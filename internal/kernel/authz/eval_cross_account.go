@@ -25,8 +25,8 @@ func EvaluateCrossAccount(req CrossAccountRequest) Decision {
 		return Deny
 	}
 
-	trustDeny, trustAllow := evaluateTrust(req.Caller, req.TrustPolicyDoc)
-	if trustDeny {
+	trustDeny, trustAllow, trustUnknown := evaluateTrust(req.Caller, req.TrustPolicyDoc)
+	if trustUnknown || trustDeny {
 		return Deny
 	}
 	if trustAllow {
@@ -35,16 +35,20 @@ func EvaluateCrossAccount(req CrossAccountRequest) Decision {
 	return Deny
 }
 
-func evaluateTrust(ctx RequestContext, trustDoc string) (denyHit, allowHit bool) {
+func evaluateTrust(ctx RequestContext, trustDoc string) (denyHit, allowHit bool, catalogUnknown bool) {
 	if trustDoc == "" {
-		return false, false
+		return false, false, false
 	}
 	doc, err := parsePolicyDocument(trustDoc)
 	if err != nil {
-		return false, false
+		return false, false, false
 	}
 	for _, st := range doc.Statement {
-		if !trustStatementMatches(st, ctx) {
+		matches, unknown := trustStatementMatches(st, ctx)
+		if unknown {
+			return false, false, true
+		}
+		if !matches {
 			continue
 		}
 		switch {
@@ -54,5 +58,5 @@ func evaluateTrust(ctx RequestContext, trustDoc string) (denyHit, allowHit bool)
 			allowHit = true
 		}
 	}
-	return denyHit, allowHit
+	return denyHit, allowHit, false
 }

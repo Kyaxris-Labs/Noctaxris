@@ -136,6 +136,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isOrgsDepthAction(action, verified.Service) {
+		s.handleOrgsDepth(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
 	switch action {
 	case catalog.ActionSTSGetCallerIdentity, "GetCallerIdentity":
 		s.handleGetCallerIdentity(w, r, requestID, eventID, verified)
@@ -193,7 +198,44 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMGetRole, "GetRole",
 		catalog.ActionIAMListRoles, "ListRoles",
 		catalog.ActionIAMDeleteRole, "DeleteRole",
-		catalog.ActionIAMUpdateAssumeRolePolicy, "UpdateAssumeRolePolicy":
+		catalog.ActionIAMUpdateAssumeRolePolicy, "UpdateAssumeRolePolicy",
+		catalog.ActionIAMCreateGroup, "CreateGroup",
+		catalog.ActionIAMDeleteGroup, "DeleteGroup",
+		catalog.ActionIAMGetGroup, "GetGroup",
+		catalog.ActionIAMListGroups, "ListGroups",
+		catalog.ActionIAMAddUserToGroup, "AddUserToGroup",
+		catalog.ActionIAMRemoveUserFromGroup, "RemoveUserFromGroup",
+		catalog.ActionIAMAttachGroupPolicy, "AttachGroupPolicy",
+		catalog.ActionIAMDetachGroupPolicy, "DetachGroupPolicy",
+		catalog.ActionIAMListAttachedGroupPolicies, "ListAttachedGroupPolicies",
+		catalog.ActionIAMPutGroupPolicy, "PutGroupPolicy",
+		catalog.ActionIAMGetGroupPolicy, "GetGroupPolicy",
+		catalog.ActionIAMDeleteGroupPolicy, "DeleteGroupPolicy",
+		catalog.ActionIAMListGroupPolicies, "ListGroupPolicies",
+		catalog.ActionIAMPutUserPermissionsBoundary, "PutUserPermissionsBoundary",
+		catalog.ActionIAMGetUserPermissionsBoundary, "GetUserPermissionsBoundary",
+		catalog.ActionIAMDeleteUserPermissionsBoundary, "DeleteUserPermissionsBoundary",
+		catalog.ActionIAMPutRolePermissionsBoundary, "PutRolePermissionsBoundary",
+		catalog.ActionIAMGetRolePermissionsBoundary, "GetRolePermissionsBoundary",
+		catalog.ActionIAMDeleteRolePermissionsBoundary, "DeleteRolePermissionsBoundary",
+		catalog.ActionIAMCreateInstanceProfile, "CreateInstanceProfile",
+		catalog.ActionIAMDeleteInstanceProfile, "DeleteInstanceProfile",
+		catalog.ActionIAMGetInstanceProfile, "GetInstanceProfile",
+		catalog.ActionIAMAddRoleToInstanceProfile, "AddRoleToInstanceProfile",
+		catalog.ActionIAMRemoveRoleFromInstanceProfile, "RemoveRoleFromInstanceProfile",
+		catalog.ActionIAMListInstanceProfiles, "ListInstanceProfiles",
+		catalog.ActionIAMCreateOpenIDConnectProvider, "CreateOpenIDConnectProvider",
+		catalog.ActionIAMDeleteOpenIDConnectProvider, "DeleteOpenIDConnectProvider",
+		catalog.ActionIAMListOpenIDConnectProviders, "ListOpenIDConnectProviders",
+		catalog.ActionIAMGetOpenIDConnectProvider, "GetOpenIDConnectProvider",
+		catalog.ActionIAMCreateSAMLProvider, "CreateSAMLProvider",
+		catalog.ActionIAMDeleteSAMLProvider, "DeleteSAMLProvider",
+		catalog.ActionIAMListSAMLProviders, "ListSAMLProviders",
+		catalog.ActionIAMGetSAMLProvider, "GetSAMLProvider",
+		catalog.ActionIAMCreateVirtualMFADevice, "CreateVirtualMFADevice",
+		catalog.ActionIAMEnableMFADevice, "EnableMFADevice",
+		catalog.ActionIAMListMFADevices, "ListMFADevices",
+		catalog.ActionIAMDeactivateMFADevice, "DeactivateMFADevice":
 		s.handleIAM(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionKMSCreateKey, "CreateKey",
 		catalog.ActionKMSDescribeKey, "DescribeKey",
@@ -538,6 +580,20 @@ func normalizeAction(action string) string {
 		return catalog.ActionOrgsCreateAccount
 	case "DescribeCreateAccountStatus":
 		return catalog.ActionOrgsDescribeCreateAccountStatus
+	case "ListAccounts":
+		return catalog.ActionOrgsListAccounts
+	case "CreateOrganizationalUnit":
+		return catalog.ActionOrgsCreateOrganizationalUnit
+	case "ListOrganizationalUnitsForParent":
+		return catalog.ActionOrgsListOrganizationalUnitsForParent
+	case "EnablePolicyType":
+		return catalog.ActionOrgsEnablePolicyType
+	case "AttachPolicy":
+		return catalog.ActionOrgsAttachPolicy
+	case "DetachPolicy":
+		return catalog.ActionOrgsDetachPolicy
+	case "DescribePolicy":
+		return catalog.ActionOrgsDescribePolicy
 	case "CreateUser":
 		return catalog.ActionIAMCreateUser
 	case "GetUser":
@@ -600,6 +656,80 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMDeleteRole
 	case "UpdateAssumeRolePolicy":
 		return catalog.ActionIAMUpdateAssumeRolePolicy
+	case "CreateGroup":
+		return catalog.ActionIAMCreateGroup
+	case "DeleteGroup":
+		return catalog.ActionIAMDeleteGroup
+	case "GetGroup":
+		return catalog.ActionIAMGetGroup
+	case "ListGroups":
+		return catalog.ActionIAMListGroups
+	case "AddUserToGroup":
+		return catalog.ActionIAMAddUserToGroup
+	case "RemoveUserFromGroup":
+		return catalog.ActionIAMRemoveUserFromGroup
+	case "AttachGroupPolicy":
+		return catalog.ActionIAMAttachGroupPolicy
+	case "DetachGroupPolicy":
+		return catalog.ActionIAMDetachGroupPolicy
+	case "ListAttachedGroupPolicies":
+		return catalog.ActionIAMListAttachedGroupPolicies
+	case "PutGroupPolicy":
+		return catalog.ActionIAMPutGroupPolicy
+	case "GetGroupPolicy":
+		return catalog.ActionIAMGetGroupPolicy
+	case "DeleteGroupPolicy":
+		return catalog.ActionIAMDeleteGroupPolicy
+	case "ListGroupPolicies":
+		return catalog.ActionIAMListGroupPolicies
+	case "PutUserPermissionsBoundary":
+		return catalog.ActionIAMPutUserPermissionsBoundary
+	case "GetUserPermissionsBoundary":
+		return catalog.ActionIAMGetUserPermissionsBoundary
+	case "DeleteUserPermissionsBoundary":
+		return catalog.ActionIAMDeleteUserPermissionsBoundary
+	case "PutRolePermissionsBoundary":
+		return catalog.ActionIAMPutRolePermissionsBoundary
+	case "GetRolePermissionsBoundary":
+		return catalog.ActionIAMGetRolePermissionsBoundary
+	case "DeleteRolePermissionsBoundary":
+		return catalog.ActionIAMDeleteRolePermissionsBoundary
+	case "CreateInstanceProfile":
+		return catalog.ActionIAMCreateInstanceProfile
+	case "DeleteInstanceProfile":
+		return catalog.ActionIAMDeleteInstanceProfile
+	case "GetInstanceProfile":
+		return catalog.ActionIAMGetInstanceProfile
+	case "AddRoleToInstanceProfile":
+		return catalog.ActionIAMAddRoleToInstanceProfile
+	case "RemoveRoleFromInstanceProfile":
+		return catalog.ActionIAMRemoveRoleFromInstanceProfile
+	case "ListInstanceProfiles":
+		return catalog.ActionIAMListInstanceProfiles
+	case "CreateOpenIDConnectProvider":
+		return catalog.ActionIAMCreateOpenIDConnectProvider
+	case "DeleteOpenIDConnectProvider":
+		return catalog.ActionIAMDeleteOpenIDConnectProvider
+	case "ListOpenIDConnectProviders":
+		return catalog.ActionIAMListOpenIDConnectProviders
+	case "GetOpenIDConnectProvider":
+		return catalog.ActionIAMGetOpenIDConnectProvider
+	case "CreateSAMLProvider":
+		return catalog.ActionIAMCreateSAMLProvider
+	case "DeleteSAMLProvider":
+		return catalog.ActionIAMDeleteSAMLProvider
+	case "ListSAMLProviders":
+		return catalog.ActionIAMListSAMLProviders
+	case "GetSAMLProvider":
+		return catalog.ActionIAMGetSAMLProvider
+	case "CreateVirtualMFADevice":
+		return catalog.ActionIAMCreateVirtualMFADevice
+	case "EnableMFADevice":
+		return catalog.ActionIAMEnableMFADevice
+	case "ListMFADevices":
+		return catalog.ActionIAMListMFADevices
+	case "DeactivateMFADevice":
+		return catalog.ActionIAMDeactivateMFADevice
 	case "CreateKey":
 		return catalog.ActionKMSCreateKey
 	case "DescribeKey":

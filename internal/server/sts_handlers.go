@@ -28,12 +28,43 @@ func (s *Server) handleGetSessionToken(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorize(verified, catalog.ActionSTSGetSessionToken, "*") {
-		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
-			"Not authorized to perform sts:GetSessionToken.", readOnly, r, eventID,
-			verified.AccessKeyID, verified.AccountID, true)
-		return
+	// AWS: GetSessionToken requires SigV4 only. No IAM permission check.
+	params := formParams(r, body)
+	serial := params.Get("SerialNumber")
+	tokenCode := params.Get("TokenCode")
+	now := s.now().UTC()
+	mfaPresent := false
+
+	if serial != "" || tokenCode != "" {
+		if serial == "" || tokenCode == "" {
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+				"SerialNumber and TokenCode must both be provided for MFA.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		dev, err := s.store.GetMFADevice(verified.AccountID, serial)
+		if err != nil || !dev.Enabled {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"MultiFactorAuthentication failed with invalid MFA one time pass code.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		callerUser := verified.Principal.UserName
+		if !verified.Principal.IsRoot && (callerUser == "" || callerUser != dev.UserName) {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"MultiFactorAuthentication failed with invalid MFA one time pass code.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		if !sts.ValidateLabTokenCode(dev.Seed, tokenCode, now, 1) {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"MultiFactorAuthentication failed with invalid MFA one time pass code.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		mfaPresent = true
 	}
+
 	secret, err := randomSecret()
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -46,9 +77,9 @@ func (s *Server) handleGetSessionToken(
 			"Unable to mint credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
+	expires := now.Add(defaultSessionDuration)
 	userName := verified.Principal.UserName
-	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
+	mintOpts := store.MintTempOpts{
 		AccountID:    verified.AccountID,
 		SessionName:  "session",
 		UserName:     userName,
@@ -56,7 +87,12 @@ func (s *Server) handleGetSessionToken(
 		SessionToken: sessionToken,
 		Expires:      expires,
 		IsRoot:       verified.Principal.IsRoot,
-	})
+	}
+	if mfaPresent {
+		mintOpts.MFAAuthenticated = true
+		mintOpts.MFAAuthenticatedAt = now
+	}
+	accessKeyID, err := s.store.MintTempCredentialsOpts(mintOpts)
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to store temporary credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)

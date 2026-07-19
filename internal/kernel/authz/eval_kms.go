@@ -16,10 +16,11 @@ type KMSRequest struct {
 
 // EvaluateKMS applies lab KMS authorization:
 //  1. Explicit Deny in identity or key policy → Deny
-//  2. If GrantSatisfied → Allow (still Deny if step 1 hit)
-//  3. Else key policy must Allow (no root short-circuit on key policy)
-//  4. AND identity must Allow (root short-circuit OK via Evaluate)
-//  5. Else Deny
+//  2. Catalog-unknown condition key → Deny
+//  3. If GrantSatisfied → Allow (still Deny if step 1/2 hit)
+//  4. Else key policy must Allow (no root short-circuit on key policy)
+//  5. AND identity must Allow (root short-circuit OK via Evaluate)
+//  6. Else Deny
 //
 // Account-level ops: when KeyPolicyDoc == "" and not grant-satisfied, only identity Evaluate runs.
 func EvaluateKMS(req KMSRequest) Decision {
@@ -30,12 +31,13 @@ func EvaluateKMS(req KMSRequest) Decision {
 		return Deny
 	}
 
-	identityDeny, _ := policyEffectHits(req.Caller, req.IdentityDocs)
+	identityDeny, _, identityUnknown := policyEffectHits(req.Caller, req.IdentityDocs)
 	var keyDeny, keyAllow bool
+	var keyUnknown bool
 	if req.KeyPolicyDoc != "" {
-		keyDeny, keyAllow = policyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
+		keyDeny, keyAllow, keyUnknown = policyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
 	}
-	if identityDeny || keyDeny {
+	if identityUnknown || keyUnknown || identityDeny || keyDeny {
 		return Deny
 	}
 	if req.GrantSatisfied {
@@ -51,14 +53,19 @@ func EvaluateKMS(req KMSRequest) Decision {
 }
 
 // policyEffectHits reports whether any statement in docs is an explicit Deny or Allow match.
-func policyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool) {
+// catalogUnknown is true if any Condition references a key absent from the catalog.
+func policyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool, catalogUnknown bool) {
 	for _, raw := range docs {
 		doc, err := parsePolicyDocument(raw)
 		if err != nil {
 			continue
 		}
 		for _, st := range doc.Statement {
-			if !statementMatches(st, ctx) {
+			matches, unknown := statementMatches(st, ctx)
+			if unknown {
+				return false, false, true
+			}
+			if !matches {
 				continue
 			}
 			switch {
@@ -69,5 +76,5 @@ func policyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool
 			}
 		}
 	}
-	return denyHit, allowHit
+	return denyHit, allowHit, false
 }

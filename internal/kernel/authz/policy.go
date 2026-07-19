@@ -89,76 +89,6 @@ func parsePolicyDocument(raw string) (policyDocument, error) {
 	return doc, nil
 }
 
-const (
-	condOpStringEquals = "StringEquals"
-	condOpStringLike   = "StringLike"
-)
-
-var supportedConditionKeys = map[string]struct{}{
-	"aws:PrincipalAccount": {},
-	"aws:RequestedRegion":  {},
-}
-
-// conditionApplies reports whether the statement Condition matches ctx.
-// Phase 1: only StringEquals / StringLike for aws:PrincipalAccount and
-// aws:RequestedRegion. Unsupported operator/key or missing ConditionKeys
-// value means the statement does not apply (neither Allow nor Deny).
-func conditionApplies(raw json.RawMessage, keys map[string]string) bool {
-	if len(raw) == 0 || string(raw) == "null" {
-		return true
-	}
-
-	var block map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &block); err != nil {
-		return false
-	}
-	if len(block) == 0 {
-		return true
-	}
-
-	for op, payload := range block {
-		switch op {
-		case condOpStringEquals, condOpStringLike:
-		default:
-			return false
-		}
-
-		var kv map[string]stringOrSlice
-		if err := json.Unmarshal(payload, &kv); err != nil {
-			return false
-		}
-		for key, expected := range kv {
-			if _, ok := supportedConditionKeys[key]; !ok {
-				return false
-			}
-			actual, ok := keys[key]
-			if !ok {
-				return false
-			}
-			if !conditionValuesMatch(op, actual, expected) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func conditionValuesMatch(op, actual string, expected stringOrSlice) bool {
-	for _, want := range expected {
-		switch op {
-		case condOpStringEquals:
-			if actual == want {
-				return true
-			}
-		case condOpStringLike:
-			if stringLikeMatch(want, actual) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // stringLikeMatch implements IAM StringLike wildcards (* any sequence, ? one char).
 func stringLikeMatch(pattern, value string) bool {
 	return globMatch(pattern, value, true)
@@ -227,46 +157,63 @@ func resourcesMatch(patterns stringOrSlice, resource string) bool {
 	return false
 }
 
-func statementMatches(st statement, ctx RequestContext) bool {
-	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
-	if !effect {
-		return false
-	}
-	if !actionsMatch(st.Action, ctx.Action) {
-		return false
-	}
-	if !resourcesMatch(st.Resource, ctx.Resource) {
-		return false
-	}
+func statementMatches(st statement, ctx RequestContext) (matches bool, catalogUnknown bool) {
 	keys := ctx.ConditionKeys
 	if keys == nil {
 		keys = map[string]string{}
 	}
-	return conditionApplies(st.Condition, keys)
+	// Catalog-unknown is checked before action/resource so typo keys never silent-skip.
+	if conditionCatalogUnknown(st.Condition) {
+		return false, true
+	}
+	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
+	if !effect {
+		return false, false
+	}
+	if !actionsMatch(st.Action, ctx.Action) {
+		return false, false
+	}
+	if !resourcesMatch(st.Resource, ctx.Resource) {
+		return false, false
+	}
+	switch conditionApplies(st.Condition, keys) {
+	case condMatch:
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 // trustStatementMatches evaluates a role trust (resource-based) statement.
 // Resource may be omitted or "*"; Principal must match the caller.
 // There is no implicit allow: a missing Principal never matches.
-func trustStatementMatches(st statement, ctx RequestContext) bool {
-	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
-	if !effect {
-		return false
-	}
-	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
-		return false
-	}
-	if !actionsMatch(st.Action, ctx.Action) {
-		return false
-	}
-	if len(st.Resource) > 0 && !resourcesMatch(st.Resource, ctx.Resource) {
-		return false
-	}
+func trustStatementMatches(st statement, ctx RequestContext) (matches bool, catalogUnknown bool) {
 	keys := ctx.ConditionKeys
 	if keys == nil {
 		keys = map[string]string{}
 	}
-	return conditionApplies(st.Condition, keys)
+	if conditionCatalogUnknown(st.Condition) {
+		return false, true
+	}
+	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
+	if !effect {
+		return false, false
+	}
+	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
+		return false, false
+	}
+	if !actionsMatch(st.Action, ctx.Action) {
+		return false, false
+	}
+	if len(st.Resource) > 0 && !resourcesMatch(st.Resource, ctx.Resource) {
+		return false, false
+	}
+	switch conditionApplies(st.Condition, keys) {
+	case condMatch:
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 func principalMatches(spec principalSpec, caller identity.Principal) bool {

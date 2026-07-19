@@ -8,6 +8,12 @@ How to confirm a local Noctaxris **lab core** build (phases 0-7).
 go test ./... -count=1
 ```
 
+Condition-key catalogs and ADR-0005 §7 evaluation are covered by:
+
+```bash
+go test ./internal/catalog/conditionkeys ./internal/kernel/authz -count=1
+```
+
 ## Compose up
 
 ```bash
@@ -49,6 +55,70 @@ aws sts assume-role-with-web-identity \
 ```
 
 Expect `AccessDenied` / `IdP not configured` for the last command.
+
+## IAM, Organizations, and STS smoke
+
+Groups inherit attached and inline policies. Permissions boundaries intersect with identity policies in `EvaluateFull`.
+
+```bash
+aws iam create-group --group-name Admins --endpoint-url "$EP"
+aws iam create-user --user-name alice --endpoint-url "$EP"
+aws iam add-user-to-group --group-name Admins --user-name alice --endpoint-url "$EP"
+
+LIST_DOC='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:ListUsers","Resource":"*"}]}'
+aws iam create-policy --policy-name GroupListUsers --policy-document "$LIST_DOC" --endpoint-url "$EP"
+POLICY_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='GroupListUsers'].Arn" --output text --endpoint-url "$EP")
+aws iam attach-group-policy --group-name Admins --policy-arn "$POLICY_ARN" --endpoint-url "$EP"
+```
+
+Boundary deny: identity allows `ListUsers` but the boundary allows only `GetUser`.
+
+```bash
+aws iam create-user --user-name bounded --endpoint-url "$EP"
+BOUNDED_KEYS=$(aws iam create-access-key --user-name bounded --endpoint-url "$EP" --output json)
+BOUNDED_AKID=$(echo "$BOUNDED_KEYS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["AccessKey"]["AccessKeyId"])')
+BOUNDED_SECRET=$(echo "$BOUNDED_KEYS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["AccessKey"]["SecretAccessKey"])')
+
+BOUND_DOC='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:GetUser","Resource":"*"}]}'
+aws iam create-policy --policy-name UserBoundary --policy-document "$BOUND_DOC" --endpoint-url "$EP"
+BOUND_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='UserBoundary'].Arn" --output text --endpoint-url "$EP")
+aws iam put-user-permissions-boundary --user-name bounded --permissions-boundary "$BOUND_ARN" --endpoint-url "$EP"
+aws iam attach-user-policy --user-name bounded --policy-arn "$POLICY_ARN" --endpoint-url "$EP"
+
+AWS_ACCESS_KEY_ID="$BOUNDED_AKID" AWS_SECRET_ACCESS_KEY="$BOUNDED_SECRET" \
+  aws iam list-users --endpoint-url "$EP"
+```
+
+Expect `AccessDenied` for the last command.
+
+Organizations list (management account `000000000001` plus any `CreateAccount` members):
+
+```bash
+aws organizations list-accounts --endpoint-url "$EP"
+```
+
+MFA and `GetSessionToken` (lab token, not RFC 6238 TOTP). After `CreateVirtualMFADevice`, `Base32StringSeed` is hex-encoded seed bytes. Token is the first 6 hex chars of `sha256(seed + ":" + unixMinute)` (see `internal/kernel/sts/mfa.go` and `sts_mfa_test.go`).
+
+```bash
+aws iam create-user --user-name mfa-user --endpoint-url "$EP"
+MFA_KEYS=$(aws iam create-access-key --user-name mfa-user --endpoint-url "$EP" --output json)
+MFA_AKID=$(echo "$MFA_KEYS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["AccessKey"]["AccessKeyId"])')
+MFA_SECRET=$(echo "$MFA_KEYS" | python3 -c 'import sys,json; print(json.load(sys.stdin)["AccessKey"]["SecretAccessKey"])')
+
+MFA_JSON=$(aws iam create-virtual-mfa-device --endpoint-url "$EP" --output json)
+SERIAL=$(echo "$MFA_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["VirtualMFADevice"]["SerialNumber"])')
+SEED_HEX=$(echo "$MFA_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["VirtualMFADevice"]["Base32StringSeed"])')
+aws iam enable-mfa-device --user-name mfa-user --serial-number "$SERIAL" --endpoint-url "$EP"
+
+TOKEN=$(python3 -c "import hashlib,time; seed=bytes.fromhex('$SEED_HEX'); m=int(time.time())//60; print(hashlib.sha256(seed+b':'+str(m).encode()).hexdigest()[:6])")
+
+AWS_ACCESS_KEY_ID="$MFA_AKID" AWS_SECRET_ACCESS_KEY="$MFA_SECRET" \
+  aws sts get-session-token \
+  --serial-number "$SERIAL" --token-code "$TOKEN" \
+  --endpoint-url "$EP"
+```
+
+Expect a session with temporary credentials. `GetSessionToken` does not require an IAM `sts:GetSessionToken` permission after SigV4.
 
 ## KMS smoke (Phase 4)
 

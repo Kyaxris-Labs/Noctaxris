@@ -6,18 +6,96 @@ Repo and Go module: `github.com/Kyaxris-Labs/Noctaxris` (PascalCase `Noctaxris`,
 
 Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxris-Labs).
 
-## Lab core (shipped)
+## Services
 
-Phases 0 through 7 are complete for lab use:
+<table>
+  <thead>
+    <tr>
+      <th>Area</th>
+      <th>Services</th>
+      <th>Detailed actions</th>
+      <th>Not implemented</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="3" align="center" valign="middle">Identity</td>
+      <td>IAM</td>
+      <td>Users, roles, managed and inline policies, access keys, groups, permissions boundaries, instance profiles, OIDC and SAML IdP CRUD, virtual MFA.</td>
+      <td>Service-linked roles, full pagination and tagging parity.</td>
+    </tr>
+    <tr>
+      <td>STS</td>
+      <td>All 11 actions (lab MFA on GetSessionToken).</td>
+      <td>Deeper AssumeRoot, DecodeAuthorizationMessage, GetDelegatedAccessToken, and GetWebIdentityToken parity.</td>
+    </tr>
+    <tr>
+      <td>Organizations</td>
+      <td>CreateAccount, ListAccounts, OUs, EnablePolicyType, SCP and RCP create/attach/detach/describe. Shared authorize uses identity, boundary, SCP, and RCP.</td>
+      <td>Invites, OU-path SCP/RCP inheritance, SCP/boundary on data-plane authorize paths.</td>
+    </tr>
+    <tr>
+      <td rowspan="1" align="center" valign="middle">Crypto</td>
+      <td>KMS</td>
+      <td>Customer-managed keys, key policies (explicit allow), Encrypt, Decrypt, GenerateDataKey*, grants, aliases.</td>
+      <td>Full KMS SAR (ReEncrypt, Sign/Verify, MAC, asymmetric, import, multi-Region, rotation APIs, tags). Cross-account key policy depth. AWS-managed key convenience aliases.</td>
+    </tr>
+    <tr>
+      <td rowspan="7" align="center" valign="middle">Data</td>
+      <td>S3</td>
+      <td>Path-style buckets and objects, bucket policy, SSE-S3/SSE-KMS, presigned GET/PUT.</td>
+      <td>Multipart, CopyObject, versioning, lifecycle, virtual-hosted style, cross-account policy depth.</td>
+    </tr>
+    <tr>
+      <td>DynamoDB</td>
+      <td>Tables, item CRUD, Query/Scan, BatchGet/BatchWrite, table resource policies, CMK encryption.</td>
+      <td>GSI/LSI, Streams, Transactions, PartiQL, global tables.</td>
+    </tr>
+    <tr>
+      <td>SQS</td>
+      <td>Standard queues, send/receive/delete (batch and visibility), queue policies, SSE-SQS and SSE-KMS.</td>
+      <td>FIFO and DLQ redrive depth.</td>
+    </tr>
+    <tr>
+      <td>SSM Parameter Store</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete Parameter Store (not full SAR).</td>
+    </tr>
+    <tr>
+      <td>Secrets Manager</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete Secrets Manager (not full SAR).</td>
+    </tr>
+    <tr>
+      <td>SNS</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete SNS (not full SAR).</td>
+    </tr>
+    <tr>
+      <td>EventBridge</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete EventBridge (not full SAR).</td>
+    </tr>
+    <tr>
+      <td rowspan="3" align="center" valign="middle">Compute</td>
+      <td>Lambda</td>
+      <td>Zip <code>python3.12</code> CreateFunction, Get, Delete, List, UpdateCode, UpdateConfiguration, sync Invoke, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD (no host <code>docker.sock</code>), platform egress deny.</td>
+      <td>Layers, versions/aliases depth, event source mappings, async invoke and DLQ, image packaging, other runtimes, cross-account resource policies, engine TLS/rootless hardening. Post-v2: Firecracker microVMs.</td>
+    </tr>
+    <tr>
+      <td>ECR</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete ECR (not full SAR).</td>
+    </tr>
+    <tr>
+      <td>ECS</td>
+      <td>not shipped</td>
+      <td>Planned lab-complete ECS (not full SAR).</td>
+    </tr>
+  </tbody>
+</table>
 
-| Area | Lab surface |
-|------|-------------|
-| Identity | IAM users/roles/policies, full STS routing, Organizations CreateAccount |
-| Crypto | KMS keys, key policies, Encrypt/Decrypt/GenerateDataKey, grants, aliases |
-| Data | S3 (path-style, bucket policy, SSE-S3/SSE-KMS, presign), DynamoDB, SQS |
-| Compute | Lambda zip `python3.12`, PassRole + trust, nested DinD Invoke |
-
-Depth beyond this table lives in [docs/deferred.md](docs/deferred.md). Phase notes: [docs/phases/index.md](docs/phases/index.md).
+More detail: [docs/deferred.md](docs/deferred.md).
 
 ## Quick start
 
@@ -51,7 +129,7 @@ Full smoke (IAM, Orgs, KMS, S3, DynamoDB, SQS, Lambda): [docs/verification.md](d
 
 ## Docs
 
-See [docs/index.md](docs/index.md) for architecture, configuration, security, verification, and phase history.
+See [docs/index.md](docs/index.md) for architecture, configuration, security, and verification.
 
 ## License
 

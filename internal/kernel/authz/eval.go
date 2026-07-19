@@ -23,14 +23,15 @@ type RequestContext struct {
 	ConditionKeys map[string]string // e.g. aws:PrincipalAccount, aws:RequestedRegion
 }
 
-// Evaluate applies single-account Phase 1 identity-policy semantics:
+// Evaluate applies single-account identity-policy semantics:
 //  1. Root principal → Allow
-//  2. Explicit Deny matching action+resource (+ applicable Condition) → Deny
-//  3. Else any Allow matching → Allow
-//  4. Else implicit Deny
+//  2. Catalog-unknown condition key in any statement → Deny (ADR-0005 §7.1)
+//  3. Explicit Deny matching action+resource (+ applicable Condition) → Deny
+//  4. Else any Allow matching → Allow
+//  5. Else implicit Deny
 //
-// Unparseable policy documents are ignored. Statements whose Condition cannot
-// be evaluated (unsupported operator/key or missing ConditionKeys) do not match
+// Unparseable policy documents are ignored. Statements whose Condition does
+// not match (unpopulated known keys on positive operators, etc.) do not match
 // for either Allow or Deny.
 //
 // Note: the HTTP handler for sts:GetCallerIdentity does not call Evaluate.
@@ -75,7 +76,11 @@ func evaluatePolicies(ctx RequestContext, policyDocs []string) Decision {
 			continue
 		}
 		for _, st := range doc.Statement {
-			if !statementMatches(st, ctx) {
+			matches, catalogUnknown := statementMatches(st, ctx)
+			if catalogUnknown {
+				return Deny
+			}
+			if !matches {
 				continue
 			}
 			switch {

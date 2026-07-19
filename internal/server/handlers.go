@@ -361,19 +361,78 @@ func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string
 func (s *Server) authorize(verified *authn.Verified, action, resource string) bool {
 	docs := s.identityDocs(verified.Principal)
 	sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID)
-	return authz.EvaluateWithSession(authz.RequestContext{
-		Principal: verified.Principal,
-		Action:    action,
-		Resource:  resource,
-		Region:    verified.Region,
-		ConditionKeys: map[string]string{
-			"aws:PrincipalAccount": verified.AccountID,
-			"aws:RequestedRegion":  verified.Region,
-		},
-	}, docs, sessionDocs) == authz.Allow
+
+	boundaryDoc := ""
+	switch verified.Principal.Kind {
+	case identity.KindUser:
+		if verified.Principal.UserName != "" {
+			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "user", verified.Principal.UserName)
+			if err != nil {
+				return false
+			}
+			if ok {
+				boundaryDoc = doc
+			}
+		}
+	case identity.KindRole:
+		if verified.Principal.RoleName != "" {
+			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "role", verified.Principal.RoleName)
+			if err != nil {
+				return false
+			}
+			if ok {
+				boundaryDoc = doc
+			}
+		}
+	}
+
+	scpDocs, err := s.store.SCPDocsForAccount(verified.AccountID)
+	if err != nil {
+		return false
+	}
+	rcpDocs, err := s.store.RCPDocsForAccount(verified.AccountID)
+	if err != nil {
+		return false
+	}
+
+	conditionKeys := map[string]string{
+		"aws:PrincipalAccount": verified.AccountID,
+		"aws:RequestedRegion":  verified.Region,
+	}
+	if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.MFAAuthenticated {
+		conditionKeys["aws:MultiFactorAuthPresent"] = "true"
+		if !ak.MFAAuthenticatedAt.IsZero() {
+			age := int(s.now().UTC().Sub(ak.MFAAuthenticatedAt.UTC()).Seconds())
+			if age < 0 {
+				age = 0
+			}
+			conditionKeys["aws:MultiFactorAuthAge"] = fmt.Sprintf("%d", age)
+		}
+	}
+
+	return authz.EvaluateFull(authz.RequestContext{
+		Principal:     verified.Principal,
+		Action:        action,
+		Resource:      resource,
+		Region:        verified.Region,
+		ConditionKeys: conditionKeys,
+	}, authz.EvalInputs{
+		IdentityDocs:        docs,
+		BoundaryDoc:         boundaryDoc,
+		SessionDocs:         sessionDocs,
+		SCPDocs:             scpDocs,
+		RCPDocs:             rcpDocs,
+		IsManagementAccount: s.store.IsManagementAccount(verified.AccountID),
+	}) == authz.Allow
 }
 
 func (s *Server) identityDocs(principal identity.Principal) []string {
+	if principal.Kind == identity.KindUser && principal.UserName != "" {
+		docs, err := s.store.IdentityPolicyDocsForUser(principal.AccountID, principal.UserName)
+		if err == nil {
+			return docs
+		}
+	}
 	arn := principal.ARN()
 	docs, _ := s.store.ListAttachedPolicyDocuments(arn)
 	inline, _ := s.store.ListInlinePolicies(arn)

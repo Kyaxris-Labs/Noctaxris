@@ -417,8 +417,26 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.UpdateAssumeRolePolicyXML(requestID)
 	default:
+		identityPayload, identityHandled, identityErr := s.handleIAMIdentity(w, r, params, requestID, eventID, action, accountID, verified.AccessKeyID, readOnly)
+		if identityErr != nil {
+			if errors.Is(identityErr, errHandled) {
+				return
+			}
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError", identityErr.Error(), readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		if identityHandled {
+			s.writeXMLOK(w, requestID, identityPayload)
+			eventName := action
+			if i := strings.Index(action, ":"); i >= 0 {
+				eventName = action[i+1:]
+			}
+			s.writeSuccessAudit(r, requestID, eventID, verified, "iam.amazonaws.com", eventName, readOnly)
+			return
+		}
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 3.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}

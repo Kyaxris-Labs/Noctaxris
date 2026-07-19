@@ -43,6 +43,18 @@ const ActionOrgsCreateAccount = "organizations:CreateAccount"
 // ActionOrgsDescribeCreateAccountStatus is the IAM action for Organizations DescribeCreateAccountStatus.
 const ActionOrgsDescribeCreateAccountStatus = "organizations:DescribeCreateAccountStatus"
 
+// Organizations depth actions.
+const (
+	ActionOrgsListAccounts                     = "organizations:ListAccounts"
+	ActionOrgsCreateOrganizationalUnit         = "organizations:CreateOrganizationalUnit"
+	ActionOrgsListOrganizationalUnitsForParent = "organizations:ListOrganizationalUnitsForParent"
+	ActionOrgsEnablePolicyType                 = "organizations:EnablePolicyType"
+	ActionOrgsCreatePolicy                     = "organizations:CreatePolicy"
+	ActionOrgsAttachPolicy                     = "organizations:AttachPolicy"
+	ActionOrgsDetachPolicy                     = "organizations:DetachPolicy"
+	ActionOrgsDescribePolicy                   = "organizations:DescribePolicy"
+)
+
 // IAM lab actions (Phase 3).
 
 // Users
@@ -102,6 +114,63 @@ const (
 	ActionIAMListRoles              = "iam:ListRoles"
 	ActionIAMDeleteRole             = "iam:DeleteRole"
 	ActionIAMUpdateAssumeRolePolicy = "iam:UpdateAssumeRolePolicy"
+)
+
+// Groups
+const (
+	ActionIAMCreateGroup               = "iam:CreateGroup"
+	ActionIAMDeleteGroup               = "iam:DeleteGroup"
+	ActionIAMGetGroup                  = "iam:GetGroup"
+	ActionIAMListGroups                = "iam:ListGroups"
+	ActionIAMAddUserToGroup            = "iam:AddUserToGroup"
+	ActionIAMRemoveUserFromGroup       = "iam:RemoveUserFromGroup"
+	ActionIAMAttachGroupPolicy         = "iam:AttachGroupPolicy"
+	ActionIAMDetachGroupPolicy         = "iam:DetachGroupPolicy"
+	ActionIAMListAttachedGroupPolicies = "iam:ListAttachedGroupPolicies"
+	ActionIAMPutGroupPolicy            = "iam:PutGroupPolicy"
+	ActionIAMGetGroupPolicy            = "iam:GetGroupPolicy"
+	ActionIAMDeleteGroupPolicy         = "iam:DeleteGroupPolicy"
+	ActionIAMListGroupPolicies         = "iam:ListGroupPolicies"
+)
+
+// Permissions boundaries
+const (
+	ActionIAMPutUserPermissionsBoundary    = "iam:PutUserPermissionsBoundary"
+	ActionIAMGetUserPermissionsBoundary    = "iam:GetUserPermissionsBoundary"
+	ActionIAMDeleteUserPermissionsBoundary = "iam:DeleteUserPermissionsBoundary"
+	ActionIAMPutRolePermissionsBoundary    = "iam:PutRolePermissionsBoundary"
+	ActionIAMGetRolePermissionsBoundary    = "iam:GetRolePermissionsBoundary"
+	ActionIAMDeleteRolePermissionsBoundary = "iam:DeleteRolePermissionsBoundary"
+)
+
+// Instance profiles
+const (
+	ActionIAMCreateInstanceProfile         = "iam:CreateInstanceProfile"
+	ActionIAMDeleteInstanceProfile         = "iam:DeleteInstanceProfile"
+	ActionIAMGetInstanceProfile            = "iam:GetInstanceProfile"
+	ActionIAMAddRoleToInstanceProfile      = "iam:AddRoleToInstanceProfile"
+	ActionIAMRemoveRoleFromInstanceProfile = "iam:RemoveRoleFromInstanceProfile"
+	ActionIAMListInstanceProfiles          = "iam:ListInstanceProfiles"
+)
+
+// Identity providers
+const (
+	ActionIAMCreateOpenIDConnectProvider = "iam:CreateOpenIDConnectProvider"
+	ActionIAMDeleteOpenIDConnectProvider = "iam:DeleteOpenIDConnectProvider"
+	ActionIAMListOpenIDConnectProviders  = "iam:ListOpenIDConnectProviders"
+	ActionIAMGetOpenIDConnectProvider    = "iam:GetOpenIDConnectProvider"
+	ActionIAMCreateSAMLProvider          = "iam:CreateSAMLProvider"
+	ActionIAMDeleteSAMLProvider          = "iam:DeleteSAMLProvider"
+	ActionIAMListSAMLProviders           = "iam:ListSAMLProviders"
+	ActionIAMGetSAMLProvider             = "iam:GetSAMLProvider"
+)
+
+// MFA devices
+const (
+	ActionIAMCreateVirtualMFADevice = "iam:CreateVirtualMFADevice"
+	ActionIAMEnableMFADevice        = "iam:EnableMFADevice"
+	ActionIAMListMFADevices         = "iam:ListMFADevices"
+	ActionIAMDeactivateMFADevice    = "iam:DeactivateMFADevice"
 )
 
 // KMS lab actions (Phase 4).
@@ -205,6 +274,14 @@ func KnownAction(action string) bool {
 		ActionSTSGetWebIdentityToken,
 		ActionOrgsCreateAccount,
 		ActionOrgsDescribeCreateAccountStatus,
+		ActionOrgsListAccounts,
+		ActionOrgsCreateOrganizationalUnit,
+		ActionOrgsListOrganizationalUnitsForParent,
+		ActionOrgsEnablePolicyType,
+		ActionOrgsCreatePolicy,
+		ActionOrgsAttachPolicy,
+		ActionOrgsDetachPolicy,
+		ActionOrgsDescribePolicy,
 		ActionIAMCreateUser,
 		ActionIAMGetUser,
 		ActionIAMListUsers,
@@ -236,6 +313,43 @@ func KnownAction(action string) bool {
 		ActionIAMListRoles,
 		ActionIAMDeleteRole,
 		ActionIAMUpdateAssumeRolePolicy,
+		ActionIAMCreateGroup,
+		ActionIAMDeleteGroup,
+		ActionIAMGetGroup,
+		ActionIAMListGroups,
+		ActionIAMAddUserToGroup,
+		ActionIAMRemoveUserFromGroup,
+		ActionIAMAttachGroupPolicy,
+		ActionIAMDetachGroupPolicy,
+		ActionIAMListAttachedGroupPolicies,
+		ActionIAMPutGroupPolicy,
+		ActionIAMGetGroupPolicy,
+		ActionIAMDeleteGroupPolicy,
+		ActionIAMListGroupPolicies,
+		ActionIAMPutUserPermissionsBoundary,
+		ActionIAMGetUserPermissionsBoundary,
+		ActionIAMDeleteUserPermissionsBoundary,
+		ActionIAMPutRolePermissionsBoundary,
+		ActionIAMGetRolePermissionsBoundary,
+		ActionIAMDeleteRolePermissionsBoundary,
+		ActionIAMCreateInstanceProfile,
+		ActionIAMDeleteInstanceProfile,
+		ActionIAMGetInstanceProfile,
+		ActionIAMAddRoleToInstanceProfile,
+		ActionIAMRemoveRoleFromInstanceProfile,
+		ActionIAMListInstanceProfiles,
+		ActionIAMCreateOpenIDConnectProvider,
+		ActionIAMDeleteOpenIDConnectProvider,
+		ActionIAMListOpenIDConnectProviders,
+		ActionIAMGetOpenIDConnectProvider,
+		ActionIAMCreateSAMLProvider,
+		ActionIAMDeleteSAMLProvider,
+		ActionIAMListSAMLProviders,
+		ActionIAMGetSAMLProvider,
+		ActionIAMCreateVirtualMFADevice,
+		ActionIAMEnableMFADevice,
+		ActionIAMListMFADevices,
+		ActionIAMDeactivateMFADevice,
 		ActionKMSCreateKey,
 		ActionKMSDescribeKey,
 		ActionKMSListKeys,

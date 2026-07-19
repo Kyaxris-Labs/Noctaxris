@@ -106,6 +106,35 @@ func (s *Store) ListOIDCProviders(accountID string) ([]OIDCProvider, error) {
 	return out, nil
 }
 
+// GetOIDCProvider returns an OIDC provider by ARN.
+func (s *Store) GetOIDCProvider(providerARN string) (OIDCProvider, error) {
+	var p OIDCProvider
+	err := s.db.QueryRow(
+		`SELECT provider_arn, account_id, url, client_id FROM oidc_providers WHERE provider_arn = ?`,
+		providerARN,
+	).Scan(&p.ProviderARN, &p.AccountID, &p.URL, &p.ClientID)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	return p, nil
+}
+
+// DeleteOIDCProvider deletes an OIDC provider by ARN.
+func (s *Store) DeleteOIDCProvider(providerARN string) error {
+	res, err := s.db.Exec(`DELETE FROM oidc_providers WHERE provider_arn = ?`, providerARN)
+	if err != nil {
+		return fmt.Errorf("delete oidc provider %s: %w", providerARN, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete oidc provider %s: %w", providerARN, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // PutSAMLProvider stores or replaces a SAML provider by name.
 func (s *Store) PutSAMLProvider(accountID, name, metadataXML string) (providerARN string, err error) {
 	if accountID == "" || name == "" || metadataXML == "" {
@@ -136,4 +165,49 @@ func (s *Store) GetSAMLProvider(providerARN string) (SAMLProvider, error) {
 		return SAMLProvider{}, err
 	}
 	return p, nil
+}
+
+// ListSAMLProviders returns SAML providers for accountID.
+func (s *Store) ListSAMLProviders(accountID string) ([]SAMLProvider, error) {
+	rows, err := s.db.Query(
+		`SELECT provider_arn, account_id, metadata_xml FROM saml_providers
+		 WHERE account_id = ? ORDER BY provider_arn`,
+		accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list saml providers %s: %w", accountID, err)
+	}
+	defer rows.Close()
+
+	var out []SAMLProvider
+	for rows.Next() {
+		var p SAMLProvider
+		if err := rows.Scan(&p.ProviderARN, &p.AccountID, &p.MetadataXML); err != nil {
+			return nil, fmt.Errorf("list saml providers %s: %w", accountID, err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list saml providers %s: %w", accountID, err)
+	}
+	if out == nil {
+		out = []SAMLProvider{}
+	}
+	return out, nil
+}
+
+// DeleteSAMLProvider deletes a SAML provider by ARN.
+func (s *Store) DeleteSAMLProvider(providerARN string) error {
+	res, err := s.db.Exec(`DELETE FROM saml_providers WHERE provider_arn = ?`, providerARN)
+	if err != nil {
+		return fmt.Errorf("delete saml provider %s: %w", providerARN, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete saml provider %s: %w", providerARN, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

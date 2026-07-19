@@ -25,6 +25,21 @@ func RoleARNWithPath(accountID, path, roleName string) string {
 	return iamResourceARN(accountID, "role", path, roleName)
 }
 
+// GroupARN builds an IAM group ARN.
+func GroupARN(accountID, path, groupName string) string {
+	return iamResourceARN(accountID, "group", path, groupName)
+}
+
+// InstanceProfileARN builds an IAM instance profile ARN.
+func InstanceProfileARN(accountID, path, profileName string) string {
+	return iamResourceARN(accountID, "instance-profile", path, profileName)
+}
+
+// MFADeviceARN builds a virtual MFA device serial ARN.
+func MFADeviceARN(accountID, serialSuffix string) string {
+	return fmt.Sprintf("arn:aws:iam::%s:mfa/%s", accountID, serialSuffix)
+}
+
 func iamResourceARN(accountID, resourceType, path, name string) string {
 	p := normalizeIAMPath(path)
 	if p == "/" {

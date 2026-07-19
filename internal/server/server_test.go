@@ -34,6 +34,12 @@ const (
 
 func newTestServer(t *testing.T) (*server.Server, string) {
 	t.Helper()
+	srv, _, auditDir := newTestServerStore(t)
+	return srv, auditDir
+}
+
+func newTestServerStore(t *testing.T) (*server.Server, *store.Store, string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
@@ -70,7 +76,7 @@ func newTestServer(t *testing.T) (*server.Server, string) {
 		AccountID:  testAccountID,
 	}
 
-	return server.New(cfg, st, aud), auditDir
+	return server.New(cfg, st, aud), st, auditDir
 }
 
 func TestHealthOK(t *testing.T) {

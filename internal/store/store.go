@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS access_keys (
   user_name TEXT,
   status TEXT NOT NULL DEFAULT 'Active',
   session_policy TEXT,
-  federated_user TEXT
+  federated_user TEXT,
+  mfa_authenticated INTEGER NOT NULL DEFAULT 0,
+  mfa_authenticated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS policies (
   policy_id TEXT PRIMARY KEY,
@@ -206,6 +208,68 @@ CREATE TABLE IF NOT EXISTS lambda_functions (
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, function_name)
 );
+CREATE TABLE IF NOT EXISTS iam_groups (
+  account_id TEXT NOT NULL,
+  group_name TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  PRIMARY KEY (account_id, group_name)
+);
+CREATE TABLE IF NOT EXISTS iam_group_memberships (
+  account_id TEXT NOT NULL,
+  group_name TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  PRIMARY KEY (account_id, group_name, user_name)
+);
+CREATE TABLE IF NOT EXISTS iam_permissions_boundaries (
+  account_id TEXT NOT NULL,
+  principal_type TEXT NOT NULL,
+  principal_name TEXT NOT NULL,
+  policy_arn TEXT NOT NULL,
+  PRIMARY KEY (account_id, principal_type, principal_name)
+);
+CREATE TABLE IF NOT EXISTS iam_instance_profiles (
+  account_id TEXT NOT NULL,
+  profile_name TEXT NOT NULL,
+  profile_arn TEXT NOT NULL,
+  PRIMARY KEY (account_id, profile_name)
+);
+CREATE TABLE IF NOT EXISTS iam_instance_profile_roles (
+  account_id TEXT NOT NULL,
+  profile_name TEXT NOT NULL,
+  role_name TEXT NOT NULL,
+  PRIMARY KEY (account_id, profile_name)
+);
+CREATE TABLE IF NOT EXISTS iam_mfa_devices (
+  account_id TEXT NOT NULL,
+  serial TEXT NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',
+  seed_ciphertext BLOB NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, serial)
+);
+CREATE TABLE IF NOT EXISTS org_ous (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL,
+  name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS org_policies (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  document TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS org_policy_attachments (
+  policy_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  PRIMARY KEY (policy_id, target_type, target_id)
+);
+CREATE TABLE IF NOT EXISTS org_enabled_policy_types (
+  root_id TEXT NOT NULL,
+  policy_type TEXT NOT NULL,
+  PRIMARY KEY (root_id, policy_type)
+);
 `
 
 // Access key status values stored in access_keys.status.
@@ -216,18 +280,20 @@ const (
 
 // AccessKey is a long-lived or temporary credential record.
 type AccessKey struct {
-	AccessKeyID   string
-	AccountID     string
-	Secret        string
-	IsRoot        bool
-	UserName      string // set for IAM user keys; empty for root/temp
-	Status        string // Active or Inactive; empty treated as Active for legacy rows
-	SessionToken  string // plaintext; empty if long-lived
-	RoleARN       string
-	SessionName   string
-	FederatedUser string
-	SessionPolicy string
-	ExpiresAt     time.Time // zero if none
+	AccessKeyID         string
+	AccountID           string
+	Secret              string
+	IsRoot              bool
+	UserName            string // set for IAM user keys; empty for root/temp
+	Status              string // Active or Inactive; empty treated as Active for legacy rows
+	SessionToken        string // plaintext; empty if long-lived
+	RoleARN             string
+	SessionName         string
+	FederatedUser       string
+	SessionPolicy       string
+	ExpiresAt           time.Time // zero if none
+	MFAAuthenticated    bool
+	MFAAuthenticatedAt  time.Time // zero if MFA not presented
 }
 
 type Store struct {
@@ -291,6 +357,8 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE roles ADD COLUMN path TEXT NOT NULL DEFAULT '/'`,
 		`ALTER TABLE roles ADD COLUMN create_date TEXT`,
 		`ALTER TABLE roles ADD COLUMN description TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
 	}
 	for _, stmt := range alters {
 		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
@@ -374,14 +442,16 @@ func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
 		status                 sql.NullString
 		sessionPolicy          sql.NullString
 		federatedUser          sql.NullString
+		mfaAuthenticated       int
+		mfaAuthenticatedAt     sql.NullString
 	)
 	err := s.db.QueryRow(
 		`SELECT account_id, secret_ciphertext, is_root,
 		        session_token_ciphertext, role_arn, session_name, expires_at, user_name, status,
-		        session_policy, federated_user
+		        session_policy, federated_user, mfa_authenticated, mfa_authenticated_at
 		 FROM access_keys WHERE access_key_id = ?`,
 		accessKeyID,
-	).Scan(&accountID, &ciphertext, &rootFlag, &sessionTokenCiphertext, &roleARN, &sessionName, &expiresAt, &userName, &status, &sessionPolicy, &federatedUser)
+	).Scan(&accountID, &ciphertext, &rootFlag, &sessionTokenCiphertext, &roleARN, &sessionName, &expiresAt, &userName, &status, &sessionPolicy, &federatedUser, &mfaAuthenticated, &mfaAuthenticatedAt)
 	if err != nil {
 		return AccessKey{}, err
 	}
@@ -390,11 +460,12 @@ func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
 		return AccessKey{}, err
 	}
 	ak := AccessKey{
-		AccessKeyID: accessKeyID,
-		AccountID:   accountID,
-		Secret:      string(plaintext),
-		IsRoot:      rootFlag == 1,
-		Status:      AccessKeyStatusActive,
+		AccessKeyID:      accessKeyID,
+		AccountID:        accountID,
+		Secret:           string(plaintext),
+		IsRoot:           rootFlag == 1,
+		Status:           AccessKeyStatusActive,
+		MFAAuthenticated: mfaAuthenticated == 1,
 	}
 	if userName.Valid {
 		ak.UserName = userName.String
@@ -427,6 +498,13 @@ func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
 			return AccessKey{}, fmt.Errorf("parse expires_at: %w", err)
 		}
 		ak.ExpiresAt = t
+	}
+	if mfaAuthenticatedAt.Valid && mfaAuthenticatedAt.String != "" {
+		t, err := time.Parse(time.RFC3339, mfaAuthenticatedAt.String)
+		if err != nil {
+			return AccessKey{}, fmt.Errorf("parse mfa_authenticated_at: %w", err)
+		}
+		ak.MFAAuthenticatedAt = t
 	}
 	return ak, nil
 }
