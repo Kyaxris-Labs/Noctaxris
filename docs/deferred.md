@@ -1,6 +1,6 @@
 # Deferred work (later phases or versions)
 
-Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routing. Phase 4 ships lab-complete KMS. Phase 5 ships lab-complete S3. Phase 6 ships lab-complete DynamoDB and SQS. Phase notes: [phases/index.md](phases/index.md).
+Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routing. Phase 4 ships lab-complete KMS. Phase 5 ships lab-complete S3. Phase 6 ships lab-complete DynamoDB and SQS. Phase 7 ships lab-complete Lambda. Phase notes: [phases/index.md](phases/index.md).
 
 ## IAM (later)
 
@@ -10,7 +10,7 @@ Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routin
 - Service-linked roles
 - IAM OpenID Connect / SAML provider CRUD APIs (beyond env/file IdP config used by STS federation)
 - Full IAM pagination, tagging, and API parity beyond the lab subset
-- PassRole enforcement on service Create/Update APIs when those services exist (Lambda and related phases)
+- PassRole on non-Lambda service configure APIs when those services gain role ARNs later
 
 ## Organizations (later)
 
@@ -61,8 +61,18 @@ Phase 6 covers lab-complete standard queues, send/receive/delete (including batc
 - Cross-account queue policy depth beyond same-account lab paths
 - AWS-managed SSE-KMS convenience aliases beyond lab customer-managed CMK smoke
 
+## Lambda (later)
+
+Phase 7 covers lab-complete zip CreateFunction / Get / Delete / List / UpdateCode / UpdateConfiguration, sync Invoke, PassRole plus `lambda.amazonaws.com` trust, nested containers via an internal Compose engine (no host `docker.sock`), execution-role session injection, and platform egress deny for function containers. Still deferred:
+
+- Full Lambda SAR / API parity (layers, versions/aliases depth, event source mappings, concurrency, Function URLs, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing, container image packaging, multi-runtime matrix)
+- MicroVM isolation (Firecracker-class)
+- Async invoke, retries, DLQ / on-failure destinations
+- Nested container engine hardening beyond lab DinD (rootless, TLS to engine by default)
+- Generated Lambda condition-key catalog from SAR / servicereference codegen
+- Cross-account function resource policy depth
+- Runtimes other than `python3.12`
+
 ## Cross-cutting (later)
 
 - Generated global and service condition-key catalogs from AWS Service Authorization Reference / servicereference JSON
-- Lambda (Phase 7 roadmap)
-- PassRole enforcement until Lambda (Phase 7)

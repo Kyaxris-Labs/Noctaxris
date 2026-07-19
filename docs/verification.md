@@ -130,4 +130,45 @@ aws sqs delete-message \
   --endpoint-url "$EP"
 ```
 
+## Lambda smoke (Phase 7, WSL or Linux)
+
+Compose must include `noctaxris-engine` so sync Invoke can start a nested container. Prefer WSL or Linux against `http://127.0.0.1:4566`.
+
+```bash
+LAMBDA_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam create-role \
+  --role-name LabLambdaRole \
+  --assume-role-policy-document "$LAMBDA_TRUST" \
+  --endpoint-url "$EP"
+
+ROLE_ARN=$(aws iam get-role --role-name LabLambdaRole --endpoint-url "$EP" --query Role.Arn --output text)
+
+mkdir -p /tmp/noctaxris-lambda
+cat > /tmp/noctaxris-lambda/handler.py <<'PY'
+def handler(event, context):
+    return {"ok": True, "echo": event}
+PY
+(cd /tmp/noctaxris-lambda && zip -q /tmp/noctaxris-fn.zip handler.py)
+
+FN="noctaxris-lab-$RANDOM"
+aws lambda create-function \
+  --function-name "$FN" \
+  --runtime python3.12 \
+  --role "$ROLE_ARN" \
+  --handler handler.handler \
+  --zip-file fileb:///tmp/noctaxris-fn.zip \
+  --endpoint-url "$EP"
+
+aws lambda invoke \
+  --function-name "$FN" \
+  --payload '{"ping":"pong"}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/noctaxris-invoke-out.json \
+  --endpoint-url "$EP"
+
+cat /tmp/noctaxris-invoke-out.json
+```
+
+Expect CreateFunction to succeed only when the role trusts `lambda.amazonaws.com`. Expect Invoke to return JSON with `"ok": true` when DinD is up. Without `NOCTAXRIS_DOCKER_HOST`, Invoke returns compute unavailable.
+
 On Windows, run the same commands inside WSL against `http://127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host (WSL can reach it via `localhost` when mirrored networking is enabled, or use the Windows host IP).

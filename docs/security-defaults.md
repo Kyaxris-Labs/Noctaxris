@@ -6,9 +6,22 @@ These defaults are intentional product posture for a local emulator that people 
 
 - Compose publishes only `127.0.0.1:4566` on the host. That is not `0.0.0.0` on the host.
 - Inside the container the process listens on `0.0.0.0:4566` so the published mapping works.
-- No `docker.sock` mount. Nested compute (later phases) must not regain host Docker control via a socket.
+- No host `docker.sock` mount on the API service. Nested compute uses Compose service `noctaxris-engine` over TCP on the Compose network (`NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2375`). The engine API is not published to the host.
+- `noctaxris-engine` runs privileged DinD so function containers can start. Privilege stays inside that nested engine. The API container remains distroless `nonroot` without a host socket.
 - Image runs as distroless `nonroot`. Data dir is seeded owned by UID `65532` so the volume is writable.
-- Compose sets `read_only: true` with `/tmp` as tmpfs.
+- Compose sets `read_only: true` with `/tmp` as tmpfs on the API service.
+
+## Lambda PassRole and trust
+
+- CreateFunction and role-changing UpdateFunctionConfiguration require `iam:PassRole` on the target role plus a trust policy that Allows `sts:AssumeRole` for `lambda.amazonaws.com`.
+- Missing PassRole or a trust policy that only names an AWS principal (and not the Lambda service) is Deny.
+- Sync Invoke mints temporary credentials for the function role and injects them into the nested container. Callers still need `lambda:InvokeFunction` on the function ARN.
+
+## Platform egress deny vs AWS default internet
+
+- Function containers join DinD network `noctaxris-fn` with `Internal: true`. That is a platform egress deny: no default route to the public internet.
+- On AWS Lambda, functions have internet egress by default unless you attach a VPC without outbound NAT. Lab functions here cannot phone home to the public internet by default.
+- Reaching the Noctaxris API from inside a function still uses `host.docker.internal` / host-gateway (`NOCTAXRIS_LAMBDA_ENDPOINT_URL`). That path is for the published loopback API, not open internet egress.
 
 ## Credentials and crypto
 
@@ -19,7 +32,7 @@ These defaults are intentional product posture for a local emulator that people 
 - Audit events must not carry secret or plaintext key material.
 - Inactive access keys are rejected at SigV4 verification.
 
-## Auth (Phase 6)
+## Auth (Phase 7)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
@@ -30,8 +43,8 @@ These defaults are intentional product posture for a local emulator that people 
 - Lab DynamoDB APIs use `EvaluateDynamoDB` (identity or table resource policy union).
 - Lab SQS APIs use `EvaluateSQS` (identity or queue policy union).
 - Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant).
+- Lab Lambda APIs use identity Evaluate plus PassRole/trust on role configure.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
-
 
 ## Optional TLS
 

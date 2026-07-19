@@ -16,6 +16,12 @@ type Config struct {
 	RootAccessKeyID     string
 	RootSecretAccessKey string
 	AccountID           string
+	// DockerHost is the nested engine endpoint (NOCTAXRIS_DOCKER_HOST).
+	// Empty disables compute (unit tests / no DinD).
+	DockerHost string
+	// LambdaEndpointURL is injected into nested functions as AWS_ENDPOINT_URL.
+	// Defaults empty; Compose sets http://host.docker.internal:4566.
+	LambdaEndpointURL string
 	// Optional IdP bootstrap for STS federation (fail-closed when unset).
 	SAMLIdPMetadataPath string
 	SAMLIdPName         string
@@ -33,6 +39,8 @@ func LoadFromEnv() (Config, error) {
 		RootAccessKeyID:     getenv("NOCTAXRIS_ROOT_ACCESS_KEY_ID", ""),
 		RootSecretAccessKey: getenv("NOCTAXRIS_ROOT_SECRET_ACCESS_KEY", ""),
 		AccountID:           getenv("NOCTAXRIS_ACCOUNT_ID", "000000000001"),
+		DockerHost:          getenv("NOCTAXRIS_DOCKER_HOST", ""),
+		LambdaEndpointURL:   getenv("NOCTAXRIS_LAMBDA_ENDPOINT_URL", ""),
 		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
 		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),
 		OIDCIssuerURL:       getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),

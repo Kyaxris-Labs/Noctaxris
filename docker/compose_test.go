@@ -31,6 +31,43 @@ func TestComposePublishesLocalhostOnly(t *testing.T) {
 	}
 }
 
+func TestComposeEngineHasNoHostPortPublish(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := serviceBlock(string(b), "noctaxris-engine")
+	if engine == "" {
+		t.Fatal("compose must define noctaxris-engine")
+	}
+	for _, line := range strings.Split(engine, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "ports:") {
+			t.Fatal("noctaxris-engine must not publish ports to the host")
+		}
+		if strings.Contains(trimmed, "2375:") || strings.HasSuffix(trimmed, ":2375") {
+			t.Fatal("noctaxris-engine must not map host port 2375")
+		}
+	}
+}
+
+func TestComposeSetsDockerHost(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noctaxris := serviceBlock(string(b), "noctaxris")
+	if !strings.Contains(noctaxris, "NOCTAXRIS_DOCKER_HOST") {
+		t.Fatal("noctaxris must set NOCTAXRIS_DOCKER_HOST")
+	}
+	if !strings.Contains(noctaxris, "tcp://noctaxris-engine:2375") {
+		t.Fatal("NOCTAXRIS_DOCKER_HOST must point at noctaxris-engine:2375")
+	}
+}
+
 // hasDockerSockVolumeEntry reports a non-comment YAML volume list item that
 // mounts a path ending in docker.sock or uses a docker.sock: host bind.
 // English comments such as "# DO NOT add docker.sock" are allowed.
@@ -52,4 +89,35 @@ func hasDockerSockVolumeEntry(content string) bool {
 		}
 	}
 	return false
+}
+
+// serviceBlock returns the indented body of a top-level Compose service.
+func serviceBlock(content, name string) string {
+	lines := strings.Split(content, "\n")
+	start := -1
+	want := "  " + name + ":"
+	for i, line := range lines {
+		if strings.TrimSuffix(line, "\r") == want {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, raw := range lines[start:] {
+		line := strings.TrimSuffix(raw, "\r")
+		if line != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") {
+				break
+			}
+			if line[0] != ' ' && line[0] != '\t' {
+				break
+			}
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

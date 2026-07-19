@@ -178,6 +178,17 @@ const (
 	ActionSQSChangeMessageVisibility  = "sqs:ChangeMessageVisibility"
 )
 
+// Lambda lab actions (Phase 7).
+const (
+	ActionLambdaCreateFunction              = "lambda:CreateFunction"
+	ActionLambdaGetFunction                 = "lambda:GetFunction"
+	ActionLambdaDeleteFunction              = "lambda:DeleteFunction"
+	ActionLambdaListFunctions               = "lambda:ListFunctions"
+	ActionLambdaUpdateFunctionCode          = "lambda:UpdateFunctionCode"
+	ActionLambdaUpdateFunctionConfiguration = "lambda:UpdateFunctionConfiguration"
+	ActionLambdaInvoke                      = "lambda:InvokeFunction"
+)
+
 // KnownAction reports whether action is recognized in the current catalog.
 func KnownAction(action string) bool {
 	switch action {
@@ -282,7 +293,14 @@ func KnownAction(action string) bool {
 		ActionSQSDeleteMessage,
 		ActionSQSSendMessageBatch,
 		ActionSQSDeleteMessageBatch,
-		ActionSQSChangeMessageVisibility:
+		ActionSQSChangeMessageVisibility,
+		ActionLambdaCreateFunction,
+		ActionLambdaGetFunction,
+		ActionLambdaDeleteFunction,
+		ActionLambdaListFunctions,
+		ActionLambdaUpdateFunctionCode,
+		ActionLambdaUpdateFunctionConfiguration,
+		ActionLambdaInvoke:
 		return true
 	default:
 		return false

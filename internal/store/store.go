@@ -189,6 +189,23 @@ CREATE TABLE IF NOT EXISTS sqs_messages (
   created_at TEXT NOT NULL,
   attributes_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS lambda_functions (
+  account_id TEXT NOT NULL,
+  function_name TEXT NOT NULL,
+  function_arn TEXT NOT NULL,
+  role_arn TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  handler TEXT NOT NULL,
+  timeout INTEGER NOT NULL,
+  memory INTEGER NOT NULL,
+  env_json TEXT NOT NULL DEFAULT '{}',
+  code_sha256 TEXT NOT NULL,
+  code_path TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'Active',
+  description TEXT NOT NULL DEFAULT '',
+  last_modified TEXT NOT NULL,
+  PRIMARY KEY (account_id, function_name)
+);
 `
 
 // Access key status values stored in access_keys.status.

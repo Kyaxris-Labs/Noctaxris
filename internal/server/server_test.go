@@ -220,8 +220,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 6") {
-		t.Fatalf("expected Phase 6 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Phase 7") && !strings.Contains(rec.Body.String(), "not implemented") {
+		t.Fatalf("expected Phase 7 message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))

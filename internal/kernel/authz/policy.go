@@ -40,10 +40,12 @@ func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
 }
 
 // principalSpec is the IAM Principal element (trust / resource policies).
-// Supports Principal "*", {"AWS":"..."}, and {"AWS":["...",...]}.
+// Supports Principal "*", {"AWS":"..."}, {"AWS":["...",...]},
+// {"Service":"..."}, and {"Service":["...",...]}.
 type principalSpec struct {
-	All bool
-	AWS stringOrSlice
+	All     bool
+	AWS     stringOrSlice
+	Service stringOrSlice
 }
 
 func (p *principalSpec) UnmarshalJSON(data []byte) error {
@@ -56,19 +58,26 @@ func (p *principalSpec) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var obj struct {
-		AWS json.RawMessage `json:"AWS"`
+		AWS     json.RawMessage `json:"AWS"`
+		Service json.RawMessage `json:"Service"`
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return err
 	}
-	if len(obj.AWS) == 0 || string(obj.AWS) == "null" {
-		return nil
+	if len(obj.AWS) > 0 && string(obj.AWS) != "null" {
+		var aws stringOrSlice
+		if err := json.Unmarshal(obj.AWS, &aws); err != nil {
+			return err
+		}
+		p.AWS = aws
 	}
-	var aws stringOrSlice
-	if err := json.Unmarshal(obj.AWS, &aws); err != nil {
-		return err
+	if len(obj.Service) > 0 && string(obj.Service) != "null" {
+		var svc stringOrSlice
+		if err := json.Unmarshal(obj.Service, &svc); err != nil {
+			return err
+		}
+		p.Service = svc
 	}
-	p.AWS = aws
 	return nil
 }
 

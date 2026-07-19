@@ -3,15 +3,18 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -33,6 +36,11 @@ type Server struct {
 	store *store.Store
 	audit *audit.Writer
 	now   func() time.Time
+
+	// Lazy nested-engine client for Lambda Invoke (cfg.DockerHost).
+	computeOnce sync.Once
+	compute     *compute.Client
+	computeErr  error
 }
 
 type awsError struct {
@@ -111,6 +119,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 				accessKeyID = ak
 			}
 			s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
+			return
+		}
+	}
+
+	if action == "" && (strings.EqualFold(verified.Service, "lambda") || isLambdaRESTPath(r.URL.Path)) {
+		restAction, body2 := resolveLambdaREST(r, body)
+		if restAction != "" {
+			s.handleLambda(w, r, body2, requestID, eventID, restAction, verified, readOnly)
 			return
 		}
 	}
@@ -230,9 +246,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSQSDeleteMessageBatch, "DeleteMessageBatch",
 		catalog.ActionSQSChangeMessageVisibility, "ChangeMessageVisibility":
 		s.handleSQS(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionLambdaCreateFunction, "CreateFunction",
+		catalog.ActionLambdaGetFunction, "GetFunction",
+		catalog.ActionLambdaDeleteFunction, "DeleteFunction",
+		catalog.ActionLambdaListFunctions, "ListFunctions",
+		catalog.ActionLambdaUpdateFunctionCode, "UpdateFunctionCode",
+		catalog.ActionLambdaUpdateFunctionConfiguration, "UpdateFunctionConfiguration",
+		catalog.ActionLambdaInvoke, "Invoke":
+		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 6.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
 }
@@ -282,7 +306,92 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 	if strings.Contains(ct, "application/x-amz-json") {
 		return false
 	}
+	if strings.Contains(ct, "application/json") {
+		return false
+	}
+	if isLambdaRESTPath(r.URL.Path) {
+		return false
+	}
 	return true
+}
+
+func isLambdaRESTPath(path string) bool {
+	return strings.HasPrefix(path, "/2015-03-31/")
+}
+
+// resolveLambdaREST maps AWS Lambda REST paths to catalog actions and injects
+// FunctionName from the URL into the JSON body when missing (CLI REST shape).
+func resolveLambdaREST(r *http.Request, body []byte) (action string, outBody []byte) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "2015-03-31" || parts[1] != "functions" {
+		return "", body
+	}
+	name := ""
+	if len(parts) >= 3 {
+		name = parts[2]
+	}
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) == 2 {
+			return catalog.ActionLambdaCreateFunction, body
+		}
+		if len(parts) == 4 && parts[3] == "invocations" {
+			return catalog.ActionLambdaInvoke, invokeRESTBody(body, name)
+		}
+	case http.MethodGet:
+		if len(parts) == 2 {
+			return catalog.ActionLambdaListFunctions, body
+		}
+		if len(parts) == 3 {
+			return catalog.ActionLambdaGetFunction, injectFunctionNameJSON(body, name)
+		}
+	case http.MethodDelete:
+		if len(parts) == 3 {
+			return catalog.ActionLambdaDeleteFunction, injectFunctionNameJSON(body, name)
+		}
+	case http.MethodPut:
+		if len(parts) == 4 && parts[3] == "code" {
+			return catalog.ActionLambdaUpdateFunctionCode, injectFunctionNameJSON(body, name)
+		}
+		if len(parts) == 4 && parts[3] == "configuration" {
+			return catalog.ActionLambdaUpdateFunctionConfiguration, injectFunctionNameJSON(body, name)
+		}
+	}
+	return "", body
+}
+
+func injectFunctionNameJSON(body []byte, name string) []byte {
+	if strings.TrimSpace(name) == "" {
+		return body
+	}
+	params := jsonBodyMap(body)
+	if params == nil {
+		params = map[string]any{}
+	}
+	if existing, _ := params["FunctionName"].(string); strings.TrimSpace(existing) == "" {
+		params["FunctionName"] = name
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return body
+	}
+	return raw
+}
+
+func invokeRESTBody(body []byte, name string) []byte {
+	event := any(map[string]any{})
+	if len(body) > 0 && json.Valid(body) {
+		_ = json.Unmarshal(body, &event)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"FunctionName": name,
+		"Payload":      event,
+	})
+	if err != nil {
+		return body
+	}
+	return raw
 }
 
 func (s *Server) writeAWSError(
@@ -587,6 +696,20 @@ func normalizeAction(action string) string {
 		return catalog.ActionSQSDeleteMessageBatch
 	case "ChangeMessageVisibility":
 		return catalog.ActionSQSChangeMessageVisibility
+	case "CreateFunction":
+		return catalog.ActionLambdaCreateFunction
+	case "GetFunction":
+		return catalog.ActionLambdaGetFunction
+	case "DeleteFunction":
+		return catalog.ActionLambdaDeleteFunction
+	case "ListFunctions":
+		return catalog.ActionLambdaListFunctions
+	case "UpdateFunctionCode":
+		return catalog.ActionLambdaUpdateFunctionCode
+	case "UpdateFunctionConfiguration":
+		return catalog.ActionLambdaUpdateFunctionConfiguration
+	case "Invoke":
+		return catalog.ActionLambdaInvoke
 	default:
 		return action
 	}

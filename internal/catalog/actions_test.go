@@ -117,6 +117,14 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionSQSSendMessageBatch,
 		catalog.ActionSQSDeleteMessageBatch,
 		catalog.ActionSQSChangeMessageVisibility,
+		// Lambda lab
+		catalog.ActionLambdaCreateFunction,
+		catalog.ActionLambdaGetFunction,
+		catalog.ActionLambdaDeleteFunction,
+		catalog.ActionLambdaListFunctions,
+		catalog.ActionLambdaUpdateFunctionCode,
+		catalog.ActionLambdaUpdateFunctionConfiguration,
+		catalog.ActionLambdaInvoke,
 	}
 	for _, action := range known {
 		if !catalog.KnownAction(action) {
@@ -137,6 +145,7 @@ func TestKnownActionUnknown(t *testing.T) {
 		"kms:ReEncrypt",
 		"dynamodb:CreateGlobalTable",
 		"sqs:CreateFIFOQueue",
+		"lambda:PublishVersion",
 	}
 	for _, action := range cases {
 		if catalog.KnownAction(action) {
@@ -249,6 +258,13 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionSQSSendMessageBatch:                "sqs:SendMessageBatch",
 		catalog.ActionSQSDeleteMessageBatch:              "sqs:DeleteMessageBatch",
 		catalog.ActionSQSChangeMessageVisibility:         "sqs:ChangeMessageVisibility",
+		catalog.ActionLambdaCreateFunction:               "lambda:CreateFunction",
+		catalog.ActionLambdaGetFunction:                  "lambda:GetFunction",
+		catalog.ActionLambdaDeleteFunction:               "lambda:DeleteFunction",
+		catalog.ActionLambdaListFunctions:                "lambda:ListFunctions",
+		catalog.ActionLambdaUpdateFunctionCode:           "lambda:UpdateFunctionCode",
+		catalog.ActionLambdaUpdateFunctionConfiguration:  "lambda:UpdateFunctionConfiguration",
+		catalog.ActionLambdaInvoke:                       "lambda:InvokeFunction",
 	}
 	for got, want := range cases {
 		if got != want {

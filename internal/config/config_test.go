@@ -21,4 +21,19 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.DataRoot != "/var/lib/noctaxris" {
 		t.Fatalf("DataRoot = %q, want %q", cfg.DataRoot, "/var/lib/noctaxris")
 	}
+	if cfg.DockerHost != "" {
+		t.Fatalf("DockerHost = %q, want empty (compute disabled)", cfg.DockerHost)
+	}
+}
+
+func TestLoadFromEnvDockerHost(t *testing.T) {
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "tcp://noctaxris-engine:2375")
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DockerHost != "tcp://noctaxris-engine:2375" {
+		t.Fatalf("DockerHost = %q, want %q", cfg.DockerHost, "tcp://noctaxris-engine:2375")
+	}
 }
