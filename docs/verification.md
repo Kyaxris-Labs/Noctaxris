@@ -1,6 +1,6 @@
 # Verification
 
-How to confirm a local Noctaxris build.
+How to confirm a local Noctaxris **lab core** build (phases 0-7).
 
 ## Unit and integration tests
 
@@ -16,7 +16,7 @@ docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
 curl http://127.0.0.1:4566/_noctaxris/health
 ```
 
-Expect body `ok`. Compose publishes `127.0.0.1:4566` only and must not mount `docker.sock`.
+Expect body `ok`. Compose publishes `127.0.0.1:4566` only and must not mount host `docker.sock`. Lambda Invoke needs the nested `noctaxris-engine` service from the same compose file.
 
 ## AWS CLI smoke (WSL or Linux)
 
