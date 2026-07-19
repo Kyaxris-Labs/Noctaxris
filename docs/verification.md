@@ -52,4 +52,19 @@ aws sts assume-role-with-web-identity \
 
 Expect `AccessDenied` / `IdP not configured` for the last command.
 
+## KMS smoke (Phase 4)
+
+```bash
+KEY_JSON=$(aws kms create-key --endpoint-url "$EP" --output json)
+KEY_ID=$(echo "$KEY_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["KeyMetadata"]["KeyId"])')
+
+aws kms encrypt --key-id "$KEY_ID" --plaintext "$(echo -n hello | base64)" --endpoint-url "$EP"
+# capture CiphertextBlob, then:
+aws kms decrypt --ciphertext-blob fileb://cipher.bin --endpoint-url "$EP"
+
+aws kms generate-data-key --key-id "$KEY_ID" --key-spec AES_256 --endpoint-url "$EP"
+aws kms create-alias --alias-name alias/lab --target-key-id "$KEY_ID" --endpoint-url "$EP"
+aws kms encrypt --key-id alias/lab --plaintext "$(echo -n via-alias | base64)" --endpoint-url "$EP"
+```
+
 On Windows, run the same commands inside WSL against `http://127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host (WSL can reach it via `localhost` when mirrored networking is enabled, or use the Windows host IP).

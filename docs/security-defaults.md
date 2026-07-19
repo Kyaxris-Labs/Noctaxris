@@ -13,12 +13,13 @@ These defaults are intentional product posture for a local emulator that people 
 ## Credentials and crypto
 
 - Injected env root credentials become the initial account root.
-- Secrets are sealed with ChaCha20-Poly1305 before landing in SQLite.
-- Tests assert the plaintext secret does not appear in `state.db`.
-- Audit events must not carry secret material.
+- Access-key secrets and KMS CMK material are sealed with ChaCha20-Poly1305 before landing in SQLite.
+- Tests assert plaintext secrets and CMK bytes do not appear in `state.db`.
+- Audit events must not carry secret or plaintext key material.
 - Inactive access keys are rejected at SigV4 verification.
+- Encrypt/Decrypt/GenerateDataKey use AES-256-GCM under the unsealed CMK.
 
-## Auth (Phase 3)
+## Auth (Phase 4)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
@@ -29,7 +30,8 @@ These defaults are intentional product posture for a local emulator that people 
 - `AssumeRole` and federation role assumption require cross-account dual evaluation (caller identity + role trust).
 - `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` authenticate via assertion or JWT, not SigV4. Crypto must succeed against configured IdP certs or OIDC JWKS. Missing IdP or failed crypto is deny, never accept-any.
 - Session policies on federated / assume sessions intersect with identity policies.
-- Deferred IAM/STS depth returns `501 NotImplemented` or an explicit fail-closed STS error after successful authn. Never silent Allow.
+- Lab KMS APIs use `EvaluateKMS`: key policy must explicitly allow (or a matching grant). Identity Allow alone is never enough.
+- Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS
 

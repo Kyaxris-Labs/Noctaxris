@@ -6,7 +6,7 @@ Repo and Go module: `github.com/Kyaxris-Labs/Noctaxris` (PascalCase `Noctaxris`,
 
 Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxris-Labs).
 
-## Quick start (Phase 3)
+## Quick start (Phase 4)
 
 1. Copy `docker/.env.example` to `docker/.env` and set root access keys.
 2. `docker compose -f docker/compose.yaml --env-file docker/.env up --build`
@@ -15,18 +15,18 @@ Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxr
 
 ```bash
 aws sts get-caller-identity --endpoint-url http://127.0.0.1:4566
+aws kms create-key --endpoint-url http://127.0.0.1:4566
 aws iam create-user --user-name labuser --endpoint-url http://127.0.0.1:4566
-aws organizations create-account --email member@example.com --account-name Member --endpoint-url http://127.0.0.1:4566
 ```
 
-Phase 3 covers SigV4, lab-complete IAM, all 11 STS actions with fail-closed federation, and Organizations CreateAccount / AssumeRole. See [docs/phases/phase-3.md](docs/phases/phase-3.md) and [docs/deferred.md](docs/deferred.md).
+Phase 4 adds lab-complete KMS (keys, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey, grants, aliases) on top of SigV4, lab IAM, full STS, and Organizations. See [docs/phases/phase-4.md](docs/phases/phase-4.md) and [docs/deferred.md](docs/deferred.md).
 
 ## Defaults
 
 - Host publish `127.0.0.1:4566` only
 - No `docker.sock`
 - Root credentials via env injection
-- Secrets encrypted at rest under the data volume
+- Secrets and CMK material encrypted at rest under the data volume
 - SigV4 required on non-health paths (except SAML/OIDC federation STS)
 
 ## Docs

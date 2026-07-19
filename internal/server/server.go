@@ -172,9 +172,29 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMDeleteRole, "DeleteRole",
 		catalog.ActionIAMUpdateAssumeRolePolicy, "UpdateAssumeRolePolicy":
 		s.handleIAM(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionKMSCreateKey, "CreateKey",
+		catalog.ActionKMSDescribeKey, "DescribeKey",
+		catalog.ActionKMSListKeys, "ListKeys",
+		catalog.ActionKMSEnableKey, "EnableKey",
+		catalog.ActionKMSDisableKey, "DisableKey",
+		catalog.ActionKMSGetKeyPolicy, "GetKeyPolicy",
+		catalog.ActionKMSPutKeyPolicy, "PutKeyPolicy",
+		catalog.ActionKMSEncrypt, "Encrypt",
+		catalog.ActionKMSDecrypt, "Decrypt",
+		catalog.ActionKMSGenerateDataKey, "GenerateDataKey",
+		catalog.ActionKMSGenerateDataKeyWithoutPlaintext, "GenerateDataKeyWithoutPlaintext",
+		catalog.ActionKMSCreateGrant, "CreateGrant",
+		catalog.ActionKMSListGrants, "ListGrants",
+		catalog.ActionKMSRetireGrant, "RetireGrant",
+		catalog.ActionKMSRevokeGrant, "RevokeGrant",
+		catalog.ActionKMSCreateAlias, "CreateAlias",
+		catalog.ActionKMSListAliases, "ListAliases",
+		catalog.ActionKMSDeleteAlias, "DeleteAlias",
+		catalog.ActionKMSUpdateAlias, "UpdateAlias":
+		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 3.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris Phase 4.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
 }
@@ -385,6 +405,44 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMDeleteRole
 	case "UpdateAssumeRolePolicy":
 		return catalog.ActionIAMUpdateAssumeRolePolicy
+	case "CreateKey":
+		return catalog.ActionKMSCreateKey
+	case "DescribeKey":
+		return catalog.ActionKMSDescribeKey
+	case "ListKeys":
+		return catalog.ActionKMSListKeys
+	case "EnableKey":
+		return catalog.ActionKMSEnableKey
+	case "DisableKey":
+		return catalog.ActionKMSDisableKey
+	case "GetKeyPolicy":
+		return catalog.ActionKMSGetKeyPolicy
+	case "PutKeyPolicy":
+		return catalog.ActionKMSPutKeyPolicy
+	case "Encrypt":
+		return catalog.ActionKMSEncrypt
+	case "Decrypt":
+		return catalog.ActionKMSDecrypt
+	case "GenerateDataKey":
+		return catalog.ActionKMSGenerateDataKey
+	case "GenerateDataKeyWithoutPlaintext":
+		return catalog.ActionKMSGenerateDataKeyWithoutPlaintext
+	case "CreateGrant":
+		return catalog.ActionKMSCreateGrant
+	case "ListGrants":
+		return catalog.ActionKMSListGrants
+	case "RetireGrant":
+		return catalog.ActionKMSRetireGrant
+	case "RevokeGrant":
+		return catalog.ActionKMSRevokeGrant
+	case "CreateAlias":
+		return catalog.ActionKMSCreateAlias
+	case "ListAliases":
+		return catalog.ActionKMSListAliases
+	case "DeleteAlias":
+		return catalog.ActionKMSDeleteAlias
+	case "UpdateAlias":
+		return catalog.ActionKMSUpdateAlias
 	default:
 		return action
 	}

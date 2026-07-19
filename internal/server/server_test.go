@@ -3,7 +3,9 @@ package server_test
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -218,8 +220,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 3") {
-		t.Fatalf("expected Phase 3 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Phase 4") {
+		t.Fatalf("expected Phase 4 message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
@@ -372,6 +374,151 @@ func TestAssumeRoleWithWebIdentityFailsWithoutIdP(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "IdP not configured") &&
 		!strings.Contains(rec.Body.String(), "AccessDenied") {
 		t.Fatalf("expected IdP not configured / AccessDenied in %q", rec.Body.String())
+	}
+}
+
+func mustKMSJSON(t *testing.T, handler http.Handler, target string, payload map[string]any, now time.Time) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", raw)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "TrentService."+target)
+	signHeader(t, req, raw, testAccessKey, testSecret, testRegion, "kms", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestKMSEncryptDecryptRoundTrip(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustKMSJSON(t, handler, "CreateKey", map[string]any{}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateKey status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := createOut["KeyMetadata"].(map[string]any)
+	keyID, _ := meta["KeyId"].(string)
+	if keyID == "" {
+		t.Fatalf("missing KeyId in %q", createRec.Body.String())
+	}
+
+	plain := base64.StdEncoding.EncodeToString([]byte("hello-kms"))
+	encRec := mustKMSJSON(t, handler, "Encrypt", map[string]any{
+		"KeyId":     keyID,
+		"Plaintext": plain,
+	}, now)
+	if encRec.Code != http.StatusOK {
+		t.Fatalf("Encrypt status=%d body=%q", encRec.Code, encRec.Body.String())
+	}
+	var encOut map[string]any
+	if err := json.Unmarshal(encRec.Body.Bytes(), &encOut); err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := encOut["CiphertextBlob"].(string)
+	if blob == "" {
+		t.Fatalf("missing CiphertextBlob in %q", encRec.Body.String())
+	}
+
+	decRec := mustKMSJSON(t, handler, "Decrypt", map[string]any{
+		"KeyId":          keyID,
+		"CiphertextBlob": blob,
+	}, now)
+	if decRec.Code != http.StatusOK {
+		t.Fatalf("Decrypt status=%d body=%q", decRec.Code, decRec.Body.String())
+	}
+	var decOut map[string]any
+	if err := json.Unmarshal(decRec.Body.Bytes(), &decOut); err != nil {
+		t.Fatal(err)
+	}
+	gotB64, _ := decOut["Plaintext"].(string)
+	got, err := base64.StdEncoding.DecodeString(gotB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello-kms" {
+		t.Fatalf("plaintext=%q", got)
+	}
+}
+
+func TestKMSKeyPolicyDeny(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustKMSJSON(t, handler, "CreateKey", map[string]any{}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateKey status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := createOut["KeyMetadata"].(map[string]any)
+	keyID, _ := meta["KeyId"].(string)
+
+	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"kms:Encrypt","Resource":"*"}]}`
+	putRec := mustKMSJSON(t, handler, "PutKeyPolicy", map[string]any{
+		"KeyId":      keyID,
+		"PolicyName": "default",
+		"Policy":     denyPolicy,
+	}, now)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PutKeyPolicy status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+
+	plain := base64.StdEncoding.EncodeToString([]byte("nope"))
+	encRec := mustKMSJSON(t, handler, "Encrypt", map[string]any{
+		"KeyId":     keyID,
+		"Plaintext": plain,
+	}, now)
+	if encRec.Code != http.StatusForbidden {
+		t.Fatalf("Encrypt status=%d want 403 body=%q", encRec.Code, encRec.Body.String())
+	}
+	if !strings.Contains(encRec.Body.String(), "AccessDeniedException") {
+		t.Fatalf("expected AccessDeniedException in %q", encRec.Body.String())
+	}
+}
+
+func TestKMSAliasEncrypt(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustKMSJSON(t, handler, "CreateKey", map[string]any{}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateKey status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := createOut["KeyMetadata"].(map[string]any)
+	keyID, _ := meta["KeyId"].(string)
+
+	aliasRec := mustKMSJSON(t, handler, "CreateAlias", map[string]any{
+		"AliasName": "alias/lab",
+		"KeyId":     keyID,
+	}, now)
+	if aliasRec.Code != http.StatusOK {
+		t.Fatalf("CreateAlias status=%d body=%q", aliasRec.Code, aliasRec.Body.String())
+	}
+
+	plain := base64.StdEncoding.EncodeToString([]byte("via-alias"))
+	encRec := mustKMSJSON(t, handler, "Encrypt", map[string]any{
+		"KeyId":     "alias/lab",
+		"Plaintext": plain,
+	}, now)
+	if encRec.Code != http.StatusOK {
+		t.Fatalf("Encrypt via alias status=%d body=%q", encRec.Code, encRec.Body.String())
 	}
 }
 

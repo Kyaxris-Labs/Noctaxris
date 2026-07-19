@@ -71,12 +71,12 @@ const (
 
 // Attachments
 const (
-	ActionIAMAttachUserPolicy          = "iam:AttachUserPolicy"
-	ActionIAMDetachUserPolicy          = "iam:DetachUserPolicy"
-	ActionIAMAttachRolePolicy          = "iam:AttachRolePolicy"
-	ActionIAMDetachRolePolicy          = "iam:DetachRolePolicy"
-	ActionIAMListAttachedUserPolicies  = "iam:ListAttachedUserPolicies"
-	ActionIAMListAttachedRolePolicies  = "iam:ListAttachedRolePolicies"
+	ActionIAMAttachUserPolicy         = "iam:AttachUserPolicy"
+	ActionIAMDetachUserPolicy         = "iam:DetachUserPolicy"
+	ActionIAMAttachRolePolicy         = "iam:AttachRolePolicy"
+	ActionIAMDetachRolePolicy         = "iam:DetachRolePolicy"
+	ActionIAMListAttachedUserPolicies = "iam:ListAttachedUserPolicies"
+	ActionIAMListAttachedRolePolicies = "iam:ListAttachedRolePolicies"
 )
 
 // Inline user policies
@@ -102,6 +102,29 @@ const (
 	ActionIAMListRoles              = "iam:ListRoles"
 	ActionIAMDeleteRole             = "iam:DeleteRole"
 	ActionIAMUpdateAssumeRolePolicy = "iam:UpdateAssumeRolePolicy"
+)
+
+// KMS lab actions (Phase 4).
+const (
+	ActionKMSCreateKey                       = "kms:CreateKey"
+	ActionKMSDescribeKey                     = "kms:DescribeKey"
+	ActionKMSListKeys                        = "kms:ListKeys"
+	ActionKMSEnableKey                       = "kms:EnableKey"
+	ActionKMSDisableKey                      = "kms:DisableKey"
+	ActionKMSGetKeyPolicy                    = "kms:GetKeyPolicy"
+	ActionKMSPutKeyPolicy                    = "kms:PutKeyPolicy"
+	ActionKMSEncrypt                         = "kms:Encrypt"
+	ActionKMSDecrypt                         = "kms:Decrypt"
+	ActionKMSGenerateDataKey                 = "kms:GenerateDataKey"
+	ActionKMSGenerateDataKeyWithoutPlaintext = "kms:GenerateDataKeyWithoutPlaintext"
+	ActionKMSCreateGrant                     = "kms:CreateGrant"
+	ActionKMSListGrants                      = "kms:ListGrants"
+	ActionKMSRetireGrant                     = "kms:RetireGrant"
+	ActionKMSRevokeGrant                     = "kms:RevokeGrant"
+	ActionKMSCreateAlias                     = "kms:CreateAlias"
+	ActionKMSListAliases                     = "kms:ListAliases"
+	ActionKMSDeleteAlias                     = "kms:DeleteAlias"
+	ActionKMSUpdateAlias                     = "kms:UpdateAlias"
 )
 
 // KnownAction reports whether action is recognized in the current catalog.
@@ -150,7 +173,26 @@ func KnownAction(action string) bool {
 		ActionIAMGetRole,
 		ActionIAMListRoles,
 		ActionIAMDeleteRole,
-		ActionIAMUpdateAssumeRolePolicy:
+		ActionIAMUpdateAssumeRolePolicy,
+		ActionKMSCreateKey,
+		ActionKMSDescribeKey,
+		ActionKMSListKeys,
+		ActionKMSEnableKey,
+		ActionKMSDisableKey,
+		ActionKMSGetKeyPolicy,
+		ActionKMSPutKeyPolicy,
+		ActionKMSEncrypt,
+		ActionKMSDecrypt,
+		ActionKMSGenerateDataKey,
+		ActionKMSGenerateDataKeyWithoutPlaintext,
+		ActionKMSCreateGrant,
+		ActionKMSListGrants,
+		ActionKMSRetireGrant,
+		ActionKMSRevokeGrant,
+		ActionKMSCreateAlias,
+		ActionKMSListAliases,
+		ActionKMSDeleteAlias,
+		ActionKMSUpdateAlias:
 		return true
 	default:
 		return false

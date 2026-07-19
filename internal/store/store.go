@@ -96,6 +96,31 @@ CREATE TABLE IF NOT EXISTS saml_providers (
   account_id TEXT NOT NULL,
   metadata_xml TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kms_keys (
+  key_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  key_state TEXT NOT NULL,
+  key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT',
+  sealed_material BLOB NOT NULL,
+  key_policy TEXT NOT NULL,
+  creation_date TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kms_aliases (
+  alias_name TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  target_key_id TEXT NOT NULL,
+  PRIMARY KEY (account_id, alias_name)
+);
+CREATE TABLE IF NOT EXISTS kms_grants (
+  grant_id TEXT PRIMARY KEY,
+  key_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  grantee_principal TEXT NOT NULL,
+  retiring_principal TEXT,
+  operations TEXT NOT NULL,
+  name TEXT
+);
 `
 
 // Access key status values stored in access_keys.status.

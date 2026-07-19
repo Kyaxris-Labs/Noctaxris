@@ -2,7 +2,7 @@
 
 Public reference for **Noctaxris** (module `github.com/Kyaxris-Labs/Noctaxris`). Product name is PascalCase `Noctaxris`.
 
-Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. It listens on loopback by default, refuses host `docker.sock`, seals access-key secrets at rest, verifies SigV4, and ships lab IAM, full STS routing with fail-closed federation, and Organizations MVP.
+Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. It listens on loopback by default, refuses host `docker.sock`, seals secrets and CMK material at rest, verifies SigV4, and ships lab IAM, full STS routing with fail-closed federation, lab-complete KMS, and Organizations MVP.
 
 ## Reference
 
@@ -17,7 +17,7 @@ Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. It list
 
 | Doc | Topic |
 |-----|--------|
-| [phases/index.md](phases/index.md) | Phase 0–3 history |
-| [deferred.md](deferred.md) | IAM/STS depth left for later |
+| [phases/index.md](phases/index.md) | Phase 0–4 history |
+| [deferred.md](deferred.md) | IAM/STS/KMS depth left for later |
 
 Quick start stays in the root [README](../README.md).
