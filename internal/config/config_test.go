@@ -27,13 +27,17 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnvDockerHost(t *testing.T) {
-	t.Setenv("NOCTAXRIS_DOCKER_HOST", "tcp://noctaxris-engine:2375")
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "tcp://noctaxris-engine:2376")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", "/certs/client")
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DockerHost != "tcp://noctaxris-engine:2375" {
-		t.Fatalf("DockerHost = %q, want %q", cfg.DockerHost, "tcp://noctaxris-engine:2375")
+	if cfg.DockerHost != "tcp://noctaxris-engine:2376" {
+		t.Fatalf("DockerHost = %q, want %q", cfg.DockerHost, "tcp://noctaxris-engine:2376")
+	}
+	if cfg.DockerTLSCertPath != "/certs/client" {
+		t.Fatalf("DockerTLSCertPath = %q, want %q", cfg.DockerTLSCertPath, "/certs/client")
 	}
 }

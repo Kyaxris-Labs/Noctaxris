@@ -220,3 +220,300 @@ func TestFunctionARN(t *testing.T) {
 		t.Fatal("default region")
 	}
 }
+
+func createTestFunction(t *testing.T, st *store.Store, account, name string, zip []byte) store.LambdaFunction {
+	t.Helper()
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: name,
+		RoleARN: "arn:aws:iam::000000000001:role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fn
+}
+
+func TestLambdaPublishVersionFreezesSnapshot(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip1 := testZip(t, map[string]string{"app.py": "v=1"})
+	createTestFunction(t, st, account, "snap-fn", zip1)
+
+	v1, err := st.PublishVersion(account, "snap-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.Version != 1 {
+		t.Fatalf("version=%d want 1", v1.Version)
+	}
+	if v1.Handler != "app.handler" {
+		t.Fatalf("handler=%q", v1.Handler)
+	}
+	wantARN := "arn:aws:lambda:us-east-1:000000000001:function:snap-fn:1"
+	if v1.VersionARN != wantARN {
+		t.Fatalf("version arn=%q want %q", v1.VersionARN, wantARN)
+	}
+
+	zip2 := testZip(t, map[string]string{"app.py": "v=2"})
+	if _, err := st.UpdateFunctionCode(account, "snap-fn", zip2); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, executed, err := st.ResolveFunction(account, "snap-fn", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != "1" {
+		t.Fatalf("executed=%q want 1", executed)
+	}
+	if resolved.CodeSHA256 != v1.CodeSHA256 {
+		t.Fatalf("version 1 code changed after $LATEST update: got %q want %q", resolved.CodeSHA256, v1.CodeSHA256)
+	}
+
+	latest, executed, err := st.ResolveFunction(account, "snap-fn", "$LATEST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != "$LATEST" {
+		t.Fatalf("executed=%q want $LATEST", executed)
+	}
+	if latest.CodeSHA256 == v1.CodeSHA256 {
+		t.Fatal("$LATEST should differ from frozen version 1 after code update")
+	}
+
+	v2, err := st.PublishVersion(account, "snap-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.Version != 2 {
+		t.Fatalf("version=%d want 2", v2.Version)
+	}
+}
+
+func TestLambdaCreateAliasResolveAndGetByQualifier(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "x=1"})
+	createTestFunction(t, st, account, "alias-fn", zip)
+
+	v1, err := st.PublishVersion(account, "alias-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, err := st.CreateLambdaAlias(account, "alias-fn", "prod", v1.Version, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias.AliasName != "prod" || alias.FunctionVersion != 1 {
+		t.Fatalf("alias=%+v", alias)
+	}
+	wantAliasARN := "arn:aws:lambda:us-east-1:000000000001:function:alias-fn:prod"
+	if alias.AliasARN != wantAliasARN {
+		t.Fatalf("alias arn=%q want %q", alias.AliasARN, wantAliasARN)
+	}
+
+	resolved, executed, err := st.ResolveFunction(account, "alias-fn", "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != "1" {
+		t.Fatalf("executed=%q want 1", executed)
+	}
+	if resolved.CodeSHA256 != v1.CodeSHA256 {
+		t.Fatalf("alias resolved wrong code sha")
+	}
+
+	got, err := st.GetFunctionByQualifier(account, "alias-fn", "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "prod" {
+		t.Fatalf("version field=%q want prod", got.Version)
+	}
+
+	byVersion, err := st.GetFunctionByQualifier(account, "alias-fn", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byVersion.Version != "1" {
+		t.Fatalf("version field=%q want 1", byVersion.Version)
+	}
+}
+
+func TestLambdaParseFunctionQualifier(t *testing.T) {
+	cases := []struct {
+		raw, wantName, wantQual string
+	}{
+		{"hello", "hello", "$LATEST"},
+		{"hello:1", "hello", "1"},
+		{"hello:prod", "hello", "prod"},
+		{"arn:aws:lambda:us-east-1:000000000001:function:hello", "hello", "$LATEST"},
+		{"arn:aws:lambda:us-east-1:000000000001:function:hello:2", "hello", "2"},
+		{"arn:aws:lambda:us-east-1:000000000001:function:hello:prod", "hello", "prod"},
+	}
+	for _, tc := range cases {
+		name, qual := store.ParseFunctionQualifier(tc.raw)
+		if name != tc.wantName || qual != tc.wantQual {
+			t.Fatalf("ParseFunctionQualifier(%q) = (%q,%q) want (%q,%q)", tc.raw, name, qual, tc.wantName, tc.wantQual)
+		}
+	}
+}
+
+func TestLambdaPublishLayerAttachAndResolve(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	layerZip := testZip(t, map[string]string{"python/layerlib.py": "LAYER_VALUE='from-layer'\n"})
+	layer, err := st.PublishLayerVersion(store.PublishLayerVersionMeta{
+		AccountID: account,
+		Region:    "us-east-1",
+		LayerName: "shared-lib",
+		Zip:       layerZip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layer.Version != 1 {
+		t.Fatalf("version=%d want 1", layer.Version)
+	}
+	wantLayerARN := "arn:aws:lambda:us-east-1:000000000001:layer:shared-lib:1"
+	if layer.LayerARN != wantLayerARN {
+		t.Fatalf("layer arn=%q want %q", layer.LayerARN, wantLayerARN)
+	}
+	if _, err := os.Stat(filepath.Join(st.DataRoot(), "lambda", account, "layers", "shared-lib", "versions", "1", "code", "python", "layerlib.py")); err != nil {
+		t.Fatalf("missing unpacked layer file: %v", err)
+	}
+
+	fnZip := testZip(t, map[string]string{"app.py": "import layerlib\ndef handler(e,c): return {'layer': layerlib.LAYER_VALUE}\n"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "layer-fn",
+		RoleARN: "arn:aws:iam::000000000001:role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: fnZip,
+		Layers: []string{layer.LayerARN},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fn.Layers) != 1 || fn.Layers[0] != wantLayerARN {
+		t.Fatalf("layers=%v want [%q]", fn.Layers, wantLayerARN)
+	}
+
+	paths, err := st.ResolveLayerCodeDirs(st.DataRoot(), account, fn.Layers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("paths=%v", paths)
+	}
+	wantPath := store.LayerCodeDirInContainer(st.DataRoot(), account, "shared-lib", 1)
+	if paths[0] != wantPath {
+		t.Fatalf("path=%q want %q", paths[0], wantPath)
+	}
+
+	got, err := st.GetLayerVersion(account, "shared-lib", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CodeSHA256 != layer.CodeSHA256 {
+		t.Fatalf("get layer sha mismatch")
+	}
+	list, err := st.ListLayerVersions(account, "shared-lib")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list=%v err=%v", list, err)
+	}
+	if err := st.DeleteLayerVersion(account, "shared-lib", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetLayerVersion(account, "shared-lib", 1); !errors.Is(err, store.ErrNoSuchLayer) {
+		t.Fatalf("want ErrNoSuchLayer, got %v", err)
+	}
+}
+
+func TestLambdaLayersMaxAndInvalidARN(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	layerZip := testZip(t, map[string]string{"python/x.py": "x=1"})
+	layer, err := st.PublishLayerVersion(store.PublishLayerVersionMeta{
+		AccountID: account, Region: "us-east-1", LayerName: "one", Zip: layerZip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arns := make([]string, 0, store.MaxLambdaLayers+1)
+	for i := 0; i < store.MaxLambdaLayers+1; i++ {
+		arns = append(arns, layer.LayerARN)
+	}
+	fnZip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	_, err = st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "too-many",
+		RoleARN: "arn:aws:iam::000000000001:role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: fnZip, Layers: arns,
+	})
+	if !errors.Is(err, store.ErrTooManyLayers) {
+		t.Fatalf("want ErrTooManyLayers, got %v", err)
+	}
+	_, err = st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "bad-arn",
+		RoleARN: "arn:aws:iam::000000000001:role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: fnZip,
+		Layers: []string{"arn:aws:lambda:us-east-1:999999999999:layer:one:1"},
+	})
+	if !errors.Is(err, store.ErrInvalidLayerARN) {
+		t.Fatalf("want ErrInvalidLayerARN, got %v", err)
+	}
+}
+
+func TestLambdaCreateFunctionImage(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	imageURI := "public.ecr.aws/lambda/python:3.12"
+
+	created, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "img-fn",
+		RoleARN:      "arn:aws:iam::000000000001:role/lambda-exec",
+		Handler:      "app.handler",
+		Timeout:      10,
+		Memory:       256,
+		PackageType:  store.LambdaPackageTypeImage,
+		ImageURI:     imageURI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.PackageType != store.LambdaPackageTypeImage {
+		t.Fatalf("PackageType=%q want Image", created.PackageType)
+	}
+	if created.ImageURI != imageURI {
+		t.Fatalf("ImageURI=%q", created.ImageURI)
+	}
+	if created.CodePath != "" {
+		t.Fatalf("CodePath=%q want empty for image", created.CodePath)
+	}
+
+	got, err := st.GetFunction(account, "img-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PackageType != store.LambdaPackageTypeImage || got.ImageURI != imageURI {
+		t.Fatalf("got=%+v", got)
+	}
+
+	updated, err := st.UpdateFunctionImageCode(account, "img-fn", "public.ecr.aws/lambda/python:3.12-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ImageURI != "public.ecr.aws/lambda/python:3.12-v2" {
+		t.Fatalf("updated ImageURI=%q", updated.ImageURI)
+	}
+
+	pub, err := st.PublishVersion(account, "img-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.PackageType != store.LambdaPackageTypeImage || pub.ImageURI != updated.ImageURI {
+		t.Fatalf("published=%+v", pub)
+	}
+}

@@ -6,7 +6,7 @@ These defaults are intentional product posture for a local emulator that people 
 
 - Compose publishes only `127.0.0.1:4566` on the host. That is not `0.0.0.0` on the host.
 - Inside the container the process listens on `0.0.0.0:4566` so the published mapping works.
-- No host `docker.sock` mount on the API service. Nested compute uses Compose service `noctaxris-engine` over TCP on the Compose network (`NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2375`). The engine API is not published to the host.
+- No host `docker.sock` mount on the API service. Nested compute uses Compose service `noctaxris-engine` over TLS on the Compose network (`NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376`, `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`). The engine API is not published to the host.
 - `noctaxris-engine` runs privileged DinD so function containers can start. Privilege stays inside that nested engine. The API container remains distroless `nonroot` without a host socket.
 - Image runs as distroless `nonroot`. Data dir is seeded owned by UID `65532` so the volume is writable.
 - Compose sets `read_only: true` with `/tmp` as tmpfs on the API service.
@@ -15,7 +15,7 @@ These defaults are intentional product posture for a local emulator that people 
 
 - CreateFunction and role-changing UpdateFunctionConfiguration require `iam:PassRole` on the target role plus a trust policy that Allows `sts:AssumeRole` for `lambda.amazonaws.com`.
 - Missing PassRole or a trust policy that only names an AWS principal (and not the Lambda service) is Deny.
-- Sync Invoke mints temporary credentials for the function role and injects them into the nested container. Callers still need `lambda:InvokeFunction` on the function ARN.
+- Sync Invoke mints temporary credentials for the function role and injects them into the nested container. Callers need identity Allow for `lambda:InvokeFunction` on the function ARN, or a same-account function resource policy that Allows invoke.
 
 ## Platform egress deny vs AWS default internet
 
@@ -43,7 +43,7 @@ These defaults are intentional product posture for a local emulator that people 
 - Lab DynamoDB APIs use `EvaluateDynamoDB` (identity or table resource policy union).
 - Lab SQS APIs use `EvaluateSQS` (identity or queue policy union).
 - Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant).
-- Lab Lambda APIs use identity Evaluate plus PassRole/trust on role configure.
+- Lab Lambda configure APIs use identity Evaluate plus PassRole/trust. Lab Lambda dataplane APIs use identity or function resource policy union (same pattern as DynamoDB and Secrets Manager).
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS

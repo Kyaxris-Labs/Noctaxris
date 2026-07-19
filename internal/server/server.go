@@ -296,13 +296,43 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSQSDeleteMessageBatch, "DeleteMessageBatch",
 		catalog.ActionSQSChangeMessageVisibility, "ChangeMessageVisibility":
 		s.handleSQS(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSSMPutParameter, "PutParameter",
+		catalog.ActionSSMGetParameter, "GetParameter",
+		catalog.ActionSSMGetParameters, "GetParameters",
+		catalog.ActionSSMDeleteParameter, "DeleteParameter",
+		catalog.ActionSSMDescribeParameters, "DescribeParameters":
+		s.handleSSM(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSecretsCreateSecret, "CreateSecret",
+		catalog.ActionSecretsGetSecretValue, "GetSecretValue",
+		catalog.ActionSecretsPutSecretValue, "PutSecretValue",
+		catalog.ActionSecretsDeleteSecret, "DeleteSecret",
+		catalog.ActionSecretsDescribeSecret, "DescribeSecret",
+		catalog.ActionSecretsListSecrets, "ListSecrets",
+		catalog.ActionSecretsPutResourcePolicy,
+		catalog.ActionSecretsGetResourcePolicy,
+		catalog.ActionSecretsDeleteResourcePolicy:
+		s.handleSecretsManager(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLambdaCreateFunction, "CreateFunction",
 		catalog.ActionLambdaGetFunction, "GetFunction",
 		catalog.ActionLambdaDeleteFunction, "DeleteFunction",
 		catalog.ActionLambdaListFunctions, "ListFunctions",
 		catalog.ActionLambdaUpdateFunctionCode, "UpdateFunctionCode",
 		catalog.ActionLambdaUpdateFunctionConfiguration, "UpdateFunctionConfiguration",
-		catalog.ActionLambdaInvoke, "Invoke":
+		catalog.ActionLambdaInvoke, "Invoke",
+		catalog.ActionLambdaPublishVersion, "PublishVersion",
+		catalog.ActionLambdaListVersionsByFunction, "ListVersionsByFunction",
+		catalog.ActionLambdaCreateAlias,
+		catalog.ActionLambdaUpdateAlias,
+		catalog.ActionLambdaDeleteAlias,
+		catalog.ActionLambdaGetAlias, "GetAlias",
+		catalog.ActionLambdaListAliases,
+		catalog.ActionLambdaPublishLayerVersion, "PublishLayerVersion",
+		catalog.ActionLambdaGetLayerVersion, "GetLayerVersion",
+		catalog.ActionLambdaListLayerVersions, "ListLayerVersions",
+		catalog.ActionLambdaDeleteLayerVersion, "DeleteLayerVersion",
+		catalog.ActionLambdaAddPermission, "AddPermission",
+		catalog.ActionLambdaRemovePermission, "RemovePermission",
+		catalog.ActionLambdaGetPolicy:
 		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
@@ -538,10 +568,23 @@ func readBody(r *http.Request, limit int64) ([]byte, error) {
 
 func resolveAction(r *http.Request, body []byte) string {
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
-		if i := strings.LastIndex(target, "."); i >= 0 && i+1 < len(target) {
-			return target[i+1:]
+		dot := strings.LastIndex(target, ".")
+		if dot < 0 || dot+1 >= len(target) {
+			return target
 		}
-		return target
+		short := target[dot+1:]
+		prefix := target[:dot]
+		switch {
+		case strings.EqualFold(prefix, "AWSLambda"):
+			return lambdaAction(short)
+		case strings.EqualFold(prefix, "TrentService"), strings.EqualFold(prefix, "AWSKMS"):
+			return normalizeAction(short)
+		case strings.EqualFold(prefix, "AmazonSSM"):
+			return normalizeAction(short)
+		case strings.EqualFold(prefix, "secretsmanager"):
+			return secretsAction(short)
+		}
+		return short
 	}
 	if v := r.URL.Query().Get("Action"); v != "" {
 		return normalizeAction(v)
@@ -844,6 +887,16 @@ func normalizeAction(action string) string {
 		return catalog.ActionSQSDeleteMessageBatch
 	case "ChangeMessageVisibility":
 		return catalog.ActionSQSChangeMessageVisibility
+	case "PutParameter":
+		return catalog.ActionSSMPutParameter
+	case "GetParameter":
+		return catalog.ActionSSMGetParameter
+	case "GetParameters":
+		return catalog.ActionSSMGetParameters
+	case "DeleteParameter":
+		return catalog.ActionSSMDeleteParameter
+	case "DescribeParameters":
+		return catalog.ActionSSMDescribeParameters
 	case "CreateFunction":
 		return catalog.ActionLambdaCreateFunction
 	case "GetFunction":
@@ -858,6 +911,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionLambdaUpdateFunctionConfiguration
 	case "Invoke":
 		return catalog.ActionLambdaInvoke
+	case "PublishVersion":
+		return catalog.ActionLambdaPublishVersion
+	case "ListVersionsByFunction":
+		return catalog.ActionLambdaListVersionsByFunction
+	case "GetAlias":
+		return catalog.ActionLambdaGetAlias
 	default:
 		return action
 	}

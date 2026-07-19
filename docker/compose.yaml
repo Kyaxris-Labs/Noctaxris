@@ -11,13 +11,15 @@ services:
       NOCTAXRIS_ROOT_ACCESS_KEY_ID: "${NOCTAXRIS_ROOT_ACCESS_KEY_ID}"
       NOCTAXRIS_ROOT_SECRET_ACCESS_KEY: "${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY}"
       NOCTAXRIS_ACCOUNT_ID: "000000000001"
-      # Nested DinD API on the Compose network only (never host docker.sock).
-      NOCTAXRIS_DOCKER_HOST: "tcp://noctaxris-engine:2375"
+      # Nested DinD API on the Compose network only (TLS on 2376, never host docker.sock).
+      NOCTAXRIS_DOCKER_HOST: "tcp://noctaxris-engine:2376"
+      NOCTAXRIS_DOCKER_CERT_PATH: "/certs/client"
       # Function containers run inside DinD and reach the published API via
       # host.docker.internal (Docker Desktop). Override for Linux or custom wiring.
       NOCTAXRIS_LAMBDA_ENDPOINT_URL: "${NOCTAXRIS_LAMBDA_ENDPOINT_URL:-http://host.docker.internal:4566}"
     volumes:
       - noctaxris-data:/var/lib/noctaxris
+      - noctaxris-engine-certs:/certs:ro
     # DO NOT add docker.sock
     read_only: true
     tmpfs:
@@ -28,13 +30,13 @@ services:
   noctaxris-engine:
     image: docker:27-dind
     privileged: true
-    environment:
-      # Lab: plain TCP on the Compose network. Do not publish 2375 to the host.
-      DOCKER_TLS_CERTDIR: ""
+    # DOCKER_TLS_CERTDIR defaults to /certs; engine listens on 2376 on the Compose network.
     volumes:
       - noctaxris-data:/var/lib/noctaxris
+      - noctaxris-engine-certs:/certs
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Engine API stays on the Compose network only; do not add a host mapping for 2375.
+    # Engine API stays on the Compose network only; do not add host mappings for 2375/2376.
 volumes:
   noctaxris-data:
+  noctaxris-engine-certs:

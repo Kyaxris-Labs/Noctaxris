@@ -30,9 +30,22 @@ func TestKnownServiceKeys(t *testing.T) {
 		"s3:prefix",
 		"dynamodb:LeadingKeys",
 		"lambda:FunctionArn",
+		"ssm:Overwrite",
+		"ssm:Recursive",
+		"secretsmanager:KmsKeyArn",
+		"secretsmanager:SecretId",
 	} {
 		if !Known(key) {
 			t.Fatalf("expected %q known", key)
 		}
+	}
+}
+
+func TestKnownSSMAndSecretsTagTemplates(t *testing.T) {
+	if !Known("ssm:resourceTag/env") {
+		t.Fatal("expected ssm:resourceTag/env known via template")
+	}
+	if !Known("secretsmanager:ResourceTag/tag-key") {
+		t.Fatal("expected secretsmanager:ResourceTag/tag-key known from SAR catalog")
 	}
 }

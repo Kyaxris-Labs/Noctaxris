@@ -355,6 +355,34 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureLambdaVersionSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLambdaLayerSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLambdaAsyncSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLambdaImageSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLambdaPolicySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSSMSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSecretsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

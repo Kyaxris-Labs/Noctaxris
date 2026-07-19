@@ -19,6 +19,8 @@ type Config struct {
 	// DockerHost is the nested engine endpoint (NOCTAXRIS_DOCKER_HOST).
 	// Empty disables compute (unit tests / no DinD).
 	DockerHost string
+	// DockerTLSCertPath is the directory with ca.pem, cert.pem, key.pem for engine TLS.
+	DockerTLSCertPath string
 	// LambdaEndpointURL is injected into nested functions as AWS_ENDPOINT_URL.
 	// Defaults empty; Compose sets http://host.docker.internal:4566.
 	LambdaEndpointURL string
@@ -40,6 +42,7 @@ func LoadFromEnv() (Config, error) {
 		RootSecretAccessKey: getenv("NOCTAXRIS_ROOT_SECRET_ACCESS_KEY", ""),
 		AccountID:           getenv("NOCTAXRIS_ACCOUNT_ID", "000000000001"),
 		DockerHost:          getenv("NOCTAXRIS_DOCKER_HOST", ""),
+		DockerTLSCertPath:   getenv("NOCTAXRIS_DOCKER_CERT_PATH", ""),
 		LambdaEndpointURL:   getenv("NOCTAXRIS_LAMBDA_ENDPOINT_URL", ""),
 		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
 		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -24,10 +25,22 @@ func functionConfiguration(fn store.LambdaFunction) map[string]any {
 		"LastModified": fn.LastModified,
 		"Description":  fn.Description,
 		"Version":      "$LATEST",
-		"PackageType":  "Zip",
+		"PackageType":  fn.PackageType,
+	}
+	if fn.PackageType == "" {
+		cfg["PackageType"] = store.LambdaPackageTypeZip
 	}
 	if len(fn.Env) > 0 {
 		cfg["Environment"] = map[string]any{"Variables": fn.Env}
+	}
+	if len(fn.Layers) > 0 {
+		cfg["Layers"] = append([]string(nil), fn.Layers...)
+	}
+	if strings.TrimSpace(fn.DeadLetterTargetArn) != "" {
+		cfg["DeadLetterConfig"] = map[string]any{"TargetArn": fn.DeadLetterTargetArn}
+	}
+	if strings.TrimSpace(fn.DestinationOnFailureArn) != "" {
+		cfg["DestinationConfig"] = map[string]any{"OnFailure": fn.DestinationOnFailureArn}
 	}
 	return cfg
 }
@@ -48,12 +61,17 @@ func CreateFunctionJSON(fn store.LambdaFunction) ([]byte, error) {
 
 // GetFunctionJSON builds a GetFunction success body.
 func GetFunctionJSON(fn store.LambdaFunction) ([]byte, error) {
+	code := map[string]any{
+		"RepositoryType": "S3",
+		"Location":       "",
+	}
+	if fn.PackageType == store.LambdaPackageTypeImage {
+		code["ImageUri"] = fn.ImageURI
+		code["RepositoryType"] = "ECR"
+	}
 	return json.Marshal(map[string]any{
 		"Configuration": functionConfiguration(fn),
-		"Code": map[string]any{
-			"RepositoryType": "S3",
-			"Location":       "",
-		},
+		"Code":          code,
 	})
 }
 
@@ -67,20 +85,154 @@ func ListFunctionsJSON(fns []store.LambdaFunction) ([]byte, error) {
 }
 
 // InvokeJSON builds a sync Invoke success body (Payload is base64).
-func InvokeJSON(payload []byte, statusCode int) ([]byte, error) {
+func InvokeJSON(payload []byte, statusCode int, executedVersion string) ([]byte, error) {
 	if statusCode == 0 {
 		statusCode = 200
 	}
+	if executedVersion == "" {
+		executedVersion = "$LATEST"
+	}
 	return json.Marshal(map[string]any{
 		"StatusCode":      statusCode,
-		"ExecutedVersion": "$LATEST",
+		"ExecutedVersion": executedVersion,
 		"Payload":         base64.StdEncoding.EncodeToString(payload),
 	})
+}
+
+// InvokeAsyncAcceptedJSON builds an async Invoke (InvocationType=Event) success body.
+func InvokeAsyncAcceptedJSON(executedVersion string) ([]byte, error) {
+	if executedVersion == "" {
+		executedVersion = "$LATEST"
+	}
+	return json.Marshal(map[string]any{
+		"StatusCode":      202,
+		"ExecutedVersion": executedVersion,
+	})
+}
+
+// functionConfigurationWithVersion maps store metadata to AWS FunctionConfiguration fields.
+func functionConfigurationWithVersion(fn store.LambdaFunction, version string) map[string]any {
+	cfg := functionConfiguration(fn)
+	cfg["Version"] = version
+	return cfg
+}
+
+// PublishVersionJSON builds a PublishVersion success body.
+func PublishVersionJSON(v store.LambdaFunctionVersion) ([]byte, error) {
+	cfg := functionConfiguration(v.LambdaFunction)
+	cfg["Version"] = fmt.Sprintf("%d", v.Version)
+	return json.Marshal(cfg)
+}
+
+// ListVersionsByFunctionJSON builds a ListVersionsByFunction success body.
+func ListVersionsByFunctionJSON(versions []store.LambdaFunctionVersion) ([]byte, error) {
+	out := make([]map[string]any, 0, len(versions))
+	for _, v := range versions {
+		cfg := functionConfiguration(v.LambdaFunction)
+		cfg["Version"] = fmt.Sprintf("%d", v.Version)
+		out = append(out, cfg)
+	}
+	return json.Marshal(map[string]any{"Versions": out})
+}
+
+// GetFunctionQualifiedJSON builds a GetFunction success body with a version qualifier.
+func GetFunctionQualifiedJSON(q store.QualifiedFunction) ([]byte, error) {
+	code := map[string]any{
+		"RepositoryType": "S3",
+		"Location":       "",
+	}
+	if q.PackageType == store.LambdaPackageTypeImage {
+		code["ImageUri"] = q.ImageURI
+		code["RepositoryType"] = "ECR"
+	}
+	return json.Marshal(map[string]any{
+		"Configuration": functionConfigurationWithVersion(q.LambdaFunction, q.Version),
+		"Code":          code,
+	})
+}
+
+func aliasConfiguration(a store.LambdaAlias) map[string]any {
+	return map[string]any{
+		"AliasArn":        a.AliasARN,
+		"Name":            a.AliasName,
+		"FunctionVersion": fmt.Sprintf("%d", a.FunctionVersion),
+		"Description":     a.Description,
+		"RevisionId":      a.RevisionID,
+	}
+}
+
+// CreateAliasJSON builds a CreateAlias / UpdateAlias success body.
+func CreateAliasJSON(a store.LambdaAlias) ([]byte, error) {
+	return json.Marshal(aliasConfiguration(a))
+}
+
+// GetAliasJSON builds a GetAlias success body.
+func GetAliasJSON(a store.LambdaAlias) ([]byte, error) {
+	return json.Marshal(aliasConfiguration(a))
+}
+
+// ListAliasesJSON builds a ListAliases success body.
+func ListAliasesJSON(aliases []store.LambdaAlias) ([]byte, error) {
+	out := make([]map[string]any, 0, len(aliases))
+	for _, a := range aliases {
+		out = append(out, aliasConfiguration(a))
+	}
+	return json.Marshal(map[string]any{"Aliases": out})
 }
 
 // EmptyOKJSON returns an empty JSON object for DeleteFunction.
 func EmptyOKJSON() ([]byte, error) {
 	return []byte("{}"), nil
+}
+
+// AddPermissionJSON builds an AddPermission success body.
+func AddPermissionJSON(statement string) ([]byte, error) {
+	return json.Marshal(map[string]string{"Statement": statement})
+}
+
+// GetPolicyJSON builds a GetPolicy success body.
+func GetPolicyJSON(policy string) ([]byte, error) {
+	return json.Marshal(map[string]string{"Policy": policy})
+}
+
+func layerVersionConfiguration(layer store.LambdaLayer) map[string]any {
+	return map[string]any{
+		"LayerArn":               layer.LayerARN,
+		"LayerVersionArn":        layer.LayerARN,
+		"Description":            layer.Description,
+		"CreatedDate":              layer.PublishedAt,
+		"Version":                  layer.Version,
+		"CompatibleRuntimes":       store.SupportedLambdaRuntimes(),
+		"CompatibleArchitectures":  []string{"x86_64"},
+		"LicenseInfo":              "",
+	}
+}
+
+// PublishLayerVersionJSON builds a PublishLayerVersion success body.
+func PublishLayerVersionJSON(layer store.LambdaLayer) ([]byte, error) {
+	cfg := layerVersionConfiguration(layer)
+	cfg["Content"] = map[string]any{
+		"CodeSha256": codeSHA256AWS(layer.CodeSHA256),
+	}
+	return json.Marshal(cfg)
+}
+
+// GetLayerVersionJSON builds a GetLayerVersion success body.
+func GetLayerVersionJSON(layer store.LambdaLayer) ([]byte, error) {
+	cfg := layerVersionConfiguration(layer)
+	cfg["Content"] = map[string]any{
+		"CodeSha256": codeSHA256AWS(layer.CodeSHA256),
+	}
+	return json.Marshal(cfg)
+}
+
+// ListLayerVersionsJSON builds a ListLayerVersions success body.
+func ListLayerVersionsJSON(layers []store.LambdaLayer) ([]byte, error) {
+	out := make([]map[string]any, 0, len(layers))
+	for _, layer := range layers {
+		out = append(out, layerVersionConfiguration(layer))
+	}
+	return json.Marshal(map[string]any{"LayerVersions": out})
 }
 
 // DecodeZipFile decodes a CreateFunction / UpdateFunctionCode ZipFile field.

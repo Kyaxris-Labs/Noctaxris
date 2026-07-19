@@ -41,8 +41,8 @@ HTTP request
        ├─ if S3 path-style REST (service s3 / empty Action) → EvaluateS3 then handler
        ├─ GetCallerIdentity → XML (no IAM Evaluate)
        ├─ DynamoDB / SQS → EvaluateDynamoDB / EvaluateSQS then handler
-       ├─ Lambda → identity Evaluate, PassRole on role configure, then handler
-       │    └─ Invoke → mint execution-role session, compute.RunInvoke via noctaxris-engine
+       ├─ Lambda → identity or resource policy (dataplane), PassRole on role configure, then handler
+       │    └─ Invoke → mint execution-role session, compute.RunInvoke via noctaxris-engine (TLS)
        ├─ other STS / IAM / KMS / Organizations → existing Evaluate paths
        └─ unknown → 501 NotImplemented
 ```
@@ -51,7 +51,7 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 
 ## Compute path
 
-Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2375`. The API process never mounts host `/var/run/docker.sock`. `noctaxris-engine` is privileged DinD so nested containers can start. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD.
+Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD.
 
 ## Authz
 
@@ -61,6 +61,7 @@ Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2375`. The API proces
 - SQS: `EvaluateSQS`. Allow if identity **or** queue policy Allows (Deny-overrides)
 - KMS: `EvaluateKMS`. Key-policy explicit Allow (or grant) plus identity
 - Lambda configure: `CheckPassRole` (caller `iam:PassRole` plus `lambda.amazonaws.com` trust)
+- Lambda dataplane: `EvaluateDynamoDB`-style union (identity **or** function resource policy Allow, Deny-overrides)
 - Session policies: `EvaluateWithSession` intersection
 - Cross-account AssumeRole: `EvaluateCrossAccount`
 

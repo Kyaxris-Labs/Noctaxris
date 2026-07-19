@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -9,7 +11,12 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-const masterKeySize = 32
+const (
+	masterKeySize = 32
+
+	ciphertextVersionV1 byte = 1
+	ciphertextVersionV2 byte = 2
+)
 
 type MasterKey [masterKeySize]byte
 
@@ -61,4 +68,78 @@ func Unseal(key MasterKey, ciphertext []byte) ([]byte, error) {
 	nonce := ciphertext[:nonceSize]
 	sealed := ciphertext[nonceSize:]
 	return aead.Open(nil, nonce, sealed, nil)
+}
+
+// EncryptUnderCMK seals plaintext with AES-256-GCM under cmk material.
+// Output format v2: version(1)=2 || keyID_len(1) || keyID || nonce || ciphertext+tag.
+func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte) ([]byte, error) {
+	if len(cmk) != 32 {
+		return nil, fmt.Errorf("cmk must be 32 bytes")
+	}
+	if keyID == "" || len(keyID) > 255 {
+		return nil, fmt.Errorf("key id required and max 255 bytes")
+	}
+	block, err := aes.NewCipher(cmk)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	sealed := gcm.Seal(nil, nonce, plaintext, nil)
+	kid := []byte(keyID)
+	out := make([]byte, 2+len(kid)+len(nonce)+len(sealed))
+	out[0] = ciphertextVersionV2
+	out[1] = byte(len(kid))
+	copy(out[2:], kid)
+	off := 2 + len(kid)
+	copy(out[off:], nonce)
+	copy(out[off+len(nonce):], sealed)
+	return out, nil
+}
+
+// DecryptUnderCMK opens a blob produced by EncryptUnderCMK (v1 or v2).
+func DecryptUnderCMK(cmk, blob []byte) ([]byte, error) {
+	if len(cmk) != 32 {
+		return nil, fmt.Errorf("cmk must be 32 bytes")
+	}
+	if len(blob) < 1 {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	block, err := aes.NewCipher(cmk)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	var rest []byte
+	switch blob[0] {
+	case ciphertextVersionV1:
+		rest = blob[1:]
+	case ciphertextVersionV2:
+		if len(blob) < 2 {
+			return nil, fmt.Errorf("ciphertext too short")
+		}
+		n := int(blob[1])
+		if len(blob) < 2+n {
+			return nil, fmt.Errorf("ciphertext too short")
+		}
+		rest = blob[2+n:]
+	default:
+		return nil, fmt.Errorf("unsupported ciphertext version %d", blob[0])
+	}
+	if len(rest) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce := rest[:nonceSize]
+	sealed := rest[nonceSize:]
+	return gcm.Open(nil, nonce, sealed, nil)
 }

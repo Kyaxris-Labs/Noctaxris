@@ -51,6 +51,9 @@ func TestComposeEngineHasNoHostPortPublish(t *testing.T) {
 		if strings.Contains(trimmed, "2375:") || strings.HasSuffix(trimmed, ":2375") {
 			t.Fatal("noctaxris-engine must not map host port 2375")
 		}
+		if strings.Contains(trimmed, "2376:") || strings.HasSuffix(trimmed, ":2376") {
+			t.Fatal("noctaxris-engine must not map host port 2376")
+		}
 	}
 }
 
@@ -63,8 +66,47 @@ func TestComposeSetsDockerHost(t *testing.T) {
 	if !strings.Contains(noctaxris, "NOCTAXRIS_DOCKER_HOST") {
 		t.Fatal("noctaxris must set NOCTAXRIS_DOCKER_HOST")
 	}
-	if !strings.Contains(noctaxris, "tcp://noctaxris-engine:2375") {
-		t.Fatal("NOCTAXRIS_DOCKER_HOST must point at noctaxris-engine:2375")
+	if !strings.Contains(noctaxris, "tcp://noctaxris-engine:2376") {
+		t.Fatal("NOCTAXRIS_DOCKER_HOST must point at noctaxris-engine:2376 (TLS)")
+	}
+	if strings.Contains(noctaxris, ":2375") {
+		t.Fatal("NOCTAXRIS_DOCKER_HOST must not use plain TCP port 2375")
+	}
+	if !strings.Contains(noctaxris, "NOCTAXRIS_DOCKER_CERT_PATH") {
+		t.Fatal("noctaxris must set NOCTAXRIS_DOCKER_CERT_PATH for engine TLS")
+	}
+}
+
+func TestComposeEngineTLSNotDisabled(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := serviceBlock(string(b), "noctaxris-engine")
+	if engine == "" {
+		t.Fatal("compose must define noctaxris-engine")
+	}
+	if strings.Contains(engine, `DOCKER_TLS_CERTDIR: ""`) {
+		t.Fatal("noctaxris-engine must not disable TLS (DOCKER_TLS_CERTDIR must not be empty)")
+	}
+}
+
+func TestComposeSharesEngineCertsVolume(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	noctaxris := serviceBlock(content, "noctaxris")
+	engine := serviceBlock(content, "noctaxris-engine")
+	if !strings.Contains(noctaxris, "noctaxris-engine-certs") {
+		t.Fatal("noctaxris must mount noctaxris-engine-certs for TLS client PEMs")
+	}
+	if !strings.Contains(engine, "noctaxris-engine-certs") {
+		t.Fatal("noctaxris-engine must mount noctaxris-engine-certs for TLS cert generation")
+	}
+	if !strings.Contains(content, "noctaxris-engine-certs:") {
+		t.Fatal("compose must declare noctaxris-engine-certs volume")
 	}
 }
 

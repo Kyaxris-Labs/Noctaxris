@@ -1,7 +1,8 @@
 // Package compute runs Lambda function code in nested containers via DinD.
 //
 // Networking (Compose + DinD):
-//   - noctaxris talks to dockerd at NOCTAXRIS_DOCKER_HOST (tcp://noctaxris-engine:2375).
+//   - noctaxris talks to dockerd at NOCTAXRIS_DOCKER_HOST (tcp://noctaxris-engine:2376)
+//     with TLS client PEMs under NOCTAXRIS_DOCKER_CERT_PATH (/certs/client in Compose).
 //   - Function containers are created inside DinD, on DinD's bridge, not on the
 //     outer Compose network, so they cannot resolve the "noctaxris" service name.
 //   - EndpointURL for invokes should be http://host.docker.internal:4566 under
@@ -20,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/api/types/image"
@@ -31,11 +33,6 @@ const (
 	// FunctionNetworkName is the DinD-internal network for one-shot invokes.
 	FunctionNetworkName = "noctaxris-fn"
 
-	// PreferredFunctionImage is the AWS Lambda Python base (one-shot override, not RIE).
-	PreferredFunctionImage = "public.ecr.aws/lambda/python:3.12"
-	// FallbackFunctionImage is used when the preferred image cannot be pulled.
-	FallbackFunctionImage = "python:3.12-slim"
-
 	defaultEndpointURL = "http://host.docker.internal:4566"
 )
 
@@ -44,16 +41,26 @@ type Client struct {
 	cli *client.Client
 }
 
-// NewClient connects to dockerHost (e.g. tcp://noctaxris-engine:2375).
+// NewClient connects to dockerHost (e.g. tcp://noctaxris-engine:2376).
+// When tlsCertPath is non-empty, client TLS is enabled using ca.pem, cert.pem,
+// and key.pem under that directory (Compose: NOCTAXRIS_DOCKER_CERT_PATH=/certs/client).
 // An empty dockerHost returns an error so callers can treat compute as disabled.
-func NewClient(dockerHost string) (*Client, error) {
+func NewClient(dockerHost, tlsCertPath string) (*Client, error) {
 	if strings.TrimSpace(dockerHost) == "" {
 		return nil, fmt.Errorf("compute: NOCTAXRIS_DOCKER_HOST is empty (compute disabled)")
 	}
-	cli, err := client.NewClientWithOpts(
+	opts := []client.Opt{
 		client.WithHost(dockerHost),
 		client.WithAPIVersionNegotiation(),
-	)
+	}
+	if p := strings.TrimSpace(tlsCertPath); p != "" {
+		opts = append(opts, client.WithTLSClientConfig(
+			filepath.Join(p, "ca.pem"),
+			filepath.Join(p, "cert.pem"),
+			filepath.Join(p, "key.pem"),
+		))
+	}
+	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("compute: docker client: %w", err)
 	}
@@ -101,16 +108,20 @@ func (c *Client) EnsureNetwork(ctx context.Context) (string, error) {
 	return resp.ID, nil
 }
 
-// EnsureImage pulls the preferred Lambda Python image, falling back to python:3.12-slim.
-func (c *Client) EnsureImage(ctx context.Context) (string, error) {
-	if err := c.pullImage(ctx, PreferredFunctionImage); err == nil {
-		return PreferredFunctionImage, nil
+// EnsureImage pulls the preferred Lambda runtime image, falling back to a slim variant.
+func (c *Client) EnsureImage(ctx context.Context, runtime string) (string, error) {
+	imgs, err := FunctionImagesForRuntime(runtime)
+	if err != nil {
+		return "", err
+	}
+	if err := c.pullImage(ctx, imgs.Preferred); err == nil {
+		return imgs.Preferred, nil
 	} else {
 		prefErr := err
-		if err := c.pullImage(ctx, FallbackFunctionImage); err != nil {
-			return "", fmt.Errorf("compute: pull %s: %v; fallback %s: %w", PreferredFunctionImage, prefErr, FallbackFunctionImage, err)
+		if err := c.pullImage(ctx, imgs.Fallback); err != nil {
+			return "", fmt.Errorf("compute: pull %s: %v; fallback %s: %w", imgs.Preferred, prefErr, imgs.Fallback, err)
 		}
-		return FallbackFunctionImage, nil
+		return imgs.Fallback, nil
 	}
 }
 

@@ -265,6 +265,28 @@ const (
 	ActionSQSChangeMessageVisibility = "sqs:ChangeMessageVisibility"
 )
 
+// SSM lab actions (Phase 8).
+const (
+	ActionSSMPutParameter       = "ssm:PutParameter"
+	ActionSSMGetParameter       = "ssm:GetParameter"
+	ActionSSMGetParameters      = "ssm:GetParameters"
+	ActionSSMDeleteParameter    = "ssm:DeleteParameter"
+	ActionSSMDescribeParameters = "ssm:DescribeParameters"
+)
+
+// Secrets Manager lab actions (Phase 8).
+const (
+	ActionSecretsCreateSecret         = "secretsmanager:CreateSecret"
+	ActionSecretsGetSecretValue       = "secretsmanager:GetSecretValue"
+	ActionSecretsPutSecretValue       = "secretsmanager:PutSecretValue"
+	ActionSecretsDeleteSecret         = "secretsmanager:DeleteSecret"
+	ActionSecretsDescribeSecret       = "secretsmanager:DescribeSecret"
+	ActionSecretsListSecrets          = "secretsmanager:ListSecrets"
+	ActionSecretsPutResourcePolicy    = "secretsmanager:PutResourcePolicy"
+	ActionSecretsGetResourcePolicy    = "secretsmanager:GetResourcePolicy"
+	ActionSecretsDeleteResourcePolicy = "secretsmanager:DeleteResourcePolicy"
+)
+
 // Lambda lab actions (Phase 7).
 const (
 	ActionLambdaCreateFunction              = "lambda:CreateFunction"
@@ -274,6 +296,20 @@ const (
 	ActionLambdaUpdateFunctionCode          = "lambda:UpdateFunctionCode"
 	ActionLambdaUpdateFunctionConfiguration = "lambda:UpdateFunctionConfiguration"
 	ActionLambdaInvoke                      = "lambda:InvokeFunction"
+	ActionLambdaPublishVersion              = "lambda:PublishVersion"
+	ActionLambdaListVersionsByFunction      = "lambda:ListVersionsByFunction"
+	ActionLambdaCreateAlias                 = "lambda:CreateAlias"
+	ActionLambdaUpdateAlias                 = "lambda:UpdateAlias"
+	ActionLambdaDeleteAlias                 = "lambda:DeleteAlias"
+	ActionLambdaGetAlias                    = "lambda:GetAlias"
+	ActionLambdaListAliases                 = "lambda:ListAliases"
+	ActionLambdaPublishLayerVersion         = "lambda:PublishLayerVersion"
+	ActionLambdaGetLayerVersion             = "lambda:GetLayerVersion"
+	ActionLambdaListLayerVersions           = "lambda:ListLayerVersions"
+	ActionLambdaDeleteLayerVersion          = "lambda:DeleteLayerVersion"
+	ActionLambdaAddPermission               = "lambda:AddPermission"
+	ActionLambdaRemovePermission            = "lambda:RemovePermission"
+	ActionLambdaGetPolicy                   = "lambda:GetPolicy"
 )
 
 // KnownAction reports whether action is recognized in the current catalog.
@@ -450,7 +486,35 @@ func KnownAction(action string) bool {
 		ActionLambdaListFunctions,
 		ActionLambdaUpdateFunctionCode,
 		ActionLambdaUpdateFunctionConfiguration,
-		ActionLambdaInvoke:
+		ActionLambdaInvoke,
+		ActionLambdaPublishVersion,
+		ActionLambdaListVersionsByFunction,
+		ActionLambdaCreateAlias,
+		ActionLambdaUpdateAlias,
+		ActionLambdaDeleteAlias,
+		ActionLambdaGetAlias,
+		ActionLambdaListAliases,
+		ActionLambdaPublishLayerVersion,
+		ActionLambdaGetLayerVersion,
+		ActionLambdaListLayerVersions,
+		ActionLambdaDeleteLayerVersion,
+		ActionLambdaAddPermission,
+		ActionLambdaRemovePermission,
+		ActionLambdaGetPolicy,
+		ActionSSMPutParameter,
+		ActionSSMGetParameter,
+		ActionSSMGetParameters,
+		ActionSSMDeleteParameter,
+		ActionSSMDescribeParameters,
+		ActionSecretsCreateSecret,
+		ActionSecretsGetSecretValue,
+		ActionSecretsPutSecretValue,
+		ActionSecretsDeleteSecret,
+		ActionSecretsDescribeSecret,
+		ActionSecretsListSecrets,
+		ActionSecretsPutResourcePolicy,
+		ActionSecretsGetResourcePolicy,
+		ActionSecretsDeleteResourcePolicy:
 		return true
 	default:
 		return false

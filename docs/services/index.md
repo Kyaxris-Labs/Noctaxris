@@ -13,9 +13,9 @@ Each shipped page covers what is implemented, how to verify with AWS CLI smoke, 
 | [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, presign |
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, one lab GSI, TTL lazy expiry, batch, resource policies |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, deduplication, RedrivePolicy, policies, SSE |
-| [Lambda](lambda.md) | Shipped | Zip `python3.12`, sync Invoke, nested DinD |
-| [SSM Parameter Store](ssm.md) | Planned | Not available yet |
-| [Secrets Manager](secretsmanager.md) | Planned | Not available yet |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers, sync+async Invoke, resource policies, TLS DinD |
+| [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, KMS via alias/aws/ssm, identity authz |
+| [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, resource policies, KMS via alias/aws/secretsmanager |
 | [SNS](sns.md) | Planned | Not available yet |
 | [EventBridge](eventbridge.md) | Planned | Not available yet |
 | [ECR](ecr.md) | Planned | Not available yet |
@@ -60,8 +60,8 @@ Per-service CLI smoke lives on each shipped service page above.
 
 ## Cross-cutting
 
-**Condition keys (v2 depth):** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Extend catalogs when new lab cores land (SSM, Secrets Manager, SNS, EventBridge, ECR, ECS). Broader operator matrix and request-context population for every global key remains open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
+**Condition keys (v2 depth):** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Extend catalogs when new lab cores land (SNS, EventBridge, ECR, ECS). Broader operator matrix and request-context population for every global key remains open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
 
 **Post-v2:** MicroVM isolation (Firecracker-class) for Lambda, and later ECS if needed. v2 keeps nested DinD. See [lambda.md](lambda.md).
 
-**New lab cores (v2):** SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS are planned as lab-complete (not full SAR) after deferred clearance for existing services. See the planned pages in the table above.
+**New lab cores (v2):** SNS, EventBridge, ECR, and ECS are planned as lab-complete (not full SAR). See the planned pages in the table above.

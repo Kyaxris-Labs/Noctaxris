@@ -18,6 +18,9 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_SAML_IDP_NAME` | `default` | SAML provider name used when seeding metadata |
 | `NOCTAXRIS_OIDC_ISSUER_URL` | empty | OIDC issuer URL. When set with client id, seeded for `AssumeRoleWithWebIdentity`. |
 | `NOCTAXRIS_OIDC_CLIENT_ID` | empty | OIDC audience / client id (required if issuer URL is set) |
+| `NOCTAXRIS_DOCKER_HOST` | empty | Nested DinD engine URL (Compose sets `tcp://noctaxris-engine:2376`). Empty disables Lambda compute for unit tests. |
+| `NOCTAXRIS_DOCKER_CERT_PATH` | empty | Directory with `ca.pem`, `cert.pem`, and `key.pem` for TLS to the engine (Compose sets `/certs/client`). |
+| `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
 
 Federation is fail-closed. If these are unset and no IdP rows exist in the store, SAML/OIDC STS APIs deny with AccessDenied / InvalidIdentityToken rather than accepting unsigned tokens.
 
