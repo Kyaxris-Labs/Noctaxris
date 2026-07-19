@@ -16,21 +16,7 @@ Phase 2 adds Organizations MVP, cross-account dual evaluation, and a minimal `st
 
 ## Smoke (Compose)
 
-With root keys from `docker/.env`:
-
-```bash
-aws organizations create-account --email member@example.com --account-name Member --endpoint-url http://127.0.0.1:4566
-aws organizations describe-create-account-status --create-account-request-id <Id> --endpoint-url http://127.0.0.1:4566
-aws sts assume-role --role-arn arn:aws:iam::<AccountId>:role/OrganizationAccountAccessRole --role-session-name admin --endpoint-url http://127.0.0.1:4566
-```
-
-Export the returned temporary credentials, then:
-
-```bash
-aws sts get-caller-identity --endpoint-url http://127.0.0.1:4566
-```
-
-Expect an assumed-role ARN in the member account.
+See [../verification.md](../verification.md) for CreateAccount and AssumeRole into `OrganizationAccountAccessRole`.
 
 ## Explicitly not in Phase 2
 

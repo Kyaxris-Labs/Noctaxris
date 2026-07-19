@@ -24,11 +24,20 @@ CREATE TABLE IF NOT EXISTS access_keys (
   session_token_ciphertext BLOB,
   role_arn TEXT,
   session_name TEXT,
-  expires_at TEXT
+  expires_at TEXT,
+  user_name TEXT,
+  status TEXT NOT NULL DEFAULT 'Active',
+  session_policy TEXT,
+  federated_user TEXT
 );
 CREATE TABLE IF NOT EXISTS policies (
   policy_id TEXT PRIMARY KEY,
-  document TEXT NOT NULL
+  document TEXT NOT NULL,
+  policy_name TEXT,
+  account_id TEXT,
+  arn TEXT,
+  path TEXT,
+  default_version_id TEXT
 );
 CREATE TABLE IF NOT EXISTS policy_attachments (
   principal_arn TEXT NOT NULL,
@@ -49,20 +58,66 @@ CREATE TABLE IF NOT EXISTS roles (
   role_name TEXT NOT NULL,
   role_arn TEXT NOT NULL,
   trust_policy TEXT NOT NULL,
+  role_id TEXT,
+  path TEXT NOT NULL DEFAULT '/',
+  create_date TEXT,
+  description TEXT,
   PRIMARY KEY (account_id, role_name)
+);
+CREATE TABLE IF NOT EXISTS users (
+  account_id TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  PRIMARY KEY (account_id, user_name)
+);
+CREATE TABLE IF NOT EXISTS managed_policies (
+  policy_arn TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  policy_name TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  default_version_id TEXT NOT NULL,
+  document TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inline_policies (
+  principal_arn TEXT NOT NULL,
+  policy_name TEXT NOT NULL,
+  document TEXT NOT NULL,
+  PRIMARY KEY (principal_arn, policy_name)
+);
+CREATE TABLE IF NOT EXISTS oidc_providers (
+  provider_arn TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  client_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS saml_providers (
+  provider_arn TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  metadata_xml TEXT NOT NULL
 );
 `
 
+// Access key status values stored in access_keys.status.
+const (
+	AccessKeyStatusActive   = "Active"
+	AccessKeyStatusInactive = "Inactive"
+)
+
 // AccessKey is a long-lived or temporary credential record.
 type AccessKey struct {
-	AccessKeyID  string
-	AccountID    string
-	Secret       string
-	IsRoot       bool
-	SessionToken string // plaintext; empty if long-lived
-	RoleARN      string
-	SessionName  string
-	ExpiresAt    time.Time // zero if none
+	AccessKeyID   string
+	AccountID     string
+	Secret        string
+	IsRoot        bool
+	UserName      string // set for IAM user keys; empty for root/temp
+	Status        string // Active or Inactive; empty treated as Active for legacy rows
+	SessionToken  string // plaintext; empty if long-lived
+	RoleARN       string
+	SessionName   string
+	FederatedUser string
+	SessionPolicy string
+	ExpiresAt     time.Time // zero if none
 }
 
 type Store struct {
@@ -84,23 +139,36 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, master: master}
-	if err := s.migrateAccessKeys(); err != nil {
+	if err := s.migrateSchema(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) migrateAccessKeys() error {
+func (s *Store) migrateSchema() error {
 	alters := []string{
 		`ALTER TABLE access_keys ADD COLUMN session_token_ciphertext BLOB`,
 		`ALTER TABLE access_keys ADD COLUMN role_arn TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN session_name TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN expires_at TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN user_name TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN status TEXT NOT NULL DEFAULT 'Active'`,
+		`ALTER TABLE access_keys ADD COLUMN session_policy TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN federated_user TEXT`,
+		`ALTER TABLE policies ADD COLUMN policy_name TEXT`,
+		`ALTER TABLE policies ADD COLUMN account_id TEXT`,
+		`ALTER TABLE policies ADD COLUMN arn TEXT`,
+		`ALTER TABLE policies ADD COLUMN path TEXT`,
+		`ALTER TABLE policies ADD COLUMN default_version_id TEXT`,
+		`ALTER TABLE roles ADD COLUMN role_id TEXT`,
+		`ALTER TABLE roles ADD COLUMN path TEXT NOT NULL DEFAULT '/'`,
+		`ALTER TABLE roles ADD COLUMN create_date TEXT`,
+		`ALTER TABLE roles ADD COLUMN description TEXT`,
 	}
 	for _, stmt := range alters {
 		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("migrate access_keys: %w", err)
+			return fmt.Errorf("migrate schema: %w", err)
 		}
 	}
 	return nil
@@ -176,13 +244,18 @@ func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
 		roleARN                sql.NullString
 		sessionName            sql.NullString
 		expiresAt              sql.NullString
+		userName               sql.NullString
+		status                 sql.NullString
+		sessionPolicy          sql.NullString
+		federatedUser          sql.NullString
 	)
 	err := s.db.QueryRow(
 		`SELECT account_id, secret_ciphertext, is_root,
-		        session_token_ciphertext, role_arn, session_name, expires_at
+		        session_token_ciphertext, role_arn, session_name, expires_at, user_name, status,
+		        session_policy, federated_user
 		 FROM access_keys WHERE access_key_id = ?`,
 		accessKeyID,
-	).Scan(&accountID, &ciphertext, &rootFlag, &sessionTokenCiphertext, &roleARN, &sessionName, &expiresAt)
+	).Scan(&accountID, &ciphertext, &rootFlag, &sessionTokenCiphertext, &roleARN, &sessionName, &expiresAt, &userName, &status, &sessionPolicy, &federatedUser)
 	if err != nil {
 		return AccessKey{}, err
 	}
@@ -195,6 +268,19 @@ func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
 		AccountID:   accountID,
 		Secret:      string(plaintext),
 		IsRoot:      rootFlag == 1,
+		Status:      AccessKeyStatusActive,
+	}
+	if userName.Valid {
+		ak.UserName = userName.String
+	}
+	if status.Valid && status.String != "" {
+		ak.Status = status.String
+	}
+	if sessionPolicy.Valid {
+		ak.SessionPolicy = sessionPolicy.String
+	}
+	if federatedUser.Valid {
+		ak.FederatedUser = federatedUser.String
 	}
 	if len(sessionTokenCiphertext) > 0 {
 		tokenPlain, err := Unseal(s.master, sessionTokenCiphertext)

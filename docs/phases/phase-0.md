@@ -24,13 +24,9 @@ Phase 0 is the runnable scaffold. It proves packaging, persistence, audit plumbi
 - Multi-account / Organizations
 - Nested containers or microVMs for compute
 
-## How to verify locally
+## How to verify
 
-```bash
-go test ./... -count=1
-```
-
-Compose smoke: health body should be `ok`. An unauthenticated call to a non-health path should return `403` and append an audit event with an error code.
+See [../verification.md](../verification.md).
 
 ## Naming note
 

@@ -23,16 +23,7 @@ Phase 1 adds SigV4 verification and the first real STS API: `GetCallerIdentity`.
 
 ## CLI smoke
 
-With Compose running and root keys in `docker/.env`:
-
-```bash
-export AWS_ACCESS_KEY_ID=<root access key id>
-export AWS_SECRET_ACCESS_KEY=<root secret>
-export AWS_DEFAULT_REGION=us-east-1
-aws sts get-caller-identity --endpoint-url http://127.0.0.1:4566
-```
-
-Expect `Account` equal to `NOCTAXRIS_ACCOUNT_ID` and `Arn` like `arn:aws:iam::ACCOUNT:root`.
+See [../verification.md](../verification.md) (`sts get-caller-identity`).
 
 ## Explicitly not in Phase 1
 

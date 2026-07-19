@@ -1,16 +1,23 @@
 # Noctaxris docs
 
-Public reference for **Noctaxris** (repo and Go module: `github.com/Kyaxris-Labs/Noctaxris`). The name is PascalCase `Noctaxris`, not all-lowercase `noctaxris`.
+Public reference for **Noctaxris** (module `github.com/Kyaxris-Labs/Noctaxris`). Product name is PascalCase `Noctaxris`.
 
-Noctaxris is a local AWS-shaped emulator aimed at cloud security labs. It ships as a Docker image first. The process listens on loopback by default, refuses host `docker.sock`, encrypts access-key secrets at rest, verifies SigV4, supports multi-account Organizations MVP with cross-account AssumeRole, and writes CloudTrail-shaped audit lines.
+Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. It listens on loopback by default, refuses host `docker.sock`, seals access-key secrets at rest, verifies SigV4, and ships lab IAM, full STS routing with fail-closed federation, and Organizations MVP.
 
-| Doc | What it covers |
-|-----|----------------|
-| [architecture.md](architecture.md) | Packages, startup, request path |
-| [configuration.md](configuration.md) | Env vars, Compose, data files |
-| [security-defaults.md](security-defaults.md) | Hard defaults and auth posture |
-| [phase-0.md](phase-0.md) | Scaffold history |
-| [phase-1.md](phase-1.md) | SigV4 + GetCallerIdentity |
-| [phase-2.md](phase-2.md) | Organizations + cross-account AssumeRole |
+## Reference
+
+| Doc | Topic |
+|-----|--------|
+| [architecture.md](architecture.md) | Packages and request path |
+| [configuration.md](configuration.md) | Env vars, data layout, Compose, IdP bootstrap |
+| [security-defaults.md](security-defaults.md) | Host, crypto, and auth posture |
+| [verification.md](verification.md) | Local tests and Compose smoke |
+
+## Roadmap
+
+| Doc | Topic |
+|-----|--------|
+| [phases/index.md](phases/index.md) | Phase 0–3 history |
+| [deferred.md](deferred.md) | IAM/STS depth left for later |
 
 Quick start stays in the root [README](../README.md).

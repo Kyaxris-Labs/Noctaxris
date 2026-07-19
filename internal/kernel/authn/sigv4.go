@@ -33,13 +33,17 @@ type Verified struct {
 
 // ResolvedKey is the credential material returned by KeyLookup.
 type ResolvedKey struct {
-	AccountID    string
-	Secret       string
-	IsRoot       bool
-	SessionToken string
-	RoleARN      string
-	SessionName  string
-	ExpiresAt    time.Time
+	AccountID     string
+	Secret        string
+	IsRoot        bool
+	UserName      string
+	Status        string
+	SessionToken  string
+	RoleARN       string
+	SessionName   string
+	FederatedUser string
+	SessionPolicy string
+	ExpiresAt     time.Time
 }
 
 // KeyLookup resolves an access key id to credential material.
@@ -105,6 +109,9 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	if err != nil || cred.AccountID == "" || cred.Secret == "" {
 		return nil, newError(CodeInvalidClientTokenId, "the access key id does not exist")
 	}
+	if cred.Status != "" && cred.Status != "Active" {
+		return nil, newError(CodeInvalidClientTokenId, "the access key is inactive")
+	}
 	if !cred.ExpiresAt.IsZero() && now.UTC().After(cred.ExpiresAt.UTC()) {
 		return nil, newError(CodeInvalidClientTokenId, "the security token included in the request is expired")
 	}
@@ -131,12 +138,16 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	var principal identity.Principal
 	if cred.IsRoot {
 		principal = identity.RootPrincipal(cred.AccountID, mat.accessKeyID)
+	} else if cred.FederatedUser != "" {
+		principal = identity.FederatedUserPrincipal(cred.AccountID, cred.FederatedUser, mat.accessKeyID)
 	} else if cred.RoleARN != "" {
 		_, roleName, ok := parseRoleNameFromARN(cred.RoleARN)
 		if !ok {
 			roleName = cred.RoleARN
 		}
 		principal = identity.RoleSessionPrincipal(cred.AccountID, roleName, cred.SessionName, mat.accessKeyID)
+	} else if cred.UserName != "" {
+		principal = identity.UserPrincipal(cred.AccountID, cred.UserName, mat.accessKeyID)
 	} else {
 		principal = identity.Principal{
 			Kind:        identity.KindUser,

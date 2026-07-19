@@ -3,8 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -18,6 +16,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/google/uuid"
 )
 
 const (
@@ -91,22 +90,29 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verified, err := authn.Verify(r, body, s.now(), sigv4Skew, s.lookupKey)
-	if err != nil {
-		code := authn.Code(err)
-		if code == "" {
-			code = authn.CodeInvalidClientTokenId
+	action := resolveAction(r, body)
+	var verified *authn.Verified
+	if isUnauthenticatedSTSAction(action) {
+		// AWS STS federation APIs authenticate via SAML/OIDC token, not SigV4.
+		verified = &authn.Verified{Region: federationRegion(r)}
+	} else {
+		var err error
+		verified, err = authn.Verify(r, body, s.now(), sigv4Skew, s.lookupKey)
+		if err != nil {
+			code := authn.Code(err)
+			if code == "" {
+				code = authn.CodeInvalidClientTokenId
+			}
+			msg := defaultAuthnMessage(code)
+			accessKeyID := ""
+			if ak, ok := parseAccessKeyID(r.Header.Get("Authorization")); ok {
+				accessKeyID = ak
+			}
+			s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
+			return
 		}
-		msg := defaultAuthnMessage(code)
-		accessKeyID := ""
-		if ak, ok := parseAccessKeyID(r.Header.Get("Authorization")); ok {
-			accessKeyID = ak
-		}
-		s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
-		return
 	}
 
-	action := resolveAction(r, body)
 	switch action {
 	case catalog.ActionSTSGetCallerIdentity, "GetCallerIdentity":
 		s.handleGetCallerIdentity(w, r, requestID, eventID, verified)
@@ -116,9 +122,59 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDescribeCreateAccountStatus(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionSTSAssumeRole, "AssumeRole":
 		s.handleAssumeRole(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSGetSessionToken, "GetSessionToken":
+		s.handleGetSessionToken(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSGetFederationToken, "GetFederationToken":
+		s.handleGetFederationToken(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSGetAccessKeyInfo, "GetAccessKeyInfo":
+		s.handleGetAccessKeyInfo(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSDecodeAuthorizationMessage, "DecodeAuthorizationMessage":
+		s.handleDecodeAuthorizationMessage(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSAssumeRoot, "AssumeRoot":
+		s.handleAssumeRoot(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSAssumeRoleWithSAML, "AssumeRoleWithSAML":
+		s.handleAssumeRoleWithSAML(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSAssumeRoleWithWebIdentity, "AssumeRoleWithWebIdentity":
+		s.handleAssumeRoleWithWebIdentity(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSGetDelegatedAccessToken, "GetDelegatedAccessToken":
+		s.handleGetDelegatedAccessToken(w, r, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSGetWebIdentityToken, "GetWebIdentityToken":
+		s.handleGetWebIdentityToken(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionIAMCreateUser, "CreateUser",
+		catalog.ActionIAMGetUser, "GetUser",
+		catalog.ActionIAMListUsers, "ListUsers",
+		catalog.ActionIAMDeleteUser, "DeleteUser",
+		catalog.ActionIAMCreateAccessKey, "CreateAccessKey",
+		catalog.ActionIAMDeleteAccessKey, "DeleteAccessKey",
+		catalog.ActionIAMListAccessKeys, "ListAccessKeys",
+		catalog.ActionIAMUpdateAccessKey, "UpdateAccessKey",
+		catalog.ActionIAMCreatePolicy, "CreatePolicy",
+		catalog.ActionIAMGetPolicy, "GetPolicy",
+		catalog.ActionIAMListPolicies, "ListPolicies",
+		catalog.ActionIAMDeletePolicy, "DeletePolicy",
+		catalog.ActionIAMAttachUserPolicy, "AttachUserPolicy",
+		catalog.ActionIAMDetachUserPolicy, "DetachUserPolicy",
+		catalog.ActionIAMAttachRolePolicy, "AttachRolePolicy",
+		catalog.ActionIAMDetachRolePolicy, "DetachRolePolicy",
+		catalog.ActionIAMListAttachedUserPolicies, "ListAttachedUserPolicies",
+		catalog.ActionIAMListAttachedRolePolicies, "ListAttachedRolePolicies",
+		catalog.ActionIAMPutUserPolicy, "PutUserPolicy",
+		catalog.ActionIAMGetUserPolicy, "GetUserPolicy",
+		catalog.ActionIAMDeleteUserPolicy, "DeleteUserPolicy",
+		catalog.ActionIAMListUserPolicies, "ListUserPolicies",
+		catalog.ActionIAMPutRolePolicy, "PutRolePolicy",
+		catalog.ActionIAMGetRolePolicy, "GetRolePolicy",
+		catalog.ActionIAMDeleteRolePolicy, "DeleteRolePolicy",
+		catalog.ActionIAMListRolePolicies, "ListRolePolicies",
+		catalog.ActionIAMCreateRole, "CreateRole",
+		catalog.ActionIAMGetRole, "GetRole",
+		catalog.ActionIAMListRoles, "ListRoles",
+		catalog.ActionIAMDeleteRole, "DeleteRole",
+		catalog.ActionIAMUpdateAssumeRolePolicy, "UpdateAssumeRolePolicy":
+		s.handleIAM(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 2.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris Phase 3.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
 }
@@ -245,13 +301,108 @@ func normalizeAction(action string) string {
 		return catalog.ActionSTSGetCallerIdentity
 	case "AssumeRole":
 		return catalog.ActionSTSAssumeRole
+	case "GetSessionToken":
+		return catalog.ActionSTSGetSessionToken
+	case "GetFederationToken":
+		return catalog.ActionSTSGetFederationToken
+	case "AssumeRoleWithSAML":
+		return catalog.ActionSTSAssumeRoleWithSAML
+	case "AssumeRoleWithWebIdentity":
+		return catalog.ActionSTSAssumeRoleWithWebIdentity
+	case "AssumeRoot":
+		return catalog.ActionSTSAssumeRoot
+	case "DecodeAuthorizationMessage":
+		return catalog.ActionSTSDecodeAuthorizationMessage
+	case "GetAccessKeyInfo":
+		return catalog.ActionSTSGetAccessKeyInfo
+	case "GetDelegatedAccessToken":
+		return catalog.ActionSTSGetDelegatedAccessToken
+	case "GetWebIdentityToken":
+		return catalog.ActionSTSGetWebIdentityToken
 	case "CreateAccount":
 		return catalog.ActionOrgsCreateAccount
 	case "DescribeCreateAccountStatus":
 		return catalog.ActionOrgsDescribeCreateAccountStatus
+	case "CreateUser":
+		return catalog.ActionIAMCreateUser
+	case "GetUser":
+		return catalog.ActionIAMGetUser
+	case "ListUsers":
+		return catalog.ActionIAMListUsers
+	case "DeleteUser":
+		return catalog.ActionIAMDeleteUser
+	case "CreateAccessKey":
+		return catalog.ActionIAMCreateAccessKey
+	case "DeleteAccessKey":
+		return catalog.ActionIAMDeleteAccessKey
+	case "ListAccessKeys":
+		return catalog.ActionIAMListAccessKeys
+	case "UpdateAccessKey":
+		return catalog.ActionIAMUpdateAccessKey
+	case "CreatePolicy":
+		return catalog.ActionIAMCreatePolicy
+	case "GetPolicy":
+		return catalog.ActionIAMGetPolicy
+	case "ListPolicies":
+		return catalog.ActionIAMListPolicies
+	case "DeletePolicy":
+		return catalog.ActionIAMDeletePolicy
+	case "AttachUserPolicy":
+		return catalog.ActionIAMAttachUserPolicy
+	case "DetachUserPolicy":
+		return catalog.ActionIAMDetachUserPolicy
+	case "AttachRolePolicy":
+		return catalog.ActionIAMAttachRolePolicy
+	case "DetachRolePolicy":
+		return catalog.ActionIAMDetachRolePolicy
+	case "ListAttachedUserPolicies":
+		return catalog.ActionIAMListAttachedUserPolicies
+	case "ListAttachedRolePolicies":
+		return catalog.ActionIAMListAttachedRolePolicies
+	case "PutUserPolicy":
+		return catalog.ActionIAMPutUserPolicy
+	case "GetUserPolicy":
+		return catalog.ActionIAMGetUserPolicy
+	case "DeleteUserPolicy":
+		return catalog.ActionIAMDeleteUserPolicy
+	case "ListUserPolicies":
+		return catalog.ActionIAMListUserPolicies
+	case "PutRolePolicy":
+		return catalog.ActionIAMPutRolePolicy
+	case "GetRolePolicy":
+		return catalog.ActionIAMGetRolePolicy
+	case "DeleteRolePolicy":
+		return catalog.ActionIAMDeleteRolePolicy
+	case "ListRolePolicies":
+		return catalog.ActionIAMListRolePolicies
+	case "CreateRole":
+		return catalog.ActionIAMCreateRole
+	case "GetRole":
+		return catalog.ActionIAMGetRole
+	case "ListRoles":
+		return catalog.ActionIAMListRoles
+	case "DeleteRole":
+		return catalog.ActionIAMDeleteRole
+	case "UpdateAssumeRolePolicy":
+		return catalog.ActionIAMUpdateAssumeRolePolicy
 	default:
 		return action
 	}
+}
+
+func isUnauthenticatedSTSAction(action string) bool {
+	switch action {
+	case catalog.ActionSTSAssumeRoleWithSAML, "AssumeRoleWithSAML",
+		catalog.ActionSTSAssumeRoleWithWebIdentity, "AssumeRoleWithWebIdentity":
+		return true
+	default:
+		return false
+	}
+}
+
+func federationRegion(r *http.Request) string {
+	_ = r
+	return "us-east-1"
 }
 
 func defaultAuthnMessage(code string) string {
@@ -304,9 +455,5 @@ func clientIP(r *http.Request) string {
 }
 
 func newRequestID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
+	return uuid.NewString()
 }

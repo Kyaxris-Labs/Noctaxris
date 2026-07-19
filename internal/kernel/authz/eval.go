@@ -41,9 +41,35 @@ func Evaluate(ctx RequestContext, identityPolicyDocs []string) Decision {
 	if ctx.Principal.IsRoot {
 		return Allow
 	}
+	return evaluatePolicies(ctx, identityPolicyDocs)
+}
 
+// EvaluateWithSession applies identity Evaluate then intersects with optional
+// sessionPolicyDocs. If sessionPolicyDocs is empty or nil, the result is the
+// same as Evaluate.
+//
+// When session policies are present, the result is Allow only if both
+// Evaluate(identityDocs) and the session-policy set Allow the request.
+// Explicit Deny in either set yields Deny.
+//
+// Root with no session docs remains Allow (via Evaluate). Root with session
+// docs still requires the session set to Allow; session evaluation does not
+// take the root short-circuit (root rarely uses federation session policies).
+func EvaluateWithSession(ctx RequestContext, identityDocs, sessionPolicyDocs []string) Decision {
+	if len(sessionPolicyDocs) == 0 {
+		return Evaluate(ctx, identityDocs)
+	}
+	if Evaluate(ctx, identityDocs) != Allow {
+		return Deny
+	}
+	return evaluatePolicies(ctx, sessionPolicyDocs)
+}
+
+// evaluatePolicies applies Deny-overrides-Allow identity-policy matching
+// without the root short-circuit.
+func evaluatePolicies(ctx RequestContext, policyDocs []string) Decision {
 	var denyHit, allowHit bool
-	for _, raw := range identityPolicyDocs {
+	for _, raw := range policyDocs {
 		doc, err := parsePolicyDocument(raw)
 		if err != nil {
 			continue

@@ -40,6 +40,25 @@ func TestNonRootARNEmpty(t *testing.T) {
 	}
 }
 
+func TestUserPrincipalARN(t *testing.T) {
+	p := identity.UserPrincipal("123456789012", "alice", "AKIAEXAMPLEKEYID01")
+	if p.Kind != identity.KindUser || p.UserName != "alice" {
+		t.Fatalf("principal = %+v", p)
+	}
+	want := "arn:aws:iam::123456789012:user/alice"
+	if got := p.ARN(); got != want {
+		t.Fatalf("ARN() = %q, want %q", got, want)
+	}
+}
+
+func TestFederatedUserPrincipalARN(t *testing.T) {
+	p := identity.FederatedUserPrincipal("123456789012", "fed-user", "ASIAEXAMPLEKEY01")
+	want := "arn:aws:sts::123456789012:federated-user/fed-user"
+	if got := p.ARN(); got != want {
+		t.Fatalf("ARN() = %q, want %q", got, want)
+	}
+}
+
 func TestRoleSessionPrincipalARN(t *testing.T) {
 	p := identity.RoleSessionPrincipal(
 		"000000000002",

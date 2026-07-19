@@ -16,17 +16,20 @@ These defaults are intentional product posture for a local emulator that people 
 - Secrets are sealed with ChaCha20-Poly1305 before landing in SQLite.
 - Tests assert the plaintext secret does not appear in `state.db`.
 - Audit events must not carry secret material.
+- Inactive access keys are rejected at SigV4 verification.
 
-## Auth (Phase 2)
+## Auth (Phase 3)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
 - Temporary credentials require a matching `X-Amz-Security-Token`.
 - Unknown keys, bad signatures, and skewed clocks return `403` with an AWS-shaped XML error and an audit line.
 - `GetCallerIdentity` succeeds after SigV4 without an IAM permission check.
-- Organizations CreateAccount / DescribeCreateAccountStatus require IAM Allow (management root is allowed).
-- `AssumeRole` requires cross-account dual evaluation (caller identity + role trust).
-- Other actions return `501 NotImplemented` after successful authn.
+- Lab IAM and other STS actions require IAM Allow (management root is allowed).
+- `AssumeRole` and federation role assumption require cross-account dual evaluation (caller identity + role trust).
+- `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` authenticate via assertion or JWT, not SigV4. Crypto must succeed against configured IdP certs or OIDC JWKS. Missing IdP or failed crypto is deny, never accept-any.
+- Session policies on federated / assume sessions intersect with identity policies.
+- Deferred IAM/STS depth returns `501 NotImplemented` or an explicit fail-closed STS error after successful authn. Never silent Allow.
 
 ## Optional TLS
 

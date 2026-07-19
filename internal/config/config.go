@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 type Config struct {
@@ -14,6 +16,11 @@ type Config struct {
 	RootAccessKeyID     string
 	RootSecretAccessKey string
 	AccountID           string
+	// Optional IdP bootstrap for STS federation (fail-closed when unset).
+	SAMLIdPMetadataPath string
+	SAMLIdPName         string
+	OIDCIssuerURL       string
+	OIDCClientID        string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -26,10 +33,32 @@ func LoadFromEnv() (Config, error) {
 		RootAccessKeyID:     getenv("NOCTAXRIS_ROOT_ACCESS_KEY_ID", ""),
 		RootSecretAccessKey: getenv("NOCTAXRIS_ROOT_SECRET_ACCESS_KEY", ""),
 		AccountID:           getenv("NOCTAXRIS_ACCOUNT_ID", "000000000001"),
+		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
+		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),
+		OIDCIssuerURL:       getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),
+		OIDCClientID:        getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
 	}
 
-	if len(cfg.AccountID) != 12 {
-		return Config{}, fmt.Errorf("account ID must be 12 characters, got %d", len(cfg.AccountID))
+	if err := validate.AccountID(cfg.AccountID); err != nil {
+		return Config{}, fmt.Errorf("NOCTAXRIS_ACCOUNT_ID: %w", err)
+	}
+	if cfg.RootAccessKeyID != "" {
+		if err := validate.AccessKeyID(cfg.RootAccessKeyID); err != nil {
+			return Config{}, fmt.Errorf("NOCTAXRIS_ROOT_ACCESS_KEY_ID: %w", err)
+		}
+	}
+	if cfg.OIDCIssuerURL != "" {
+		if err := validate.OIDCIssuerURL(cfg.OIDCIssuerURL); err != nil {
+			return Config{}, fmt.Errorf("NOCTAXRIS_OIDC_ISSUER_URL: %w", err)
+		}
+		if err := validate.OIDCClientID(cfg.OIDCClientID); err != nil {
+			return Config{}, fmt.Errorf("NOCTAXRIS_OIDC_CLIENT_ID: %w", err)
+		}
+	}
+	if cfg.SAMLIdPName != "" && cfg.SAMLIdPName != "default" {
+		if err := validate.IAMName(cfg.SAMLIdPName); err != nil {
+			return Config{}, fmt.Errorf("NOCTAXRIS_SAML_IDP_NAME: %w", err)
+		}
 	}
 
 	return cfg, nil

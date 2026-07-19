@@ -6,9 +6,10 @@ import "fmt"
 type Kind string
 
 const (
-	KindRoot Kind = "Root"
-	KindUser Kind = "User"
-	KindRole Kind = "Role"
+	KindRoot      Kind = "Root"
+	KindUser      Kind = "User"
+	KindRole      Kind = "Role"
+	KindFederated Kind = "Federated"
 )
 
 // Principal is a verified IAM identity for request evaluation.
@@ -17,6 +18,7 @@ type Principal struct {
 	AccountID   string
 	AccessKeyID string
 	IsRoot      bool
+	UserName    string
 	RoleName    string
 	SessionName string
 }
@@ -28,6 +30,26 @@ func RootPrincipal(accountID, accessKeyID string) Principal {
 		AccountID:   accountID,
 		AccessKeyID: accessKeyID,
 		IsRoot:      true,
+	}
+}
+
+// UserPrincipal returns an IAM user principal.
+func UserPrincipal(accountID, userName, accessKeyID string) Principal {
+	return Principal{
+		Kind:        KindUser,
+		AccountID:   accountID,
+		AccessKeyID: accessKeyID,
+		UserName:    userName,
+	}
+}
+
+// FederatedUserPrincipal returns an STS federated-user principal.
+func FederatedUserPrincipal(accountID, name, accessKeyID string) Principal {
+	return Principal{
+		Kind:        KindFederated,
+		AccountID:   accountID,
+		AccessKeyID: accessKeyID,
+		SessionName: name,
 	}
 }
 
@@ -44,11 +66,19 @@ func RoleSessionPrincipal(accountID, roleName, sessionName, accessKeyID string) 
 
 // ARN returns the IAM or STS ARN for this principal.
 // Root: arn:aws:iam::ACCOUNT:root
+// User: arn:aws:iam::ACCOUNT:user/NAME
+// Federated: arn:aws:sts::ACCOUNT:federated-user/NAME
 // Role session: arn:aws:sts::ACCOUNT:assumed-role/ROLE/SESSION
 // Role without session: arn:aws:iam::ACCOUNT:role/NAME
 func (p Principal) ARN() string {
 	if p.IsRoot || p.Kind == KindRoot {
 		return fmt.Sprintf("arn:aws:iam::%s:root", p.AccountID)
+	}
+	if p.Kind == KindUser && p.UserName != "" {
+		return fmt.Sprintf("arn:aws:iam::%s:user/%s", p.AccountID, p.UserName)
+	}
+	if p.Kind == KindFederated && p.SessionName != "" {
+		return fmt.Sprintf("arn:aws:sts::%s:federated-user/%s", p.AccountID, p.SessionName)
 	}
 	if p.Kind == KindRole && p.RoleName != "" {
 		if p.SessionName != "" {

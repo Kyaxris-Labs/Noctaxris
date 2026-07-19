@@ -58,3 +58,53 @@ func (s *Store) ListAttachedPolicyDocuments(principalARN string) ([]string, erro
 	}
 	return docs, nil
 }
+
+// AttachedPolicyRef is a managed policy attachment listing entry.
+type AttachedPolicyRef struct {
+	PolicyARN  string
+	PolicyName string
+}
+
+// ListAttachedPolicyRefs returns attached managed policy ARNs for principalARN.
+func (s *Store) ListAttachedPolicyRefs(principalARN string) ([]AttachedPolicyRef, error) {
+	rows, err := s.db.Query(
+		`SELECT a.policy_id, COALESCE(p.policy_name, '')
+		 FROM policy_attachments a
+		 LEFT JOIN policies p ON p.policy_id = a.policy_id
+		 WHERE a.principal_arn = ?
+		 ORDER BY a.policy_id`,
+		principalARN,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list attached policy refs for %s: %w", principalARN, err)
+	}
+	defer rows.Close()
+
+	var out []AttachedPolicyRef
+	for rows.Next() {
+		var ref AttachedPolicyRef
+		if err := rows.Scan(&ref.PolicyARN, &ref.PolicyName); err != nil {
+			return nil, fmt.Errorf("list attached policy refs for %s: %w", principalARN, err)
+		}
+		if ref.PolicyName == "" {
+			ref.PolicyName = policyNameFromARN(ref.PolicyARN)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list attached policy refs for %s: %w", principalARN, err)
+	}
+	if out == nil {
+		out = []AttachedPolicyRef{}
+	}
+	return out, nil
+}
+
+func policyNameFromARN(arn string) string {
+	for i := len(arn) - 1; i >= 0; i-- {
+		if arn[i] == '/' {
+			return arn[i+1:]
+		}
+	}
+	return arn
+}

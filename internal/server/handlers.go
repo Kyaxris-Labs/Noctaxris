@@ -20,6 +20,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/services/organizations"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 const defaultAssumeRoleDuration = time.Hour
@@ -30,13 +31,17 @@ func (s *Server) lookupKey(accessKeyID string) (authn.ResolvedKey, error) {
 		return authn.ResolvedKey{}, err
 	}
 	return authn.ResolvedKey{
-		AccountID:    ak.AccountID,
-		Secret:       ak.Secret,
-		IsRoot:       ak.IsRoot,
-		SessionToken: ak.SessionToken,
-		RoleARN:      ak.RoleARN,
-		SessionName:  ak.SessionName,
-		ExpiresAt:    ak.ExpiresAt,
+		AccountID:     ak.AccountID,
+		Secret:        ak.Secret,
+		IsRoot:        ak.IsRoot,
+		UserName:      ak.UserName,
+		Status:        ak.Status,
+		SessionToken:  ak.SessionToken,
+		RoleARN:       ak.RoleARN,
+		SessionName:   ak.SessionName,
+		FederatedUser: ak.FederatedUser,
+		SessionPolicy: ak.SessionPolicy,
+		ExpiresAt:     ak.ExpiresAt,
 	}, nil
 }
 
@@ -52,6 +57,10 @@ func (s *Server) handleGetCallerIdentity(
 		arn = verified.Principal.ARN()
 		userID = fmt.Sprintf("%s:%s:%s", verified.AccountID, verified.Principal.RoleName, verified.Principal.SessionName)
 		identityType = "AssumedRole"
+	} else if verified.Principal.Kind == identity.KindFederated {
+		arn = verified.Principal.ARN()
+		userID = fmt.Sprintf("%s:%s", verified.AccountID, verified.Principal.SessionName)
+		identityType = "FederatedUser"
 	} else if !verified.Principal.IsRoot {
 		userID = verified.AccessKeyID
 		arn = verified.Principal.ARN()
@@ -129,6 +138,12 @@ func (s *Server) handleCreateAccount(
 
 	createID, _, err := s.store.CreateMemberAccount(verified.AccountID, email, name)
 	if err != nil {
+		if validate.IsInvalid(err) {
+			s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+				err.Error(), readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
 		s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to create account.", readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
@@ -273,7 +288,7 @@ func (s *Server) handleAssumeRole(
 		roleARN = storedARN
 	}
 
-	callerDocs, _ := s.store.ListAttachedPolicyDocuments(verified.Principal.ARN())
+	callerDocs := s.identityDocs(verified.Principal)
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
 			Principal: verified.Principal,
@@ -340,8 +355,13 @@ func (s *Server) handleAssumeRole(
 }
 
 func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string) bool {
-	docs, _ := s.store.ListAttachedPolicyDocuments(verified.Principal.ARN())
-	return authz.Evaluate(authz.RequestContext{
+	return s.authorize(verified, action, resource)
+}
+
+func (s *Server) authorize(verified *authn.Verified, action, resource string) bool {
+	docs := s.identityDocs(verified.Principal)
+	sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID)
+	return authz.EvaluateWithSession(authz.RequestContext{
 		Principal: verified.Principal,
 		Action:    action,
 		Resource:  resource,
@@ -350,7 +370,25 @@ func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string
 			"aws:PrincipalAccount": verified.AccountID,
 			"aws:RequestedRegion":  verified.Region,
 		},
-	}, docs) == authz.Allow
+	}, docs, sessionDocs) == authz.Allow
+}
+
+func (s *Server) identityDocs(principal identity.Principal) []string {
+	arn := principal.ARN()
+	docs, _ := s.store.ListAttachedPolicyDocuments(arn)
+	inline, _ := s.store.ListInlinePolicies(arn)
+	for _, p := range inline {
+		docs = append(docs, p.Document)
+	}
+	return docs
+}
+
+func (s *Server) sessionPolicyDocs(accessKeyID string) []string {
+	ak, err := s.store.LookupAccessKeyRecord(accessKeyID)
+	if err != nil || ak.SessionPolicy == "" {
+		return nil
+	}
+	return []string{ak.SessionPolicy}
 }
 
 func (s *Server) writeXMLOK(w http.ResponseWriter, requestID string, payload []byte) {
@@ -379,6 +417,9 @@ func (s *Server) writeSuccessAudit(
 	}
 	if verified.Principal.Kind == identity.KindRole {
 		uid["type"] = "AssumedRole"
+	}
+	if verified.Principal.Kind == identity.KindFederated {
+		uid["type"] = "FederatedUser"
 	}
 	ev := audit.Event{
 		EventVersion:       eventVersion,

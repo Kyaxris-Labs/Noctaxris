@@ -121,3 +121,70 @@ func TestExplicitDenyOverridesAllow(t *testing.T) {
 		t.Fatalf("got %v, want Deny", got)
 	}
 }
+
+func TestEvaluateWithSessionIntersection(t *testing.T) {
+	ctx := authz.RequestContext{
+		Principal: identity.Principal{
+			Kind:      identity.KindUser,
+			AccountID: "000000000001",
+			IsRoot:    false,
+		},
+		Action:   "sts:GetCallerIdentity",
+		Resource: "*",
+	}
+	allowDoc := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Action":"sts:GetCallerIdentity",
+			"Resource":"*"
+		}]
+	}`
+	denyDoc := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Deny",
+			"Action":"sts:GetCallerIdentity",
+			"Resource":"*"
+		}]
+	}`
+
+	if got := authz.EvaluateWithSession(ctx, []string{allowDoc}, []string{denyDoc}); got != authz.Deny {
+		t.Fatalf("identity Allow + session Deny got %v, want Deny", got)
+	}
+	if got := authz.EvaluateWithSession(ctx, []string{allowDoc}, []string{allowDoc}); got != authz.Allow {
+		t.Fatalf("identity Allow + session Allow got %v, want Allow", got)
+	}
+	if got := authz.EvaluateWithSession(ctx, []string{denyDoc}, []string{allowDoc}); got != authz.Deny {
+		t.Fatalf("identity Deny + session Allow got %v, want Deny", got)
+	}
+}
+
+func TestEvaluateWithSessionEmptySameAsEvaluate(t *testing.T) {
+	ctx := authz.RequestContext{
+		Principal: identity.Principal{
+			Kind:      identity.KindUser,
+			AccountID: "000000000001",
+			IsRoot:    false,
+		},
+		Action:   "sts:GetCallerIdentity",
+		Resource: "*",
+	}
+	allowDoc := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Action":"sts:GetCallerIdentity",
+			"Resource":"*"
+		}]
+	}`
+	if got := authz.EvaluateWithSession(ctx, []string{allowDoc}, nil); got != authz.Allow {
+		t.Fatalf("nil session got %v, want Allow", got)
+	}
+	if got := authz.EvaluateWithSession(ctx, []string{allowDoc}, []string{}); got != authz.Allow {
+		t.Fatalf("empty session got %v, want Allow", got)
+	}
+	if got := authz.EvaluateWithSession(ctx, nil, nil); got != authz.Deny {
+		t.Fatalf("no identity policies got %v, want Deny", got)
+	}
+}

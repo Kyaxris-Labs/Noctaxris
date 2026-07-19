@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 // OrganizationAccountAccessRoleName is the IAM role created in member accounts.
@@ -20,14 +22,18 @@ func OrganizationAccountAccessRoleTrustPolicy(mgmtAccountID string) string {
 	)
 }
 
-// RoleARN builds an IAM role ARN for the given account and role name.
-func RoleARN(accountID, roleName string) string {
-	return fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, roleName)
-}
-
 // CreateMemberAccount creates a member account under mgmtAccountID with
 // OrganizationAccountAccessRole and a SUCCEEDED create-account request.
 func (s *Store) CreateMemberAccount(mgmtAccountID, email, accountName string) (requestID, accountID string, err error) {
+	if err := validate.AccountID(mgmtAccountID); err != nil {
+		return "", "", fmt.Errorf("create member account: %w", err)
+	}
+	if err := validate.Email(email); err != nil {
+		return "", "", fmt.Errorf("create member account: %w", err)
+	}
+	if err := validate.AccountName(accountName); err != nil {
+		return "", "", fmt.Errorf("create member account: %w", err)
+	}
 	accountID, err = s.allocateAccountID(mgmtAccountID)
 	if err != nil {
 		return "", "", err
@@ -111,4 +117,23 @@ func newCreateAccountRequestID() (string, error) {
 		return "", err
 	}
 	return "car-" + hex.EncodeToString(b[:]), nil
+}
+
+// AccountExists reports whether accountID is present in the accounts table.
+func (s *Store) AccountExists(accountID string) bool {
+	var id string
+	err := s.db.QueryRow(`SELECT account_id FROM accounts WHERE account_id = ?`, accountID).Scan(&id)
+	return err == nil
+}
+
+// IsOrgMemberAccount reports whether memberAccountID was created via Organizations
+// CreateAccount under mgmtAccountID.
+func (s *Store) IsOrgMemberAccount(mgmtAccountID, memberAccountID string) bool {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM create_account_requests
+		 WHERE requested_by_account_id = ? AND account_id = ? AND status = 'SUCCEEDED'`,
+		mgmtAccountID, memberAccountID,
+	).Scan(&n)
+	return err == nil && n > 0
 }

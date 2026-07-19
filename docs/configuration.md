@@ -14,13 +14,21 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_ROOT_ACCESS_KEY_ID` | required | Bootstrap root access key id |
 | `NOCTAXRIS_ROOT_SECRET_ACCESS_KEY` | required | Bootstrap root secret (encrypted before disk) |
 | `NOCTAXRIS_ACCOUNT_ID` | `000000000001` | 12-character account id |
+| `NOCTAXRIS_SAML_IDP_METADATA` | empty | Path to SAML IdP metadata XML. When set, seeded into the store at startup for `AssumeRoleWithSAML`. |
+| `NOCTAXRIS_SAML_IDP_NAME` | `default` | SAML provider name used when seeding metadata |
+| `NOCTAXRIS_OIDC_ISSUER_URL` | empty | OIDC issuer URL. When set with client id, seeded for `AssumeRoleWithWebIdentity`. |
+| `NOCTAXRIS_OIDC_CLIENT_ID` | empty | OIDC audience / client id (required if issuer URL is set) |
+
+Federation is fail-closed. If these are unset and no IdP rows exist in the store, SAML/OIDC STS APIs deny with AccessDenied / InvalidIdentityToken rather than accepting unsigned tokens.
+
+`NOCTAXRIS_ACCOUNT_ID`, root access key id, OIDC URL/client id, SAML provider name, and SAML metadata path are validated at startup (`internal/validate`). Invalid values fail process start.
 
 ## Data layout under `NOCTAXRIS_DATA_ROOT`
 
 | Path | Role |
 |------|------|
 | `master.key` | 32-byte AEAD key (mode `0600` when created) |
-| `state.db` | SQLite accounts and access keys |
+| `state.db` | SQLite accounts, users, keys, policies, roles, IdP config |
 | `cloudtrail/events.jsonl` | Audit trail |
 
 ## Docker / Compose

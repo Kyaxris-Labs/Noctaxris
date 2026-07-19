@@ -1,0 +1,48 @@
+package store
+
+import (
+	"fmt"
+	"strings"
+)
+
+// UserARN builds an IAM user ARN for accountID, path, and userName.
+func UserARN(accountID, path, userName string) string {
+	return iamResourceARN(accountID, "user", path, userName)
+}
+
+// PolicyARN builds a customer-managed IAM policy ARN.
+func PolicyARN(accountID, path, policyName string) string {
+	return iamResourceARN(accountID, "policy", path, policyName)
+}
+
+// RoleARN builds an IAM role ARN for the given account and role name (path "/").
+func RoleARN(accountID, roleName string) string {
+	return RoleARNWithPath(accountID, "/", roleName)
+}
+
+// RoleARNWithPath builds an IAM role ARN including path.
+func RoleARNWithPath(accountID, path, roleName string) string {
+	return iamResourceARN(accountID, "role", path, roleName)
+}
+
+func iamResourceARN(accountID, resourceType, path, name string) string {
+	p := normalizeIAMPath(path)
+	if p == "/" {
+		return fmt.Sprintf("arn:aws:iam::%s:%s/%s", accountID, resourceType, name)
+	}
+	trimmed := strings.Trim(p, "/")
+	return fmt.Sprintf("arn:aws:iam::%s:%s/%s/%s", accountID, resourceType, trimmed, name)
+}
+
+func normalizeIAMPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+	return path
+}

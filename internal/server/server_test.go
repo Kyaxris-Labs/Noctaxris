@@ -218,8 +218,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 2") {
-		t.Fatalf("expected Phase 2 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Phase 3") {
+		t.Fatalf("expected Phase 3 message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
@@ -284,6 +284,105 @@ func TestCreateAccountAssumeRoleFlow(t *testing.T) {
 	if !strings.Contains(assumeXML, "assumed-role/OrganizationAccountAccessRole/admin") {
 		t.Fatalf("missing assumed role ARN in %q", assumeXML)
 	}
+}
+
+func TestCreateUserAccessKeyGetCallerIdentity(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createUserBody := []byte("Action=CreateUser&Version=2010-05-08&UserName=alice")
+	createUserReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", createUserBody)
+	signHeader(t, createUserReq, createUserBody, testAccessKey, testSecret, testRegion, "iam", now)
+	createUserRec := httptest.NewRecorder()
+	handler.ServeHTTP(createUserRec, createUserReq)
+	if createUserRec.Code != http.StatusOK {
+		t.Fatalf("CreateUser status=%d body=%q", createUserRec.Code, createUserRec.Body.String())
+	}
+	if !strings.Contains(createUserRec.Body.String(), "<UserName>alice</UserName>") {
+		t.Fatalf("CreateUser body=%q", createUserRec.Body.String())
+	}
+
+	createKeyBody := []byte("Action=CreateAccessKey&Version=2010-05-08&UserName=alice")
+	createKeyReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", createKeyBody)
+	signHeader(t, createKeyReq, createKeyBody, testAccessKey, testSecret, testRegion, "iam", now)
+	createKeyRec := httptest.NewRecorder()
+	handler.ServeHTTP(createKeyRec, createKeyReq)
+	if createKeyRec.Code != http.StatusOK {
+		t.Fatalf("CreateAccessKey status=%d body=%q", createKeyRec.Code, createKeyRec.Body.String())
+	}
+	keyXML := createKeyRec.Body.String()
+	akid := xmlTag(t, keyXML, "AccessKeyId")
+	secret := xmlTag(t, keyXML, "SecretAccessKey")
+	if !strings.HasPrefix(akid, "AKIA") || secret == "" {
+		t.Fatalf("CreateAccessKey body=%q", keyXML)
+	}
+
+	gciBody := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	gciReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", gciBody)
+	signHeader(t, gciReq, gciBody, akid, secret, testRegion, "sts", now)
+	gciRec := httptest.NewRecorder()
+	handler.ServeHTTP(gciRec, gciReq)
+	if gciRec.Code != http.StatusOK {
+		t.Fatalf("GetCallerIdentity status=%d body=%q", gciRec.Code, gciRec.Body.String())
+	}
+	gciXML := gciRec.Body.String()
+	if !strings.Contains(gciXML, "arn:aws:iam::"+testAccountID+":user/alice") {
+		t.Fatalf("expected IAM user ARN in %q", gciXML)
+	}
+}
+
+func TestGetSessionToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	body := []byte("Action=GetSessionToken&Version=2011-06-15")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	signHeader(t, req, body, testAccessKey, testSecret, testRegion, "sts", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetSessionToken status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	resp := rec.Body.String()
+	if !strings.Contains(resp, "<GetSessionTokenResponse") {
+		t.Fatalf("missing GetSessionTokenResponse in %q", resp)
+	}
+	if !strings.Contains(resp, "ASIA") || !strings.Contains(resp, "SessionToken") {
+		t.Fatalf("GetSessionToken body=%q", resp)
+	}
+}
+
+func TestAssumeRoleWithWebIdentityFailsWithoutIdP(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/DoesNotMatter"
+	body := []byte("Action=AssumeRoleWithWebIdentity&Version=2011-06-15&RoleArn=" +
+		url.QueryEscape(roleARN) +
+		"&RoleSessionName=web&WebIdentityToken=not.a.jwt")
+	// Federation STS does not require SigV4 (AWS CLI sends unsigned).
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want %d body=%q", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "IdP not configured") &&
+		!strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("expected IdP not configured / AccessDenied in %q", rec.Body.String())
+	}
+}
+
+func xmlTag(t *testing.T, xml, tag string) string {
+	t.Helper()
+	start := strings.Index(xml, "<"+tag+">")
+	end := strings.Index(xml, "</"+tag+">")
+	if start < 0 || end <= start {
+		t.Fatalf("missing <%s> in %q", tag, xml)
+	}
+	return xml[start+len(tag)+2 : end]
 }
 
 func mustNewRequest(t *testing.T, method, rawURL string, body []byte) *http.Request {
