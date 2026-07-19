@@ -88,4 +88,46 @@ URL=$(aws s3 "presign" "s3://$BUCKET/hello.txt" --endpoint-url "$EP")
 curl -fsS "$URL"
 ```
 
+## DynamoDB smoke (Phase 6)
+
+```bash
+TABLE="noctaxris-lab-$RANDOM"
+aws dynamodb create-table \
+  --table-name "$TABLE" \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url "$EP"
+
+aws dynamodb put-item \
+  --table-name "$TABLE" \
+  --item '{"pk":{"S":"1"},"data":{"S":"hello-ddb"}}' \
+  --endpoint-url "$EP"
+
+aws dynamodb get-item \
+  --table-name "$TABLE" \
+  --key '{"pk":{"S":"1"}}' \
+  --endpoint-url "$EP"
+```
+
+## SQS smoke (Phase 6)
+
+```bash
+QUEUE="noctaxris-lab-$RANDOM"
+QUEUE_URL=$(aws sqs create-queue --queue-name "$QUEUE" --endpoint-url "$EP" --query QueueUrl --output text)
+
+aws sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-body hello-sqs \
+  --endpoint-url "$EP"
+
+MSG_JSON=$(aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP" --output json)
+HANDLE=$(echo "$MSG_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["Messages"][0]["ReceiptHandle"])')
+
+aws sqs delete-message \
+  --queue-url "$QUEUE_URL" \
+  --receipt-handle "$HANDLE" \
+  --endpoint-url "$EP"
+```
+
 On Windows, run the same commands inside WSL against `http://127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host (WSL can reach it via `localhost` when mirrored networking is enabled, or use the Windows host IP).

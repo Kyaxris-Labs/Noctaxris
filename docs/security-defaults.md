@@ -19,7 +19,7 @@ These defaults are intentional product posture for a local emulator that people 
 - Audit events must not carry secret or plaintext key material.
 - Inactive access keys are rejected at SigV4 verification.
 
-## Auth (Phase 5)
+## Auth (Phase 6)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
@@ -27,8 +27,11 @@ These defaults are intentional product posture for a local emulator that people 
 - Presigned S3 GET/PUT use query SigV4 (`X-Amz-Expires` max 604800).
 - `GetCallerIdentity` succeeds after SigV4 without an IAM permission check.
 - Lab S3 APIs use `EvaluateS3` (identity or bucket policy union).
+- Lab DynamoDB APIs use `EvaluateDynamoDB` (identity or table resource policy union).
+- Lab SQS APIs use `EvaluateSQS` (identity or queue policy union).
 - Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant).
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
+
 
 ## Optional TLS
 

@@ -199,9 +199,40 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKMSDeleteAlias, "DeleteAlias",
 		catalog.ActionKMSUpdateAlias, "UpdateAlias":
 		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionDynamoDBCreateTable, "CreateTable",
+		catalog.ActionDynamoDBDescribeTable, "DescribeTable",
+		catalog.ActionDynamoDBDeleteTable, "DeleteTable",
+		catalog.ActionDynamoDBListTables, "ListTables",
+		catalog.ActionDynamoDBUpdateTable, "UpdateTable",
+		catalog.ActionDynamoDBPutItem, "PutItem",
+		catalog.ActionDynamoDBGetItem, "GetItem",
+		catalog.ActionDynamoDBDeleteItem, "DeleteItem",
+		catalog.ActionDynamoDBUpdateItem, "UpdateItem",
+		catalog.ActionDynamoDBQuery, "Query",
+		catalog.ActionDynamoDBScan, "Scan",
+		catalog.ActionDynamoDBBatchGetItem, "BatchGetItem",
+		catalog.ActionDynamoDBBatchWriteItem, "BatchWriteItem",
+		catalog.ActionDynamoDBPutResourcePolicy, "PutResourcePolicy",
+		catalog.ActionDynamoDBGetResourcePolicy, "GetResourcePolicy",
+		catalog.ActionDynamoDBDeleteResourcePolicy, "DeleteResourcePolicy":
+		s.handleDynamoDB(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSQSCreateQueue, "CreateQueue",
+		catalog.ActionSQSGetQueueUrl, "GetQueueUrl",
+		catalog.ActionSQSGetQueueAttributes, "GetQueueAttributes",
+		catalog.ActionSQSSetQueueAttributes, "SetQueueAttributes",
+		catalog.ActionSQSDeleteQueue, "DeleteQueue",
+		catalog.ActionSQSListQueues, "ListQueues",
+		catalog.ActionSQSPurgeQueue, "PurgeQueue",
+		catalog.ActionSQSSendMessage, "SendMessage",
+		catalog.ActionSQSReceiveMessage, "ReceiveMessage",
+		catalog.ActionSQSDeleteMessage, "DeleteMessage",
+		catalog.ActionSQSSendMessageBatch, "SendMessageBatch",
+		catalog.ActionSQSDeleteMessageBatch, "DeleteMessageBatch",
+		catalog.ActionSQSChangeMessageVisibility, "ChangeMessageVisibility":
+		s.handleSQS(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 5.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris Phase 6.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
 }
@@ -498,6 +529,64 @@ func normalizeAction(action string) string {
 		return catalog.ActionKMSDeleteAlias
 	case "UpdateAlias":
 		return catalog.ActionKMSUpdateAlias
+	case "CreateTable":
+		return catalog.ActionDynamoDBCreateTable
+	case "DescribeTable":
+		return catalog.ActionDynamoDBDescribeTable
+	case "DeleteTable":
+		return catalog.ActionDynamoDBDeleteTable
+	case "ListTables":
+		return catalog.ActionDynamoDBListTables
+	case "UpdateTable":
+		return catalog.ActionDynamoDBUpdateTable
+	case "PutItem":
+		return catalog.ActionDynamoDBPutItem
+	case "GetItem":
+		return catalog.ActionDynamoDBGetItem
+	case "DeleteItem":
+		return catalog.ActionDynamoDBDeleteItem
+	case "UpdateItem":
+		return catalog.ActionDynamoDBUpdateItem
+	case "Query":
+		return catalog.ActionDynamoDBQuery
+	case "Scan":
+		return catalog.ActionDynamoDBScan
+	case "BatchGetItem":
+		return catalog.ActionDynamoDBBatchGetItem
+	case "BatchWriteItem":
+		return catalog.ActionDynamoDBBatchWriteItem
+	case "PutResourcePolicy":
+		return catalog.ActionDynamoDBPutResourcePolicy
+	case "GetResourcePolicy":
+		return catalog.ActionDynamoDBGetResourcePolicy
+	case "DeleteResourcePolicy":
+		return catalog.ActionDynamoDBDeleteResourcePolicy
+	case "CreateQueue":
+		return catalog.ActionSQSCreateQueue
+	case "GetQueueUrl":
+		return catalog.ActionSQSGetQueueUrl
+	case "GetQueueAttributes":
+		return catalog.ActionSQSGetQueueAttributes
+	case "SetQueueAttributes":
+		return catalog.ActionSQSSetQueueAttributes
+	case "DeleteQueue":
+		return catalog.ActionSQSDeleteQueue
+	case "ListQueues":
+		return catalog.ActionSQSListQueues
+	case "PurgeQueue":
+		return catalog.ActionSQSPurgeQueue
+	case "SendMessage":
+		return catalog.ActionSQSSendMessage
+	case "ReceiveMessage":
+		return catalog.ActionSQSReceiveMessage
+	case "DeleteMessage":
+		return catalog.ActionSQSDeleteMessage
+	case "SendMessageBatch":
+		return catalog.ActionSQSSendMessageBatch
+	case "DeleteMessageBatch":
+		return catalog.ActionSQSDeleteMessageBatch
+	case "ChangeMessageVisibility":
+		return catalog.ActionSQSChangeMessageVisibility
 	default:
 		return action
 	}

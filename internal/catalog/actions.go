@@ -141,6 +141,43 @@ const (
 	ActionS3DeleteObject       = "s3:DeleteObject"
 )
 
+// DynamoDB lab actions (Phase 6).
+const (
+	ActionDynamoDBCreateTable          = "dynamodb:CreateTable"
+	ActionDynamoDBDescribeTable        = "dynamodb:DescribeTable"
+	ActionDynamoDBDeleteTable          = "dynamodb:DeleteTable"
+	ActionDynamoDBListTables           = "dynamodb:ListTables"
+	ActionDynamoDBUpdateTable          = "dynamodb:UpdateTable"
+	ActionDynamoDBPutItem              = "dynamodb:PutItem"
+	ActionDynamoDBGetItem              = "dynamodb:GetItem"
+	ActionDynamoDBDeleteItem           = "dynamodb:DeleteItem"
+	ActionDynamoDBUpdateItem           = "dynamodb:UpdateItem"
+	ActionDynamoDBQuery                = "dynamodb:Query"
+	ActionDynamoDBScan                 = "dynamodb:Scan"
+	ActionDynamoDBBatchGetItem         = "dynamodb:BatchGetItem"
+	ActionDynamoDBBatchWriteItem       = "dynamodb:BatchWriteItem"
+	ActionDynamoDBPutResourcePolicy    = "dynamodb:PutResourcePolicy"
+	ActionDynamoDBGetResourcePolicy    = "dynamodb:GetResourcePolicy"
+	ActionDynamoDBDeleteResourcePolicy = "dynamodb:DeleteResourcePolicy"
+)
+
+// SQS lab actions (Phase 6).
+const (
+	ActionSQSCreateQueue              = "sqs:CreateQueue"
+	ActionSQSGetQueueUrl              = "sqs:GetQueueUrl"
+	ActionSQSGetQueueAttributes       = "sqs:GetQueueAttributes"
+	ActionSQSSetQueueAttributes       = "sqs:SetQueueAttributes"
+	ActionSQSDeleteQueue              = "sqs:DeleteQueue"
+	ActionSQSListQueues               = "sqs:ListQueues"
+	ActionSQSPurgeQueue               = "sqs:PurgeQueue"
+	ActionSQSSendMessage              = "sqs:SendMessage"
+	ActionSQSReceiveMessage           = "sqs:ReceiveMessage"
+	ActionSQSDeleteMessage            = "sqs:DeleteMessage"
+	ActionSQSSendMessageBatch         = "sqs:SendMessageBatch"
+	ActionSQSDeleteMessageBatch       = "sqs:DeleteMessageBatch"
+	ActionSQSChangeMessageVisibility  = "sqs:ChangeMessageVisibility"
+)
+
 // KnownAction reports whether action is recognized in the current catalog.
 func KnownAction(action string) bool {
 	switch action {
@@ -216,7 +253,36 @@ func KnownAction(action string) bool {
 		ActionS3DeleteBucketPolicy,
 		ActionS3GetObject,
 		ActionS3PutObject,
-		ActionS3DeleteObject:
+		ActionS3DeleteObject,
+		ActionDynamoDBCreateTable,
+		ActionDynamoDBDescribeTable,
+		ActionDynamoDBDeleteTable,
+		ActionDynamoDBListTables,
+		ActionDynamoDBUpdateTable,
+		ActionDynamoDBPutItem,
+		ActionDynamoDBGetItem,
+		ActionDynamoDBDeleteItem,
+		ActionDynamoDBUpdateItem,
+		ActionDynamoDBQuery,
+		ActionDynamoDBScan,
+		ActionDynamoDBBatchGetItem,
+		ActionDynamoDBBatchWriteItem,
+		ActionDynamoDBPutResourcePolicy,
+		ActionDynamoDBGetResourcePolicy,
+		ActionDynamoDBDeleteResourcePolicy,
+		ActionSQSCreateQueue,
+		ActionSQSGetQueueUrl,
+		ActionSQSGetQueueAttributes,
+		ActionSQSSetQueueAttributes,
+		ActionSQSDeleteQueue,
+		ActionSQSListQueues,
+		ActionSQSPurgeQueue,
+		ActionSQSSendMessage,
+		ActionSQSReceiveMessage,
+		ActionSQSDeleteMessage,
+		ActionSQSSendMessageBatch,
+		ActionSQSDeleteMessageBatch,
+		ActionSQSChangeMessageVisibility:
 		return true
 	default:
 		return false

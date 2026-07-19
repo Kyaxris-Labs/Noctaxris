@@ -142,6 +142,53 @@ CREATE TABLE IF NOT EXISTS s3_objects (
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key)
 );
+CREATE TABLE IF NOT EXISTS dynamodb_tables (
+  account_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  table_arn TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  hash_key_name TEXT NOT NULL,
+  hash_key_type TEXT NOT NULL,
+  range_key_name TEXT NOT NULL DEFAULT '',
+  range_key_type TEXT NOT NULL DEFAULT '',
+  resource_policy TEXT NOT NULL DEFAULT '',
+  sse_type TEXT NOT NULL DEFAULT 'AWS_OWNED',
+  kms_key_id TEXT NOT NULL DEFAULT '',
+  creation_date TEXT NOT NULL,
+  PRIMARY KEY (account_id, table_name)
+);
+CREATE TABLE IF NOT EXISTS dynamodb_items (
+  account_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  item_pk TEXT NOT NULL,
+  item_sk TEXT NOT NULL DEFAULT '',
+  item_json BLOB NOT NULL,
+  sealed INTEGER NOT NULL DEFAULT 0,
+  sealed_dek BLOB,
+  PRIMARY KEY (account_id, table_name, item_pk, item_sk)
+);
+CREATE TABLE IF NOT EXISTS sqs_queues (
+  account_id TEXT NOT NULL,
+  queue_name TEXT NOT NULL,
+  queue_url TEXT NOT NULL,
+  queue_arn TEXT NOT NULL,
+  attributes_json TEXT NOT NULL DEFAULT '{}',
+  creation_date TEXT NOT NULL,
+  PRIMARY KEY (account_id, queue_name)
+);
+CREATE TABLE IF NOT EXISTS sqs_messages (
+  message_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  queue_name TEXT NOT NULL,
+  body BLOB NOT NULL,
+  sealed INTEGER NOT NULL DEFAULT 0,
+  sealed_dek BLOB,
+  receipt_handle TEXT UNIQUE,
+  visible_after TEXT NOT NULL DEFAULT '',
+  receive_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  attributes_json TEXT NOT NULL DEFAULT '{}'
+);
 `
 
 // Access key status values stored in access_keys.status.

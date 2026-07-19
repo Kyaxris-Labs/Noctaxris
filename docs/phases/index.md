@@ -10,3 +10,4 @@ Completed delivery slices. Smoke commands live in [../verification.md](../verifi
 | 3 | Lab IAM + all 11 STS actions (fail-closed federation) | [phase-3.md](phase-3.md) |
 | 4 | Lab-complete KMS (keys, policies, crypto, grants, aliases) | [phase-4.md](phase-4.md) |
 | 5 | Lab-complete S3 (objects, bucket policy, SSE, path-style presign) | [phase-5.md](phase-5.md) |
+| 6 | Lab-complete DynamoDB + SQS (items, resource/queue policy, SSE) | [phase-6.md](phase-6.md) |

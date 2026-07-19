@@ -6,7 +6,7 @@ Repo and Go module: `github.com/Kyaxris-Labs/Noctaxris` (PascalCase `Noctaxris`,
 
 Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxris-Labs).
 
-## Quick start (Phase 5)
+## Quick start (Phase 6)
 
 1. Copy `docker/.env.example` to `docker/.env` and set root access keys.
 2. `docker compose -f docker/compose.yaml --env-file docker/.env up --build`
@@ -20,7 +20,7 @@ aws s3 mb s3://lab-bucket --endpoint-url http://127.0.0.1:4566
 aws kms create-key --endpoint-url http://127.0.0.1:4566
 ```
 
-Phase 5 adds lab-complete S3 (path-style buckets/objects, bucket policies, SSE-S3/SSE-KMS, presigned GET/PUT) on top of KMS, IAM, STS, and Organizations. See [docs/phases/phase-5.md](docs/phases/phase-5.md) and [docs/deferred.md](docs/deferred.md).
+Phase 6 adds lab-complete DynamoDB and SQS on top of S3, KMS, IAM, STS, and Organizations. See [docs/phases/phase-6.md](docs/phases/phase-6.md) and [docs/deferred.md](docs/deferred.md).
 
 ## Defaults
 
