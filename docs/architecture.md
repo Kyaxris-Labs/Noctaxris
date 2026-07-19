@@ -26,7 +26,8 @@ Noctaxris/
   internal/services/lambda/       # CreateFunction / Invoke JSON helpers
   internal/services/organizations/
   internal/server/
-  docs/
+  docs/                           # public docs
+    docs/services/                  # per-service APIs, smoke, deferred depth
 ```
 
 ## Request path

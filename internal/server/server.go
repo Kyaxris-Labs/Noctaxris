@@ -255,7 +255,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKMSCreateAlias, "CreateAlias",
 		catalog.ActionKMSListAliases, "ListAliases",
 		catalog.ActionKMSDeleteAlias, "DeleteAlias",
-		catalog.ActionKMSUpdateAlias, "UpdateAlias":
+		catalog.ActionKMSUpdateAlias, "UpdateAlias",
+		catalog.ActionKMSScheduleKeyDeletion, "ScheduleKeyDeletion",
+		catalog.ActionKMSCancelKeyDeletion, "CancelKeyDeletion",
+		catalog.ActionKMSEnableKeyRotation, "EnableKeyRotation",
+		catalog.ActionKMSDisableKeyRotation, "DisableKeyRotation",
+		catalog.ActionKMSGetKeyRotationStatus, "GetKeyRotationStatus",
+		"ReEncrypt":
 		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionDynamoDBCreateTable, "CreateTable",
 		catalog.ActionDynamoDBDescribeTable, "DescribeTable",
@@ -272,7 +278,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionDynamoDBBatchWriteItem, "BatchWriteItem",
 		catalog.ActionDynamoDBPutResourcePolicy, "PutResourcePolicy",
 		catalog.ActionDynamoDBGetResourcePolicy, "GetResourcePolicy",
-		catalog.ActionDynamoDBDeleteResourcePolicy, "DeleteResourcePolicy":
+		catalog.ActionDynamoDBDeleteResourcePolicy, "DeleteResourcePolicy",
+		catalog.ActionDynamoDBUpdateTimeToLive, "UpdateTimeToLive",
+		catalog.ActionDynamoDBDescribeTimeToLive, "DescribeTimeToLive":
 		s.handleDynamoDB(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSQSCreateQueue, "CreateQueue",
 		catalog.ActionSQSGetQueueUrl, "GetQueueUrl",
@@ -768,6 +776,16 @@ func normalizeAction(action string) string {
 		return catalog.ActionKMSDeleteAlias
 	case "UpdateAlias":
 		return catalog.ActionKMSUpdateAlias
+	case "ScheduleKeyDeletion":
+		return catalog.ActionKMSScheduleKeyDeletion
+	case "CancelKeyDeletion":
+		return catalog.ActionKMSCancelKeyDeletion
+	case "EnableKeyRotation":
+		return catalog.ActionKMSEnableKeyRotation
+	case "DisableKeyRotation":
+		return catalog.ActionKMSDisableKeyRotation
+	case "GetKeyRotationStatus":
+		return catalog.ActionKMSGetKeyRotationStatus
 	case "CreateTable":
 		return catalog.ActionDynamoDBCreateTable
 	case "DescribeTable":

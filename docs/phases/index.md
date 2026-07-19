@@ -1,6 +1,6 @@
 # Phase history
 
-Completed delivery slices for the **lab core**. Smoke commands live in [../verification.md](../verification.md). Deferred depth is in [../deferred.md](../deferred.md).
+Completed delivery slices for the **lab core**. Smoke commands and deferred depth live under [../services/](../services/index.md).
 
 | Phase | Focus | Doc |
 |-------|--------|-----|

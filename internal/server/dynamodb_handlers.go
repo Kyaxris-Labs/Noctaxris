@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -64,6 +65,10 @@ func (s *Server) handleDynamoDB(
 		s.dynamoGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBDeleteResourcePolicy:
 		s.dynamoDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBUpdateTimeToLive:
+		s.dynamoUpdateTimeToLive(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBDescribeTimeToLive:
+		s.dynamoDescribeTimeToLive(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		_ = accountID
 		s.writeDynamoError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
@@ -108,43 +113,23 @@ func dynamoAction(action string) string {
 		return catalog.ActionDynamoDBGetResourcePolicy
 	case "DeleteResourcePolicy":
 		return catalog.ActionDynamoDBDeleteResourcePolicy
+	case "UpdateTimeToLive":
+		return catalog.ActionDynamoDBUpdateTimeToLive
+	case "DescribeTimeToLive":
+		return catalog.ActionDynamoDBDescribeTimeToLive
 	default:
 		return action
 	}
 }
 
 func (s *Server) authorizeDynamoDB(verified *authn.Verified, action, resource, resourcePolicy string) bool {
-	identityDocs := s.identityDocs(verified.Principal)
-	decision := authz.EvaluateDynamoDB(authz.DynamoDBRequest{
-		Caller: authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    action,
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		},
-		IdentityDocs:      identityDocs,
-		ResourcePolicyDoc: resourcePolicy,
+	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
+			Caller:            caller,
+			IdentityDocs:      identityDocs,
+			ResourcePolicyDoc: resourcePolicy,
+		})
 	})
-	if decision != authz.Allow {
-		return false
-	}
-	if sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID); len(sessionDocs) > 0 {
-		return authz.EvaluateWithSession(authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    action,
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		}, identityDocs, sessionDocs) == authz.Allow
-	}
-	return true
 }
 
 func (s *Server) dynamoTableOrErr(
@@ -313,9 +298,32 @@ func (s *Server) dynamoCreateTable(
 		}
 	}
 
+	var gsi *store.DynamoGSI
+	if indexes, ok := params["GlobalSecondaryIndexes"].([]any); ok && len(indexes) > 0 {
+		if len(indexes) > 1 {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Only one lab GSI is supported.", readOnly, eventID, verified)
+			return
+		}
+		raw, ok := indexes[0].(map[string]any)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Invalid GlobalSecondaryIndexes entry.", readOnly, eventID, verified)
+			return
+		}
+		parsed, err := dynamoParseGSISpec(raw, attrTypes)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		gsi = &parsed
+	}
+
 	table, err := s.store.CreateTable(
 		verified.AccountID, region, tableName,
 		hashKey, hashType, rangeKey, rangeType, sseType, kmsKeyID,
+		gsi,
 	)
 	if errors.Is(err, store.ErrTableAlreadyExists) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
@@ -430,52 +438,150 @@ func (s *Server) dynamoUpdateTable(
 			"User is not authorized to perform dynamodb:UpdateTable.", readOnly, eventID, verified)
 		return
 	}
-	sseSpec, ok := params["SSESpecification"].(map[string]any)
-	if !ok {
-		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"SSESpecification is required.", readOnly, eventID, verified)
-		return
-	}
-	enabled, _ := sseSpec["Enabled"].(bool)
-	sseType := store.SSETypeAWSOwned
-	kmsKeyID := ""
-	if enabled {
-		sseTypeParam, _ := sseSpec["SSEType"].(string)
-		switch strings.ToUpper(sseTypeParam) {
-		case "", "KMS":
-			sseType = store.SSETypeKMS
-		case "AES256":
-			sseType = store.SSETypeAWSOwned
-		default:
-			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				"Unsupported SSEType.", readOnly, eventID, verified)
-			return
-		}
-		kmsKeyID, _ = sseSpec["KMSMasterKeyId"].(string)
-		if sseType == store.SSETypeKMS {
-			if kmsKeyID == "" {
+
+	updated := false
+	if gsiUpdates, ok := params["GlobalSecondaryIndexUpdates"].([]any); ok && len(gsiUpdates) > 0 {
+		for _, raw := range gsiUpdates {
+			entry, ok := raw.(map[string]any)
+			if !ok {
 				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-					"KMSMasterKeyId is required for SSEType KMS.", readOnly, eventID, verified)
+					"Invalid GlobalSecondaryIndexUpdates entry.", readOnly, eventID, verified)
 				return
 			}
-			resolved, err := s.store.ResolveKeyID(verified.AccountID, kmsKeyID)
+			createSpec, ok := entry["Create"].(map[string]any)
+			if !ok {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					"Only Create GlobalSecondaryIndexUpdates are supported.", readOnly, eventID, verified)
+				return
+			}
+			attrTypes := dynamoAttrTypes(params)
+			gsi, err := dynamoParseGSISpec(createSpec, attrTypes)
 			if err != nil {
 				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-					"KMSMasterKeyId not found.", readOnly, eventID, verified)
+					err.Error(), readOnly, eventID, verified)
 				return
 			}
-			key, err := s.store.GetKey(resolved)
-			if err != nil || key.AccountID != verified.AccountID {
-				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-					"KMSMasterKeyId not found.", readOnly, eventID, verified)
+			if err := s.store.UpdateTableGSI(verified.AccountID, tableName, gsi); err != nil {
+				if errors.Is(err, store.ErrGSIAlreadyExists) {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
+						"GSI already exists.", readOnly, eventID, verified)
+					return
+				}
+				if errors.Is(err, store.ErrInvalidKeyType) {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+						"Invalid GSI key AttributeType.", readOnly, eventID, verified)
+					return
+				}
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to update table.", readOnly, eventID, verified)
 				return
 			}
-			kmsKeyID = key.ARN
+			updated = true
 		}
 	}
-	if err := s.store.UpdateTableSSE(verified.AccountID, tableName, sseType, kmsKeyID); err != nil {
+
+	if sseSpec, ok := params["SSESpecification"].(map[string]any); ok {
+		enabled, _ := sseSpec["Enabled"].(bool)
+		sseType := store.SSETypeAWSOwned
+		kmsKeyID := ""
+		if enabled {
+			sseTypeParam, _ := sseSpec["SSEType"].(string)
+			switch strings.ToUpper(sseTypeParam) {
+			case "", "KMS":
+				sseType = store.SSETypeKMS
+			case "AES256":
+				sseType = store.SSETypeAWSOwned
+			default:
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					"Unsupported SSEType.", readOnly, eventID, verified)
+				return
+			}
+			kmsKeyID, _ = sseSpec["KMSMasterKeyId"].(string)
+			if sseType == store.SSETypeKMS {
+				if kmsKeyID == "" {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+						"KMSMasterKeyId is required for SSEType KMS.", readOnly, eventID, verified)
+					return
+				}
+				resolved, err := s.store.ResolveKeyID(verified.AccountID, kmsKeyID)
+				if err != nil {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+						"KMSMasterKeyId not found.", readOnly, eventID, verified)
+					return
+				}
+				key, err := s.store.GetKey(resolved)
+				if err != nil || key.AccountID != verified.AccountID {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+						"KMSMasterKeyId not found.", readOnly, eventID, verified)
+					return
+				}
+				kmsKeyID = key.ARN
+			}
+		}
+		if err := s.store.UpdateTableSSE(verified.AccountID, tableName, sseType, kmsKeyID); err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to update table.", readOnly, eventID, verified)
+			return
+		}
+		updated = true
+	}
+
+	if !updated {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"SSESpecification or GlobalSecondaryIndexUpdates is required.", readOnly, eventID, verified)
+		return
+	}
+	refreshed, err := s.store.GetTable(verified.AccountID, tableName)
+	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to update table.", readOnly, eventID, verified)
+			"Unable to load table.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.CreateTableJSON(refreshed)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "UpdateTable", readOnly)
+}
+
+func (s *Server) dynamoUpdateTimeToLive(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	tableName, _ := params["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBUpdateTimeToLive, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:UpdateTimeToLive.", readOnly, eventID, verified)
+		return
+	}
+	spec, ok := params["TimeToLiveSpecification"].(map[string]any)
+	if !ok {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TimeToLiveSpecification is required.", readOnly, eventID, verified)
+		return
+	}
+	attrName, _ := spec["AttributeName"].(string)
+	enabled, _ := spec["Enabled"].(bool)
+	if strings.TrimSpace(attrName) == "" {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"AttributeName is required.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.UpdateTimeToLive(verified.AccountID, tableName, attrName, enabled); err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update TTL.", readOnly, eventID, verified)
 		return
 	}
 	updated, err := s.store.GetTable(verified.AccountID, tableName)
@@ -484,14 +590,43 @@ func (s *Server) dynamoUpdateTable(
 			"Unable to load table.", readOnly, eventID, verified)
 		return
 	}
-	payload, err := ddb.CreateTableJSON(updated)
+	payload, err := ddb.UpdateTimeToLiveJSON(updated)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to build response.", readOnly, eventID, verified)
 		return
 	}
 	s.writeDynamoOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "UpdateTable", readOnly)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "UpdateTimeToLive", readOnly)
+}
+
+func (s *Server) dynamoDescribeTimeToLive(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	tableName, _ := params["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBDescribeTimeToLive, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:DescribeTimeToLive.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.DescribeTimeToLiveJSON(table)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "DescribeTimeToLive", readOnly)
 }
 
 func (s *Server) dynamoPutItem(
@@ -681,13 +816,14 @@ func (s *Server) dynamoQuery(
 			"User is not authorized to perform dynamodb:Query.", readOnly, eventID, verified)
 		return
 	}
-	hashAV, err := ddb.HashKeyFromQuery(table, params)
+	indexName, _ := params["IndexName"].(string)
+	hashAV, err := ddb.HashKeyFromQueryIndex(table, indexName, params)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	itemPK, err := ddb.CanonicalAV(hashAV)
+	queryPK, err := ddb.CanonicalAV(hashAV)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			err.Error(), readOnly, eventID, verified)
@@ -702,14 +838,31 @@ func (s *Server) dynamoQuery(
 				parseErr.Error(), readOnly, eventID, verified)
 			return
 		}
-		_, startSK, err = ddb.PrimaryKeyStrings(table, startKey)
+		itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, startKey)
 		if err != nil {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				err.Error(), readOnly, eventID, verified)
 			return
 		}
+		if indexName != "" {
+			_, startSK, err = s.store.GetItemGSIKeys(verified.AccountID, table.TableName, itemPK, itemSK)
+			if errors.Is(err, store.ErrNoSuchItem) {
+				startSK = ""
+			} else if err != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to query items.", readOnly, eventID, verified)
+				return
+			}
+		} else {
+			startSK = itemSK
+		}
 	}
-	page, err := s.store.QueryItems(verified.AccountID, table.TableName, itemPK, limit, startSK)
+	var page store.ItemPage
+	if indexName != "" {
+		page, err = s.store.QueryGSIItems(verified.AccountID, table.TableName, queryPK, limit, startSK)
+	} else {
+		page, err = s.store.QueryItems(verified.AccountID, table.TableName, queryPK, limit, startSK)
+	}
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to query items.", readOnly, eventID, verified)
@@ -1098,7 +1251,13 @@ func (s *Server) dynamoStoreItem(
 			"Unable to seal item.", readOnly, eventID, verified)
 		return err
 	}
-	if err := s.store.PutItemBytes(verified.AccountID, table.TableName, itemPK, itemSK, data, sealed, sealedDEK); err != nil {
+	gsiPK, gsiSK, err := ddb.GSIKeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return err
+	}
+	if err := s.store.PutItemBytes(verified.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, data, sealed, sealedDEK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put item.", readOnly, eventID, verified)
 		return err
@@ -1150,6 +1309,9 @@ func (s *Server) dynamoLoadItem(
 			"Unable to decode item.", readOnly, eventID, verified)
 		return nil, false, err
 	}
+	if ddb.ItemExpired(table, item, time.Now().Unix()) {
+		return nil, false, nil
+	}
 	return item, true, nil
 }
 
@@ -1179,6 +1341,7 @@ func (s *Server) dynamoDecodePage(
 		}
 	}
 	items := make([]ddb.ItemMap, 0, len(page.Items))
+	nowUnix := time.Now().Unix()
 	for _, stored := range page.Items {
 		plain, err := ddb.LoadItemJSON(table, stored, cmk)
 		if err != nil {
@@ -1191,6 +1354,9 @@ func (s *Server) dynamoDecodePage(
 			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to decode item.", readOnly, eventID, verified)
 			return nil, nil, err
+		}
+		if ddb.ItemExpired(table, item, nowUnix) {
+			continue
 		}
 		items = append(items, item)
 	}

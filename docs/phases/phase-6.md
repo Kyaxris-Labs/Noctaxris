@@ -18,7 +18,7 @@ Phase 6 delivers lab-complete DynamoDB and SQS cores: tables and item CRUD with 
 | SendMessageBatch, DeleteMessageBatch, ChangeMessageVisibility | Done |
 | Queue policy via attributes, SSE-SQS, SSE-KMS | Done |
 | `EvaluateSQS` (identity or queue policy union, Deny-overrides) | Done |
-| Deferred DynamoDB and SQS depth | [../deferred.md](../deferred.md) |
+| Deferred DynamoDB and SQS depth | [../services/dynamodb.md](../services/dynamodb.md), [../services/sqs.md](../services/sqs.md) |
 
 ## Authz note
 
@@ -26,8 +26,8 @@ Same-account DynamoDB uses identity **or** table resource policy Allow. Same-acc
 
 ## Smoke (Compose)
 
-See [../verification.md](../verification.md) for `aws dynamodb create-table/put-item/get-item` and `aws sqs create-queue/send/receive/delete`.
+See [../services/dynamodb.md](../services/dynamodb.md) and [../services/sqs.md](../services/sqs.md) for create-table/put-item/get-item and create-queue/send/receive/delete.
 
 ## Explicitly not in Phase 6
 
-See [../deferred.md](../deferred.md). No GSI/LSI, Streams, Transactions, FIFO queues, or Lambda.
+Current deferred depth: [../services/dynamodb.md](../services/dynamodb.md), [../services/sqs.md](../services/sqs.md). At Phase 6 ship time there was no lab GSI/TTL, FIFO/RedrivePolicy, or Lambda (those landed later).

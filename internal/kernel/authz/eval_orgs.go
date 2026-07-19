@@ -14,6 +14,20 @@ func orgFilterAllows(ctx RequestContext, docs []string) bool {
 	return true
 }
 
+// OrgFiltersDeny reports whether RCPs or SCPs deny the request (EvaluateFull
+// steps 2–3). Identity, boundary, and session are not considered so callers
+// that combine resource-based OR with identity (S3/SQS/DynamoDB) can apply
+// boundary/session only when identity Allows (ADR-0005 §8).
+func OrgFiltersDeny(ctx RequestContext, in EvalInputs) bool {
+	if len(in.RCPDocs) > 0 && !orgFilterAllows(ctx, in.RCPDocs) {
+		return true
+	}
+	if !in.IsManagementAccount && len(in.SCPDocs) > 0 && !orgFilterAllows(ctx, in.SCPDocs) {
+		return true
+	}
+	return false
+}
+
 // denyScanFull returns true if any applicable policy type has an explicit
 // Deny match or a catalog-unknown condition key. Management accounts skip
 // SCP docs (SCPs do not apply).

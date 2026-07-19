@@ -28,7 +28,7 @@ func TestCreateTableDescribeList(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
 
-	tbl, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "")
+	tbl, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestCreateTableDescribeList(t *testing.T) {
 		t.Fatalf("expected composite key table")
 	}
 
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", ""); !errors.Is(err, store.ErrTableAlreadyExists) {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", "", nil); !errors.Is(err, store.ErrTableAlreadyExists) {
 		t.Fatalf("want ErrTableAlreadyExists, got %v", err)
 	}
 
@@ -70,12 +70,12 @@ func TestCreateTableDescribeList(t *testing.T) {
 func TestPutGetDeleteItem(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Users", "Id", store.KeyTypeString, "", "", "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Users", "Id", store.KeyTypeString, "", "", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 
 	body := []byte(`{"Id":{"S":"u1"},"Name":{"S":"Ada"}}`)
-	if err := st.PutItemBytes(account, "Users", `{"S":"u1"}`, "", body, false, nil); err != nil {
+	if err := st.PutItemBytes(account, "Users", `{"S":"u1"}`, "", "", "", body, false, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,12 +102,12 @@ func TestPutGetDeleteItem(t *testing.T) {
 func TestPutItemSealed(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Secrets", "Id", store.KeyTypeString, "", "", store.SSETypeKMS, "key-1"); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Secrets", "Id", store.KeyTypeString, "", "", store.SSETypeKMS, "key-1", nil); err != nil {
 		t.Fatal(err)
 	}
 	cipher := []byte{0x01, 0x02, 0x03}
 	dek := []byte{0xaa, 0xbb}
-	if err := st.PutItemBytes(account, "Secrets", `{"S":"s1"}`, "", cipher, true, dek); err != nil {
+	if err := st.PutItemBytes(account, "Secrets", `{"S":"s1"}`, "", "", "", cipher, true, dek); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetItemBytes(account, "Secrets", `{"S":"s1"}`, "")
@@ -121,7 +121,7 @@ func TestPutItemSealed(t *testing.T) {
 
 func TestPutItemUnknownTable(t *testing.T) {
 	st := openDynamoStore(t)
-	if err := st.PutItemBytes("000000000001", "Ghost", `{"S":"x"}`, "", []byte("{}"), false, nil); !errors.Is(err, store.ErrNoSuchTable) {
+	if err := st.PutItemBytes("000000000001", "Ghost", `{"S":"x"}`, "", "", "", []byte("{}"), false, nil); !errors.Is(err, store.ErrNoSuchTable) {
 		t.Fatalf("want ErrNoSuchTable, got %v", err)
 	}
 }
@@ -129,17 +129,17 @@ func TestPutItemUnknownTable(t *testing.T) {
 func TestQueryItemsByHash(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	pk := `{"S":"Radiohead"}`
 	songs := []string{`{"S":"Creep"}`, `{"S":"Karma Police"}`, `{"S":"No Surprises"}`}
 	for _, sk := range songs {
-		if err := st.PutItemBytes(account, "Music", pk, sk, []byte(`{}`), false, nil); err != nil {
+		if err := st.PutItemBytes(account, "Music", pk, sk, "", "", []byte(`{}`), false, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := st.PutItemBytes(account, "Music", `{"S":"Other"}`, `{"S":"Song"}`, []byte(`{}`), false, nil); err != nil {
+	if err := st.PutItemBytes(account, "Music", `{"S":"Other"}`, `{"S":"Song"}`, "", "", []byte(`{}`), false, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +173,7 @@ func TestQueryItemsByHash(t *testing.T) {
 func TestScanItems(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	rows := [][2]string{
@@ -182,7 +182,7 @@ func TestScanItems(t *testing.T) {
 		{`{"S":"B"}`, `{"S":"1"}`},
 	}
 	for _, r := range rows {
-		if err := st.PutItemBytes(account, "Music", r[0], r[1], []byte(`{}`), false, nil); err != nil {
+		if err := st.PutItemBytes(account, "Music", r[0], r[1], "", "", []byte(`{}`), false, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -212,7 +212,7 @@ func TestScanItems(t *testing.T) {
 func TestResourcePolicyLifecycle(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,7 +243,7 @@ func TestResourcePolicyLifecycle(t *testing.T) {
 func TestUpdateTableSSE(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpdateTableSSE(account, "Music", store.SSETypeKMS, "key-9"); err != nil {
@@ -261,10 +261,10 @@ func TestUpdateTableSSE(t *testing.T) {
 func TestDeleteTableRejectsNonEmpty(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
-	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", ""); err != nil {
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutItemBytes(account, "Music", `{"S":"x"}`, "", []byte(`{}`), false, nil); err != nil {
+	if err := st.PutItemBytes(account, "Music", `{"S":"x"}`, "", "", "", []byte(`{}`), false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DeleteTable(account, "Music"); !errors.Is(err, store.ErrTableNotEmpty) {
@@ -284,7 +284,114 @@ func TestDeleteTableRejectsNonEmpty(t *testing.T) {
 
 func TestCreateTableInvalidKeyType(t *testing.T) {
 	st := openDynamoStore(t)
-	if _, err := st.CreateTable("000000000001", "us-east-1", "Bad", "Id", "X", "", "", "", ""); !errors.Is(err, store.ErrInvalidKeyType) {
+	if _, err := st.CreateTable("000000000001", "us-east-1", "Bad", "Id", "X", "", "", "", "", nil); !errors.Is(err, store.ErrInvalidKeyType) {
 		t.Fatalf("want ErrInvalidKeyType, got %v", err)
+	}
+}
+
+func TestCreateTableWithGSI(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	gsi := &store.DynamoGSI{
+		IndexName:   "GenreIndex",
+		HashKeyName: "Genre",
+		HashKeyType: store.KeyTypeString,
+	}
+	tbl, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "", gsi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tbl.HasGSI() || tbl.GSIName != "GenreIndex" || tbl.GSIHashKeyName != "Genre" {
+		t.Fatalf("table=%+v", tbl)
+	}
+}
+
+func TestQueryGSIItems(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	gsi := &store.DynamoGSI{
+		IndexName:    "GenreIndex",
+		HashKeyName:  "Genre",
+		HashKeyType:  store.KeyTypeString,
+		RangeKeyName: "Year",
+		RangeKeyType: store.KeyTypeNumber,
+	}
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "SongTitle", store.KeyTypeString, "", "", gsi); err != nil {
+		t.Fatal(err)
+	}
+	pk := `{"S":"Radiohead"}`
+	rows := []struct {
+		sk, gsiPK, gsiSK string
+	}{
+		{`{"S":"Creep"}`, `{"S":"Rock"}`, `{"N":"1993"}`},
+		{`{"S":"Karma Police"}`, `{"S":"Rock"}`, `{"N":"1997"}`},
+		{`{"S":"Jazz Song"}`, `{"S":"Jazz"}`, `{"N":"2001"}`},
+	}
+	for _, r := range rows {
+		if err := st.PutItemBytes(account, "Music", pk, r.sk, r.gsiPK, r.gsiSK, []byte(`{}`), false, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rockPK := `{"S":"Rock"}`
+	page, err := st.QueryGSIItems(account, "Music", rockPK, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("want 2 rock items, got %d", len(page.Items))
+	}
+	if page.Items[0].GSISK != `{"N":"1993"}` {
+		t.Fatalf("first gsi_sk=%q", page.Items[0].GSISK)
+	}
+}
+
+func TestUpdateTableGSI(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTable(account, "us-east-1", "Music", "Artist", store.KeyTypeString, "", "", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	gsi := store.DynamoGSI{IndexName: "GenreIndex", HashKeyName: "Genre", HashKeyType: store.KeyTypeString}
+	if err := st.UpdateTableGSI(account, "Music", gsi); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetTable(account, "Music")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasGSI() {
+		t.Fatalf("table=%+v", got)
+	}
+	if err := st.UpdateTableGSI(account, "Music", gsi); !errors.Is(err, store.ErrGSIAlreadyExists) {
+		t.Fatalf("want ErrGSIAlreadyExists, got %v", err)
+	}
+}
+
+func TestUpdateTimeToLive(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTable(account, "us-east-1", "Sessions", "Id", store.KeyTypeString, "", "", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateTimeToLive(account, "Sessions", "expires", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetTable(account, "Sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TTLEnabled || got.TTLAttributeName != "expires" {
+		t.Fatalf("table=%+v", got)
+	}
+	if err := st.UpdateTimeToLive(account, "Sessions", "ttl", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetTable(account, "Sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TTLEnabled || got.TTLAttributeName != "ttl" {
+		t.Fatalf("table=%+v", got)
 	}
 }

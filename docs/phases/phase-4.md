@@ -13,7 +13,7 @@ Phase 4 delivers a lab-complete KMS core: customer-managed keys with sealed mate
 | CreateAlias, ListAliases, DeleteAlias, UpdateAlias | Done |
 | `EvaluateKMS` (identity + key policy explicit allow + grants) | Done |
 | CMK material sealed at rest | Done |
-| Deferred KMS depth | [../deferred.md](../deferred.md) |
+| Deferred KMS depth | [../services/kms.md](../services/kms.md) |
 
 ## Authz note
 
@@ -21,8 +21,8 @@ KMS key policies are special. Identity Allow alone never authorizes a key-scoped
 
 ## Smoke (Compose)
 
-See [../verification.md](../verification.md) for CreateKey, Encrypt/Decrypt, GenerateDataKey, and CreateAlias.
+See [../services/kms.md](../services/kms.md) for CreateKey, Encrypt/Decrypt, GenerateDataKey, and CreateAlias.
 
 ## Explicitly not in Phase 4
 
-See [../deferred.md](../deferred.md). No S3/SSE, DynamoDB, SQS, Lambda, or full KMS SAR parity.
+Current deferred depth: [../services/kms.md](../services/kms.md). At Phase 4 ship time there was no S3/SSE, DynamoDB, SQS, Lambda, or full KMS SAR parity.

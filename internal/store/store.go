@@ -106,7 +106,9 @@ CREATE TABLE IF NOT EXISTS kms_keys (
   key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT',
   sealed_material BLOB NOT NULL,
   key_policy TEXT NOT NULL,
-  creation_date TEXT NOT NULL
+  creation_date TEXT NOT NULL,
+  deletion_date TEXT NOT NULL DEFAULT '',
+  key_rotation_enabled INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS kms_aliases (
   alias_name TEXT NOT NULL,
@@ -144,6 +146,27 @@ CREATE TABLE IF NOT EXISTS s3_objects (
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key)
 );
+CREATE TABLE IF NOT EXISTS s3_multipart_uploads (
+  upload_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  bucket TEXT NOT NULL,
+  key TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  sse_algorithm TEXT,
+  kms_key_id TEXT,
+  sealed_dek BLOB,
+  initiated TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS s3_multipart_parts (
+  upload_id TEXT NOT NULL,
+  part_number INTEGER NOT NULL,
+  etag TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  storage_path TEXT NOT NULL,
+  PRIMARY KEY (upload_id, part_number),
+  FOREIGN KEY (upload_id) REFERENCES s3_multipart_uploads(upload_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_s3_multipart_uploads_bucket ON s3_multipart_uploads(account_id, bucket);
 CREATE TABLE IF NOT EXISTS dynamodb_tables (
   account_id TEXT NOT NULL,
   table_name TEXT NOT NULL,
@@ -157,6 +180,13 @@ CREATE TABLE IF NOT EXISTS dynamodb_tables (
   sse_type TEXT NOT NULL DEFAULT 'AWS_OWNED',
   kms_key_id TEXT NOT NULL DEFAULT '',
   creation_date TEXT NOT NULL,
+  gsi_name TEXT NOT NULL DEFAULT '',
+  gsi_hash_key_name TEXT NOT NULL DEFAULT '',
+  gsi_hash_key_type TEXT NOT NULL DEFAULT '',
+  gsi_range_key_name TEXT NOT NULL DEFAULT '',
+  gsi_range_key_type TEXT NOT NULL DEFAULT '',
+  ttl_attribute_name TEXT NOT NULL DEFAULT '',
+  ttl_enabled INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, table_name)
 );
 CREATE TABLE IF NOT EXISTS dynamodb_items (
@@ -164,6 +194,8 @@ CREATE TABLE IF NOT EXISTS dynamodb_items (
   table_name TEXT NOT NULL,
   item_pk TEXT NOT NULL,
   item_sk TEXT NOT NULL DEFAULT '',
+  gsi_pk TEXT NOT NULL DEFAULT '',
+  gsi_sk TEXT NOT NULL DEFAULT '',
   item_json BLOB NOT NULL,
   sealed INTEGER NOT NULL DEFAULT 0,
   sealed_dek BLOB,
@@ -189,7 +221,10 @@ CREATE TABLE IF NOT EXISTS sqs_messages (
   visible_after TEXT NOT NULL DEFAULT '',
   receive_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  attributes_json TEXT NOT NULL DEFAULT '{}'
+  attributes_json TEXT NOT NULL DEFAULT '{}',
+  message_group_id TEXT NOT NULL DEFAULT '',
+  message_deduplication_id TEXT NOT NULL DEFAULT '',
+  sequence_number INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS lambda_functions (
   account_id TEXT NOT NULL,
@@ -359,6 +394,22 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE roles ADD COLUMN description TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
+		`ALTER TABLE kms_keys ADD COLUMN deletion_date TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE kms_keys ADD COLUMN key_rotation_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_range_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_range_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN ttl_attribute_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN ttl_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE dynamodb_items ADD COLUMN gsi_pk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_items ADD COLUMN gsi_sk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sqs_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sqs_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sqs_messages ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_algorithm TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_kms_key_id TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, stmt := range alters {
 		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {

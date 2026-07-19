@@ -93,6 +93,70 @@ func TestCheckPassRoleAWSPrincipalOnlyDeny(t *testing.T) {
 	}
 }
 
+func passRoleIdentityAllow() string {
+	return `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Action":"iam:PassRole",
+			"Resource":"` + lambdaExecRoleARN + `"
+		}]
+	}`
+}
+
+func passRoleNonRootBase() authz.PassRoleRequest {
+	return authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal: identity.UserPrincipal(passRoleAccountID, "alice", "AKIAA"),
+		},
+		IdentityDocs:     []string{passRoleIdentityAllow()},
+		RoleARN:          lambdaExecRoleARN,
+		TrustPolicyDoc:   lambdaTrustDoc,
+		ServicePrincipal: authz.ServicePrincipalLambda,
+	}
+}
+
+func TestCheckPassRoleSCPDenyDespiteIdentityAllow(t *testing.T) {
+	req := passRoleNonRootBase()
+	req.EvalInputs = authz.EvalInputs{
+		SCPDocs: []string{`{
+			"Version":"2012-10-17",
+			"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]
+		}`},
+		IsManagementAccount: false,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("SCP without PassRole Allow got %v, want Deny", got)
+	}
+}
+
+func TestCheckPassRoleBoundaryDenyDespiteIdentityAllow(t *testing.T) {
+	req := passRoleNonRootBase()
+	req.EvalInputs = authz.EvalInputs{
+		BoundaryDoc: `{
+			"Version":"2012-10-17",
+			"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]
+		}`,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("boundary without PassRole Allow got %v, want Deny", got)
+	}
+}
+
+func TestCheckPassRoleManagementAccountSCPExempt(t *testing.T) {
+	req := passRoleNonRootBase()
+	req.EvalInputs = authz.EvalInputs{
+		SCPDocs: []string{`{
+			"Version":"2012-10-17",
+			"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]
+		}`},
+		IsManagementAccount: true,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Allow {
+		t.Fatalf("management SCP exempt got %v, want Allow", got)
+	}
+}
+
 func TestCheckPassRoleWrongServiceDeny(t *testing.T) {
 	req := authz.PassRoleRequest{
 		Caller: authz.RequestContext{

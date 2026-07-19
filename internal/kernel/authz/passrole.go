@@ -11,14 +11,15 @@ const actionAssumeRole = "sts:AssumeRole"
 // PassRoleRequest is input for configure-time PassRole checks.
 type PassRoleRequest struct {
 	Caller           RequestContext // Action is set by CheckPassRole to iam:PassRole
-	IdentityDocs     []string
+	IdentityDocs     []string       // used when EvalInputs.IdentityDocs is nil
+	EvalInputs       EvalInputs     // boundary, session, SCP/RCP; IdentityDocs wins when non-nil
 	RoleARN          string
 	TrustPolicyDoc   string
 	ServicePrincipal string // e.g. ServicePrincipalLambda
 }
 
 // CheckPassRole applies configure-time PassRole dual evaluation:
-//  1. Caller must Allow iam:PassRole on RoleARN (root short-circuits via Evaluate)
+//  1. Caller must Allow iam:PassRole on RoleARN via EvaluateFull (SCP, RCP, boundary, session)
 //  2. Trust policy must Allow sts:AssumeRole for Principal Service = ServicePrincipal
 //
 // Both sides must Allow; otherwise Deny.
@@ -27,7 +28,11 @@ func CheckPassRole(req PassRoleRequest) Decision {
 	ctx.Action = actionPassRole
 	ctx.Resource = req.RoleARN
 
-	if Evaluate(ctx, req.IdentityDocs) != Allow {
+	in := req.EvalInputs
+	if in.IdentityDocs == nil {
+		in.IdentityDocs = req.IdentityDocs
+	}
+	if EvaluateFull(ctx, in) != Allow {
 		return Deny
 	}
 	if !TrustAllowsService(req.TrustPolicyDoc, req.ServicePrincipal) {

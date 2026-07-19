@@ -154,17 +154,18 @@ func (s *Server) checkLambdaPassRole(verified *authn.Verified, roleARN string) e
 	if storedARN != "" {
 		roleARN = storedARN
 	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to Lambda")
+	}
 	decision := authz.CheckPassRole(authz.PassRoleRequest{
 		Caller: authz.RequestContext{
-			Principal: verified.Principal,
-			Resource:  roleARN,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
 		},
-		IdentityDocs:     s.identityDocs(verified.Principal),
+		EvalInputs:       in,
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalLambda,

@@ -23,7 +23,7 @@ Phase 1 adds SigV4 verification and the first real STS API: `GetCallerIdentity`.
 
 ## CLI smoke
 
-See [../verification.md](../verification.md) (`sts get-caller-identity`).
+See [../services/sts.md](../services/sts.md) (`sts get-caller-identity`).
 
 ## Explicitly not in Phase 1
 

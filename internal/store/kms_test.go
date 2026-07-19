@@ -147,3 +147,170 @@ func TestKMSGrantList(t *testing.T) {
 		t.Fatalf("FindMatchingGrant ok=%v err=%v", ok, err)
 	}
 }
+
+func TestKMSScheduleAndCancelKeyDeletion(t *testing.T) {
+	st := openKMSStore(t)
+	accountID := "000000000001"
+	k, err := st.CreateKey(accountID, "arn:aws:iam::"+accountID+":root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scheduled, err := st.ScheduleKeyDeletion(k.KeyID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduled.KeyState != store.KeyStatePendingDeletion {
+		t.Fatalf("state=%q want PendingDeletion", scheduled.KeyState)
+	}
+	if scheduled.DeletionDate == "" {
+		t.Fatal("expected DeletionDate")
+	}
+	if scheduled.PendingWindowInDays != 30 {
+		t.Fatalf("PendingWindowInDays=%d want 30 default", scheduled.PendingWindowInDays)
+	}
+
+	got, err := st.GetKey(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyState != store.KeyStatePendingDeletion || got.DeletionDate != scheduled.DeletionDate {
+		t.Fatalf("GetKey after schedule: %+v", got)
+	}
+
+	if _, err := st.ScheduleKeyDeletion(k.KeyID, 7); err == nil {
+		t.Fatal("expected error scheduling deletion twice")
+	}
+
+	if err := st.CancelKeyDeletion(k.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetKey(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyState != store.KeyStateDisabled {
+		t.Fatalf("after cancel state=%q want Disabled", got.KeyState)
+	}
+	if got.DeletionDate != "" {
+		t.Fatalf("after cancel DeletionDate=%q want empty", got.DeletionDate)
+	}
+
+	if err := st.CancelKeyDeletion(k.KeyID); err == nil {
+		t.Fatal("expected error canceling when not pending deletion")
+	}
+}
+
+func TestKMSScheduleKeyDeletionClampsWindow(t *testing.T) {
+	st := openKMSStore(t)
+	accountID := "000000000001"
+	k, err := st.CreateKey(accountID, "arn:aws:iam::"+accountID+":root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	low, err := st.ScheduleKeyDeletion(k.KeyID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if low.PendingWindowInDays != 7 {
+		t.Fatalf("low clamp=%d want 7", low.PendingWindowInDays)
+	}
+	if err := st.CancelKeyDeletion(k.KeyID); err != nil {
+		t.Fatal(err)
+	}
+
+	k2, err := st.CreateKey(accountID, "arn:aws:iam::"+accountID+":root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	high, err := st.ScheduleKeyDeletion(k2.KeyID, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if high.PendingWindowInDays != 30 {
+		t.Fatalf("high clamp=%d want 30", high.PendingWindowInDays)
+	}
+}
+
+func TestKMSKeyRotationFlag(t *testing.T) {
+	st := openKMSStore(t)
+	accountID := "000000000001"
+	k, err := st.CreateKey(accountID, "arn:aws:iam::"+accountID+":root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := st.GetKeyRotationEnabled(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		t.Fatal("rotation should default to false")
+	}
+
+	if err := st.SetKeyRotationEnabled(k.KeyID, true); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = st.GetKeyRotationEnabled(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled {
+		t.Fatal("rotation should be enabled")
+	}
+	got, err := st.GetKey(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.KeyRotationEnabled {
+		t.Fatal("GetKey KeyRotationEnabled=false")
+	}
+
+	if err := st.SetKeyRotationEnabled(k.KeyID, false); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = st.GetKeyRotationEnabled(k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		t.Fatal("rotation should be disabled")
+	}
+}
+
+func TestKMSAWSManagedConvenienceAliases(t *testing.T) {
+	st := openKMSStore(t)
+	accountID := "000000000001"
+
+	s3ID, err := st.ResolveKeyID(accountID, store.AliasAWSS3)
+	if err != nil {
+		t.Fatalf("resolve alias/aws/s3: %v", err)
+	}
+	ddbID, err := st.ResolveKeyID(accountID, store.AliasAWSDynamoDB)
+	if err != nil {
+		t.Fatalf("resolve alias/aws/dynamodb: %v", err)
+	}
+	sqsID, err := st.ResolveKeyID(accountID, store.AliasAWSSQS)
+	if err != nil {
+		t.Fatalf("resolve alias/aws/sqs: %v", err)
+	}
+	if s3ID != ddbID || ddbID != sqsID {
+		t.Fatalf("expected shared lab CMK, got s3=%q ddb=%q sqs=%q", s3ID, ddbID, sqsID)
+	}
+
+	again, err := st.EnsureAWSManagedConvenienceAliases(accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != s3ID {
+		t.Fatalf("idempotent ensure got %q want %q", again, s3ID)
+	}
+
+	k, err := st.GetKey(s3ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.AccountID != accountID || k.KeyState != store.KeyStateEnabled {
+		t.Fatalf("managed key unexpected: %+v", k)
+	}
+}

@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"database/sql"
+	"errors"
 	"testing"
 )
 
@@ -80,5 +82,49 @@ func TestRolePermissionsBoundary(t *testing.T) {
 	}
 	if err := st.DeleteRolePermissionsBoundary(accountID, "AppRole"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPutPermissionsBoundaryRejectsUnknownPolicyARN(t *testing.T) {
+	st := openTestStore(t)
+	const accountID = "000000000001"
+	boundaryDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+
+	if _, _, err := st.CreateUser(accountID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRole(accountID, "AppRole", boundaryDoc); err != nil {
+		t.Fatal(err)
+	}
+
+	unknownARN := "arn:aws:iam::000000000001:policy/DoesNotExist"
+	if err := st.PutUserPermissionsBoundary(accountID, "alice", unknownARN); err == nil {
+		t.Fatal("expected error for unknown user boundary policy ARN")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected sql.ErrNoRows in chain, got %v", err)
+	}
+	if _, err := st.GetUserPermissionsBoundary(accountID, "alice"); err == nil {
+		t.Fatal("unknown policy ARN must not be stored for user")
+	}
+
+	if err := st.PutRolePermissionsBoundary(accountID, "AppRole", unknownARN); err == nil {
+		t.Fatal("expected error for unknown role boundary policy ARN")
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected sql.ErrNoRows in chain, got %v", err)
+	}
+	if _, err := st.GetRolePermissionsBoundary(accountID, "AppRole"); err == nil {
+		t.Fatal("unknown policy ARN must not be stored for role")
+	}
+
+	policyARN, err := st.CreateManagedPolicy(accountID, "Boundary", boundaryDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutUserPermissionsBoundary(accountID, "alice", policyARN); err != nil {
+		t.Fatalf("PutUserPermissionsBoundary with managed policy: %v", err)
+	}
+	gotARN, err := st.GetUserPermissionsBoundary(accountID, "alice")
+	if err != nil || gotARN != policyARN {
+		t.Fatalf("gotARN=%q err=%v", gotARN, err)
 	}
 }

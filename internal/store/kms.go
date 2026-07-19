@@ -4,9 +4,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,23 +17,45 @@ const (
 	// DefaultKMSRegion is the lab region embedded in KMS ARNs.
 	DefaultKMSRegion = "us-east-1"
 
-	KeyStateEnabled  = "Enabled"
-	KeyStateDisabled = "Disabled"
+	KeyStateEnabled         = "Enabled"
+	KeyStateDisabled        = "Disabled"
+	KeyStatePendingDeletion = "PendingDeletion"
 
 	KeyUsageEncryptDecrypt = "ENCRYPT_DECRYPT"
 
 	cmkMaterialSize = 32
+
+	defaultPendingWindowDays = 30
+	minPendingWindowDays     = 7
+	maxPendingWindowDays     = 30
+
+	// Lab convenience aliases approximating AWS-managed service keys.
+	AliasAWSS3       = "alias/aws/s3"
+	AliasAWSDynamoDB = "alias/aws/dynamodb"
+	AliasAWSSQS      = "alias/aws/sqs"
 )
+
+// awsManagedConvenienceAliases are lab stand-ins for AWS-managed KMS key aliases.
+var awsManagedConvenienceAliases = []string{AliasAWSS3, AliasAWSDynamoDB, AliasAWSSQS}
+
+// ErrInvalidKeyState is returned when a KMS key is not in a compatible state.
+var ErrInvalidKeyState = errors.New("invalid key state")
+
+// ErrUnsupportedKeyRotation is returned when rotation is not allowed for the key.
+var ErrUnsupportedKeyRotation = errors.New("key rotation not supported")
 
 // Key is a customer-managed KMS key record (material remains sealed).
 type Key struct {
-	KeyID        string
-	AccountID    string
-	ARN          string
-	KeyState     string
-	KeyUsage     string
-	KeyPolicy    string
-	CreationDate string
+	KeyID               string
+	AccountID           string
+	ARN                 string
+	KeyState            string
+	KeyUsage            string
+	KeyPolicy           string
+	CreationDate        string
+	DeletionDate        string
+	PendingWindowInDays int
+	KeyRotationEnabled  bool
 }
 
 // Alias is a KMS alias pointing at a CMK.
@@ -113,59 +137,44 @@ func AliasARN(region, accountID, aliasName string) string {
 
 // CreateKey mints a CMK, seals 32-byte material under the store master key, and stores it.
 func (s *Store) CreateKey(accountID, creatorARN, policyOverride string) (Key, error) {
-	keyID := uuid.NewString()
-	material := make([]byte, cmkMaterialSize)
-	if _, err := io.ReadFull(rand.Reader, material); err != nil {
-		return Key{}, fmt.Errorf("create key: generate material: %w", err)
-	}
-	sealed, err := Seal(s.master, material)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return Key{}, fmt.Errorf("create key: seal material: %w", err)
+		return Key{}, fmt.Errorf("create key: begin: %w", err)
 	}
-	policy := strings.TrimSpace(policyOverride)
-	if policy == "" {
-		policy = DefaultKeyPolicy(accountID, creatorARN)
-	}
-	arn := KeyARN(DefaultKMSRegion, accountID, keyID)
-	created := nowRFC3339()
-	_, err = s.db.Exec(
-		`INSERT INTO kms_keys
-		 (key_id, account_id, arn, key_state, key_usage, sealed_material, key_policy, creation_date)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		keyID, accountID, arn, KeyStateEnabled, KeyUsageEncryptDecrypt, sealed, policy, created,
-	)
+	defer tx.Rollback()
+	k, err := s.createKeyTx(tx, accountID, creatorARN, policyOverride)
 	if err != nil {
-		return Key{}, fmt.Errorf("create key: %w", err)
+		return Key{}, err
 	}
-	return Key{
-		KeyID:        keyID,
-		AccountID:    accountID,
-		ARN:          arn,
-		KeyState:     KeyStateEnabled,
-		KeyUsage:     KeyUsageEncryptDecrypt,
-		KeyPolicy:    policy,
-		CreationDate: created,
-	}, nil
+	if err := tx.Commit(); err != nil {
+		return Key{}, fmt.Errorf("create key: commit: %w", err)
+	}
+	return k, nil
 }
 
 // GetKey returns a CMK by key ID.
 func (s *Store) GetKey(keyID string) (Key, error) {
 	var k Key
+	var rotation int
 	err := s.db.QueryRow(
-		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date
+		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
+		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0)
 		 FROM kms_keys WHERE key_id = ?`,
 		keyID,
-	).Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate)
+	).Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
+		&k.DeletionDate, &rotation)
 	if err != nil {
 		return Key{}, err
 	}
+	k.KeyRotationEnabled = rotation != 0
 	return k, nil
 }
 
 // ListKeys returns CMKs for an account ordered by creation_date.
 func (s *Store) ListKeys(accountID string) ([]Key, error) {
 	rows, err := s.db.Query(
-		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date
+		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
+		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0)
 		 FROM kms_keys WHERE account_id = ? ORDER BY creation_date, key_id`,
 		accountID,
 	)
@@ -177,9 +186,12 @@ func (s *Store) ListKeys(accountID string) ([]Key, error) {
 	var out []Key
 	for rows.Next() {
 		var k Key
-		if err := rows.Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate); err != nil {
+		var rotation int
+		if err := rows.Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
+			&k.DeletionDate, &rotation); err != nil {
 			return nil, fmt.Errorf("list keys %s: %w", accountID, err)
 		}
+		k.KeyRotationEnabled = rotation != 0
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
@@ -198,6 +210,13 @@ func (s *Store) SetKeyState(keyID, state string) error {
 	default:
 		return fmt.Errorf("set key state %s: invalid state %q", keyID, state)
 	}
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return err
+	}
+	if k.KeyState == KeyStatePendingDeletion {
+		return fmt.Errorf("set key state %s: %w", keyID, ErrInvalidKeyState)
+	}
 	res, err := s.db.Exec(`UPDATE kms_keys SET key_state = ? WHERE key_id = ?`, state, keyID)
 	if err != nil {
 		return fmt.Errorf("set key state %s: %w", keyID, err)
@@ -210,6 +229,117 @@ func (s *Store) SetKeyState(keyID, state string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// ScheduleKeyDeletion moves a CMK to PendingDeletion and stores DeletionDate.
+// pendingWindowInDays defaults to 30 and is clamped to 7–30.
+func (s *Store) ScheduleKeyDeletion(keyID string, pendingWindowInDays int) (Key, error) {
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return Key{}, err
+	}
+	switch k.KeyState {
+	case KeyStateEnabled, KeyStateDisabled:
+	default:
+		return Key{}, fmt.Errorf("schedule key deletion %s: %w", keyID, ErrInvalidKeyState)
+	}
+	days := pendingWindowInDays
+	if days <= 0 {
+		days = defaultPendingWindowDays
+	}
+	if days < minPendingWindowDays {
+		days = minPendingWindowDays
+	}
+	if days > maxPendingWindowDays {
+		days = maxPendingWindowDays
+	}
+	deletionDate := time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
+	res, err := s.db.Exec(
+		`UPDATE kms_keys SET key_state = ?, deletion_date = ? WHERE key_id = ?`,
+		KeyStatePendingDeletion, deletionDate, keyID,
+	)
+	if err != nil {
+		return Key{}, fmt.Errorf("schedule key deletion %s: %w", keyID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return Key{}, fmt.Errorf("schedule key deletion %s: %w", keyID, err)
+	}
+	if affected == 0 {
+		return Key{}, sql.ErrNoRows
+	}
+	k.KeyState = KeyStatePendingDeletion
+	k.DeletionDate = deletionDate
+	k.PendingWindowInDays = days
+	return k, nil
+}
+
+// CancelKeyDeletion cancels PendingDeletion and sets the key to Disabled.
+// Matches AWS KMS: cancel leaves the key Disabled; callers must EnableKey to use it again.
+func (s *Store) CancelKeyDeletion(keyID string) error {
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return err
+	}
+	if k.KeyState != KeyStatePendingDeletion {
+		return fmt.Errorf("cancel key deletion %s: %w", keyID, ErrInvalidKeyState)
+	}
+	res, err := s.db.Exec(
+		`UPDATE kms_keys SET key_state = ?, deletion_date = '' WHERE key_id = ?`,
+		KeyStateDisabled, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel key deletion %s: %w", keyID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("cancel key deletion %s: %w", keyID, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetKeyRotationEnabled persists automatic rotation status for a symmetric ENCRYPT_DECRYPT CMK.
+// Lab: status flag only; no background rotator.
+func (s *Store) SetKeyRotationEnabled(keyID string, enabled bool) error {
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return err
+	}
+	if k.KeyUsage != KeyUsageEncryptDecrypt {
+		return fmt.Errorf("set key rotation %s: %w", keyID, ErrUnsupportedKeyRotation)
+	}
+	if k.KeyState == KeyStatePendingDeletion {
+		return fmt.Errorf("set key rotation %s: %w", keyID, ErrInvalidKeyState)
+	}
+	flag := 0
+	if enabled {
+		flag = 1
+	}
+	res, err := s.db.Exec(`UPDATE kms_keys SET key_rotation_enabled = ? WHERE key_id = ?`, flag, keyID)
+	if err != nil {
+		return fmt.Errorf("set key rotation %s: %w", keyID, err)
+	}
+	if _, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("set key rotation %s: %w", keyID, err)
+	}
+	return nil
+}
+
+// GetKeyRotationEnabled returns whether automatic key rotation is enabled.
+func (s *Store) GetKeyRotationEnabled(keyID string) (bool, error) {
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return false, err
+	}
+	return k.KeyRotationEnabled, nil
+}
+
+// KeyUsableForCrypto reports whether the key may be used for cryptographic operations.
+func KeyUsableForCrypto(state string) bool {
+	return state == KeyStateEnabled
 }
 
 // GetKeyPolicy returns the key policy document for keyID.
@@ -387,6 +517,20 @@ func (s *Store) ResolveKeyID(accountID, keyIdOrAliasOrArn string) (string, error
 
 func (s *Store) resolveAlias(accountID, aliasName string) (string, error) {
 	aliasName = normalizeAliasName(aliasName)
+	keyID, err := s.lookupAliasTarget(accountID, aliasName)
+	if err == nil {
+		return keyID, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) && isAWSManagedConvenienceAlias(aliasName) {
+		if _, ensErr := s.EnsureAWSManagedConvenienceAliases(accountID); ensErr != nil {
+			return "", ensErr
+		}
+		return s.lookupAliasTarget(accountID, aliasName)
+	}
+	return "", err
+}
+
+func (s *Store) lookupAliasTarget(accountID, aliasName string) (string, error) {
 	var keyID string
 	err := s.db.QueryRow(
 		`SELECT target_key_id FROM kms_aliases WHERE account_id = ? AND alias_name = ?`,
@@ -396,6 +540,127 @@ func (s *Store) resolveAlias(accountID, aliasName string) (string, error) {
 		return "", err
 	}
 	return keyID, nil
+}
+
+func isAWSManagedConvenienceAlias(aliasName string) bool {
+	aliasName = normalizeAliasName(aliasName)
+	for _, a := range awsManagedConvenienceAliases {
+		if aliasName == a {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureAWSManagedConvenienceAliases creates a per-account lab CMK and seeds
+// alias/aws/s3, alias/aws/dynamodb, and alias/aws/sqs pointing at it.
+// These are lab approximations of AWS-managed keys, not AWS-owned key parity.
+// Idempotent: returns the existing target key id when any alias is already present.
+func (s *Store) EnsureAWSManagedConvenienceAliases(accountID string) (string, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return "", fmt.Errorf("ensure aws managed aliases: account id required")
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("ensure aws managed aliases: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var existingKeyID string
+	for _, alias := range awsManagedConvenienceAliases {
+		var keyID string
+		err := tx.QueryRow(
+			`SELECT target_key_id FROM kms_aliases WHERE account_id = ? AND alias_name = ?`,
+			accountID, alias,
+		).Scan(&keyID)
+		if err == nil {
+			existingKeyID = keyID
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("ensure aws managed aliases: lookup %s: %w", alias, err)
+		}
+	}
+
+	keyID := existingKeyID
+	if keyID == "" {
+		k, createErr := s.createKeyTx(tx, accountID, fmt.Sprintf("arn:aws:iam::%s:root", accountID), "")
+		if createErr != nil {
+			return "", fmt.Errorf("ensure aws managed aliases: create key: %w", createErr)
+		}
+		keyID = k.KeyID
+	}
+
+	for _, alias := range awsManagedConvenienceAliases {
+		var current string
+		err := tx.QueryRow(
+			`SELECT target_key_id FROM kms_aliases WHERE account_id = ? AND alias_name = ?`,
+			accountID, alias,
+		).Scan(&current)
+		switch {
+		case err == nil:
+			if current != keyID {
+				if _, uerr := tx.Exec(
+					`UPDATE kms_aliases SET target_key_id = ? WHERE account_id = ? AND alias_name = ?`,
+					keyID, accountID, alias,
+				); uerr != nil {
+					return "", fmt.Errorf("ensure aws managed aliases: retarget %s: %w", alias, uerr)
+				}
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			if _, ierr := tx.Exec(
+				`INSERT INTO kms_aliases (alias_name, account_id, target_key_id) VALUES (?, ?, ?)`,
+				alias, accountID, keyID,
+			); ierr != nil {
+				return "", fmt.Errorf("ensure aws managed aliases: insert %s: %w", alias, ierr)
+			}
+		default:
+			return "", fmt.Errorf("ensure aws managed aliases: check %s: %w", alias, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("ensure aws managed aliases: commit: %w", err)
+	}
+	return keyID, nil
+}
+
+// createKeyTx inserts a CMK within an existing transaction.
+func (s *Store) createKeyTx(tx *sql.Tx, accountID, creatorARN, policyOverride string) (Key, error) {
+	keyID := uuid.NewString()
+	material := make([]byte, cmkMaterialSize)
+	if _, err := io.ReadFull(rand.Reader, material); err != nil {
+		return Key{}, fmt.Errorf("create key: generate material: %w", err)
+	}
+	sealed, err := Seal(s.master, material)
+	if err != nil {
+		return Key{}, fmt.Errorf("create key: seal material: %w", err)
+	}
+	policy := strings.TrimSpace(policyOverride)
+	if policy == "" {
+		policy = DefaultKeyPolicy(accountID, creatorARN)
+	}
+	arn := KeyARN(DefaultKMSRegion, accountID, keyID)
+	created := nowRFC3339()
+	_, err = tx.Exec(
+		`INSERT INTO kms_keys
+		 (key_id, account_id, arn, key_state, key_usage, sealed_material, key_policy, creation_date, deletion_date, key_rotation_enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0)`,
+		keyID, accountID, arn, KeyStateEnabled, KeyUsageEncryptDecrypt, sealed, policy, created,
+	)
+	if err != nil {
+		return Key{}, fmt.Errorf("create key: %w", err)
+	}
+	return Key{
+		KeyID:        keyID,
+		AccountID:    accountID,
+		ARN:          arn,
+		KeyState:     KeyStateEnabled,
+		KeyUsage:     KeyUsageEncryptDecrypt,
+		KeyPolicy:    policy,
+		CreationDate: created,
+	}, nil
 }
 
 func normalizeAliasName(name string) string {

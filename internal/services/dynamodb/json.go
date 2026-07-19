@@ -37,6 +37,52 @@ func tableDescription(t store.DynamoTable) map[string]any {
 		},
 	}
 
+	if t.HasGSI() {
+		gsiAttrs := []map[string]string{
+			{"AttributeName": t.GSIHashKeyName, "AttributeType": t.GSIHashKeyType},
+		}
+		gsiKeySchema := []map[string]string{
+			{"AttributeName": t.GSIHashKeyName, "KeyType": "HASH"},
+		}
+		if t.GSIHasRangeKey() {
+			gsiAttrs = append(gsiAttrs, map[string]string{
+				"AttributeName": t.GSIRangeKeyName, "AttributeType": t.GSIRangeKeyType,
+			})
+			gsiKeySchema = append(gsiKeySchema, map[string]string{
+				"AttributeName": t.GSIRangeKeyName, "KeyType": "RANGE",
+			})
+		}
+		for _, a := range gsiAttrs {
+			found := false
+			for _, existing := range attrs {
+				if existing["AttributeName"] == a["AttributeName"] {
+					found = true
+					break
+				}
+			}
+			if !found {
+				attrs = append(attrs, a)
+			}
+		}
+		desc["AttributeDefinitions"] = attrs
+		desc["GlobalSecondaryIndexes"] = []map[string]any{{
+			"IndexName":   t.GSIName,
+			"KeySchema":   gsiKeySchema,
+			"Projection":  map[string]string{"ProjectionType": "ALL"},
+			"IndexStatus": "ACTIVE",
+		}}
+	}
+
+	ttlStatus := store.TTLStatusDisabled
+	if t.TTLEnabled {
+		ttlStatus = store.TTLStatusEnabled
+	}
+	ttlDesc := map[string]any{"TimeToLiveStatus": ttlStatus}
+	if t.TTLAttributeName != "" {
+		ttlDesc["AttributeName"] = t.TTLAttributeName
+	}
+	desc["TimeToLiveDescription"] = ttlDesc
+
 	sseType := "AES256"
 	sse := map[string]any{
 		"Status":  "ENABLED",
@@ -154,4 +200,22 @@ func BatchWriteItemJSON(unprocessed map[string]any) ([]byte, error) {
 // GetResourcePolicyJSON builds a GetResourcePolicy success body.
 func GetResourcePolicyJSON(policy string) ([]byte, error) {
 	return json.Marshal(map[string]any{"Policy": policy})
+}
+
+// DescribeTimeToLiveJSON builds a DescribeTimeToLive success body.
+func DescribeTimeToLiveJSON(t store.DynamoTable) ([]byte, error) {
+	ttlStatus := store.TTLStatusDisabled
+	if t.TTLEnabled {
+		ttlStatus = store.TTLStatusEnabled
+	}
+	desc := map[string]any{"TimeToLiveStatus": ttlStatus}
+	if t.TTLAttributeName != "" {
+		desc["AttributeName"] = t.TTLAttributeName
+	}
+	return json.Marshal(map[string]any{"TimeToLiveDescription": desc})
+}
+
+// UpdateTimeToLiveJSON builds an UpdateTimeToLive success body.
+func UpdateTimeToLiveJSON(t store.DynamoTable) ([]byte, error) {
+	return DescribeTimeToLiveJSON(t)
 }

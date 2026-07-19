@@ -679,7 +679,7 @@ func signS3Header(t *testing.T, req *http.Request, body []byte, akid, secret, re
 	}
 	for name := range req.Header {
 		lower := strings.ToLower(name)
-		if strings.HasPrefix(lower, "x-amz-server-side-encryption") {
+		if strings.HasPrefix(lower, "x-amz-") && lower != "x-amz-date" && lower != "x-amz-content-sha256" {
 			headerSet[lower] = struct{}{}
 		}
 	}

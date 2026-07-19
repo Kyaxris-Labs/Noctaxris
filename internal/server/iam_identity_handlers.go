@@ -306,6 +306,13 @@ func (s *Server) handleIAMIdentity(
 	case catalog.ActionIAMAddRoleToInstanceProfile, "AddRoleToInstanceProfile":
 		handled = true
 		if addErr := s.store.AddRoleToInstanceProfile(accountID, params["InstanceProfileName"], params["RoleName"]); addErr != nil {
+			// Store wraps GetInstanceProfile/GetRole (sql.ErrNoRows) for missing entities;
+			// one-role limit returns a plain error without ErrNoRows.
+			if errors.Is(addErr, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Instance profile or role not found.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+				return nil, true, errHandled
+			}
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "LimitExceeded",
 				addErr.Error(), readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
 			return nil, true, errHandled

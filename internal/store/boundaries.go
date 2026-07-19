@@ -73,6 +73,9 @@ func (s *Store) putPermissionsBoundary(accountID, principalType, principalName, 
 	if policyARN == "" {
 		return fmt.Errorf("put permissions boundary: policy_arn required")
 	}
+	if _, err := s.policyDocumentByARN(policyARN); err != nil {
+		return fmt.Errorf("put permissions boundary: %w", err)
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO iam_permissions_boundaries (account_id, principal_type, principal_name, policy_arn)
 		 VALUES (?, ?, ?, ?)

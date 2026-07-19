@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
@@ -9,8 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
+)
+
+const (
+	sseAES256 = "AES256"
+	sseAWSKMS = "aws:kms"
 )
 
 var (
@@ -21,7 +31,15 @@ var (
 	ErrBucketNotEmpty      = errors.New("BucketNotEmpty")
 	ErrNoSuchKey           = errors.New("NoSuchKey")
 	ErrNoSuchBucketPolicy  = errors.New("NoSuchBucketPolicy")
+	ErrNoSuchUpload        = errors.New("NoSuchUpload")
+	ErrInvalidPart         = errors.New("InvalidPart")
+	ErrEntityTooSmall           = errors.New("EntityTooSmall")
+	ErrNoSuchBucketEncryption   = errors.New("ServerSideEncryptionConfigurationNotFoundError")
+	ErrInvalidBucketEncryption  = errors.New("InvalidBucketEncryption")
 )
+
+// MinMultipartPartSize is the AWS minimum part size (5 MiB) except the final part.
+const MinMultipartPartSize = 5 * 1024 * 1024
 
 var bucketNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
@@ -31,6 +49,12 @@ type Bucket struct {
 	Name         string
 	CreationDate string
 	BucketPolicy string
+}
+
+// BucketEncryption is the default SSE configuration for a bucket.
+type BucketEncryption struct {
+	Algorithm string
+	KMSKeyID  string
 }
 
 // ObjectMeta is S3 object metadata (bytes live on disk at StoragePath).
@@ -223,6 +247,98 @@ func (s *Store) GetBucketPolicy(accountID, name string) (string, error) {
 		return "", ErrNoSuchBucketPolicy
 	}
 	return b.BucketPolicy, nil
+}
+
+// PutBucketEncryption sets the bucket default SSE configuration.
+func (s *Store) PutBucketEncryption(accountID, name string, enc BucketEncryption) error {
+	algo := strings.TrimSpace(enc.Algorithm)
+	switch strings.ToUpper(algo) {
+	case "AES256":
+		algo = sseAES256
+	case "AWS:KMS":
+		algo = sseAWSKMS
+	default:
+		return ErrInvalidBucketEncryption
+	}
+	kmsKeyID := strings.TrimSpace(enc.KMSKeyID)
+	if algo == sseAWSKMS && kmsKeyID == "" {
+		return ErrInvalidBucketEncryption
+	}
+	if algo == sseAES256 {
+		kmsKeyID = ""
+	}
+	res, err := s.db.Exec(
+		`UPDATE s3_buckets SET default_encryption_algorithm = ?, default_encryption_kms_key_id = ?
+		 WHERE account_id = ? AND name = ?`,
+		algo, kmsKeyID, accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("put bucket encryption: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNoSuchBucket
+	}
+	return nil
+}
+
+// GetBucketEncryption returns the bucket default SSE configuration.
+func (s *Store) GetBucketEncryption(accountID, name string) (BucketEncryption, error) {
+	var algo, kmsID sql.NullString
+	err := s.db.QueryRow(
+		`SELECT default_encryption_algorithm, default_encryption_kms_key_id FROM s3_buckets
+		 WHERE account_id = ? AND name = ?`,
+		accountID, name,
+	).Scan(&algo, &kmsID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BucketEncryption{}, ErrNoSuchBucket
+	}
+	if err != nil {
+		return BucketEncryption{}, fmt.Errorf("get bucket encryption: %w", err)
+	}
+	if !algo.Valid || strings.TrimSpace(algo.String) == "" {
+		return BucketEncryption{}, ErrNoSuchBucketEncryption
+	}
+	out := BucketEncryption{Algorithm: algo.String}
+	if kmsID.Valid {
+		out.KMSKeyID = kmsID.String
+	}
+	return out, nil
+}
+
+// DeleteBucketEncryption removes the bucket default SSE configuration.
+func (s *Store) DeleteBucketEncryption(accountID, name string) error {
+	res, err := s.db.Exec(
+		`UPDATE s3_buckets SET default_encryption_algorithm = '', default_encryption_kms_key_id = ''
+		 WHERE account_id = ? AND name = ?`,
+		accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("delete bucket encryption: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNoSuchBucket
+	}
+	return nil
+}
+
+// CopyObject stores dest from caller-supplied payload and metadata (same account).
+func (s *Store) CopyObject(accountID, srcBucket, srcKey, destBucket, destKey string, dest PutObjectMeta) (ObjectMeta, error) {
+	srcMeta, srcData, err := s.GetObject(accountID, srcBucket, srcKey)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
+	if dest.Data == nil {
+		dest.Data = srcData
+	}
+	if dest.ContentType == "" {
+		dest.ContentType = srcMeta.ContentType
+	}
+	if dest.PlainSize == 0 {
+		dest.PlainSize = srcMeta.Size
+	}
+	return s.PutObject(accountID, destBucket, destKey, dest)
 }
 
 // DeleteBucketPolicy clears the bucket policy.
@@ -455,4 +571,377 @@ func BucketARN(bucket string) string {
 // ObjectARN builds arn:aws:s3:::bucket/key.
 func ObjectARN(bucket, key string) string {
 	return "arn:aws:s3:::" + bucket + "/" + key
+}
+
+// MultipartUpload is in-progress multipart upload metadata.
+type MultipartUpload struct {
+	AccountID    string
+	Bucket       string
+	Key          string
+	UploadID     string
+	ContentType  string
+	SSEAlgorithm string
+	KMSKeyID     string
+	SealedDEK    []byte
+	Initiated    string
+}
+
+// MultipartPart is a stored upload part.
+type MultipartPart struct {
+	PartNumber  int
+	ETag        string
+	Size        int64
+	StoragePath string
+}
+
+// CreateMultipartUploadMeta carries optional SSE and content metadata for a new upload.
+type CreateMultipartUploadMeta struct {
+	ContentType  string
+	SSEAlgorithm string
+	KMSKeyID     string
+	SealedDEK    []byte
+}
+
+// CompletedPartInput is a part reference supplied to CompleteMultipartUpload.
+type CompletedPartInput struct {
+	PartNumber int
+	ETag       string
+}
+
+// CreateMultipartUpload starts a multipart upload and returns an upload ID.
+func (s *Store) CreateMultipartUpload(accountID, bucket, key string, meta CreateMultipartUploadMeta) (MultipartUpload, error) {
+	if err := ValidateBucketName(bucket); err != nil {
+		return MultipartUpload{}, err
+	}
+	key, err := SanitizeObjectKey(key)
+	if err != nil {
+		return MultipartUpload{}, err
+	}
+	if _, err := s.GetBucket(accountID, bucket); err != nil {
+		return MultipartUpload{}, err
+	}
+	ct := meta.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	uploadID := uuid.NewString()
+	initiated := nowRFC3339()
+	_, err = s.db.Exec(
+		`INSERT INTO s3_multipart_uploads
+		 (upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uploadID, accountID, bucket, key, ct, nullIfEmpty(meta.SSEAlgorithm), nullIfEmpty(meta.KMSKeyID), meta.SealedDEK, initiated,
+	)
+	if err != nil {
+		return MultipartUpload{}, fmt.Errorf("create multipart upload: %w", err)
+	}
+	return MultipartUpload{
+		AccountID:    accountID,
+		Bucket:       bucket,
+		Key:          key,
+		UploadID:     uploadID,
+		ContentType:  ct,
+		SSEAlgorithm: meta.SSEAlgorithm,
+		KMSKeyID:     meta.KMSKeyID,
+		SealedDEK:    meta.SealedDEK,
+		Initiated:    initiated,
+	}, nil
+}
+
+// UploadPartMeta describes bytes for one multipart part.
+type UploadPartMeta struct {
+	Data      []byte
+	ETag      string
+	PlainSize int64
+}
+
+// UploadPart stores one part blob for a multipart upload.
+func (s *Store) UploadPart(accountID, bucket, key, uploadID string, partNumber int, meta UploadPartMeta) (MultipartPart, error) {
+	if partNumber < 1 || partNumber > 10000 {
+		return MultipartPart{}, ErrInvalidPart
+	}
+	upload, err := s.getMultipartUpload(accountID, bucket, key, uploadID)
+	if err != nil {
+		return MultipartPart{}, err
+	}
+	data := meta.Data
+	etag := normalizeETag(meta.ETag)
+	if etag == "" {
+		plainSum := md5.Sum(data)
+		etag = hex.EncodeToString(plainSum[:])
+	}
+	size := meta.PlainSize
+	if size == 0 {
+		size = int64(len(data))
+	}
+	rel := filepath.Join("s3", accountID, bucket, ".multipart", uploadID, fmt.Sprintf("part-%05d", partNumber))
+	abs := filepath.Join(s.dataRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		return MultipartPart{}, fmt.Errorf("upload part mkdir: %w", err)
+	}
+	if err := os.WriteFile(abs, data, 0o600); err != nil {
+		return MultipartPart{}, fmt.Errorf("upload part write: %w", err)
+	}
+	part := MultipartPart{
+		PartNumber:  partNumber,
+		ETag:        etag,
+		Size:        size,
+		StoragePath: rel,
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO s3_multipart_parts (upload_id, part_number, etag, size, storage_path)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(upload_id, part_number) DO UPDATE SET
+		   etag = excluded.etag,
+		   size = excluded.size,
+		   storage_path = excluded.storage_path`,
+		upload.UploadID, partNumber, etag, part.Size, rel,
+	)
+	if err != nil {
+		_ = os.Remove(abs)
+		return MultipartPart{}, fmt.Errorf("upload part meta: %w", err)
+	}
+	return part, nil
+}
+
+// MultipartCompleteResult is the assembled payload before final PutObject.
+type MultipartCompleteResult struct {
+	Upload MultipartUpload
+	Data   []byte
+	ETag   string
+}
+
+// CompleteMultipartUpload validates parts and returns the assembled plaintext object bytes.
+func (s *Store) CompleteMultipartUpload(accountID, bucket, key, uploadID string, completed []CompletedPartInput) (MultipartCompleteResult, error) {
+	upload, err := s.getMultipartUpload(accountID, bucket, key, uploadID)
+	if err != nil {
+		return MultipartCompleteResult{}, err
+	}
+	if len(completed) == 0 {
+		return MultipartCompleteResult{}, ErrInvalidPart
+	}
+	storedParts, err := s.listAllParts(uploadID)
+	if err != nil {
+		return MultipartCompleteResult{}, err
+	}
+	partByNum := make(map[int]MultipartPart, len(storedParts))
+	for _, p := range storedParts {
+		partByNum[p.PartNumber] = p
+	}
+	sort.Slice(completed, func(i, j int) bool {
+		return completed[i].PartNumber < completed[j].PartNumber
+	})
+	var assembled []byte
+	var plainETags [][]byte
+	for i, want := range completed {
+		got, ok := partByNum[want.PartNumber]
+		if !ok {
+			return MultipartCompleteResult{}, ErrInvalidPart
+		}
+		if i < len(completed)-1 && got.Size < MinMultipartPartSize {
+			return MultipartCompleteResult{}, ErrEntityTooSmall
+		}
+		if normalizeETag(want.ETag) != got.ETag {
+			return MultipartCompleteResult{}, ErrInvalidPart
+		}
+		data, err := os.ReadFile(filepath.Join(s.dataRoot, got.StoragePath))
+		if err != nil {
+			return MultipartCompleteResult{}, fmt.Errorf("complete read part: %w", err)
+		}
+		assembled = append(assembled, data...)
+		sum := md5.Sum(data)
+		plainETags = append(plainETags, sum[:])
+	}
+	return MultipartCompleteResult{
+		Upload: upload,
+		Data:   assembled,
+		ETag:   multipartCompositeETag(plainETags),
+	}, nil
+}
+
+// CleanupMultipartUpload deletes upload metadata and part blobs after a successful finalize.
+func (s *Store) CleanupMultipartUpload(uploadID string) error {
+	return s.deleteMultipartUpload(uploadID)
+}
+
+// AbortMultipartUpload removes upload metadata and part blobs.
+func (s *Store) AbortMultipartUpload(accountID, bucket, key, uploadID string) error {
+	upload, err := s.getMultipartUpload(accountID, bucket, key, uploadID)
+	if err != nil {
+		return err
+	}
+	return s.deleteMultipartUpload(upload.UploadID)
+}
+
+// ListParts returns parts for an upload with optional pagination.
+func (s *Store) ListParts(accountID, bucket, key, uploadID string, partNumberMarker, maxParts int) ([]MultipartPart, bool, error) {
+	upload, err := s.getMultipartUpload(accountID, bucket, key, uploadID)
+	if err != nil {
+		return nil, false, err
+	}
+	if maxParts <= 0 {
+		maxParts = 1000
+	}
+	query := `SELECT part_number, etag, size, storage_path FROM s3_multipart_parts
+		WHERE upload_id = ? AND part_number > ? ORDER BY part_number LIMIT ?`
+	rows, err := s.db.Query(query, upload.UploadID, partNumberMarker, maxParts+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list parts: %w", err)
+	}
+	defer rows.Close()
+	var parts []MultipartPart
+	for rows.Next() {
+		var p MultipartPart
+		if err := rows.Scan(&p.PartNumber, &p.ETag, &p.Size, &p.StoragePath); err != nil {
+			return nil, false, err
+		}
+		parts = append(parts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	truncated := len(parts) > maxParts
+	if truncated {
+		parts = parts[:maxParts]
+	}
+	return parts, truncated, nil
+}
+
+// ListMultipartUploads returns in-progress uploads for a bucket.
+func (s *Store) ListMultipartUploads(accountID, bucket, prefix string) ([]MultipartUpload, error) {
+	if _, err := s.GetBucket(accountID, bucket); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated
+		 FROM s3_multipart_uploads WHERE account_id = ? AND bucket = ? AND key LIKE ? ORDER BY key`,
+		accountID, bucket, prefix+"%",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list multipart uploads: %w", err)
+	}
+	defer rows.Close()
+	var out []MultipartUpload
+	for rows.Next() {
+		u, err := scanMultipartUpload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// GetMultipartUpload returns in-progress upload metadata.
+func (s *Store) GetMultipartUpload(accountID, bucket, key, uploadID string) (MultipartUpload, error) {
+	return s.getMultipartUpload(accountID, bucket, key, uploadID)
+}
+
+func (s *Store) getMultipartUpload(accountID, bucket, key, uploadID string) (MultipartUpload, error) {
+	key, err := SanitizeObjectKey(key)
+	if err != nil {
+		return MultipartUpload{}, err
+	}
+	row := s.db.QueryRow(
+		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated
+		 FROM s3_multipart_uploads WHERE upload_id = ? AND account_id = ? AND bucket = ? AND key = ?`,
+		uploadID, accountID, bucket, key,
+	)
+	u, err := scanMultipartUploadRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MultipartUpload{}, ErrNoSuchUpload
+	}
+	if err != nil {
+		return MultipartUpload{}, fmt.Errorf("get multipart upload: %w", err)
+	}
+	return u, nil
+}
+
+func (s *Store) listAllParts(uploadID string) ([]MultipartPart, error) {
+	rows, err := s.db.Query(
+		`SELECT part_number, etag, size, storage_path FROM s3_multipart_parts
+		 WHERE upload_id = ? ORDER BY part_number`,
+		uploadID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list all parts: %w", err)
+	}
+	defer rows.Close()
+	var parts []MultipartPart
+	for rows.Next() {
+		var p MultipartPart
+		if err := rows.Scan(&p.PartNumber, &p.ETag, &p.Size, &p.StoragePath); err != nil {
+			return nil, err
+		}
+		parts = append(parts, p)
+	}
+	return parts, rows.Err()
+}
+
+func (s *Store) deleteMultipartUpload(uploadID string) error {
+	parts, err := s.listAllParts(uploadID)
+	if err != nil {
+		return err
+	}
+	for _, p := range parts {
+		_ = os.Remove(filepath.Join(s.dataRoot, p.StoragePath))
+	}
+	if len(parts) > 0 {
+		_ = os.RemoveAll(filepath.Dir(filepath.Join(s.dataRoot, parts[0].StoragePath)))
+	}
+	_, err = s.db.Exec(`DELETE FROM s3_multipart_uploads WHERE upload_id = ?`, uploadID)
+	if err != nil {
+		return fmt.Errorf("delete multipart upload: %w", err)
+	}
+	return nil
+}
+
+func scanMultipartUpload(rows *sql.Rows) (MultipartUpload, error) {
+	var u MultipartUpload
+	var ct, sse, kmsID sql.NullString
+	var sealed []byte
+	if err := rows.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &u.Initiated); err != nil {
+		return MultipartUpload{}, err
+	}
+	if ct.Valid {
+		u.ContentType = ct.String
+	}
+	if sse.Valid {
+		u.SSEAlgorithm = sse.String
+	}
+	if kmsID.Valid {
+		u.KMSKeyID = kmsID.String
+	}
+	u.SealedDEK = sealed
+	return u, nil
+}
+
+func scanMultipartUploadRow(row *sql.Row) (MultipartUpload, error) {
+	var u MultipartUpload
+	var ct, sse, kmsID sql.NullString
+	var sealed []byte
+	if err := row.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &u.Initiated); err != nil {
+		return MultipartUpload{}, err
+	}
+	if ct.Valid {
+		u.ContentType = ct.String
+	}
+	if sse.Valid {
+		u.SSEAlgorithm = sse.String
+	}
+	if kmsID.Valid {
+		u.KMSKeyID = kmsID.String
+	}
+	u.SealedDEK = sealed
+	return u, nil
+}
+
+func multipartCompositeETag(partMD5s [][]byte) string {
+	combined := bytes.Join(partMD5s, nil)
+	sum := md5.Sum(combined)
+	return hex.EncodeToString(sum[:]) + "-" + strconv.Itoa(len(partMD5s))
+}
+
+func normalizeETag(etag string) string {
+	return strings.Trim(strings.TrimSpace(etag), `"`)
 }

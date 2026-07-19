@@ -109,7 +109,7 @@ func b64(data []byte) string {
 }
 
 func keyMetadata(k store.Key) map[string]any {
-	return map[string]any{
+	meta := map[string]any{
 		"AWSAccountId": k.AccountID,
 		"KeyId":        k.KeyID,
 		"Arn":          k.ARN,
@@ -120,6 +120,10 @@ func keyMetadata(k store.Key) map[string]any {
 		"KeyManager":   "CUSTOMER",
 		"Origin":       "AWS_KMS",
 	}
+	if k.DeletionDate != "" {
+		meta["DeletionDate"] = parseCreationFloat(k.DeletionDate)
+	}
+	return meta
 }
 
 func parseCreationFloat(rfc3339 string) float64 {
@@ -161,6 +165,16 @@ func EncryptJSON(keyID string, ciphertext []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"CiphertextBlob": b64(ciphertext),
 		"KeyId":          keyID,
+	})
+}
+
+func ReEncryptJSON(sourceKeyARN, destKeyARN string, ciphertext []byte) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"CiphertextBlob":                 b64(ciphertext),
+		"SourceKeyId":                    sourceKeyARN,
+		"KeyId":                          destKeyARN,
+		"SourceEncryptionAlgorithm":      "SYMMETRIC_DEFAULT",
+		"DestinationEncryptionAlgorithm": "SYMMETRIC_DEFAULT",
 	})
 }
 
@@ -219,6 +233,23 @@ func ListAliasesJSON(aliases []store.Alias, accountID string) ([]byte, error) {
 		})
 	}
 	return json.Marshal(map[string]any{"Aliases": entries})
+}
+
+func ScheduleKeyDeletionJSON(k store.Key) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"KeyId":               k.ARN,
+		"KeyState":            k.KeyState,
+		"DeletionDate":        parseCreationFloat(k.DeletionDate),
+		"PendingWindowInDays": k.PendingWindowInDays,
+	})
+}
+
+func CancelKeyDeletionJSON(keyARN string) ([]byte, error) {
+	return json.Marshal(map[string]string{"KeyId": keyARN})
+}
+
+func GetKeyRotationStatusJSON(enabled bool) ([]byte, error) {
+	return json.Marshal(map[string]any{"KeyRotationEnabled": enabled})
 }
 
 // DecodeBinaryField decodes a base64 string from a JSON request field.

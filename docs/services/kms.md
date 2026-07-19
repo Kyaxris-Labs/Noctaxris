@@ -1,0 +1,58 @@
+# KMS
+
+**Status:** shipped
+
+Lab-complete customer-managed keys: sealed CMK material, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey*, ReEncrypt, grants, aliases (including lab `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs`), deletion lifecycle, and rotation enable/status flags.
+
+## Implemented
+
+| Area | Actions |
+|------|---------|
+| Keys | `CreateKey`, `DescribeKey`, `ListKeys`, `EnableKey`, `DisableKey` |
+| Lifecycle | `ScheduleKeyDeletion`, `CancelKeyDeletion` (`PendingDeletion` state. Cancel sets `Disabled`, matching AWS. No background sweeper after `DeletionDate`) |
+| Rotation flags | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` |
+| Key policy | `GetKeyPolicy`, `PutKeyPolicy` |
+| Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` |
+| Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
+| Aliases | `CreateAlias`, `ListAliases`, `DeleteAlias`, `UpdateAlias` |
+| Lab convenience aliases | Per-account `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs` (lab CMK approximations, not AWS-owned keys) |
+
+CreateKey seeds a default key policy that allows the account root (and the IAM user creator when applicable). CMK material is sealed at rest under the data volume. Lab convenience aliases are created on first use per account.
+
+### Authz notes
+
+KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet).
+
+Cross-account key policy and grant depth beyond same-account lab paths is deferred.
+
+## How to verify / CLI smoke
+
+Shared Compose and env setup: [index.md](index.md#shared-verification).
+
+```bash
+KEY_JSON=$(aws kms create-key --endpoint-url "$EP" --output json)
+KEY_ID=$(echo "$KEY_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["KeyMetadata"]["KeyId"])')
+
+aws kms encrypt --key-id "$KEY_ID" --plaintext "$(echo -n hello | base64)" --endpoint-url "$EP"
+aws kms generate-data-key --key-id "$KEY_ID" --key-spec AES_256 --endpoint-url "$EP"
+aws kms create-alias --alias-name alias/lab --target-key-id "$KEY_ID" --endpoint-url "$EP"
+```
+
+Deletion lifecycle and rotation flags:
+
+```bash
+KEY_ID=$(aws kms create-key --endpoint-url "$EP" --query KeyMetadata.KeyId --output text)
+aws kms schedule-key-deletion --key-id "$KEY_ID" --pending-window-in-days 7 --endpoint-url "$EP"
+aws kms cancel-key-deletion --key-id "$KEY_ID" --endpoint-url "$EP"
+# Cancel leaves the key Disabled (AWS-shaped). Enable before crypto use.
+aws kms enable-key --key-id "$KEY_ID" --endpoint-url "$EP"
+aws kms enable-key-rotation --key-id "$KEY_ID" --endpoint-url "$EP"
+aws kms get-key-rotation-status --key-id "$KEY_ID" --endpoint-url "$EP"
+```
+
+## Not yet / deferred
+
+- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity)
+- Background deletion after `DeletionDate` and on-demand or automatic key-material rotation (lab stores rotation enabled flags only)
+- Cross-account key policy and grant flows beyond same-account lab paths
+- True AWS-owned managed key types beyond the lab convenience aliases above

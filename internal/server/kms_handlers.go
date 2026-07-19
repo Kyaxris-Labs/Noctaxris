@@ -11,7 +11,6 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	kmssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/kms"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -26,6 +25,11 @@ func (s *Server) handleKMS(
 ) {
 	params := jsonBodyMap(body)
 	accountID := verified.AccountID
+
+	if action == "ReEncrypt" {
+		s.handleKMSReEncrypt(w, r, body, requestID, eventID, params, verified, readOnly)
+		return
+	}
 
 	resource := "*"
 	var (
@@ -135,7 +139,6 @@ func (s *Server) handleKMS(
 		resource = key.ARN
 	}
 
-	identityDocs := s.identityDocs(verified.Principal)
 	grantSatisfied := false
 	if keyID != "" {
 		ok, gerr := s.store.FindMatchingGrant(keyID, verified.Principal.ARN(), action)
@@ -144,43 +147,10 @@ func (s *Server) handleKMS(
 		}
 	}
 
-	decision := authz.EvaluateKMS(authz.KMSRequest{
-		Caller: authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    normalizeAction(action),
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		},
-		IdentityDocs:   identityDocs,
-		KeyPolicyDoc:   keyPolicy,
-		GrantSatisfied: grantSatisfied,
-	})
-	if decision != authz.Allow {
+	if !s.authorizeDataplaneKMS(verified, normalizeAction(action), resource, keyPolicy, grantSatisfied) {
 		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+normalizeAction(action)+".", readOnly, eventID, verified)
 		return
-	}
-
-	// Session policy intersection when present.
-	if sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID); len(sessionDocs) > 0 {
-		if authz.EvaluateWithSession(authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    normalizeAction(action),
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		}, identityDocs, sessionDocs) != authz.Allow {
-			s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
-				"User is not authorized to perform "+normalizeAction(action)+".", readOnly, eventID, verified)
-			return
-		}
 	}
 
 	var payload []byte
@@ -206,6 +176,11 @@ func (s *Server) handleKMS(
 		payload, err = kmssvc.ListKeysJSON(keys)
 	case catalog.ActionKMSEnableKey, "EnableKey":
 		if err := s.store.SetKeyState(keyID, store.KeyStateEnabled); err != nil {
+			if errors.Is(err, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is pending deletion.", readOnly, eventID, verified)
+				return
+			}
 			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
@@ -213,11 +188,84 @@ func (s *Server) handleKMS(
 		payload, err = kmssvc.EmptyOKJSON()
 	case catalog.ActionKMSDisableKey, "DisableKey":
 		if err := s.store.SetKeyState(keyID, store.KeyStateDisabled); err != nil {
+			if errors.Is(err, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is pending deletion.", readOnly, eventID, verified)
+				return
+			}
 			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
 		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSScheduleKeyDeletion, "ScheduleKeyDeletion":
+		window := intFromJSONNumber(params["PendingWindowInDays"])
+		scheduled, schedErr := s.store.ScheduleKeyDeletion(keyID, window)
+		if schedErr != nil {
+			if errors.Is(schedErr, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is not in a valid state for deletion.", readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.ScheduleKeyDeletionJSON(scheduled)
+	case catalog.ActionKMSCancelKeyDeletion, "CancelKeyDeletion":
+		if err := s.store.CancelKeyDeletion(keyID); err != nil {
+			if errors.Is(err, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is not pending deletion.", readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.CancelKeyDeletionJSON(key.ARN)
+	case catalog.ActionKMSEnableKeyRotation, "EnableKeyRotation":
+		if err := s.store.SetKeyRotationEnabled(keyID, true); err != nil {
+			if errors.Is(err, store.ErrUnsupportedKeyRotation) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedOperationException",
+					"Key rotation is supported only for symmetric ENCRYPT_DECRYPT keys.", readOnly, eventID, verified)
+				return
+			}
+			if errors.Is(err, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is not in a valid state for rotation.", readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSDisableKeyRotation, "DisableKeyRotation":
+		if err := s.store.SetKeyRotationEnabled(keyID, false); err != nil {
+			if errors.Is(err, store.ErrUnsupportedKeyRotation) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedOperationException",
+					"Key rotation is supported only for symmetric ENCRYPT_DECRYPT keys.", readOnly, eventID, verified)
+				return
+			}
+			if errors.Is(err, store.ErrInvalidKeyState) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+					"Key is not in a valid state for rotation.", readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSGetKeyRotationStatus, "GetKeyRotationStatus":
+		enabled, rotErr := s.store.GetKeyRotationEnabled(keyID)
+		if rotErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.GetKeyRotationStatusJSON(enabled)
 	case catalog.ActionKMSGetKeyPolicy, "GetKeyPolicy":
 		policy, getErr := s.store.GetKeyPolicy(keyID)
 		if getErr != nil {
@@ -235,9 +283,8 @@ func (s *Server) handleKMS(
 		}
 		payload, err = kmssvc.EmptyOKJSON()
 	case catalog.ActionKMSEncrypt, "Encrypt":
-		if key.KeyState != store.KeyStateEnabled {
-			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "DisabledException",
-				"Key is disabled.", readOnly, eventID, verified)
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
 		plain, decErr := kmssvc.DecodeBinaryField(params["Plaintext"])
@@ -266,9 +313,8 @@ func (s *Server) handleKMS(
 				"CiphertextBlob is required.", readOnly, eventID, verified)
 			return
 		}
-		if key.KeyState != store.KeyStateEnabled {
-			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "DisabledException",
-				"Key is disabled.", readOnly, eventID, verified)
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
 		cmk, unsealErr := s.store.UnsealKeyMaterial(keyID)
@@ -286,9 +332,8 @@ func (s *Server) handleKMS(
 		payload, err = kmssvc.DecryptJSON(key.ARN, plain)
 	case catalog.ActionKMSGenerateDataKey, "GenerateDataKey",
 		catalog.ActionKMSGenerateDataKeyWithoutPlaintext, "GenerateDataKeyWithoutPlaintext":
-		if key.KeyState != store.KeyStateEnabled {
-			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "DisabledException",
-				"Key is disabled.", readOnly, eventID, verified)
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
 		dek := make([]byte, 32)
@@ -312,6 +357,10 @@ func (s *Server) handleKMS(
 		includePlain := action == catalog.ActionKMSGenerateDataKey || action == "GenerateDataKey"
 		payload, err = kmssvc.GenerateDataKeyJSON(key.ARN, dek, ct, includePlain)
 	case catalog.ActionKMSCreateGrant, "CreateGrant":
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
+			return
+		}
 		grantee, _ := params["GranteePrincipal"].(string)
 		retiring, _ := params["RetiringPrincipal"].(string)
 		name, _ := params["Name"].(string)
@@ -429,6 +478,151 @@ func (s *Server) handleKMS(
 	s.writeSuccessAudit(r, requestID, eventID, verified, "kms.amazonaws.com", eventNameForRequest(r), readOnly)
 }
 
+func (s *Server) handleKMSReEncrypt(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	params map[string]any,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	accountID := verified.AccountID
+
+	destParam, _ := params["DestinationKeyId"].(string)
+	if strings.TrimSpace(destParam) == "" {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"DestinationKeyId is required.", readOnly, eventID, verified)
+		return
+	}
+
+	blob, decErr := kmssvc.DecodeBinaryField(params["CiphertextBlob"])
+	if decErr != nil || len(blob) == 0 {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"CiphertextBlob is required.", readOnly, eventID, verified)
+		return
+	}
+
+	sourceParam, _ := params["SourceKeyId"].(string)
+	var (
+		sourceKeyID string
+		err         error
+	)
+	if strings.TrimSpace(sourceParam) != "" {
+		sourceKeyID, err = s.store.ResolveKeyID(accountID, sourceParam)
+		if err != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Source key not found.", readOnly, eventID, verified)
+			return
+		}
+		if embedded, kidErr := kmssvc.KeyIDFromCiphertext(blob); kidErr == nil && embedded != "" {
+			embeddedID, resolveErr := s.store.ResolveKeyID(accountID, embedded)
+			if resolveErr == nil && embeddedID != sourceKeyID {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "IncorrectKeyException",
+					"The key ID in CiphertextBlob does not match SourceKeyId.", readOnly, eventID, verified)
+				return
+			}
+		}
+	} else {
+		embedded, kidErr := kmssvc.KeyIDFromCiphertext(blob)
+		if kidErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"SourceKeyId is required.", readOnly, eventID, verified)
+			return
+		}
+		sourceKeyID, err = s.store.ResolveKeyID(accountID, embedded)
+		if err != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				"Source key not found.", readOnly, eventID, verified)
+			return
+		}
+	}
+
+	destKeyID, err := s.store.ResolveKeyID(accountID, destParam)
+	if err != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Destination key not found.", readOnly, eventID, verified)
+		return
+	}
+
+	sourceKey, err := s.store.GetKey(sourceKeyID)
+	if err != nil || sourceKey.AccountID != accountID {
+		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Source key not found.", readOnly, eventID, verified)
+		return
+	}
+	destKey, err := s.store.GetKey(destKeyID)
+	if err != nil || destKey.AccountID != accountID {
+		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Destination key not found.", readOnly, eventID, verified)
+		return
+	}
+
+	grantFrom := false
+	if ok, gerr := s.store.FindMatchingGrant(sourceKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptFrom); gerr == nil {
+		grantFrom = ok
+	}
+	grantTo := false
+	if ok, gerr := s.store.FindMatchingGrant(destKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptTo); gerr == nil {
+		grantTo = ok
+	}
+
+	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptFrom, sourceKey.ARN, sourceKey.KeyPolicy, grantFrom) {
+		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform "+catalog.ActionKMSReEncryptFrom+".", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptTo, destKey.ARN, destKey.KeyPolicy, grantTo) {
+		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform "+catalog.ActionKMSReEncryptTo+".", readOnly, eventID, verified)
+		return
+	}
+
+	if !store.KeyUsableForCrypto(sourceKey.KeyState) {
+		s.writeKMSCryptoStateError(w, r, body, requestID, sourceKey.KeyState, readOnly, eventID, verified)
+		return
+	}
+	if !store.KeyUsableForCrypto(destKey.KeyState) {
+		s.writeKMSCryptoStateError(w, r, body, requestID, destKey.KeyState, readOnly, eventID, verified)
+		return
+	}
+
+	sourceCMK, unsealErr := s.store.UnsealKeyMaterial(sourceKeyID)
+	if unsealErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load source key material.", readOnly, eventID, verified)
+		return
+	}
+	plain, openErr := kmssvc.DecryptUnderCMK(sourceCMK, blob)
+	if openErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
+			"Unable to decrypt ciphertext.", readOnly, eventID, verified)
+		return
+	}
+
+	destCMK, unsealErr := s.store.UnsealKeyMaterial(destKeyID)
+	if unsealErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load destination key material.", readOnly, eventID, verified)
+		return
+	}
+	ct, encErr := kmssvc.EncryptUnderCMK(destCMK, destKeyID, plain)
+	if encErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to encrypt.", readOnly, eventID, verified)
+		return
+	}
+
+	payload, err := kmssvc.ReEncryptJSON(sourceKey.ARN, destKey.ARN, ct)
+	if err != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeJSONOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "kms.amazonaws.com", "ReEncrypt", readOnly)
+}
+
 func jsonBodyMap(body []byte) map[string]any {
 	out := map[string]any{}
 	if len(body) == 0 {
@@ -452,6 +646,45 @@ func stringSliceParam(v any) []string {
 		return t
 	default:
 		return nil
+	}
+}
+
+func intFromJSONNumber(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case json.Number:
+		n, err := t.Int64()
+		if err != nil {
+			return 0
+		}
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func (s *Server) writeKMSCryptoStateError(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID string,
+	keyState string,
+	readOnly bool,
+	eventID string,
+	verified *authn.Verified,
+) {
+	switch keyState {
+	case store.KeyStatePendingDeletion:
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "KMSInvalidStateException",
+			"Key is pending deletion.", readOnly, eventID, verified)
+	default:
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "DisabledException",
+			"Key is disabled.", readOnly, eventID, verified)
 	}
 }
 

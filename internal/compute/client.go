@@ -13,7 +13,7 @@
 //   - EnsureNetwork creates noctaxris-fn with Internal:true so functions have no
 //     default route to the public internet. Reaching the Noctaxris API still depends
 //     on host.docker.internal / host-gateway working on the platform. Full egress
-//     policy hardening beyond Internal networks is deferred.
+//     policy hardening beyond Internal networks is out of scope for the lab core (see docs/services/lambda.md).
 package compute
 
 import (

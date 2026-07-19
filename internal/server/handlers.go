@@ -358,7 +358,25 @@ func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string
 	return s.authorize(verified, action, resource)
 }
 
-func (s *Server) authorize(verified *authn.Verified, action, resource string) bool {
+func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
+	keys := map[string]string{
+		"aws:PrincipalAccount": verified.AccountID,
+		"aws:RequestedRegion":  verified.Region,
+	}
+	if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.MFAAuthenticated {
+		keys["aws:MultiFactorAuthPresent"] = "true"
+		if !ak.MFAAuthenticatedAt.IsZero() {
+			age := int(s.now().UTC().Sub(ak.MFAAuthenticatedAt.UTC()).Seconds())
+			if age < 0 {
+				age = 0
+			}
+			keys["aws:MultiFactorAuthAge"] = fmt.Sprintf("%d", age)
+		}
+	}
+	return keys
+}
+
+func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 	docs := s.identityDocs(verified.Principal)
 	sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID)
 
@@ -368,7 +386,7 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 		if verified.Principal.UserName != "" {
 			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "user", verified.Principal.UserName)
 			if err != nil {
-				return false
+				return authz.EvalInputs{}, false
 			}
 			if ok {
 				boundaryDoc = doc
@@ -378,7 +396,7 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 		if verified.Principal.RoleName != "" {
 			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "role", verified.Principal.RoleName)
 			if err != nil {
-				return false
+				return authz.EvalInputs{}, false
 			}
 			if ok {
 				boundaryDoc = doc
@@ -388,42 +406,110 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 
 	scpDocs, err := s.store.SCPDocsForAccount(verified.AccountID)
 	if err != nil {
-		return false
+		return authz.EvalInputs{}, false
 	}
 	rcpDocs, err := s.store.RCPDocsForAccount(verified.AccountID)
 	if err != nil {
-		return false
+		return authz.EvalInputs{}, false
 	}
 
-	conditionKeys := map[string]string{
-		"aws:PrincipalAccount": verified.AccountID,
-		"aws:RequestedRegion":  verified.Region,
-	}
-	if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.MFAAuthenticated {
-		conditionKeys["aws:MultiFactorAuthPresent"] = "true"
-		if !ak.MFAAuthenticatedAt.IsZero() {
-			age := int(s.now().UTC().Sub(ak.MFAAuthenticatedAt.UTC()).Seconds())
-			if age < 0 {
-				age = 0
-			}
-			conditionKeys["aws:MultiFactorAuthAge"] = fmt.Sprintf("%d", age)
-		}
-	}
-
-	return authz.EvaluateFull(authz.RequestContext{
-		Principal:     verified.Principal,
-		Action:        action,
-		Resource:      resource,
-		Region:        verified.Region,
-		ConditionKeys: conditionKeys,
-	}, authz.EvalInputs{
+	return authz.EvalInputs{
 		IdentityDocs:        docs,
 		BoundaryDoc:         boundaryDoc,
 		SessionDocs:         sessionDocs,
 		SCPDocs:             scpDocs,
 		RCPDocs:             rcpDocs,
 		IsManagementAccount: s.store.IsManagementAccount(verified.AccountID),
-	}) == authz.Allow
+	}, true
+}
+
+func (s *Server) requestContext(verified *authn.Verified, action, resource string) authz.RequestContext {
+	return authz.RequestContext{
+		Principal:     verified.Principal,
+		Action:        action,
+		Resource:      resource,
+		Region:        verified.Region,
+		ConditionKeys: s.conditionKeys(verified),
+	}
+}
+
+func (s *Server) authorize(verified *authn.Verified, action, resource string) bool {
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return false
+	}
+	return authz.EvaluateFull(s.requestContext(verified, action, resource), in) == authz.Allow
+}
+
+// authorizeDataplaneOR applies SCP/RCP, then a resource-OR identity evaluator
+// (S3/SQS/DynamoDB). Boundary and session intersect only when identity Allows
+// (ADR-0005 §8 resource-policy-only path skips boundary/session).
+func (s *Server) authorizeDataplaneOR(
+	verified *authn.Verified,
+	action, resource string,
+	eval func(caller authz.RequestContext, identityDocs []string) authz.Decision,
+) bool {
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return false
+	}
+	ctx := s.requestContext(verified, action, resource)
+	if authz.OrgFiltersDeny(ctx, in) {
+		return false
+	}
+	if eval(ctx, in.IdentityDocs) != authz.Allow {
+		return false
+	}
+	if authz.Evaluate(ctx, in.IdentityDocs) != authz.Allow {
+		return true
+	}
+	if !ctx.Principal.IsRoot && strings.TrimSpace(in.BoundaryDoc) != "" {
+		if authz.Evaluate(ctx, []string{in.BoundaryDoc}) != authz.Allow {
+			return false
+		}
+	}
+	if len(in.SessionDocs) > 0 {
+		if authz.Evaluate(ctx, in.SessionDocs) != authz.Allow {
+			return false
+		}
+	}
+	return true
+}
+
+// authorizeDataplaneKMS applies SCP/RCP, EvaluateKMS, then always intersects
+// boundary (when set, non-root) and session (when present).
+func (s *Server) authorizeDataplaneKMS(
+	verified *authn.Verified,
+	action, resource, keyPolicy string,
+	grantSatisfied bool,
+) bool {
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return false
+	}
+	ctx := s.requestContext(verified, action, resource)
+	if authz.OrgFiltersDeny(ctx, in) {
+		return false
+	}
+	if authz.EvaluateKMS(authz.KMSRequest{
+		Caller:         ctx,
+		IdentityDocs:   in.IdentityDocs,
+		KeyPolicyDoc:   keyPolicy,
+		GrantSatisfied: grantSatisfied,
+	}) != authz.Allow {
+		return false
+	}
+	if !ctx.Principal.IsRoot && strings.TrimSpace(in.BoundaryDoc) != "" {
+		if authz.Evaluate(ctx, []string{in.BoundaryDoc}) != authz.Allow {
+			return false
+		}
+	}
+	if len(in.SessionDocs) > 0 {
+		if authz.Evaluate(ctx, in.SessionDocs) != authz.Allow {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) identityDocs(principal identity.Principal) []string {

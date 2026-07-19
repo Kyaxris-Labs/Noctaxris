@@ -91,6 +91,11 @@ func (s *Server) handleSQS(
 				"A queue already exists with the same name and different attributes.", readOnly, eventID, verified)
 			return
 		}
+		if errors.Is(err, store.ErrInvalidFIFOQueueName) {
+			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
+				"Can only include '.fifo' at the end of a FIFO queue name.", readOnly, eventID, verified)
+			return
+		}
 		if err != nil {
 			s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to create queue.", readOnly, eventID, verified)
@@ -103,6 +108,11 @@ func (s *Server) handleSQS(
 	case catalog.ActionSQSSetQueueAttributes, "SetQueueAttributes":
 		attrs := stringMapParam(params["Attributes"])
 		if err := s.store.SetQueueAttributes(queue.AccountID, queue.QueueName, attrs); err != nil {
+			if errors.Is(err, store.ErrInvalidFIFOQueueName) {
+				s.writeSQSError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
+					"Can only include '.fifo' at the end of a FIFO queue name.", readOnly, eventID, verified)
+				return
+			}
 			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "InvalidAttributeValue",
 				"Unable to set queue attributes.", readOnly, eventID, verified)
 			return
@@ -209,37 +219,13 @@ func (s *Server) handleSQS(
 }
 
 func (s *Server) authorizeSQS(verified *authn.Verified, action, resource, queuePolicy string) bool {
-	identityDocs := s.identityDocs(verified.Principal)
-	decision := authz.EvaluateSQS(authz.SQSRequest{
-		Caller: authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    action,
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		},
-		IdentityDocs:   identityDocs,
-		QueuePolicyDoc: queuePolicy,
+	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+		return authz.EvaluateSQS(authz.SQSRequest{
+			Caller:         caller,
+			IdentityDocs:   identityDocs,
+			QueuePolicyDoc: queuePolicy,
+		})
 	})
-	if decision != authz.Allow {
-		return false
-	}
-	if sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID); len(sessionDocs) > 0 {
-		return authz.EvaluateWithSession(authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    action,
-			Resource:  resource,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
-		}, identityDocs, sessionDocs) == authz.Allow
-	}
-	return true
 }
 
 func (s *Server) resolveSQSQueue(accountID string, params map[string]any) (store.Queue, error) {
@@ -335,18 +321,29 @@ func (s *Server) sqsSendMessage(
 		s.writeSQSEncryptError(w, r, requestID, eventID, verified, readOnly, encErr)
 		return nil, nil
 	}
-	msg, err := s.store.SendMessage(queue.AccountID, queue.QueueName, storedBody, sealed, sealedDEK, attrsJSON)
+	sendOpts := sqsSendOptsFromParams(queue.Attributes, params)
+	msg, err := s.store.SendMessage(queue.AccountID, queue.QueueName, storedBody, sealed, sealedDEK, attrsJSON, sendOpts)
 	if err != nil {
 		if errors.Is(err, store.ErrNoSuchQueue) {
 			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
 				"The specified queue does not exist.", readOnly, eventID, verified)
 			return nil, nil
 		}
+		if errors.Is(err, store.ErrMissingMessageGroupID) {
+			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "MissingParameter",
+				"The request must contain the parameter MessageGroupId.", readOnly, eventID, verified)
+			return nil, nil
+		}
+		if errors.Is(err, store.ErrMissingMessageDeduplication) {
+			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
+				"The queue should either have ContentBasedDeduplication enabled or MessageDeduplicationId provided explicitly.", readOnly, eventID, verified)
+			return nil, nil
+		}
 		s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to send message.", readOnly, eventID, verified)
 		return nil, nil
 	}
-	return sqssvc.SendMessageJSON(msg.MessageID, sqssvc.MD5Hex(body), md5Attrs)
+	return sqssvc.SendMessageJSON(msg.MessageID, sqssvc.MD5Hex(body), md5Attrs, msg.SequenceNumber)
 }
 
 func (s *Server) sqsReceiveMessage(
@@ -386,10 +383,13 @@ func (s *Server) sqsReceiveMessage(
 		}
 		bodyStr := string(plain)
 		entry := sqssvc.ReceivedMessage{
-			MessageID:     m.MessageID,
-			ReceiptHandle: m.ReceiptHandle,
-			Body:          bodyStr,
-			MD5OfBody:     sqssvc.MD5Hex(bodyStr),
+			MessageID:              m.MessageID,
+			ReceiptHandle:          m.ReceiptHandle,
+			Body:                   bodyStr,
+			MD5OfBody:              sqssvc.MD5Hex(bodyStr),
+			MessageGroupID:         m.MessageGroupID,
+			MessageDeduplicationID: m.MessageDeduplicationID,
+			SequenceNumber:         m.SequenceNumber,
 			Attributes: map[string]string{
 				"ApproximateReceiveCount": strconv.Itoa(m.ReceiveCount),
 				"SentTimestamp":           m.CreatedAt,
@@ -478,7 +478,7 @@ func (s *Server) sqsSendMessageBatch(
 			})
 			continue
 		}
-		msg, err := s.store.SendMessage(queue.AccountID, queue.QueueName, storedBody, sealed, sealedDEK, attrsJSON)
+		msg, err := s.store.SendMessage(queue.AccountID, queue.QueueName, storedBody, sealed, sealedDEK, attrsJSON, sqsSendOptsFromEntry(queue.Attributes, entry))
 		if err != nil {
 			failed = append(failed, sqssvc.BatchFailure{
 				ID: id, Code: "InternalError", Message: "Unable to send message.", SenderFault: false,
@@ -704,6 +704,39 @@ func (s *Server) writeSQSError(
 		accountID = verified.AccountID
 	}
 	s.auditAPIError(r, requestID, eventID, code, message, readOnly, accessKeyID, accountID, verified != nil)
+}
+
+func sqsSendOptsFromParams(attrs map[string]string, params map[string]any) *store.SendMessageOpts {
+	if !attrTruthySQS(attrs, "FifoQueue") {
+		return nil
+	}
+	opts := &store.SendMessageOpts{}
+	if groupID, _ := params["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
+		opts.MessageGroupID = strings.TrimSpace(groupID)
+	}
+	if dedupID, _ := params["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
+		opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+	}
+	return opts
+}
+
+func sqsSendOptsFromEntry(attrs map[string]string, entry map[string]any) *store.SendMessageOpts {
+	if !attrTruthySQS(attrs, "FifoQueue") {
+		return nil
+	}
+	opts := &store.SendMessageOpts{}
+	if groupID, _ := entry["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
+		opts.MessageGroupID = strings.TrimSpace(groupID)
+	}
+	if dedupID, _ := entry["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
+		opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+	}
+	return opts
+}
+
+func attrTruthySQS(attrs map[string]string, name string) bool {
+	v, ok := attrs[name]
+	return ok && strings.EqualFold(strings.TrimSpace(v), "true")
 }
 
 func stringMapParam(v any) map[string]string {

@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -109,13 +110,77 @@ func KeyFromCanonical(table store.DynamoTable, itemPK, itemSK string) (ItemMap, 
 	return out, nil
 }
 
-// HashKeyFromQuery extracts the hash AttributeValue for a lab Query
-// (KeyConditions EQ, or KeyConditionExpression equality on the hash key).
+// GSIKeyStrings extracts canonical (gsiPK, gsiSK) from item attributes for the
+// table lab GSI. Empty strings are returned when the GSI keys are absent.
+func GSIKeyStrings(table store.DynamoTable, item ItemMap) (gsiPK, gsiSK string, err error) {
+	if !table.HasGSI() {
+		return "", "", nil
+	}
+	hashAV, ok := item[table.GSIHashKeyName]
+	if !ok {
+		return "", "", nil
+	}
+	gsiPK, err = CanonicalAV(hashAV)
+	if err != nil {
+		return "", "", err
+	}
+	if !table.GSIHasRangeKey() {
+		return gsiPK, "", nil
+	}
+	rangeAV, ok := item[table.GSIRangeKeyName]
+	if !ok {
+		return gsiPK, "", nil
+	}
+	gsiSK, err = CanonicalAV(rangeAV)
+	if err != nil {
+		return "", "", err
+	}
+	return gsiPK, gsiSK, nil
+}
+
+// ItemExpired reports whether a TTL-enabled table should treat the item as expired.
+func ItemExpired(table store.DynamoTable, item ItemMap, nowUnix int64) bool {
+	if !table.TTLEnabled || table.TTLAttributeName == "" {
+		return false
+	}
+	av, ok := item[table.TTLAttributeName]
+	if !ok {
+		return false
+	}
+	n, ok := av["N"].(string)
+	if !ok {
+		return false
+	}
+	epoch, err := strconv.ParseInt(n, 10, 64)
+	if err != nil || epoch <= 0 {
+		return false
+	}
+	return epoch <= nowUnix
+}
+
+// HashKeyFromQueryIndex extracts the hash AttributeValue for a lab Query against
+// the base table or a named GSI.
+func HashKeyFromQueryIndex(table store.DynamoTable, indexName string, params map[string]any) (map[string]any, error) {
+	hashName := table.HashKeyName
+	if indexName != "" {
+		if !table.HasGSI() || table.GSIName != indexName {
+			return nil, fmt.Errorf("index %q not found", indexName)
+		}
+		hashName = table.GSIHashKeyName
+	}
+	return hashKeyFromQuery(hashName, params)
+}
+
+// HashKeyFromQuery extracts the hash AttributeValue for a lab Query on the base table.
 func HashKeyFromQuery(table store.DynamoTable, params map[string]any) (map[string]any, error) {
+	return HashKeyFromQueryIndex(table, "", params)
+}
+
+func hashKeyFromQuery(hashName string, params map[string]any) (map[string]any, error) {
 	if kc, ok := params["KeyConditions"].(map[string]any); ok {
-		entry, ok := kc[table.HashKeyName].(map[string]any)
+		entry, ok := kc[hashName].(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("KeyConditions must include hash key %q", table.HashKeyName)
+			return nil, fmt.Errorf("KeyConditions must include hash key %q", hashName)
 		}
 		op, _ := entry["ComparisonOperator"].(string)
 		if op != "" && !strings.EqualFold(op, "EQ") {
@@ -138,10 +203,10 @@ func HashKeyFromQuery(table store.DynamoTable, params map[string]any) (map[strin
 	if strings.TrimSpace(expr) == "" || values == nil {
 		return nil, fmt.Errorf("KeyConditions or KeyConditionExpression is required")
 	}
-	hashName := table.HashKeyName
+	hashNameExpr := hashName
 	for k, v := range names {
-		if s, ok := v.(string); ok && s == table.HashKeyName {
-			hashName = k
+		if s, ok := v.(string); ok && s == hashName {
+			hashNameExpr = k
 			break
 		}
 	}
@@ -156,7 +221,7 @@ func HashKeyFromQuery(table store.DynamoTable, params map[string]any) (map[strin
 				name = mapped
 			}
 		}
-		if name == table.HashKeyName || token == hashName || token == table.HashKeyName {
+		if name == hashName || token == hashNameExpr || token == hashName {
 			if i+2 < len(parts) && parts[i+1] == "=" {
 				placeholder = strings.Trim(parts[i+2], "()")
 				break

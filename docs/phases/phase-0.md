@@ -26,7 +26,7 @@ Phase 0 is the runnable scaffold. It proves packaging, persistence, audit plumbi
 
 ## How to verify
 
-See [../verification.md](../verification.md).
+Shared Compose and `go test`: [../services/index.md](../services/index.md#shared-verification).
 
 ## Naming note
 

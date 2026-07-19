@@ -31,30 +31,30 @@ Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxr
     </tr>
     <tr>
       <td>Organizations</td>
-      <td>CreateAccount, ListAccounts, OUs, EnablePolicyType, SCP and RCP create/attach/detach/describe. Shared authorize uses identity, boundary, SCP, and RCP.</td>
-      <td>Invites, OU-path SCP/RCP inheritance, SCP/boundary on data-plane authorize paths.</td>
+      <td>CreateAccount, ListAccounts, OUs, EnablePolicyType, SCP and RCP create/attach/detach/describe. Identity, boundary, SCP, and RCP apply on shared authorize and on S3/KMS/DynamoDB/SQS plus Lambda PassRole paths.</td>
+      <td>Invites, OU-path SCP/RCP inheritance.</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
       <td>KMS</td>
-      <td>Customer-managed keys, key policies (explicit allow), Encrypt, Decrypt, GenerateDataKey*, grants, aliases.</td>
-      <td>Full KMS SAR (ReEncrypt, Sign/Verify, MAC, asymmetric, import, multi-Region, rotation APIs, tags). Cross-account key policy depth. AWS-managed key convenience aliases.</td>
+      <td>Customer-managed keys, key policies, Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ScheduleKeyDeletion/CancelKeyDeletion, rotation enable/status flags.</td>
+      <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, material rotation sweeper, tags, cross-account key policy depth, true AWS-owned managed keys.</td>
     </tr>
     <tr>
       <td rowspan="7" align="center" valign="middle">Data</td>
       <td>S3</td>
-      <td>Path-style buckets and objects, bucket policy, SSE-S3/SSE-KMS, presigned GET/PUT.</td>
-      <td>Multipart, CopyObject, versioning, lifecycle, virtual-hosted style, cross-account policy depth.</td>
+      <td>Path-style buckets and objects, bucket policy, SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload, CopyObject (same account), bucket default encryption.</td>
+      <td>Versioning, lifecycle, virtual-hosted style, cross-account policy depth, multipart presign.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan, BatchGet/BatchWrite, table resource policies, CMK encryption.</td>
-      <td>GSI/LSI, Streams, Transactions, PartiQL, global tables.</td>
+      <td>Tables, item CRUD, Query/Scan with one lab GSI, BatchGet/BatchWrite, table resource policies, CMK encryption, TTL configure and lazy expiry.</td>
+      <td>LSI, Streams, Transactions, PartiQL, global tables, multi-GSI.</td>
     </tr>
     <tr>
       <td>SQS</td>
-      <td>Standard queues, send/receive/delete (batch and visibility), queue policies, SSE-SQS and SSE-KMS.</td>
-      <td>FIFO and DLQ redrive depth.</td>
+      <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies, SSE-SQS and SSE-KMS, RedrivePolicy to DLQ.</td>
+      <td>High-throughput FIFO quotas, DLQ redrive allow policies, delay queue depth.</td>
     </tr>
     <tr>
       <td>SSM Parameter Store</td>
@@ -95,7 +95,7 @@ Primary distribution: Docker image under [Kyaxris-Labs](https://github.com/Kyaxr
   </tbody>
 </table>
 
-More detail: [docs/deferred.md](docs/deferred.md).
+Per-service detail (implemented, CLI smoke, deferred): [docs/services/](docs/services/index.md).
 
 ## Quick start
 
@@ -116,7 +116,7 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Full smoke (IAM, Orgs, KMS, S3, DynamoDB, SQS, Lambda): [docs/verification.md](docs/verification.md).
+Full smoke (IAM, Orgs, KMS, S3, DynamoDB, SQS, Lambda): each page under [docs/services/](docs/services/index.md), plus shared Compose setup on the services index.
 
 ## Defaults
 
@@ -129,7 +129,7 @@ Full smoke (IAM, Orgs, KMS, S3, DynamoDB, SQS, Lambda): [docs/verification.md](d
 
 ## Docs
 
-See [docs/index.md](docs/index.md) for architecture, configuration, security, and verification.
+See [docs/index.md](docs/index.md) for architecture, configuration, security, and per-service docs.
 
 ## License
 

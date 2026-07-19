@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -42,26 +43,32 @@ func EmptyOKJSON() ([]byte, error) {
 }
 
 // SendMessageJSON builds a SendMessage response. md5Attrs may be empty.
-func SendMessageJSON(messageID, md5Body, md5Attrs string) ([]byte, error) {
-	out := map[string]string{
+func SendMessageJSON(messageID, md5Body, md5Attrs string, sequenceNumber int64) ([]byte, error) {
+	out := map[string]any{
 		"MessageId":        messageID,
 		"MD5OfMessageBody": md5Body,
 	}
 	if md5Attrs != "" {
 		out["MD5OfMessageAttributes"] = md5Attrs
 	}
+	if sequenceNumber > 0 {
+		out["SequenceNumber"] = strconv.FormatInt(sequenceNumber, 10)
+	}
 	return json.Marshal(out)
 }
 
 // ReceivedMessage is one message entry in a ReceiveMessage response.
 type ReceivedMessage struct {
-	MessageID         string
-	ReceiptHandle     string
-	Body              string
-	MD5OfBody         string
-	MD5OfMessageAttrs string
-	Attributes        map[string]string
-	MessageAttributes map[string]any
+	MessageID              string
+	ReceiptHandle          string
+	Body                   string
+	MD5OfBody              string
+	MD5OfMessageAttrs      string
+	Attributes             map[string]string
+	MessageAttributes      map[string]any
+	MessageGroupID         string
+	MessageDeduplicationID string
+	SequenceNumber         int64
 }
 
 // ReceiveMessageJSON builds a ReceiveMessage response.
@@ -74,8 +81,23 @@ func ReceiveMessageJSON(messages []ReceivedMessage) ([]byte, error) {
 			"MD5OfBody":     m.MD5OfBody,
 			"Body":          m.Body,
 		}
+		attrs := map[string]string{}
 		if len(m.Attributes) > 0 {
-			entry["Attributes"] = m.Attributes
+			for k, v := range m.Attributes {
+				attrs[k] = v
+			}
+		}
+		if m.MessageGroupID != "" {
+			attrs["MessageGroupId"] = m.MessageGroupID
+		}
+		if m.MessageDeduplicationID != "" {
+			attrs["MessageDeduplicationId"] = m.MessageDeduplicationID
+		}
+		if m.SequenceNumber > 0 {
+			attrs["SequenceNumber"] = strconv.FormatInt(m.SequenceNumber, 10)
+		}
+		if len(attrs) > 0 {
+			entry["Attributes"] = attrs
 		}
 		if len(m.MessageAttributes) > 0 {
 			entry["MessageAttributes"] = m.MessageAttributes

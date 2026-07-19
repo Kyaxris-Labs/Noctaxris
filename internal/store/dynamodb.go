@@ -14,6 +14,8 @@ var (
 	ErrNoSuchItem           = errors.New("NoSuchItem")
 	ErrNoSuchResourcePolicy = errors.New("PolicyNotFoundException")
 	ErrInvalidKeyType       = errors.New("ValidationException: invalid key type")
+	ErrGSIAlreadyExists     = errors.New("ResourceInUseException: GSI already exists")
+	ErrNoSuchIndex          = errors.New("ResourceNotFoundException: index not found")
 )
 
 const (
@@ -28,22 +30,46 @@ const (
 	KeyTypeString = "S"
 	KeyTypeNumber = "N"
 	KeyTypeBinary = "B"
+
+	TTLStatusEnabled  = "ENABLED"
+	TTLStatusDisabled = "DISABLED"
 )
+
+// DynamoGSI is lab metadata for a single global secondary index.
+type DynamoGSI struct {
+	IndexName    string
+	HashKeyName  string
+	HashKeyType  string
+	RangeKeyName string
+	RangeKeyType string
+}
+
+// HasRangeKey reports whether the GSI uses a composite key.
+func (g DynamoGSI) HasRangeKey() bool {
+	return g.RangeKeyName != ""
+}
 
 // DynamoTable is a DynamoDB table metadata row.
 type DynamoTable struct {
-	AccountID      string
-	TableName      string
-	TableARN       string
-	Status         string
-	HashKeyName    string
-	HashKeyType    string
-	RangeKeyName   string
-	RangeKeyType   string
-	ResourcePolicy string
-	SSEType        string
-	KMSKeyID       string
-	CreationDate   string
+	AccountID        string
+	TableName        string
+	TableARN         string
+	Status           string
+	HashKeyName      string
+	HashKeyType      string
+	RangeKeyName     string
+	RangeKeyType     string
+	ResourcePolicy   string
+	SSEType          string
+	KMSKeyID         string
+	CreationDate     string
+	GSIName          string
+	GSIHashKeyName   string
+	GSIHashKeyType   string
+	GSIRangeKeyName  string
+	GSIRangeKeyType  string
+	TTLAttributeName string
+	TTLEnabled       bool
 }
 
 // HasRangeKey reports whether the table uses a composite primary key.
@@ -51,11 +77,23 @@ func (t DynamoTable) HasRangeKey() bool {
 	return t.RangeKeyName != ""
 }
 
+// HasGSI reports whether the table has a lab global secondary index.
+func (t DynamoTable) HasGSI() bool {
+	return t.GSIName != ""
+}
+
+// GSIHasRangeKey reports whether the table GSI uses a composite key.
+func (t DynamoTable) GSIHasRangeKey() bool {
+	return t.GSIRangeKeyName != ""
+}
+
 // DynamoStoredItem is a stored item row. ItemJSON holds plaintext AttributeValue
 // map JSON when Sealed is false, or ciphertext bytes when Sealed is true.
 type DynamoStoredItem struct {
 	ItemPK    string
 	ItemSK    string
+	GSIPK     string
+	GSISK     string
 	ItemJSON  []byte
 	Sealed    bool
 	SealedDEK []byte
@@ -86,9 +124,59 @@ func validKeyType(t string) bool {
 	}
 }
 
+const dynamoTableSelect = `account_id, table_name, table_arn, status, hash_key_name, hash_key_type,
+		        range_key_name, range_key_type, resource_policy, sse_type, kms_key_id, creation_date,
+		        gsi_name, gsi_hash_key_name, gsi_hash_key_type, gsi_range_key_name, gsi_range_key_type,
+		        ttl_attribute_name, ttl_enabled`
+
+func scanDynamoTable(scanner interface {
+	Scan(dest ...any) error
+}) (DynamoTable, error) {
+	var t DynamoTable
+	var ttlEnabled int
+	err := scanner.Scan(
+		&t.AccountID, &t.TableName, &t.TableARN, &t.Status,
+		&t.HashKeyName, &t.HashKeyType, &t.RangeKeyName, &t.RangeKeyType,
+		&t.ResourcePolicy, &t.SSEType, &t.KMSKeyID, &t.CreationDate,
+		&t.GSIName, &t.GSIHashKeyName, &t.GSIHashKeyType, &t.GSIRangeKeyName, &t.GSIRangeKeyType,
+		&t.TTLAttributeName, &ttlEnabled,
+	)
+	if err != nil {
+		return DynamoTable{}, err
+	}
+	t.TTLEnabled = ttlEnabled == 1
+	return t, nil
+}
+
+func validateGSI(gsi *DynamoGSI) error {
+	if gsi == nil {
+		return nil
+	}
+	if strings.TrimSpace(gsi.IndexName) == "" {
+		return fmt.Errorf("GSI IndexName is required")
+	}
+	if strings.TrimSpace(gsi.HashKeyName) == "" || !validKeyType(gsi.HashKeyType) {
+		return ErrInvalidKeyType
+	}
+	if gsi.RangeKeyName != "" && !validKeyType(gsi.RangeKeyType) {
+		return ErrInvalidKeyType
+	}
+	return nil
+}
+
+func gsiColumns(gsi *DynamoGSI) (name, hashName, hashType, rangeName, rangeType string) {
+	if gsi == nil {
+		return "", "", "", "", ""
+	}
+	return gsi.IndexName, gsi.HashKeyName, gsi.HashKeyType, gsi.RangeKeyName, gsi.RangeKeyType
+}
+
 // CreateTable inserts a new table. rangeKey and rangeType are empty for
-// hash-only tables. sseType defaults to AWS_OWNED when empty.
-func (s *Store) CreateTable(accountID, region, name, hashKey, hashType, rangeKey, rangeType, sseType, kmsKeyID string) (DynamoTable, error) {
+// hash-only tables. sseType defaults to AWS_OWNED when empty. gsi is optional.
+func (s *Store) CreateTable(
+	accountID, region, name, hashKey, hashType, rangeKey, rangeType, sseType, kmsKeyID string,
+	gsi *DynamoGSI,
+) (DynamoTable, error) {
 	if strings.TrimSpace(name) == "" {
 		return DynamoTable{}, fmt.Errorf("create table: name is required")
 	}
@@ -98,21 +186,28 @@ func (s *Store) CreateTable(accountID, region, name, hashKey, hashType, rangeKey
 	if rangeKey != "" && !validKeyType(rangeType) {
 		return DynamoTable{}, ErrInvalidKeyType
 	}
+	if err := validateGSI(gsi); err != nil {
+		return DynamoTable{}, err
+	}
 	if sseType == "" {
 		sseType = SSETypeAWSOwned
 	}
 	if sseType != SSETypeAWSOwned && sseType != SSETypeKMS {
 		return DynamoTable{}, fmt.Errorf("create table: invalid sse type %q", sseType)
 	}
+	gsiName, gsiHashName, gsiHashType, gsiRangeName, gsiRangeType := gsiColumns(gsi)
 	arn := TableARN(accountID, region, name)
 	created := nowRFC3339()
 	_, err := s.db.Exec(
 		`INSERT INTO dynamodb_tables
 		 (account_id, table_name, table_arn, status, hash_key_name, hash_key_type,
-		  range_key_name, range_key_type, resource_policy, sse_type, kms_key_id, creation_date)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+		  range_key_name, range_key_type, resource_policy, sse_type, kms_key_id, creation_date,
+		  gsi_name, gsi_hash_key_name, gsi_hash_key_type, gsi_range_key_name, gsi_range_key_type,
+		  ttl_attribute_name, ttl_enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, '', 0)`,
 		accountID, name, arn, TableStatusActive, hashKey, hashType,
 		rangeKey, rangeType, sseType, kmsKeyID, created,
+		gsiName, gsiHashName, gsiHashType, gsiRangeName, gsiRangeType,
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -121,30 +216,32 @@ func (s *Store) CreateTable(accountID, region, name, hashKey, hashType, rangeKey
 		return DynamoTable{}, fmt.Errorf("create table: %w", err)
 	}
 	return DynamoTable{
-		AccountID:    accountID,
-		TableName:    name,
-		TableARN:     arn,
-		Status:       TableStatusActive,
-		HashKeyName:  hashKey,
-		HashKeyType:  hashType,
-		RangeKeyName: rangeKey,
-		RangeKeyType: rangeType,
-		SSEType:      sseType,
-		KMSKeyID:     kmsKeyID,
-		CreationDate: created,
+		AccountID:       accountID,
+		TableName:       name,
+		TableARN:        arn,
+		Status:          TableStatusActive,
+		HashKeyName:     hashKey,
+		HashKeyType:     hashType,
+		RangeKeyName:    rangeKey,
+		RangeKeyType:    rangeType,
+		SSEType:         sseType,
+		KMSKeyID:        kmsKeyID,
+		CreationDate:    created,
+		GSIName:         gsiName,
+		GSIHashKeyName:  gsiHashName,
+		GSIHashKeyType:  gsiHashType,
+		GSIRangeKeyName: gsiRangeName,
+		GSIRangeKeyType: gsiRangeType,
 	}, nil
 }
 
 // GetTable returns table metadata or ErrNoSuchTable.
 func (s *Store) GetTable(accountID, name string) (DynamoTable, error) {
-	var t DynamoTable
-	err := s.db.QueryRow(
-		`SELECT account_id, table_name, table_arn, status, hash_key_name, hash_key_type,
-		        range_key_name, range_key_type, resource_policy, sse_type, kms_key_id, creation_date
-		 FROM dynamodb_tables WHERE account_id = ? AND table_name = ?`,
+	row := s.db.QueryRow(
+		`SELECT `+dynamoTableSelect+` FROM dynamodb_tables WHERE account_id = ? AND table_name = ?`,
 		accountID, name,
-	).Scan(&t.AccountID, &t.TableName, &t.TableARN, &t.Status, &t.HashKeyName, &t.HashKeyType,
-		&t.RangeKeyName, &t.RangeKeyType, &t.ResourcePolicy, &t.SSEType, &t.KMSKeyID, &t.CreationDate)
+	)
+	t, err := scanDynamoTable(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DynamoTable{}, ErrNoSuchTable
 	}
@@ -162,9 +259,7 @@ func (s *Store) DescribeTable(accountID, name string) (DynamoTable, error) {
 // ListTables returns tables for an account ordered by name.
 func (s *Store) ListTables(accountID string) ([]DynamoTable, error) {
 	rows, err := s.db.Query(
-		`SELECT account_id, table_name, table_arn, status, hash_key_name, hash_key_type,
-		        range_key_name, range_key_type, resource_policy, sse_type, kms_key_id, creation_date
-		 FROM dynamodb_tables WHERE account_id = ? ORDER BY table_name`,
+		`SELECT `+dynamoTableSelect+` FROM dynamodb_tables WHERE account_id = ? ORDER BY table_name`,
 		accountID,
 	)
 	if err != nil {
@@ -173,9 +268,8 @@ func (s *Store) ListTables(accountID string) ([]DynamoTable, error) {
 	defer rows.Close()
 	out := []DynamoTable{}
 	for rows.Next() {
-		var t DynamoTable
-		if err := rows.Scan(&t.AccountID, &t.TableName, &t.TableARN, &t.Status, &t.HashKeyName, &t.HashKeyType,
-			&t.RangeKeyName, &t.RangeKeyType, &t.ResourcePolicy, &t.SSEType, &t.KMSKeyID, &t.CreationDate); err != nil {
+		t, err := scanDynamoTable(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list tables: %w", err)
 		}
 		out = append(out, t)
@@ -220,6 +314,61 @@ func (s *Store) UpdateTableSSE(accountID, name, sseType, kmsKeyID string) error 
 	)
 	if err != nil {
 		return fmt.Errorf("update table sse: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNoSuchTable
+	}
+	return nil
+}
+
+// UpdateTableGSI adds the single lab GSI to a table that does not already have one.
+func (s *Store) UpdateTableGSI(accountID, name string, gsi DynamoGSI) error {
+	if err := validateGSI(&gsi); err != nil {
+		return err
+	}
+	table, err := s.GetTable(accountID, name)
+	if err != nil {
+		return err
+	}
+	if table.HasGSI() {
+		return ErrGSIAlreadyExists
+	}
+	res, err := s.db.Exec(
+		`UPDATE dynamodb_tables SET
+		   gsi_name = ?, gsi_hash_key_name = ?, gsi_hash_key_type = ?,
+		   gsi_range_key_name = ?, gsi_range_key_type = ?
+		 WHERE account_id = ? AND table_name = ?`,
+		gsi.IndexName, gsi.HashKeyName, gsi.HashKeyType,
+		gsi.RangeKeyName, gsi.RangeKeyType,
+		accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("update table gsi: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNoSuchTable
+	}
+	return nil
+}
+
+// UpdateTimeToLive sets the TTL attribute name and enabled flag on a table.
+func (s *Store) UpdateTimeToLive(accountID, name, attributeName string, enabled bool) error {
+	if strings.TrimSpace(attributeName) == "" {
+		return fmt.Errorf("update ttl: attribute name is required")
+	}
+	enabledFlag := 0
+	if enabled {
+		enabledFlag = 1
+	}
+	res, err := s.db.Exec(
+		`UPDATE dynamodb_tables SET ttl_attribute_name = ?, ttl_enabled = ?
+		 WHERE account_id = ? AND table_name = ?`,
+		attributeName, enabledFlag, accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("update ttl: %w", err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
@@ -274,8 +423,12 @@ func (s *Store) DeleteResourcePolicy(accountID, name string) error {
 
 // PutItemBytes upserts an item under the canonical (itemPK, itemSK) key. itemJSON
 // is plaintext AttributeValue map JSON for AWS_OWNED tables, or ciphertext for
-// KMS tables (with the sealed flag set and optional sealedDEK).
-func (s *Store) PutItemBytes(accountID, table, itemPK, itemSK string, itemJSON []byte, sealed bool, sealedDEK []byte) error {
+// KMS tables (with the sealed flag set and optional sealedDEK). gsiPK and gsiSK
+// index the item for lab GSI queries when non-empty.
+func (s *Store) PutItemBytes(
+	accountID, table, itemPK, itemSK, gsiPK, gsiSK string,
+	itemJSON []byte, sealed bool, sealedDEK []byte,
+) error {
 	if _, err := s.GetTable(accountID, table); err != nil {
 		return err
 	}
@@ -285,13 +438,15 @@ func (s *Store) PutItemBytes(accountID, table, itemPK, itemSK string, itemJSON [
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO dynamodb_items
-		 (account_id, table_name, item_pk, item_sk, item_json, sealed, sealed_dek)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 (account_id, table_name, item_pk, item_sk, gsi_pk, gsi_sk, item_json, sealed, sealed_dek)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, table_name, item_pk, item_sk) DO UPDATE SET
+		   gsi_pk = excluded.gsi_pk,
+		   gsi_sk = excluded.gsi_sk,
 		   item_json = excluded.item_json,
 		   sealed = excluded.sealed,
 		   sealed_dek = excluded.sealed_dek`,
-		accountID, table, itemPK, itemSK, itemJSON, sealedFlag, sealedDEK,
+		accountID, table, itemPK, itemSK, gsiPK, gsiSK, itemJSON, sealedFlag, sealedDEK,
 	)
 	if err != nil {
 		return fmt.Errorf("put item: %w", err)
@@ -307,11 +462,11 @@ func (s *Store) GetItemBytes(accountID, table, itemPK, itemSK string) (DynamoSto
 		sealedDEK []byte
 	)
 	err := s.db.QueryRow(
-		`SELECT item_pk, item_sk, item_json, sealed, sealed_dek
+		`SELECT item_pk, item_sk, gsi_pk, gsi_sk, item_json, sealed, sealed_dek
 		 FROM dynamodb_items
 		 WHERE account_id = ? AND table_name = ? AND item_pk = ? AND item_sk = ?`,
 		accountID, table, itemPK, itemSK,
-	).Scan(&it.ItemPK, &it.ItemSK, &it.ItemJSON, &sealed, &sealedDEK)
+	).Scan(&it.ItemPK, &it.ItemSK, &it.GSIPK, &it.GSISK, &it.ItemJSON, &sealed, &sealedDEK)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DynamoStoredItem{}, ErrNoSuchItem
 	}
@@ -321,6 +476,22 @@ func (s *Store) GetItemBytes(accountID, table, itemPK, itemSK string) (DynamoSto
 	it.Sealed = sealed == 1
 	it.SealedDEK = sealedDEK
 	return it, nil
+}
+
+// GetItemGSIKeys returns stored GSI key columns for an item.
+func (s *Store) GetItemGSIKeys(accountID, table, itemPK, itemSK string) (gsiPK, gsiSK string, err error) {
+	err = s.db.QueryRow(
+		`SELECT gsi_pk, gsi_sk FROM dynamodb_items
+		 WHERE account_id = ? AND table_name = ? AND item_pk = ? AND item_sk = ?`,
+		accountID, table, itemPK, itemSK,
+	).Scan(&gsiPK, &gsiSK)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrNoSuchItem
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("get item gsi keys: %w", err)
+	}
+	return gsiPK, gsiSK, nil
 }
 
 // DeleteItem removes an item by canonical key. Missing items are a no-op.
@@ -340,7 +511,7 @@ func (s *Store) DeleteItem(accountID, table, itemPK, itemSK string) error {
 // limit is greater than zero the page is capped and HasMore is set. startSK is an
 // exclusive continuation key (empty for the first page).
 func (s *Store) QueryItems(accountID, table, hashPK string, limit int, startSK string) (ItemPage, error) {
-	query := `SELECT item_pk, item_sk, item_json, sealed, sealed_dek
+	query := `SELECT item_pk, item_sk, gsi_pk, gsi_sk, item_json, sealed, sealed_dek
 	          FROM dynamodb_items
 	          WHERE account_id = ? AND table_name = ? AND item_pk = ?`
 	args := []any{accountID, table, hashPK}
@@ -363,10 +534,35 @@ func (s *Store) QueryItems(accountID, table, hashPK string, limit int, startSK s
 	return scanItemPage(rows, limit)
 }
 
+// QueryGSIItems returns items whose gsi_pk equals hashPK, ordered by gsi_sk.
+func (s *Store) QueryGSIItems(accountID, table, gsiPK string, limit int, startGsiSK string) (ItemPage, error) {
+	query := `SELECT item_pk, item_sk, gsi_pk, gsi_sk, item_json, sealed, sealed_dek
+	          FROM dynamodb_items
+	          WHERE account_id = ? AND table_name = ? AND gsi_pk = ?`
+	args := []any{accountID, table, gsiPK}
+	if startGsiSK != "" {
+		query += ` AND gsi_sk > ?`
+		args = append(args, startGsiSK)
+	}
+	query += ` ORDER BY gsi_sk`
+	fetch := limit
+	if limit > 0 {
+		fetch = limit + 1
+		query += ` LIMIT ?`
+		args = append(args, fetch)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return ItemPage{}, fmt.Errorf("query gsi items: %w", err)
+	}
+	defer rows.Close()
+	return scanItemPage(rows, limit)
+}
+
 // ScanItems returns items across a table ordered by (item_pk, item_sk). startPK
 // and startSK form an exclusive continuation key (both empty for the first page).
 func (s *Store) ScanItems(accountID, table string, limit int, startPK, startSK string) (ItemPage, error) {
-	query := `SELECT item_pk, item_sk, item_json, sealed, sealed_dek
+	query := `SELECT item_pk, item_sk, gsi_pk, gsi_sk, item_json, sealed, sealed_dek
 	          FROM dynamodb_items
 	          WHERE account_id = ? AND table_name = ?`
 	args := []any{accountID, table}
@@ -396,7 +592,7 @@ func scanItemPage(rows *sql.Rows, limit int) (ItemPage, error) {
 			sealed    int
 			sealedDEK []byte
 		)
-		if err := rows.Scan(&it.ItemPK, &it.ItemSK, &it.ItemJSON, &sealed, &sealedDEK); err != nil {
+		if err := rows.Scan(&it.ItemPK, &it.ItemSK, &it.GSIPK, &it.GSISK, &it.ItemJSON, &sealed, &sealedDEK); err != nil {
 			return ItemPage{}, fmt.Errorf("scan item page: %w", err)
 		}
 		it.Sealed = sealed == 1

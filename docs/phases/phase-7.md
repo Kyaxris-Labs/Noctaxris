@@ -15,7 +15,7 @@ Phase 7 delivers a lab-complete Lambda core: zip packaging for `python3.12`, Cre
 | No host `docker.sock` mount on the API container | Done |
 | Execution-role temp credentials injected on Invoke | Done |
 | Function network `noctaxris-fn` with `Internal: true` (egress deny) | Done |
-| Deferred Lambda depth | [../deferred.md](../deferred.md) |
+| Deferred Lambda depth | [../services/lambda.md](../services/lambda.md) |
 
 ## Authz note
 
@@ -27,8 +27,8 @@ CreateFunction and UpdateFunctionConfiguration that set a role require the calle
 
 ## Smoke (Compose)
 
-See [../verification.md](../verification.md) for create-role with Lambda trust, zip CreateFunction, and Invoke.
+See [../services/lambda.md](../services/lambda.md) for create-role with Lambda trust, zip CreateFunction, and Invoke.
 
 ## Explicitly not in Phase 7
 
-See [../deferred.md](../deferred.md). No layers, event source mappings, async invoke, Function URLs, container-image packaging, or runtimes other than `python3.12`.
+See [../services/lambda.md](../services/lambda.md). No layers, event source mappings, async invoke, Function URLs, container-image packaging, or runtimes other than `python3.12`.

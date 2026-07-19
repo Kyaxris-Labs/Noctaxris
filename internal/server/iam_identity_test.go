@@ -201,6 +201,54 @@ func TestIAMGroupsBoundariesInstanceProfilesIdP(t *testing.T) {
 	}
 }
 
+func TestAddRoleToInstanceProfileErrorMapping(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(body))
+		signHeader(t, req, []byte(body), testAccessKey, testSecret, testRegion, "iam", now)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	trust := url.QueryEscape(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	rec := post("Action=CreateRole&Version=2010-05-08&RoleName=mapRole&AssumeRolePolicyDocument=" + trust)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("CreateRole status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = post("Action=CreateRole&Version=2010-05-08&RoleName=mapRole2&AssumeRolePolicyDocument=" + trust)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("CreateRole2 status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = post("Action=CreateInstanceProfile&Version=2010-05-08&InstanceProfileName=mapProfile")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("CreateInstanceProfile status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=AddRoleToInstanceProfile&Version=2010-05-08&InstanceProfileName=missingProfile&RoleName=mapRole")
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "NoSuchEntity") {
+		t.Fatalf("missing profile want 404 NoSuchEntity got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=AddRoleToInstanceProfile&Version=2010-05-08&InstanceProfileName=mapProfile&RoleName=missingRole")
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "NoSuchEntity") {
+		t.Fatalf("missing role want 404 NoSuchEntity got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=AddRoleToInstanceProfile&Version=2010-05-08&InstanceProfileName=mapProfile&RoleName=mapRole")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first AddRoleToInstanceProfile status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = post("Action=AddRoleToInstanceProfile&Version=2010-05-08&InstanceProfileName=mapProfile&RoleName=mapRole2")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "LimitExceeded") {
+		t.Fatalf("second role want 400 LimitExceeded got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestIAMGroupPolicyAuthorizesUser(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

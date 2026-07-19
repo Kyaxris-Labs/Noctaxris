@@ -15,7 +15,7 @@ Phase 3 delivers the full STS 11-action surface with fail-closed SAML/OIDC feder
 | AssumeRoot (member account only when org relationship exists) | Done |
 | DecodeAuthorizationMessage / GetAccessKeyInfo | Done |
 | GetDelegatedAccessToken / GetWebIdentityToken | Fail-closed stubs |
-| Deferred backlog | [../deferred.md](../deferred.md) |
+| Deferred IAM / STS depth | [../services/iam.md](../services/iam.md), [../services/sts.md](../services/sts.md) |
 
 ## Lab IAM (in scope)
 
@@ -39,8 +39,8 @@ Federation never accepts arbitrary assertions. Without configured IdP metadata o
 
 ## Smoke (Compose)
 
-See [../verification.md](../verification.md) for IAM user/key, CreateRole/AssumeRole, GetSessionToken, and fail-closed web identity.
+See [../services/iam.md](../services/iam.md) and [../services/sts.md](../services/sts.md) for IAM user/key, CreateRole/AssumeRole, GetSessionToken, and fail-closed web identity.
 
 ## Explicitly not in Phase 3
 
-See [../deferred.md](../deferred.md). No KMS, S3, DynamoDB, SQS, or Lambda. No full IAM parity, SCPs/RCPs, or MFA device registry.
+Current deferred depth: [../services/iam.md](../services/iam.md), [../services/sts.md](../services/sts.md). At Phase 3 ship time there was no KMS, S3, DynamoDB, SQS, or Lambda, and no full IAM parity, SCPs/RCPs, or MFA device registry.

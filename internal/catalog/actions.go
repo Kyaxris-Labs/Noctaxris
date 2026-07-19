@@ -194,20 +194,36 @@ const (
 	ActionKMSListAliases                     = "kms:ListAliases"
 	ActionKMSDeleteAlias                     = "kms:DeleteAlias"
 	ActionKMSUpdateAlias                     = "kms:UpdateAlias"
+	ActionKMSScheduleKeyDeletion             = "kms:ScheduleKeyDeletion"
+	ActionKMSCancelKeyDeletion               = "kms:CancelKeyDeletion"
+	ActionKMSEnableKeyRotation               = "kms:EnableKeyRotation"
+	ActionKMSDisableKeyRotation              = "kms:DisableKeyRotation"
+	ActionKMSGetKeyRotationStatus            = "kms:GetKeyRotationStatus"
+	ActionKMSReEncryptFrom                   = "kms:ReEncryptFrom"
+	ActionKMSReEncryptTo                     = "kms:ReEncryptTo"
 )
 
 // S3 lab actions (Phase 5).
 const (
-	ActionS3CreateBucket       = "s3:CreateBucket"
-	ActionS3DeleteBucket       = "s3:DeleteBucket"
-	ActionS3ListAllMyBuckets   = "s3:ListAllMyBuckets"
-	ActionS3ListBucket         = "s3:ListBucket"
-	ActionS3GetBucketPolicy    = "s3:GetBucketPolicy"
-	ActionS3PutBucketPolicy    = "s3:PutBucketPolicy"
-	ActionS3DeleteBucketPolicy = "s3:DeleteBucketPolicy"
-	ActionS3GetObject          = "s3:GetObject"
-	ActionS3PutObject          = "s3:PutObject"
-	ActionS3DeleteObject       = "s3:DeleteObject"
+	ActionS3CreateBucket            = "s3:CreateBucket"
+	ActionS3DeleteBucket            = "s3:DeleteBucket"
+	ActionS3ListAllMyBuckets        = "s3:ListAllMyBuckets"
+	ActionS3ListBucket              = "s3:ListBucket"
+	ActionS3GetBucketPolicy         = "s3:GetBucketPolicy"
+	ActionS3PutBucketPolicy         = "s3:PutBucketPolicy"
+	ActionS3DeleteBucketPolicy      = "s3:DeleteBucketPolicy"
+	ActionS3GetObject               = "s3:GetObject"
+	ActionS3PutObject               = "s3:PutObject"
+	ActionS3DeleteObject            = "s3:DeleteObject"
+	ActionS3CreateMultipartUpload   = "s3:CreateMultipartUpload"
+	ActionS3UploadPart              = "s3:UploadPart"
+	ActionS3CompleteMultipartUpload = "s3:CompleteMultipartUpload"
+	ActionS3AbortMultipartUpload    = "s3:AbortMultipartUpload"
+	ActionS3ListParts               = "s3:ListParts"
+	ActionS3ListMultipartUploads    = "s3:ListMultipartUploads"
+	ActionS3PutEncryptionConfiguration    = "s3:PutEncryptionConfiguration"
+	ActionS3GetEncryptionConfiguration    = "s3:GetEncryptionConfiguration"
+	ActionS3DeleteEncryptionConfiguration = "s3:DeleteEncryptionConfiguration"
 )
 
 // DynamoDB lab actions (Phase 6).
@@ -228,23 +244,25 @@ const (
 	ActionDynamoDBPutResourcePolicy    = "dynamodb:PutResourcePolicy"
 	ActionDynamoDBGetResourcePolicy    = "dynamodb:GetResourcePolicy"
 	ActionDynamoDBDeleteResourcePolicy = "dynamodb:DeleteResourcePolicy"
+	ActionDynamoDBUpdateTimeToLive     = "dynamodb:UpdateTimeToLive"
+	ActionDynamoDBDescribeTimeToLive   = "dynamodb:DescribeTimeToLive"
 )
 
 // SQS lab actions (Phase 6).
 const (
-	ActionSQSCreateQueue              = "sqs:CreateQueue"
-	ActionSQSGetQueueUrl              = "sqs:GetQueueUrl"
-	ActionSQSGetQueueAttributes       = "sqs:GetQueueAttributes"
-	ActionSQSSetQueueAttributes       = "sqs:SetQueueAttributes"
-	ActionSQSDeleteQueue              = "sqs:DeleteQueue"
-	ActionSQSListQueues               = "sqs:ListQueues"
-	ActionSQSPurgeQueue               = "sqs:PurgeQueue"
-	ActionSQSSendMessage              = "sqs:SendMessage"
-	ActionSQSReceiveMessage           = "sqs:ReceiveMessage"
-	ActionSQSDeleteMessage            = "sqs:DeleteMessage"
-	ActionSQSSendMessageBatch         = "sqs:SendMessageBatch"
-	ActionSQSDeleteMessageBatch       = "sqs:DeleteMessageBatch"
-	ActionSQSChangeMessageVisibility  = "sqs:ChangeMessageVisibility"
+	ActionSQSCreateQueue             = "sqs:CreateQueue"
+	ActionSQSGetQueueUrl             = "sqs:GetQueueUrl"
+	ActionSQSGetQueueAttributes      = "sqs:GetQueueAttributes"
+	ActionSQSSetQueueAttributes      = "sqs:SetQueueAttributes"
+	ActionSQSDeleteQueue             = "sqs:DeleteQueue"
+	ActionSQSListQueues              = "sqs:ListQueues"
+	ActionSQSPurgeQueue              = "sqs:PurgeQueue"
+	ActionSQSSendMessage             = "sqs:SendMessage"
+	ActionSQSReceiveMessage          = "sqs:ReceiveMessage"
+	ActionSQSDeleteMessage           = "sqs:DeleteMessage"
+	ActionSQSSendMessageBatch        = "sqs:SendMessageBatch"
+	ActionSQSDeleteMessageBatch      = "sqs:DeleteMessageBatch"
+	ActionSQSChangeMessageVisibility = "sqs:ChangeMessageVisibility"
 )
 
 // Lambda lab actions (Phase 7).
@@ -369,6 +387,13 @@ func KnownAction(action string) bool {
 		ActionKMSListAliases,
 		ActionKMSDeleteAlias,
 		ActionKMSUpdateAlias,
+		ActionKMSScheduleKeyDeletion,
+		ActionKMSCancelKeyDeletion,
+		ActionKMSEnableKeyRotation,
+		ActionKMSDisableKeyRotation,
+		ActionKMSGetKeyRotationStatus,
+		ActionKMSReEncryptFrom,
+		ActionKMSReEncryptTo,
 		ActionS3CreateBucket,
 		ActionS3DeleteBucket,
 		ActionS3ListAllMyBuckets,
@@ -379,6 +404,15 @@ func KnownAction(action string) bool {
 		ActionS3GetObject,
 		ActionS3PutObject,
 		ActionS3DeleteObject,
+		ActionS3CreateMultipartUpload,
+		ActionS3UploadPart,
+		ActionS3CompleteMultipartUpload,
+		ActionS3AbortMultipartUpload,
+		ActionS3ListParts,
+		ActionS3ListMultipartUploads,
+		ActionS3PutEncryptionConfiguration,
+		ActionS3GetEncryptionConfiguration,
+		ActionS3DeleteEncryptionConfiguration,
 		ActionDynamoDBCreateTable,
 		ActionDynamoDBDescribeTable,
 		ActionDynamoDBDeleteTable,
@@ -395,6 +429,8 @@ func KnownAction(action string) bool {
 		ActionDynamoDBPutResourcePolicy,
 		ActionDynamoDBGetResourcePolicy,
 		ActionDynamoDBDeleteResourcePolicy,
+		ActionDynamoDBUpdateTimeToLive,
+		ActionDynamoDBDescribeTimeToLive,
 		ActionSQSCreateQueue,
 		ActionSQSGetQueueUrl,
 		ActionSQSGetQueueAttributes,

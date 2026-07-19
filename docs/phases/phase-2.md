@@ -16,7 +16,7 @@ Phase 2 adds Organizations MVP, cross-account dual evaluation, and a minimal `st
 
 ## Smoke (Compose)
 
-See [../verification.md](../verification.md) for CreateAccount and AssumeRole into `OrganizationAccountAccessRole`.
+See [../services/organizations.md](../services/organizations.md) for CreateAccount and [../services/sts.md](../services/sts.md) for AssumeRole into `OrganizationAccountAccessRole`.
 
 ## Explicitly not in Phase 2
 
