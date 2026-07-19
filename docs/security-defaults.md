@@ -13,24 +13,21 @@ These defaults are intentional product posture for a local emulator that people 
 ## Credentials and crypto
 
 - Injected env root credentials become the initial account root.
-- Access-key secrets and KMS CMK material are sealed with ChaCha20-Poly1305 before landing in SQLite.
+- Access-key secrets, KMS CMK material, and SSE-S3 DEKs are sealed with ChaCha20-Poly1305 before landing in SQLite.
+- Object ciphertext for SSE lives under the data volume filesystem.
 - Tests assert plaintext secrets and CMK bytes do not appear in `state.db`.
 - Audit events must not carry secret or plaintext key material.
 - Inactive access keys are rejected at SigV4 verification.
-- Encrypt/Decrypt/GenerateDataKey use AES-256-GCM under the unsealed CMK.
 
-## Auth (Phase 4)
+## Auth (Phase 5)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
 - Temporary credentials require a matching `X-Amz-Security-Token`.
-- Unknown keys, bad signatures, and skewed clocks return `403` with an AWS-shaped XML error and an audit line.
+- Presigned S3 GET/PUT use query SigV4 (`X-Amz-Expires` max 604800).
 - `GetCallerIdentity` succeeds after SigV4 without an IAM permission check.
-- Lab IAM and other STS actions require IAM Allow (management root is allowed).
-- `AssumeRole` and federation role assumption require cross-account dual evaluation (caller identity + role trust).
-- `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` authenticate via assertion or JWT, not SigV4. Crypto must succeed against configured IdP certs or OIDC JWKS. Missing IdP or failed crypto is deny, never accept-any.
-- Session policies on federated / assume sessions intersect with identity policies.
-- Lab KMS APIs use `EvaluateKMS`: key policy must explicitly allow (or a matching grant). Identity Allow alone is never enough.
+- Lab S3 APIs use `EvaluateS3` (identity or bucket policy union).
+- Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant).
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS

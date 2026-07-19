@@ -220,8 +220,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 4") {
-		t.Fatalf("expected Phase 4 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Phase 5") {
+		t.Fatalf("expected Phase 5 message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
@@ -520,6 +520,283 @@ func TestKMSAliasEncrypt(t *testing.T) {
 	if encRec.Code != http.StatusOK {
 		t.Fatalf("Encrypt via alias status=%d body=%q", encRec.Code, encRec.Body.String())
 	}
+}
+
+func TestS3PutGetObject(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/lab-bucket", nil, "s3", now, nil)
+	payload := []byte("hello-phase5")
+	putRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/lab-bucket/docs/hi.txt", payload, "s3", now, map[string]string{
+		"Content-Type": "text/plain",
+	})
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PutObject status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+	getRec := mustS3(t, handler, http.MethodGet, "http://127.0.0.1:4566/lab-bucket/docs/hi.txt", nil, "s3", now, nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetObject status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+	if getRec.Body.String() != string(payload) {
+		t.Fatalf("body=%q", getRec.Body.String())
+	}
+}
+
+func TestS3BucketPolicyDenyGet(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket/secret.txt", []byte("nope"), "s3", now, nil)
+
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`)
+	polRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket?policy", policy, "s3", now, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if polRec.Code != http.StatusOK {
+		t.Fatalf("PutBucketPolicy status=%d body=%q", polRec.Code, polRec.Body.String())
+	}
+
+	getRec := mustS3(t, handler, http.MethodGet, "http://127.0.0.1:4566/deny-bucket/secret.txt", nil, "s3", now, nil)
+	if getRec.Code != http.StatusForbidden {
+		t.Fatalf("GetObject status=%d want 403 body=%q", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), "AccessDenied") {
+		t.Fatalf("expected AccessDenied in %q", getRec.Body.String())
+	}
+}
+
+func TestS3SSEKMSPutGet(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustKMSJSON(t, handler, "CreateKey", map[string]any{}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateKey status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := createOut["KeyMetadata"].(map[string]any)
+	keyID, _ := meta["KeyId"].(string)
+	if keyID == "" {
+		t.Fatal("missing KeyId")
+	}
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/kms-bucket", nil, "s3", now, nil)
+	payload := []byte("sse-kms-secret")
+	putRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/kms-bucket/enc.bin", payload, "s3", now, map[string]string{
+		"x-amz-server-side-encryption":                "aws:kms",
+		"x-amz-server-side-encryption-aws-kms-key-id": keyID,
+	})
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PutObject SSE-KMS status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+	if putRec.Header().Get("x-amz-server-side-encryption") != "aws:kms" {
+		t.Fatalf("missing SSE header: %v", putRec.Header())
+	}
+
+	getRec := mustS3(t, handler, http.MethodGet, "http://127.0.0.1:4566/kms-bucket/enc.bin", nil, "s3", now, nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetObject status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+	if getRec.Body.String() != string(payload) {
+		t.Fatalf("body=%q", getRec.Body.String())
+	}
+}
+
+func TestS3PresignedGet(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/presign-bucket", nil, "s3", now, nil)
+	payload := []byte("presigned-bytes")
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/presign-bucket/p.txt", payload, "s3", now, nil)
+
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/presign-bucket/p.txt", nil)
+	req.Header.Del("Content-Type")
+	signQuery(t, req, nil, testAccessKey, testSecret, testRegion, "s3", now, 900)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("presigned GET status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != string(payload) {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+}
+
+func mustS3(t *testing.T, handler http.Handler, method, rawURL string, body []byte, service string, now time.Time, extraHeaders map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := mustNewRequest(t, method, rawURL, body)
+	if body == nil {
+		req.Header.Del("Content-Type")
+	} else if extraHeaders == nil || extraHeaders["Content-Type"] == "" {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	signS3Header(t, req, body, testAccessKey, testSecret, testRegion, service, now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func signS3Header(t *testing.T, req *http.Request, body []byte, akid, secret, region, service string, when time.Time) {
+	t.Helper()
+	amzDate := when.UTC().Format("20060102T150405Z")
+	dateStamp := when.UTC().Format("20060102")
+	req.Header.Set("X-Amz-Date", amzDate)
+
+	payloadHash := req.Header.Get("X-Amz-Content-Sha256")
+	if payloadHash == "" {
+		sum := sha256.Sum256(body)
+		payloadHash = hex.EncodeToString(sum[:])
+		req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	}
+
+	headerSet := map[string]struct{}{
+		"host":                 {},
+		"x-amz-content-sha256": {},
+		"x-amz-date":           {},
+	}
+	if ct := req.Header.Get("Content-Type"); ct != "" {
+		headerSet["content-type"] = struct{}{}
+	}
+	for name := range req.Header {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "x-amz-server-side-encryption") {
+			headerSet[lower] = struct{}{}
+		}
+	}
+	signedHeaders := make([]string, 0, len(headerSet))
+	for h := range headerSet {
+		signedHeaders = append(signedHeaders, h)
+	}
+	sort.Strings(signedHeaders)
+
+	canonicalHeaders := ""
+	for _, h := range signedHeaders {
+		canonicalHeaders += h + ":" + headerVal(req, h) + "\n"
+	}
+	signedHeaderList := strings.Join(signedHeaders, ";")
+
+	canonicalRequest := strings.Join([]string{
+		req.Method,
+		canonicalPath(req),
+		canonicalQuery(req.URL.Query(), false),
+		canonicalHeaders,
+		signedHeaderList,
+		payloadHash,
+	}, "\n")
+
+	scope := dateStamp + "/" + region + "/" + service + "/aws4_request"
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hexSHA256(canonicalRequest),
+	}, "\n")
+
+	sig := hex.EncodeToString(hmacSHA256(deriveKey(secret, dateStamp, region, service), stringToSign))
+	req.Header.Set("Authorization", fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		akid, scope, signedHeaderList, sig,
+	))
+}
+
+func signQuery(t *testing.T, req *http.Request, body []byte, akid, secret, region, service string, when time.Time, expires int) {
+	t.Helper()
+	amzDate := when.UTC().Format("20060102T150405Z")
+	dateStamp := when.UTC().Format("20060102")
+	scope := dateStamp + "/" + region + "/" + service + "/aws4_request"
+	cred := akid + "/" + scope
+
+	q := req.URL.Query()
+	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	q.Set("X-Amz-Credential", cred)
+	q.Set("X-Amz-Date", amzDate)
+	q.Set("X-Amz-Expires", fmt.Sprintf("%d", expires))
+	q.Set("X-Amz-SignedHeaders", "host")
+	req.URL.RawQuery = q.Encode()
+
+	payloadHash := "UNSIGNED-PAYLOAD"
+	if len(body) > 0 {
+		sum := sha256.Sum256(body)
+		payloadHash = hex.EncodeToString(sum[:])
+	}
+
+	canonicalHeaders := "host:" + headerVal(req, "host") + "\n"
+	canonicalRequest := strings.Join([]string{
+		req.Method,
+		canonicalPath(req),
+		canonicalQuery(req.URL.Query(), true),
+		canonicalHeaders,
+		"host",
+		payloadHash,
+	}, "\n")
+
+	sts := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hexSHA256(canonicalRequest),
+	}, "\n")
+
+	sig := hex.EncodeToString(hmacSHA256(deriveKey(secret, dateStamp, region, service), sts))
+	q.Set("X-Amz-Signature", sig)
+	req.URL.RawQuery = q.Encode()
+}
+
+func canonicalQuery(q url.Values, excludeSignature bool) string {
+	type kv struct{ k, v string }
+	var pairs []kv
+	for key, values := range q {
+		if excludeSignature && strings.EqualFold(key, "X-Amz-Signature") {
+			continue
+		}
+		ek := uriEncode(key)
+		if len(values) == 0 {
+			pairs = append(pairs, kv{ek, ""})
+			continue
+		}
+		for _, v := range values {
+			pairs = append(pairs, kv{ek, uriEncode(v)})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].k == pairs[j].k {
+			return pairs[i].v < pairs[j].v
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		parts[i] = p.k + "=" + p.v
+	}
+	return strings.Join(parts, "&")
+}
+
+func uriEncode(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.' || c == '~' {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 func xmlTag(t *testing.T, xml, tag string) string {

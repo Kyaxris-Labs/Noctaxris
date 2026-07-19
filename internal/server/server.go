@@ -23,7 +23,8 @@ const (
 	eventVersion    = "1.11"
 	healthPath      = "/_noctaxris/health"
 	requestIDHeader = "x-amz-request-id"
-	maxBodyBytes    = 1 << 20 // 1 MiB
+	maxBodyBytes    = 1 << 20  // 1 MiB
+	maxS3BodyBytes  = 16 << 20 // 16 MiB lab PutObject
 	sigv4Skew       = 15 * time.Minute
 )
 
@@ -83,7 +84,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	eventID := newRequestID()
 	readOnly := r.Method == http.MethodGet || r.Method == http.MethodHead
 
-	body, err := readBody(r, maxBodyBytes)
+	bodyLimit := bodyLimitForRequest(r)
+	body, err := readBody(r, bodyLimit)
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusBadRequest, "InvalidRequest",
 			"Unable to read request body.", readOnly, r, eventID, "", "", false)
@@ -111,6 +113,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
 			return
 		}
+	}
+
+	if action == "" && (verified.Service == "s3" || isS3PathStyleRequest(r, body, action)) {
+		s.handleS3(w, r, body, requestID, eventID, verified, readOnly)
+		return
 	}
 
 	switch action {
@@ -194,9 +201,57 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 4.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris Phase 5.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
+}
+
+func bodyLimitForRequest(r *http.Request) int64 {
+	if isLikelyNonS3Protocol(r) {
+		return maxBodyBytes
+	}
+	return maxS3BodyBytes
+}
+
+func isLikelyNonS3Protocol(r *http.Request) bool {
+	if r.Header.Get("X-Amz-Target") != "" {
+		return true
+	}
+	if r.URL.Query().Get("Action") != "" {
+		return true
+	}
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/x-amz-json") {
+		return true
+	}
+	if strings.Contains(ct, "application/x-www-form-urlencoded") {
+		return true
+	}
+	return false
+}
+
+// isS3PathStyleRequest detects path-style S3 when Action/X-Amz-Target are absent.
+func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
+	if action != "" {
+		return false
+	}
+	if r.Header.Get("X-Amz-Target") != "" {
+		return false
+	}
+	if r.URL.Query().Get("Action") != "" {
+		return false
+	}
+	if len(body) > 0 {
+		vals, err := url.ParseQuery(string(body))
+		if err == nil && vals.Get("Action") != "" {
+			return false
+		}
+	}
+	ct := r.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/x-amz-json") {
+		return false
+	}
+	return true
 }
 
 func (s *Server) writeAWSError(

@@ -32,8 +32,6 @@ aws sts get-caller-identity --endpoint-url "$EP"
 
 aws iam create-user --user-name labuser --endpoint-url "$EP"
 aws iam create-access-key --user-name labuser --endpoint-url "$EP"
-# use the returned user keys for:
-aws sts get-caller-identity --endpoint-url "$EP"
 
 TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:root"},"Action":"sts:AssumeRole"}]}'
 aws iam create-role --role-name LabRole --assume-role-policy-document "$TRUST" --endpoint-url "$EP"
@@ -59,12 +57,35 @@ KEY_JSON=$(aws kms create-key --endpoint-url "$EP" --output json)
 KEY_ID=$(echo "$KEY_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["KeyMetadata"]["KeyId"])')
 
 aws kms encrypt --key-id "$KEY_ID" --plaintext "$(echo -n hello | base64)" --endpoint-url "$EP"
-# capture CiphertextBlob, then:
-aws kms decrypt --ciphertext-blob fileb://cipher.bin --endpoint-url "$EP"
-
 aws kms generate-data-key --key-id "$KEY_ID" --key-spec AES_256 --endpoint-url "$EP"
 aws kms create-alias --alias-name alias/lab --target-key-id "$KEY_ID" --endpoint-url "$EP"
-aws kms encrypt --key-id alias/lab --plaintext "$(echo -n via-alias | base64)" --endpoint-url "$EP"
+```
+
+## S3 smoke (Phase 5)
+
+Force path-style addressing for the local endpoint:
+
+```bash
+aws configure set default.s3.addressing_style path
+
+BUCKET="noctaxris-lab-$RANDOM"
+aws s3 mb "s3://$BUCKET" --endpoint-url "$EP"
+echo hello-s3 > /tmp/noctaxris-obj.txt
+aws s3 cp /tmp/noctaxris-obj.txt "s3://$BUCKET/hello.txt" --endpoint-url "$EP"
+aws s3 ls "s3://$BUCKET" --endpoint-url "$EP"
+aws s3 cp "s3://$BUCKET/hello.txt" /tmp/noctaxris-obj-out.txt --endpoint-url "$EP"
+
+# SSE-S3
+aws s3 cp /tmp/noctaxris-obj.txt "s3://$BUCKET/sse-s3.txt" \
+  --sse AES256 --endpoint-url "$EP"
+
+# SSE-KMS (KEY_ID from Phase 4 create-key)
+aws s3 cp /tmp/noctaxris-obj.txt "s3://$BUCKET/sse-kms.txt" \
+  --sse aws:kms --sse-kms-key-id "$KEY_ID" --endpoint-url "$EP"
+
+# Presign then curl (query SigV4, no Authorization header)
+URL=$(aws s3 "presign" "s3://$BUCKET/hello.txt" --endpoint-url "$EP")
+curl -fsS "$URL"
 ```
 
 On Windows, run the same commands inside WSL against `http://127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host (WSL can reach it via `localhost` when mirrored networking is enabled, or use the Windows host IP).

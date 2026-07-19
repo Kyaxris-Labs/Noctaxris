@@ -1,4 +1,4 @@
-# Architecture (Phase 4)
+# Architecture (Phase 5)
 
 One Go binary runs in the container. There is no sidecar API gateway and no Docker socket mount.
 
@@ -9,19 +9,20 @@ Noctaxris/
   cmd/noctaxris/
   docker/
   internal/config/
-  internal/store/                 # users, IAM keys, KMS CMKs/aliases/grants, orgs, IdP
+  internal/store/                 # users, IAM, KMS, S3 buckets/objects, orgs, IdP
   internal/catalog/
   internal/kernel/audit/
-  internal/kernel/authn/          # SigV4 + session token
-  internal/kernel/authz/          # Evaluate, EvaluateCrossAccount, EvaluateWithSession, EvaluateKMS
+  internal/kernel/authn/          # SigV4 header + query (presign)
+  internal/kernel/authz/          # Evaluate, EvaluateCrossAccount, EvaluateWithSession, EvaluateKMS, EvaluateS3
   internal/kernel/identity/
-  internal/kernel/federation/     # SAML / OIDC verification (fail-closed)
-  internal/kernel/sts/            # STS XML builders
+  internal/kernel/federation/
+  internal/kernel/sts/
   internal/services/iam/
-  internal/services/kms/          # KMS JSON + AES-GCM helpers
+  internal/services/kms/
+  internal/services/s3/           # object AES-GCM helpers
   internal/services/organizations/
   internal/server/
-  docs/                             # public reference (see docs/index.md)
+  docs/
 ```
 
 ## Request path
@@ -30,34 +31,27 @@ Noctaxris/
 HTTP request
   ├─ GET /_noctaxris/health → 200 ok
   └─ else
-       ├─ resolve Action
-       ├─ AssumeRoleWithSAML / AssumeRoleWithWebIdentity → IdP crypto (no SigV4) then dual-eval
-       ├─ else authn.Verify (SigV4, session token if temp key, inactive keys rejected)
+       ├─ AssumeRoleWithSAML / AssumeRoleWithWebIdentity → IdP crypto (no SigV4)
+       ├─ else authn.Verify (SigV4 header or query)
+       ├─ if S3 path-style REST (service s3 / empty Action) → EvaluateS3 then handler
        ├─ GetCallerIdentity → XML (no IAM Evaluate)
-       ├─ other STS → Evaluate / dual-eval then handler
-       ├─ IAM lab APIs → Evaluate iam:* then handler
-       ├─ KMS lab APIs → EvaluateKMS then handler (JSON / TrentService)
-       ├─ Organizations CreateAccount / DescribeCreateAccountStatus → Evaluate then handler
+       ├─ other STS / IAM / KMS / Organizations → existing Evaluate paths
        └─ unknown → 501 NotImplemented
 ```
 
-Input validation for account ids, IAM names, emails, policy JSON, and IdP paths uses `internal/validate` (`go-playground/validator`). Request and event ids use `google/uuid`. OIDC JWT checks use `go-jose`. CMKs use AES-256-GCM under sealed key material.
-
-SigV4 is required for every non-health path except `AssumeRoleWithSAML` and `AssumeRoleWithWebIdentity`, which authenticate with the federation token.
+Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Bucket metadata and object metadata (etag, SSE) live in SQLite.
 
 ## Authz
 
-- Same-account: `Evaluate` (root Allow, explicit Deny, Allow, implicit Deny)
-- Attached managed + inline policy documents are merged for the principal
-- Federated / assume sessions with a session policy use `EvaluateWithSession` (intersection)
-- AssumeRole and federation role assumption: `EvaluateCrossAccount` (caller identity + trust)
-- Federation crypto must succeed against configured IdP before dual-eval mint
-- KMS: `EvaluateKMS` requires key-policy explicit Allow (or a matching grant) plus identity Allow. Identity alone is never enough for key-scoped ops.
+- Same-account identity: `Evaluate`
+- S3: `EvaluateS3` — Allow if identity **or** bucket policy Allows (Deny-overrides)
+- KMS: `EvaluateKMS` — key-policy explicit Allow (or grant) plus identity
+- Session policies: `EvaluateWithSession` intersection
+- Cross-account AssumeRole: `EvaluateCrossAccount`
 
-## Identity model
+## Identity and data
 
 - Env-injected keys are management account root
-- IAM users get long-lived `AKIA` keys (secret sealed at rest)
-- Temporary `ASIA` keys require `X-Amz-Security-Token`
-- KMS CMK material is sealed at rest under the data-root master key
-- Optional IdP bootstrap via env paths/URLs into SQLite (see [configuration.md](configuration.md))
+- IAM user secrets and KMS CMK material sealed at rest
+- S3 SSE-S3 DEKs sealed with the data-root master key
+- SSE-KMS uses Phase 4 GenerateDataKey / Decrypt under the caller

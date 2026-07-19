@@ -125,7 +125,7 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 		}
 	}
 
-	payloadHash := payloadHash(r, body)
+	payloadHash := payloadHash(r, body, mat)
 	canonicalReq := buildCanonicalRequest(r, mat, payloadHash)
 	stringToSign := buildStringToSign(mat.amzDate, credDate, mat.region, mat.service, canonicalReq)
 	signingKey := deriveSigningKey(cred.Secret, credDate, mat.region, mat.service)
@@ -294,13 +294,17 @@ func parseAmzDate(s string) (time.Time, error) {
 	return time.Parse("20060102T150405Z", s)
 }
 
-func payloadHash(r *http.Request, body []byte) string {
+func payloadHash(r *http.Request, body []byte, mat *authMaterial) string {
 	h := r.Header.Get("X-Amz-Content-Sha256")
 	if h == "" {
 		h = r.Header.Get("x-amz-content-sha256")
 	}
 	if h != "" {
 		return h
+	}
+	// AWS S3 presigned URLs sign with UNSIGNED-PAYLOAD when the header is omitted.
+	if mat != nil && mat.queryAuth && strings.EqualFold(mat.service, "s3") {
+		return "UNSIGNED-PAYLOAD"
 	}
 	if len(body) == 0 {
 		return emptyPayload

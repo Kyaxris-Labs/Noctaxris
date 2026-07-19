@@ -127,6 +127,20 @@ const (
 	ActionKMSUpdateAlias                     = "kms:UpdateAlias"
 )
 
+// S3 lab actions (Phase 5).
+const (
+	ActionS3CreateBucket       = "s3:CreateBucket"
+	ActionS3DeleteBucket       = "s3:DeleteBucket"
+	ActionS3ListAllMyBuckets   = "s3:ListAllMyBuckets"
+	ActionS3ListBucket         = "s3:ListBucket"
+	ActionS3GetBucketPolicy    = "s3:GetBucketPolicy"
+	ActionS3PutBucketPolicy    = "s3:PutBucketPolicy"
+	ActionS3DeleteBucketPolicy = "s3:DeleteBucketPolicy"
+	ActionS3GetObject          = "s3:GetObject"
+	ActionS3PutObject          = "s3:PutObject"
+	ActionS3DeleteObject       = "s3:DeleteObject"
+)
+
 // KnownAction reports whether action is recognized in the current catalog.
 func KnownAction(action string) bool {
 	switch action {
@@ -192,7 +206,17 @@ func KnownAction(action string) bool {
 		ActionKMSCreateAlias,
 		ActionKMSListAliases,
 		ActionKMSDeleteAlias,
-		ActionKMSUpdateAlias:
+		ActionKMSUpdateAlias,
+		ActionS3CreateBucket,
+		ActionS3DeleteBucket,
+		ActionS3ListAllMyBuckets,
+		ActionS3ListBucket,
+		ActionS3GetBucketPolicy,
+		ActionS3PutBucketPolicy,
+		ActionS3DeleteBucketPolicy,
+		ActionS3GetObject,
+		ActionS3PutObject,
+		ActionS3DeleteObject:
 		return true
 	default:
 		return false

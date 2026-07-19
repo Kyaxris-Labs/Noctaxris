@@ -9,3 +9,4 @@ Completed delivery slices. Smoke commands live in [../verification.md](../verifi
 | 2 | Organizations CreateAccount + cross-account `AssumeRole` | [phase-2.md](phase-2.md) |
 | 3 | Lab IAM + all 11 STS actions (fail-closed federation) | [phase-3.md](phase-3.md) |
 | 4 | Lab-complete KMS (keys, policies, crypto, grants, aliases) | [phase-4.md](phase-4.md) |
+| 5 | Lab-complete S3 (objects, bucket policy, SSE, path-style presign) | [phase-5.md](phase-5.md) |

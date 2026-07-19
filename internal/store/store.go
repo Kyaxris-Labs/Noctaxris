@@ -121,6 +121,27 @@ CREATE TABLE IF NOT EXISTS kms_grants (
   operations TEXT NOT NULL,
   name TEXT
 );
+CREATE TABLE IF NOT EXISTS s3_buckets (
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  creation_date TEXT NOT NULL,
+  bucket_policy TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (account_id, name)
+);
+CREATE TABLE IF NOT EXISTS s3_objects (
+  account_id TEXT NOT NULL,
+  bucket TEXT NOT NULL,
+  key TEXT NOT NULL,
+  etag TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  content_type TEXT,
+  sse_algorithm TEXT,
+  kms_key_id TEXT,
+  sealed_dek BLOB,
+  storage_path TEXT NOT NULL,
+  last_modified TEXT NOT NULL,
+  PRIMARY KEY (account_id, bucket, key)
+);
 `
 
 // Access key status values stored in access_keys.status.
@@ -146,8 +167,9 @@ type AccessKey struct {
 }
 
 type Store struct {
-	db     *sql.DB
-	master MasterKey
+	db       *sql.DB
+	master   MasterKey
+	dataRoot string
 }
 
 func Open(dataRoot string, master MasterKey) (*Store, error) {
@@ -163,12 +185,27 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, master: master}
+	s := &Store{db: db, master: master, dataRoot: dataRoot}
 	if err := s.migrateSchema(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// DataRoot returns the store data directory (object bytes live under s3/).
+func (s *Store) DataRoot() string {
+	return s.dataRoot
+}
+
+// SealWithMaster seals plaintext under the store master key.
+func (s *Store) SealWithMaster(plaintext []byte) ([]byte, error) {
+	return Seal(s.master, plaintext)
+}
+
+// UnsealWithMaster opens a blob produced by SealWithMaster.
+func (s *Store) UnsealWithMaster(ciphertext []byte) ([]byte, error) {
+	return Unseal(s.master, ciphertext)
 }
 
 func (s *Store) migrateSchema() error {

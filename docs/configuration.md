@@ -28,7 +28,8 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 | Path | Role |
 |------|------|
 | `master.key` | 32-byte AEAD key (mode `0600` when created) |
-| `state.db` | SQLite accounts, users, keys, policies, roles, KMS CMKs/aliases/grants, IdP config |
+| `state.db` | SQLite accounts, users, keys, policies, roles, KMS, S3 bucket/object metadata, IdP config |
+| `s3/` | Object bytes (path-style layout under account and bucket) |
 | `cloudtrail/events.jsonl` | Audit trail |
 
 ## Docker / Compose

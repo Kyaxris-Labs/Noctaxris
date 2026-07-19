@@ -1,6 +1,6 @@
 # Deferred work (later phases or versions)
 
-Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routing. Phase 4 ships lab-complete KMS. Phase notes: [phases/index.md](phases/index.md).
+Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routing. Phase 4 ships lab-complete KMS. Phase 5 ships lab-complete S3. Phase notes: [phases/index.md](phases/index.md).
 
 ## IAM (later)
 
@@ -10,7 +10,7 @@ Items intentionally not completed yet. Phase 3 shipped lab IAM + full STS routin
 - Service-linked roles
 - IAM OpenID Connect / SAML provider CRUD APIs (beyond env/file IdP config used by STS federation)
 - Full IAM pagination, tagging, and API parity beyond the lab subset
-- PassRole enforcement on service Create/Update APIs when those services exist (S3, Lambda, and related phases)
+- PassRole enforcement on service Create/Update APIs when those services exist (Lambda and related phases)
 
 ## Organizations (later)
 
@@ -30,10 +30,21 @@ Phase 4 covers lab-complete keys, key policies (explicit allow), Encrypt/Decrypt
 - Full KMS SAR / API parity beyond the lab set (ReEncrypt, Sign/Verify, GenerateMac/VerifyMac, GetPublicKey, asymmetric key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, ScheduleKeyDeletion/CancelKeyDeletion/PendingDeletion depth, automatic rotation APIs, tags, full pagination parity)
 - Generated KMS condition-key catalog from SAR / servicereference codegen
 - Cross-account key policy and grant flows beyond same-account lab paths
-- AWS-managed key types and service-linked defaults used when S3 / DynamoDB / SQS land
+- AWS-managed key types and service-linked defaults used when DynamoDB / SQS land
+
+## S3 (later)
+
+Phase 5 covers lab-complete buckets, objects, bucket policies, SSE-S3/SSE-KMS, and path-style presigned GET/PUT. Still deferred:
+
+- Full S3 SAR / API parity (multipart upload APIs, CopyObject, versioning, lifecycle, CORS, website, Object Lock, replication, access points, inventory, Select, Glacier, tagging APIs beyond basics, ACLs beyond default private, ListObjectVersions, etc.)
+- Virtual-hosted-style endpoints and Transfer Acceleration
+- Cross-account bucket policy depth beyond same-account lab paths
+- Generated S3 condition-key catalog from SAR / servicereference codegen
+- Presigned POST, multipart presign, and clock-skew edge cases beyond current authn
+- Bucket default encryption configuration APIs (`PutBucketEncryption`) as a later convenience (Phase 5 uses per-request SSE headers)
 
 ## Cross-cutting (later)
 
 - Generated global and service condition-key catalogs from AWS Service Authorization Reference / servicereference JSON
-- S3, DynamoDB, SQS, Lambda (later roadmap phases)
+- DynamoDB, SQS, Lambda (later roadmap phases)
 - PassRole enforcement until Lambda (Phase 7)

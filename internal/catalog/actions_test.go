@@ -75,6 +75,17 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionKMSListAliases,
 		catalog.ActionKMSDeleteAlias,
 		catalog.ActionKMSUpdateAlias,
+		// S3 lab
+		catalog.ActionS3CreateBucket,
+		catalog.ActionS3DeleteBucket,
+		catalog.ActionS3ListAllMyBuckets,
+		catalog.ActionS3ListBucket,
+		catalog.ActionS3GetBucketPolicy,
+		catalog.ActionS3PutBucketPolicy,
+		catalog.ActionS3DeleteBucketPolicy,
+		catalog.ActionS3GetObject,
+		catalog.ActionS3PutObject,
+		catalog.ActionS3DeleteObject,
 	}
 	for _, action := range known {
 		if !catalog.KnownAction(action) {
@@ -86,7 +97,7 @@ func TestKnownActionPhase4(t *testing.T) {
 func TestKnownActionUnknown(t *testing.T) {
 	cases := []string{
 		"",
-		"s3:ListBucket",
+		"s3:GetBucketAcl",
 		"GetCallerIdentity",
 		"sts:getcalleridentity",
 		"organizations:ListAccounts",
@@ -166,6 +177,16 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionKMSListAliases:                     "kms:ListAliases",
 		catalog.ActionKMSDeleteAlias:                     "kms:DeleteAlias",
 		catalog.ActionKMSUpdateAlias:                     "kms:UpdateAlias",
+		catalog.ActionS3CreateBucket:                     "s3:CreateBucket",
+		catalog.ActionS3DeleteBucket:                     "s3:DeleteBucket",
+		catalog.ActionS3ListAllMyBuckets:                 "s3:ListAllMyBuckets",
+		catalog.ActionS3ListBucket:                       "s3:ListBucket",
+		catalog.ActionS3GetBucketPolicy:                  "s3:GetBucketPolicy",
+		catalog.ActionS3PutBucketPolicy:                  "s3:PutBucketPolicy",
+		catalog.ActionS3DeleteBucketPolicy:               "s3:DeleteBucketPolicy",
+		catalog.ActionS3GetObject:                        "s3:GetObject",
+		catalog.ActionS3PutObject:                        "s3:PutObject",
+		catalog.ActionS3DeleteObject:                     "s3:DeleteObject",
 	}
 	for got, want := range cases {
 		if got != want {
