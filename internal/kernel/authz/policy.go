@@ -2,10 +2,13 @@ package authz
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 )
 
-// policyDocument is an IAM identity policy JSON document.
+// policyDocument is an IAM identity or resource (trust) policy JSON document.
 type policyDocument struct {
 	Version   string      `json:"Version"`
 	Statement []statement `json:"Statement"`
@@ -15,6 +18,7 @@ type statement struct {
 	Effect    string          `json:"Effect"`
 	Action    stringOrSlice   `json:"Action"`
 	Resource  stringOrSlice   `json:"Resource"`
+	Principal *principalSpec  `json:"Principal"`
 	Condition json.RawMessage `json:"Condition"`
 }
 
@@ -32,6 +36,39 @@ func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*s = many
+	return nil
+}
+
+// principalSpec is the IAM Principal element (trust / resource policies).
+// Supports Principal "*", {"AWS":"..."}, and {"AWS":["...",...]}.
+type principalSpec struct {
+	All bool
+	AWS stringOrSlice
+}
+
+func (p *principalSpec) UnmarshalJSON(data []byte) error {
+	var star string
+	if err := json.Unmarshal(data, &star); err == nil {
+		if star != "*" {
+			return fmt.Errorf("unsupported Principal string %q", star)
+		}
+		p.All = true
+		return nil
+	}
+	var obj struct {
+		AWS json.RawMessage `json:"AWS"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	if len(obj.AWS) == 0 || string(obj.AWS) == "null" {
+		return nil
+	}
+	var aws stringOrSlice
+	if err := json.Unmarshal(obj.AWS, &aws); err != nil {
+		return err
+	}
+	p.AWS = aws
 	return nil
 }
 
@@ -197,4 +234,64 @@ func statementMatches(st statement, ctx RequestContext) bool {
 		keys = map[string]string{}
 	}
 	return conditionApplies(st.Condition, keys)
+}
+
+// trustStatementMatches evaluates a role trust (resource-based) statement.
+// Resource may be omitted or "*"; Principal must match the caller.
+// There is no implicit allow: a missing Principal never matches.
+func trustStatementMatches(st statement, ctx RequestContext) bool {
+	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
+	if !effect {
+		return false
+	}
+	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
+		return false
+	}
+	if !actionsMatch(st.Action, ctx.Action) {
+		return false
+	}
+	if len(st.Resource) > 0 && !resourcesMatch(st.Resource, ctx.Resource) {
+		return false
+	}
+	keys := ctx.ConditionKeys
+	if keys == nil {
+		keys = map[string]string{}
+	}
+	return conditionApplies(st.Condition, keys)
+}
+
+func principalMatches(spec principalSpec, caller identity.Principal) bool {
+	if spec.All {
+		return true
+	}
+	callerARN := caller.ARN()
+	for _, p := range spec.AWS {
+		if p == "*" {
+			return true
+		}
+		if p == caller.AccountID {
+			return true
+		}
+		if p == callerARN && callerARN != "" {
+			return true
+		}
+		if accountID, ok := accountRootARN(p); ok && accountID == caller.AccountID {
+			return true
+		}
+	}
+	return false
+}
+
+// accountRootARN reports whether s is arn:aws:iam::ACCOUNT:root and returns ACCOUNT.
+func accountRootARN(s string) (accountID string, ok bool) {
+	const prefix = "arn:aws:iam::"
+	const suffix = ":root"
+	if !strings.HasPrefix(s, prefix) || !strings.HasSuffix(s, suffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(s, prefix), suffix)
+	if id == "" || strings.Contains(id, ":") {
+		return "", false
+	}
+	return id, true
 }

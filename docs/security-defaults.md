@@ -17,12 +17,15 @@ These defaults are intentional product posture for a local emulator that people 
 - Tests assert the plaintext secret does not appear in `state.db`.
 - Audit events must not carry secret material.
 
-## Auth (Phase 1)
+## Auth (Phase 2)
 
 - Health is open for container checks: `GET /_noctaxris/health`.
 - Every other path requires a valid SigV4 signature (header or query) for a known access key.
+- Temporary credentials require a matching `X-Amz-Security-Token`.
 - Unknown keys, bad signatures, and skewed clocks return `403` with an AWS-shaped XML error and an audit line.
 - `GetCallerIdentity` succeeds after SigV4 without an IAM permission check.
+- Organizations CreateAccount / DescribeCreateAccountStatus require IAM Allow (management root is allowed).
+- `AssumeRole` requires cross-account dual evaluation (caller identity + role trust).
 - Other actions return `501 NotImplemented` after successful authn.
 
 ## Optional TLS

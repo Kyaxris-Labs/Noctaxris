@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 )
 
 const (
@@ -28,11 +29,15 @@ func fixedNow() time.Time {
 	return time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
 }
 
-func lookupOK(accessKeyID string) (string, string, bool, error) {
+func lookupOK(accessKeyID string) (authn.ResolvedKey, error) {
 	if accessKeyID != testAKID {
-		return "", "", false, fmt.Errorf("unknown key")
+		return authn.ResolvedKey{}, fmt.Errorf("unknown key")
 	}
-	return testAcct, testSecret, true, nil
+	return authn.ResolvedKey{
+		AccountID: testAcct,
+		Secret:    testSecret,
+		IsRoot:    true,
+	}, nil
 }
 
 func TestVerifyHeaderSignedRequest(t *testing.T) {
@@ -98,8 +103,8 @@ func TestVerifyUnknownKey(t *testing.T) {
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
 	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
 
-	_, err := authn.Verify(req, body, now, 15*time.Minute, func(string) (string, string, bool, error) {
-		return "", "", false, fmt.Errorf("not found")
+	_, err := authn.Verify(req, body, now, 15*time.Minute, func(string) (authn.ResolvedKey, error) {
+		return authn.ResolvedKey{}, fmt.Errorf("not found")
 	})
 	if authn.Code(err) != authn.CodeInvalidClientTokenId {
 		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
@@ -136,6 +141,43 @@ func TestVerifyUnsignedPayloadHeader(t *testing.T) {
 
 	if _, err := authn.Verify(req, body, now, 15*time.Minute, lookupOK); err != nil {
 		t.Fatalf("Verify UNSIGNED-PAYLOAD: %v", err)
+	}
+}
+
+func TestVerifyRequiresSessionToken(t *testing.T) {
+	now := fixedNow()
+	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
+
+	lookupTemp := func(string) (authn.ResolvedKey, error) {
+		return authn.ResolvedKey{
+			AccountID:    testAcct,
+			Secret:       testSecret,
+			SessionToken: "session-token-value",
+			RoleARN:      "arn:aws:iam::" + testAcct + ":role/OrganizationAccountAccessRole",
+			SessionName:  "admin",
+			ExpiresAt:    now.Add(time.Hour),
+		}, nil
+	}
+
+	_, err := authn.Verify(req, body, now, 15*time.Minute, lookupTemp)
+	if authn.Code(err) != authn.CodeInvalidClientTokenId {
+		t.Fatalf("missing token Code=%q err=%v", authn.Code(err), err)
+	}
+
+	req2 := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	req2.Header.Set("X-Amz-Security-Token", "session-token-value")
+	signHeader(t, req2, body, testAKID, testSecret, testRegion, testSvc, now)
+	// Re-set token after sign (signHeader does not include security token in signed headers for this helper)
+	req2.Header.Set("X-Amz-Security-Token", "session-token-value")
+
+	got, err := authn.Verify(req2, body, now, 15*time.Minute, lookupTemp)
+	if err != nil {
+		t.Fatalf("Verify with token: %v", err)
+	}
+	if got.Principal.Kind != identity.KindRole || got.Principal.SessionName != "admin" {
+		t.Fatalf("principal=%+v", got.Principal)
 	}
 }
 

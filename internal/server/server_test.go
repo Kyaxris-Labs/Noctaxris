@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -217,8 +218,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 1") {
-		t.Fatalf("expected Phase 1 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "Phase 2") {
+		t.Fatalf("expected Phase 2 message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
@@ -227,6 +228,61 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"errorCode":"NotImplemented"`) {
 		t.Fatalf("expected NotImplemented audit in %q", data)
+	}
+}
+
+func TestCreateAccountAssumeRoleFlow(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createBody := []byte("Action=CreateAccount&Version=2016-11-28&Email=member%40example.com&AccountName=Member")
+	createReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", createBody)
+	signHeader(t, createReq, createBody, testAccessKey, testSecret, testRegion, "organizations", now)
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateAccount status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	createXML := createRec.Body.String()
+	if !strings.Contains(createXML, "SUCCEEDED") {
+		t.Fatalf("CreateAccount body=%q", createXML)
+	}
+	// Extract Id from <Id>...</Id> inside CreateAccountStatus
+	idStart := strings.Index(createXML, "<Id>")
+	idEnd := strings.Index(createXML, "</Id>")
+	if idStart < 0 || idEnd <= idStart {
+		t.Fatalf("missing create request id in %q", createXML)
+	}
+	createID := createXML[idStart+4 : idEnd]
+
+	descBody := []byte("Action=DescribeCreateAccountStatus&Version=2016-11-28&CreateAccountRequestId=" + createID)
+	descReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", descBody)
+	signHeader(t, descReq, descBody, testAccessKey, testSecret, testRegion, "organizations", now)
+	descRec := httptest.NewRecorder()
+	handler.ServeHTTP(descRec, descReq)
+	if descRec.Code != http.StatusOK {
+		t.Fatalf("Describe status=%d body=%q", descRec.Code, descRec.Body.String())
+	}
+	if !strings.Contains(descRec.Body.String(), "<AccountId>000000000002</AccountId>") {
+		t.Fatalf("Describe body=%q", descRec.Body.String())
+	}
+
+	roleARN := "arn:aws:iam::000000000002:role/OrganizationAccountAccessRole"
+	assumeBody := []byte("Action=AssumeRole&Version=2011-06-15&RoleArn=" + url.QueryEscape(roleARN) + "&RoleSessionName=admin")
+	assumeReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", assumeBody)
+	signHeader(t, assumeReq, assumeBody, testAccessKey, testSecret, testRegion, "sts", now)
+	assumeRec := httptest.NewRecorder()
+	handler.ServeHTTP(assumeRec, assumeReq)
+	if assumeRec.Code != http.StatusOK {
+		t.Fatalf("AssumeRole status=%d body=%q", assumeRec.Code, assumeRec.Body.String())
+	}
+	assumeXML := assumeRec.Body.String()
+	if !strings.Contains(assumeXML, "ASIA") || !strings.Contains(assumeXML, "SessionToken") {
+		t.Fatalf("AssumeRole body=%q", assumeXML)
+	}
+	if !strings.Contains(assumeXML, "assumed-role/OrganizationAccountAccessRole/admin") {
+		t.Fatalf("missing assumed role ARN in %q", assumeXML)
 	}
 }
 

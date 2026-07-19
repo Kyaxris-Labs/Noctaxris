@@ -25,13 +25,25 @@ type Verified struct {
 	Principal       identity.Principal
 	AccessKeyID     string
 	SecretAccessKey string
+	SessionToken    string
 	Region          string
 	Service         string
 	AccountID       string
 }
 
-// KeyLookup resolves an access key id to account, secret, and root flag.
-type KeyLookup func(accessKeyID string) (accountID, secret string, isRoot bool, err error)
+// ResolvedKey is the credential material returned by KeyLookup.
+type ResolvedKey struct {
+	AccountID    string
+	Secret       string
+	IsRoot       bool
+	SessionToken string
+	RoleARN      string
+	SessionName  string
+	ExpiresAt    time.Time
+}
+
+// KeyLookup resolves an access key id to credential material.
+type KeyLookup func(accessKeyID string) (ResolvedKey, error)
 
 type authMaterial struct {
 	accessKeyID   string
@@ -89,15 +101,27 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 		return nil, newError(CodeSignatureDoesNotMatch, "credential scope date mismatch")
 	}
 
-	accountID, secret, isRoot, err := lookup(mat.accessKeyID)
-	if err != nil || accountID == "" || secret == "" {
+	cred, err := lookup(mat.accessKeyID)
+	if err != nil || cred.AccountID == "" || cred.Secret == "" {
 		return nil, newError(CodeInvalidClientTokenId, "the access key id does not exist")
+	}
+	if !cred.ExpiresAt.IsZero() && now.UTC().After(cred.ExpiresAt.UTC()) {
+		return nil, newError(CodeInvalidClientTokenId, "the security token included in the request is expired")
+	}
+	if cred.SessionToken != "" {
+		reqToken := strings.TrimSpace(r.Header.Get("X-Amz-Security-Token"))
+		if reqToken == "" {
+			reqToken = strings.TrimSpace(r.URL.Query().Get("X-Amz-Security-Token"))
+		}
+		if reqToken == "" || reqToken != cred.SessionToken {
+			return nil, newError(CodeInvalidClientTokenId, "the security token included in the request is invalid")
+		}
 	}
 
 	payloadHash := payloadHash(r, body)
 	canonicalReq := buildCanonicalRequest(r, mat, payloadHash)
 	stringToSign := buildStringToSign(mat.amzDate, credDate, mat.region, mat.service, canonicalReq)
-	signingKey := deriveSigningKey(secret, credDate, mat.region, mat.service)
+	signingKey := deriveSigningKey(cred.Secret, credDate, mat.region, mat.service)
 	expected := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
 
 	if !hmac.Equal([]byte(strings.ToLower(mat.signature)), []byte(strings.ToLower(expected))) {
@@ -105,12 +129,18 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	}
 
 	var principal identity.Principal
-	if isRoot {
-		principal = identity.RootPrincipal(accountID, mat.accessKeyID)
+	if cred.IsRoot {
+		principal = identity.RootPrincipal(cred.AccountID, mat.accessKeyID)
+	} else if cred.RoleARN != "" {
+		_, roleName, ok := parseRoleNameFromARN(cred.RoleARN)
+		if !ok {
+			roleName = cred.RoleARN
+		}
+		principal = identity.RoleSessionPrincipal(cred.AccountID, roleName, cred.SessionName, mat.accessKeyID)
 	} else {
 		principal = identity.Principal{
 			Kind:        identity.KindUser,
-			AccountID:   accountID,
+			AccountID:   cred.AccountID,
 			AccessKeyID: mat.accessKeyID,
 			IsRoot:      false,
 		}
@@ -119,11 +149,26 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	return &Verified{
 		Principal:       principal,
 		AccessKeyID:     mat.accessKeyID,
-		SecretAccessKey: secret,
+		SecretAccessKey: cred.Secret,
+		SessionToken:    cred.SessionToken,
 		Region:          mat.region,
 		Service:         mat.service,
-		AccountID:       accountID,
+		AccountID:       cred.AccountID,
 	}, nil
+}
+
+func parseRoleNameFromARN(roleARN string) (accountID, roleName string, ok bool) {
+	const marker = ":role/"
+	i := strings.Index(roleARN, marker)
+	if i < 0 {
+		return "", "", false
+	}
+	prefix := roleARN[:i]
+	const iamPrefix = "arn:aws:iam::"
+	if !strings.HasPrefix(prefix, iamPrefix) {
+		return "", "", false
+	}
+	return prefix[len(iamPrefix):], roleARN[i+len(marker):], true
 }
 
 func extractAuth(r *http.Request) (*authMaterial, error) {

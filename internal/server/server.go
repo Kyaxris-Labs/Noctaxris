@@ -17,7 +17,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -108,83 +107,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	action := resolveAction(r, body)
-	if action == catalog.ActionSTSGetCallerIdentity || action == "GetCallerIdentity" {
+	switch action {
+	case catalog.ActionSTSGetCallerIdentity, "GetCallerIdentity":
 		s.handleGetCallerIdentity(w, r, requestID, eventID, verified)
-		return
-	}
-
-	s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-		"This API action is not implemented in Noctaxris Phase 1.", readOnly, r, eventID,
-		verified.AccessKeyID, verified.AccountID, true)
-}
-
-func (s *Server) handleGetCallerIdentity(
-	w http.ResponseWriter,
-	r *http.Request,
-	requestID, eventID string,
-	verified *authn.Verified,
-) {
-	// AWS STS GetCallerIdentity requires no IAM permissions after authentication.
-	userID, arn := sts.RootCallerIDs(verified.AccountID)
-	if !verified.Principal.IsRoot {
-		userID = verified.AccessKeyID
-		arn = verified.Principal.ARN()
-		if arn == "" {
-			arn = fmt.Sprintf("arn:aws:iam::%s:user/%s", verified.AccountID, verified.AccessKeyID)
-		}
-	}
-
-	payload, err := sts.GetCallerIdentityXML(verified.AccountID, userID, arn, requestID)
-	if err != nil {
-		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to build GetCallerIdentity response.", true, r, eventID,
+	case catalog.ActionOrgsCreateAccount, "CreateAccount":
+		s.handleCreateAccount(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsDescribeCreateAccountStatus, "DescribeCreateAccountStatus":
+		s.handleDescribeCreateAccountStatus(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionSTSAssumeRole, "AssumeRole":
+		s.handleAssumeRole(w, r, body, requestID, eventID, verified, readOnly)
+	default:
+		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
+			"This API action is not implemented in Noctaxris Phase 2.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
-		return
 	}
-
-	w.Header().Set(requestIDHeader, requestID)
-	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(xml.Header))
-	_, _ = w.Write(payload)
-
-	ev := audit.Event{
-		EventVersion:       eventVersion,
-		EventTime:          s.now().UTC().Format(time.RFC3339),
-		EventSource:        "sts.amazonaws.com",
-		EventName:          "GetCallerIdentity",
-		AWSRegion:          verified.Region,
-		SourceIPAddress:    clientIP(r),
-		UserAgent:          r.UserAgent(),
-		RequestID:          requestID,
-		EventID:            eventID,
-		EventType:          "AwsApiCall",
-		RecipientAccountID: verified.AccountID,
-		ReadOnly:           true,
-		UserIdentity: map[string]any{
-			"type":        "Root",
-			"accountId":   verified.AccountID,
-			"accessKeyId": verified.AccessKeyID,
-			"arn":         arn,
-		},
-		RequestParameters: map[string]any{
-			"httpMethod": r.Method,
-			"path":       r.URL.Path,
-		},
-	}
-	if !verified.Principal.IsRoot {
-		ev.UserIdentity = map[string]any{
-			"type":        "IAMUser",
-			"accountId":   verified.AccountID,
-			"accessKeyId": verified.AccessKeyID,
-			"arn":         arn,
-		}
-	}
-	_ = s.audit.Write(context.Background(), ev)
-}
-
-func (s *Server) lookupKey(accessKeyID string) (accountID, secret string, isRoot bool, err error) {
-	return s.store.LookupAccessKey(accessKeyID)
 }
 
 func (s *Server) writeAWSError(
@@ -304,10 +240,18 @@ func normalizeAction(action string) string {
 	if strings.Contains(action, ":") {
 		return action
 	}
-	if action == "GetCallerIdentity" {
+	switch action {
+	case "GetCallerIdentity":
 		return catalog.ActionSTSGetCallerIdentity
+	case "AssumeRole":
+		return catalog.ActionSTSAssumeRole
+	case "CreateAccount":
+		return catalog.ActionOrgsCreateAccount
+	case "DescribeCreateAccountStatus":
+		return catalog.ActionOrgsDescribeCreateAccountStatus
+	default:
+		return action
 	}
-	return action
 }
 
 func defaultAuthnMessage(code string) string {

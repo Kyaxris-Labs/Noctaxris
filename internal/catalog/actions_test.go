@@ -6,23 +6,32 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 )
 
-func TestKnownActionGetCallerIdentity(t *testing.T) {
-	if !catalog.KnownAction(catalog.ActionSTSGetCallerIdentity) {
-		t.Fatalf("KnownAction(%q) = false, want true", catalog.ActionSTSGetCallerIdentity)
+func TestKnownActionPhase2(t *testing.T) {
+	known := []string{
+		catalog.ActionSTSGetCallerIdentity,
+		catalog.ActionSTSAssumeRole,
+		catalog.ActionOrgsCreateAccount,
+		catalog.ActionOrgsDescribeCreateAccountStatus,
+		"sts:GetCallerIdentity",
+		"sts:AssumeRole",
+		"organizations:CreateAccount",
+		"organizations:DescribeCreateAccountStatus",
 	}
-	if !catalog.KnownAction("sts:GetCallerIdentity") {
-		t.Fatal(`KnownAction("sts:GetCallerIdentity") = false, want true`)
+	for _, action := range known {
+		if !catalog.KnownAction(action) {
+			t.Fatalf("KnownAction(%q) = false, want true", action)
+		}
 	}
 }
 
 func TestKnownActionUnknown(t *testing.T) {
 	cases := []string{
 		"",
-		"sts:AssumeRole",
 		"iam:GetUser",
 		"s3:ListBucket",
 		"GetCallerIdentity",
 		"sts:getcalleridentity",
+		"organizations:ListAccounts",
 	}
 	for _, action := range cases {
 		if catalog.KnownAction(action) {
@@ -31,9 +40,16 @@ func TestKnownActionUnknown(t *testing.T) {
 	}
 }
 
-func TestActionSTSGetCallerIdentityConstant(t *testing.T) {
-	const want = "sts:GetCallerIdentity"
-	if catalog.ActionSTSGetCallerIdentity != want {
-		t.Fatalf("ActionSTSGetCallerIdentity = %q, want %q", catalog.ActionSTSGetCallerIdentity, want)
+func TestActionConstants(t *testing.T) {
+	cases := map[string]string{
+		catalog.ActionSTSGetCallerIdentity:            "sts:GetCallerIdentity",
+		catalog.ActionSTSAssumeRole:                   "sts:AssumeRole",
+		catalog.ActionOrgsCreateAccount:               "organizations:CreateAccount",
+		catalog.ActionOrgsDescribeCreateAccountStatus: "organizations:DescribeCreateAccountStatus",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Fatalf("constant = %q, want %q", got, want)
+		}
 	}
 }
