@@ -1,0 +1,21 @@
+services:
+  noctaxris:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      NOCTAXRIS_LISTEN: "0.0.0.0:4566"
+      NOCTAXRIS_DATA_ROOT: "/var/lib/noctaxris"
+      NOCTAXRIS_ROOT_ACCESS_KEY_ID: "${NOCTAXRIS_ROOT_ACCESS_KEY_ID}"
+      NOCTAXRIS_ROOT_SECRET_ACCESS_KEY: "${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY}"
+      NOCTAXRIS_ACCOUNT_ID: "000000000001"
+    volumes:
+      - noctaxris-data:/var/lib/noctaxris
+    # DO NOT add docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp
+volumes:
+  noctaxris-data:
