@@ -368,3 +368,27 @@ func TestAddTopicPermissionDuplicateLabel(t *testing.T) {
 		t.Fatalf("want ErrSNSPolicyStatementExists, got %v", err)
 	}
 }
+
+func TestPublishRejectsSQSARNAccountMismatch(t *testing.T) {
+	st := openSNSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTopic(account, "us-east-1", "alerts", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "jobs", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Subscribe(account, "alerts", "sqs", "arn:aws:sqs:us-east-1:999999999999:jobs"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Publish(account, "alerts", "hello", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ReceiveMessages(account, "jobs", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no delivery for cross-account SQS ARN, got %d", len(msgs))
+	}
+}

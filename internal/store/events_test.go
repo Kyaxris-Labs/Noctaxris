@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -105,6 +106,11 @@ func TestPutEventsMatchesRuleAndRecordsTargets(t *testing.T) {
 	}
 	queue, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "evt-match", nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetQueueAttributes(account, "evt-match", map[string]string{
+		"Policy": eventsQueuePolicyForDelivery(queue.QueueARN),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.PutTargets(account, "default", "lab-rule", []store.EventTargetInput{{
@@ -313,6 +319,13 @@ func TestPutEventsSkipsDeliveryWithoutResourcePolicy(t *testing.T) {
 	if len(msgs) != 0 {
 		t.Fatalf("expected no delivery without resource policy, got %d messages", len(msgs))
 	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none when resource policy blocks delivery", matches)
+	}
 }
 
 func eventsQueuePolicyForDelivery(queueARN string) string {
@@ -389,5 +402,164 @@ func TestPutEventsDetailKeyMismatch(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("matches=%+v want none", matches)
+	}
+}
+
+func TestPutEventsDeliversToSNS(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	if _, err := st.PutRule(account, "us-east-1", "default", "sns-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	topic, err := st.CreateTopic(account, "us-east-1", "evt-sns", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sns:Publish","Resource":"` + topic.TopicARN + `"}]}`
+	if err := st.SetTopicAttributes(account, "evt-sns", map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "evt-sns-sub", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Subscribe(account, "evt-sns", "sqs", queue.QueueARN); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "sns-rule", []store.EventTargetInput{{
+		ID:  "1",
+		ARN: topic.TopicARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source:     "noctaxris.lab",
+		DetailType: "sns-demo",
+		Detail:     `{"via":"sns"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FailedEntryCount != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v", matches)
+	}
+	msgs, err := st.ReceiveMessages(account, "evt-sns-sub", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected SNS fan-out to queue, got %d messages", len(msgs))
+	}
+	if !strings.Contains(string(msgs[0].Body), "noctaxris.lab") && !strings.Contains(string(msgs[0].Body), `"via"`) {
+		// SNS envelope wraps EventBridge body; look for detail payload
+		if !strings.Contains(string(msgs[0].Body), "via") {
+			t.Fatalf("Body=%q want eventbridge payload via SNS", msgs[0].Body)
+		}
+	}
+}
+
+func TestPutEventsRoleArnRequiresRoleIdentityAllow(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "evt-deliver", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "evt-role-deny", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "role-deny-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "role-deny-rule", []store.EventTargetInput{{
+		ID:      "1",
+		ARN:     queue.QueueARN,
+		RoleARN: roleARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source:     "noctaxris.lab",
+		DetailType: "demo",
+		Detail:     `{"ok":true}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none when role lacks SendMessage", matches)
+	}
+	msgs, err := st.ReceiveMessages(account, "evt-role-deny", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no delivery, got %d", len(msgs))
+	}
+}
+
+func TestPutEventsRoleArnDeliversWithRoleIdentityAllow(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "evt-deliver-ok", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "deliver", allow); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "evt-role-ok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "role-ok-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "role-ok-rule", []store.EventTargetInput{{
+		ID:      "1",
+		ARN:     queue.QueueARN,
+		RoleARN: roleARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source:     "noctaxris.lab",
+		DetailType: "demo",
+		Detail:     `{"ok":true}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v", matches)
+	}
+	msgs, err := st.ReceiveMessages(account, "evt-role-ok", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected RoleArn delivery, got %d", len(msgs))
 	}
 }

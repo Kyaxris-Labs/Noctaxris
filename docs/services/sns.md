@@ -13,7 +13,8 @@ Lab-complete SNS core: topic CRUD, publish, subscribe, topic policies, and best-
 | Subscriptions | `Subscribe`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
 | Protocols | `sqs` and `lambda` (lab auto-confirm on subscribe). HTTP, email, and SMS deferred |
-| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path. Best-effort with up to two attempts per target |
+| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path. Best-effort with up to two attempts per target. Delivery failures are logged after retries. SQS subscription ARNs must match the subscription owner account |
+| Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
 Topic and subscription metadata live in SQLite.
 
@@ -67,5 +68,4 @@ aws sns set-topic-attributes \
 - Full SNS SAR beyond the lab set (FIFO topics, SMS, email, HTTP and HTTPS subscriptions, filter policy depth, raw message delivery edge cases)
 - HTTP, email, and SMS subscription protocols and confirmation token flows
 - Exact AWS retry and jitter timing for delivery failures
-- Lambda async `DestinationConfig.OnFailure` SNS destination (skipped)
 - Cross-account topic policy depth beyond same-account lab paths

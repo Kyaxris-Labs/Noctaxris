@@ -138,7 +138,7 @@ func TestECRAuthorizationTokenRoundTrip(t *testing.T) {
 		t.Fatalf("token=%q expires=%v", token, expiresAt)
 	}
 
-	gotAccount, gotPrincipal, err := st.ValidateAuthorizationToken(token)
+	gotAccount, gotPrincipal, _, err := st.ValidateAuthorizationToken(token)
 	if err != nil {
 		t.Fatal(err)
 	}

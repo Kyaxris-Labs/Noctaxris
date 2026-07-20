@@ -640,28 +640,28 @@ func (s *Store) IssueAuthorizationToken(accountID, principal string, ttl time.Du
 }
 
 // ValidateAuthorizationToken checks a previously issued token hash and expiry.
-func (s *Store) ValidateAuthorizationToken(token string) (accountID, principal string, err error) {
+func (s *Store) ValidateAuthorizationToken(token string) (accountID, principal string, expiresAt time.Time, err error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return "", "", ErrInvalidAuthorizationToken
+		return "", "", time.Time{}, ErrInvalidAuthorizationToken
 	}
-	var expiresAt string
+	var expiresRaw string
 	err = s.db.QueryRow(
 		`SELECT account_id, principal, expires_at FROM ecr_auth_tokens WHERE token_hash = ?`,
 		hashAuthToken(token),
-	).Scan(&accountID, &principal, &expiresAt)
+	).Scan(&accountID, &principal, &expiresRaw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", "", ErrInvalidAuthorizationToken
+			return "", "", time.Time{}, ErrInvalidAuthorizationToken
 		}
-		return "", "", fmt.Errorf("validate authorization token: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("validate authorization token: %w", err)
 	}
-	exp, parseErr := time.Parse(time.RFC3339, expiresAt)
+	expiresAt, parseErr := time.Parse(time.RFC3339, expiresRaw)
 	if parseErr != nil {
-		return "", "", fmt.Errorf("validate authorization token: parse expiry: %w", parseErr)
+		return "", "", time.Time{}, fmt.Errorf("validate authorization token: parse expiry: %w", parseErr)
 	}
-	if time.Now().UTC().After(exp) {
-		return "", "", ErrExpiredAuthorizationToken
+	if time.Now().UTC().After(expiresAt) {
+		return "", "", time.Time{}, ErrExpiredAuthorizationToken
 	}
-	return accountID, principal, nil
+	return accountID, principal, expiresAt, nil
 }

@@ -12,7 +12,7 @@ Lab-complete ECR core: repository CRUD, authorization tokens, repository policie
 | Auth | `GetAuthorizationToken` (base64 `AWS:password`, lab proxy endpoint on loopback) |
 | Repository policy | `GetRepositoryPolicy`, `SetRepositoryPolicy`, `DeleteRepositoryPolicy` |
 | Images | `PutImage`, `BatchGetImage`, `ListImages`, `BatchDeleteImage` |
-| Registry V2 | `GET /v2/`, blob upload (monolithic PUT), manifest GET/PUT/HEAD, tags list. Bearer token from `GetAuthorizationToken` |
+| Registry V2 | `GET /v2/`, blob upload (monolithic PUT), manifest GET/PUT/HEAD, tags list. `GET`/`POST` `/v2/token` returns Docker Registry token JSON (`token` / `access_token`) for the `GetAuthorizationToken` password. `WWW-Authenticate` Bearer realm points at `/v2/token` |
 | DinD sync | On manifest PUT with a tag, pull the image into `noctaxris-engine` so ECS and Lambda Image paths can use lab registry refs |
 
 Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (account from `sts get-caller-identity`). Blobs and manifests persist under the data volume.
@@ -58,7 +58,7 @@ aws ecr set-repository-policy \
   --endpoint-url "$EP"
 ```
 
-Expect `create-repository` to return a repository URI under `127.0.0.1:4566`. Expect `docker push` to succeed after `get-login-password`. Expect `list-images` to show the `lab` tag after push.
+Expect `create-repository` to return a repository URI under `127.0.0.1:4566`. Expect `docker login` to succeed after `get-login-password` (Docker exchanges Basic credentials at `/v2/token` for a Bearer token matching that password). Expect `docker push` to succeed. Expect `list-images` to show the `lab` tag after push.
 
 ## Not yet / deferred
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/errdefs"
 	"github.com/google/uuid"
 )
 
@@ -135,4 +136,44 @@ func (c *Client) StopECSTask(ctx context.Context, containerID string) error {
 		return fmt.Errorf("compute: ecs container remove: %w", err)
 	}
 	return nil
+}
+
+// WaitECSTaskExit blocks until the container is not running or ctx ends.
+func (c *Client) WaitECSTaskExit(ctx context.Context, containerID string) error {
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return fmt.Errorf("compute: container ID is required")
+	}
+	statusCh, errCh := c.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("compute: ecs container wait: %w", err)
+		}
+		return nil
+	case st := <-statusCh:
+		if st.Error != nil && st.Error.Message != "" {
+			return fmt.Errorf("compute: ecs container wait: %s", st.Error.Message)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ContainerRunning reports whether the DinD container is still running.
+// Missing containers are treated as not running.
+func (c *Client) ContainerRunning(ctx context.Context, containerID string) (bool, error) {
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return false, fmt.Errorf("compute: container ID is required")
+	}
+	insp, err := c.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("compute: ecs container inspect: %w", err)
+	}
+	return insp.State != nil && insp.State.Running, nil
 }

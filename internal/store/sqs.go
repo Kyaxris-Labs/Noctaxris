@@ -192,6 +192,19 @@ func queueNameFromARN(arn string) (string, error) {
 	return arn[i+1:], nil
 }
 
+// queueAccountFromARN extracts the account id from arn:aws:sqs:REGION:ACCOUNT:NAME.
+func queueAccountFromARN(arn string) (string, error) {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "sqs" {
+		return "", fmt.Errorf("invalid queue arn %q", arn)
+	}
+	accountID := strings.TrimSpace(parts[4])
+	if accountID == "" {
+		return "", fmt.Errorf("invalid queue arn %q", arn)
+	}
+	return accountID, nil
+}
+
 func contentBasedDedupID(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])

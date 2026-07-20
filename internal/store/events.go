@@ -1,14 +1,20 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/google/uuid"
 )
 
@@ -710,6 +716,11 @@ func (s *Store) matchAndRecordEventTargets(accountID, busName, entryID, source, 
 			return err
 		}
 		for _, tgt := range targets {
+			if !s.eventTargetDeliveryAuthorized(accountID, tgt) {
+				log.Printf("events delivery skipped entry=%s rule=%s target=%s reason=unauthorized",
+					entryID, rule.ARN, tgt.ARN)
+				continue
+			}
 			if err := s.recordEventRuleMatch(entryID, rule.ARN, tgt.ARN, tgt.ID, created); err != nil {
 				return err
 			}
@@ -732,51 +743,158 @@ func (s *Store) recordEventRuleMatch(entryID, ruleARN, targetARN, targetID, crea
 }
 
 // deliverEventTarget fans out a matched event to SQS, Lambda, or SNS targets.
+// Callers must authorize delivery first via eventTargetDeliveryAuthorized.
 // Without RoleArn, delivery requires the target resource policy to Allow
 // events.amazonaws.com or the account root for the target action (best-effort skip).
-// With RoleArn, PassRole is enforced at PutTargets; delivery uses internal store paths
-// (role session minting for the passed role remains deferred).
+// With RoleArn, PassRole is enforced at PutTargets and delivery mints a role session
+// then requires the role identity policies to Allow the target action.
 func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tgt EventTarget, source, detailType, detailJSON, created string) {
 	body, err := eventBridgeDeliveryBody(accountID, entryID, DefaultEventsRegion, source, detailType, detailJSON, created)
 	if err != nil {
+		log.Printf("events delivery marshal failed entry=%s target=%s err=%v", entryID, tgt.ARN, err)
 		return
 	}
 	if input := strings.TrimSpace(tgt.Input); input != "" {
 		body = input
 	}
 	arn := strings.TrimSpace(tgt.ARN)
-	if strings.TrimSpace(tgt.RoleARN) == "" {
-		action, ok := eventTargetDeliveryAction(arn)
-		if !ok {
-			_ = rule
-			return
-		}
-		if !s.eventTargetResourcePolicyAllows(accountID, arn, action) {
-			return
-		}
-	}
+	var deliverErr error
 	switch {
 	case strings.HasPrefix(arn, "arn:aws:sqs:"):
 		queueName, err := queueNameFromARN(arn)
 		if err != nil {
-			return
+			deliverErr = err
+			break
 		}
-		_, _ = s.SendMessage(accountID, queueName, []byte(body), false, nil, "", nil)
+		_, deliverErr = s.SendMessage(accountID, queueName, []byte(body), false, nil, "", nil)
 	case strings.HasPrefix(arn, "arn:aws:lambda:"):
 		functionName, qualifier := ParseFunctionQualifier(arn)
 		if functionName == "" {
-			return
+			deliverErr = fmt.Errorf("empty function name")
+			break
 		}
-		_, _ = s.EnqueueAsyncInvoke(accountID, functionName, qualifier, body)
+		_, deliverErr = s.EnqueueAsyncInvoke(accountID, functionName, qualifier, body)
 	case strings.HasPrefix(arn, "arn:aws:sns:"):
 		topic, err := s.GetTopicByARN(arn)
 		if err != nil {
-			return
+			deliverErr = err
+			break
 		}
-		_, _ = s.Publish(accountID, topic.TopicName, body, "", nil)
+		_, deliverErr = s.Publish(accountID, topic.TopicName, body, "", nil)
 	default:
 		_ = rule
+		return
 	}
+	if deliverErr != nil {
+		log.Printf("events delivery failed entry=%s rule=%s target=%s err=%v",
+			entryID, rule.ARN, arn, deliverErr)
+	}
+}
+
+func (s *Store) eventTargetDeliveryAuthorized(accountID string, tgt EventTarget) bool {
+	arn := strings.TrimSpace(tgt.ARN)
+	action, ok := eventTargetDeliveryAction(arn)
+	if !ok {
+		return false
+	}
+	roleARN := strings.TrimSpace(tgt.RoleARN)
+	if roleARN == "" {
+		return s.eventTargetResourcePolicyAllows(accountID, arn, action)
+	}
+	return s.eventTargetRoleSessionAllows(accountID, roleARN, action, arn)
+}
+
+// eventTargetRoleSessionAllows mints a temporary session for RoleArn and evaluates
+// whether the role identity policies Allow the delivery action on the target ARN.
+func (s *Store) eventTargetRoleSessionAllows(accountID, roleARN, action, targetARN string) bool {
+	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok || roleAccountID != accountID {
+		return false
+	}
+	if _, _, err := s.GetRole(accountID, roleName); err != nil {
+		return false
+	}
+	secret, err := randomHexSecret(16)
+	if err != nil {
+		log.Printf("events role session mint secret failed role=%s err=%v", roleARN, err)
+		return false
+	}
+	sessionToken, err := randomHexSecret(16)
+	if err != nil {
+		log.Printf("events role session mint token failed role=%s err=%v", roleARN, err)
+		return false
+	}
+	accessKeyID, err := s.MintTempCredentialsOpts(MintTempOpts{
+		AccountID:    accountID,
+		RoleARN:      roleARN,
+		SessionName:  "events-delivery",
+		Secret:       secret,
+		SessionToken: sessionToken,
+		Expires:      time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		log.Printf("events role session mint failed role=%s err=%v", roleARN, err)
+		return false
+	}
+
+	docs, err := s.identityPolicyDocsForRoleARN(roleARN)
+	if err != nil {
+		log.Printf("events role policy load failed role=%s err=%v", roleARN, err)
+		return false
+	}
+	boundaryDoc := ""
+	if doc, ok, err := s.PermissionsBoundaryDoc(accountID, "role", roleName); err == nil && ok {
+		boundaryDoc = doc
+	}
+	scpDocs, err := s.SCPDocsForAccount(accountID)
+	if err != nil {
+		return false
+	}
+	rcpDocs, err := s.RCPDocsForAccount(accountID)
+	if err != nil {
+		return false
+	}
+	principal := identity.RoleSessionPrincipal(accountID, roleName, "events-delivery", accessKeyID)
+	ctx := authz.RequestContext{
+		Principal: principal,
+		Action:    action,
+		Resource:  targetARN,
+		Region:    DefaultEventsRegion,
+	}
+	in := authz.EvalInputs{
+		IdentityDocs:        docs,
+		BoundaryDoc:         boundaryDoc,
+		SCPDocs:             scpDocs,
+		RCPDocs:             rcpDocs,
+		IsManagementAccount: s.IsManagementAccount(accountID),
+	}
+	return authz.EvaluateFull(ctx, in) == authz.Allow
+}
+
+func (s *Store) identityPolicyDocsForRoleARN(roleARN string) ([]string, error) {
+	docs, err := s.ListAttachedPolicyDocuments(roleARN)
+	if err != nil {
+		return nil, err
+	}
+	inline, err := s.ListInlinePolicies(roleARN)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range inline {
+		docs = append(docs, p.Document)
+	}
+	if docs == nil {
+		docs = []string{}
+	}
+	return docs, nil
+}
+
+func randomHexSecret(nbytes int) (string, error) {
+	b := make([]byte, nbytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func eventTargetDeliveryAction(targetARN string) (string, bool) {

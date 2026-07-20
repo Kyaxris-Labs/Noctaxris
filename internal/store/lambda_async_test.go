@@ -122,3 +122,53 @@ func TestAsyncInvokeDestinationOnFailureDLQ(t *testing.T) {
 		t.Fatalf("dlq message=%+v", msgs)
 	}
 }
+
+func TestAsyncInvokeDestinationOnFailureSNS(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "x=1"})
+
+	topic, err := st.CreateTopic(account, "us-east-1", "lambda-fail-topic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "lambda-fail-q", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Subscribe(account, "lambda-fail-topic", "sqs", store.QueueARN("us-east-1", account, "lambda-fail-q")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:               account,
+		Region:                  "us-east-1",
+		FunctionName:            "dest-fail-sns",
+		RoleARN:                 "arn:aws:iam::000000000001:role/lambda-exec",
+		Runtime:                 store.LambdaRuntimePython312,
+		Handler:                 "app.handler",
+		Timeout:                 3,
+		Memory:                  128,
+		Zip:                     zip,
+		DestinationOnFailureArn: topic.TopicARN,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := st.EnqueueAsyncInvoke(account, "dest-fail-sns", "$LATEST", `{"n":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ProcessAsyncInvocation(job.InvocationID, store.LambdaAsyncMaxRetries, func() error {
+		return errors.New("fail")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ReceiveMessages(account, "lambda-fail-q", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || !bytes.Contains(msgs[0].Body, []byte(`\"n\":2`)) {
+		t.Fatalf("sns destination message=%+v", msgs)
+	}
+}

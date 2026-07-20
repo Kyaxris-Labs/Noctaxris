@@ -55,8 +55,59 @@ func TestRegistryV2Unauthorized(t *testing.T) {
 		t.Fatalf("status=%d want 401 body=%q", rec.Code, rec.Body.String())
 	}
 	www := rec.Header().Get("WWW-Authenticate")
-	if !strings.Contains(www, "Bearer realm=") || !strings.Contains(www, `service="ecr"`) {
+	if !strings.Contains(www, `Bearer realm="http://127.0.0.1:4566/v2/token"`) || !strings.Contains(www, `service="ecr"`) {
 		t.Fatalf("WWW-Authenticate=%q", www)
+	}
+}
+
+func TestRegistryV2TokenEndpoint(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	token := issueRegistryToken(t, handler, now)
+	auth := registryAuthHeader(token)
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/v2/token?service=ecr", nil)
+	unauthRec := httptest.NewRecorder()
+	handler.ServeHTTP(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth token status=%d want 401 body=%q", unauthRec.Code, unauthRec.Body.String())
+	}
+	if !strings.Contains(unauthRec.Header().Get("WWW-Authenticate"), "Basic realm=") {
+		t.Fatalf("token WWW-Authenticate=%q want Basic", unauthRec.Header().Get("WWW-Authenticate"))
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/v2/token?service=ecr&account=AWS", nil)
+	req.Header.Set("Authorization", auth)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	gotToken, _ := out["token"].(string)
+	gotAccess, _ := out["access_token"].(string)
+	if gotToken != token || gotAccess != token {
+		t.Fatalf("token=%q access_token=%q want %q", gotToken, gotAccess, token)
+	}
+	expiresIn, ok := out["expires_in"].(float64)
+	if !ok || expiresIn <= 0 {
+		t.Fatalf("expires_in=%v want > 0", out["expires_in"])
+	}
+	if issuedAt, _ := out["issued_at"].(string); issuedAt == "" {
+		t.Fatal("missing issued_at")
+	}
+
+	bearerReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/v2/", nil)
+	bearerReq.Header.Set("Authorization", "Bearer "+gotToken)
+	bearerRec := httptest.NewRecorder()
+	handler.ServeHTTP(bearerRec, bearerReq)
+	if bearerRec.Code != http.StatusOK {
+		t.Fatalf("bearer /v2/ status=%d body=%q", bearerRec.Code, bearerRec.Body.String())
 	}
 }
 

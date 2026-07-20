@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
@@ -509,7 +510,7 @@ func (s *Server) ecsRunTask(
 		return
 	}
 
-	if err := s.executeECSTask(r.Context(), verified.AccountID, td, taskRoleARN, task.TaskARN); err != nil {
+	if err := s.executeECSTask(r.Context(), verified.AccountID, region, cluster, td, taskRoleARN, task.TaskARN); err != nil {
 		_ = s.store.DeleteTask(verified.AccountID, task.TaskARN)
 		if strings.Contains(err.Error(), "compute unavailable") {
 			s.writeECSError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
@@ -548,7 +549,7 @@ func (s *Server) resolveTaskDefinition(accountID, taskDef string) (store.ECSTask
 
 func (s *Server) executeECSTask(
 	ctx context.Context,
-	accountID string,
+	accountID, region, cluster string,
 	td store.ECSTaskDefinition,
 	taskRoleARN, taskARN string,
 ) error {
@@ -637,7 +638,61 @@ func (s *Server) executeECSTask(
 		_ = cli.StopECSTask(ctx, containerID)
 		return err
 	}
+	go s.reapECSTask(accountID, region, cluster, taskARN, containerID)
 	return nil
+}
+
+// reapECSTask waits for the DinD container to exit then marks the store task STOPPED.
+func (s *Server) reapECSTask(accountID, region, cluster, taskARN, containerID string) {
+	cli, err := s.computeClient()
+	if err != nil || cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	if err := cli.WaitECSTaskExit(ctx, containerID); err != nil {
+		return
+	}
+	_ = cli.StopECSTask(context.Background(), containerID)
+	_, _ = s.store.StopTask(accountID, region, store.StopTaskInput{
+		Cluster: cluster,
+		Task:    taskARN,
+	})
+}
+
+// syncECSTaskStatuses marks RUNNING tasks STOPPED when their DinD container has exited.
+func (s *Server) syncECSTaskStatuses(ctx context.Context, accountID, region, cluster string, tasks []store.ECSTask) []store.ECSTask {
+	if strings.TrimSpace(s.cfg.DockerHost) == "" || len(tasks) == 0 {
+		return tasks
+	}
+	cli, err := s.computeClient()
+	if err != nil || cli == nil {
+		return tasks
+	}
+	out := make([]store.ECSTask, len(tasks))
+	copy(out, tasks)
+	for i, task := range out {
+		if task.LastStatus != store.ECSTaskStatusRunning {
+			continue
+		}
+		runtimeID, err := s.store.TaskRuntimeID(accountID, task.TaskARN)
+		if err != nil || runtimeID == "" {
+			continue
+		}
+		running, err := cli.ContainerRunning(ctx, runtimeID)
+		if err != nil || running {
+			continue
+		}
+		_ = cli.StopECSTask(ctx, runtimeID)
+		stopped, err := s.store.StopTask(accountID, region, store.StopTaskInput{
+			Cluster: cluster,
+			Task:    task.TaskARN,
+		})
+		if err == nil {
+			out[i] = stopped
+		}
+	}
+	return out
 }
 
 func (s *Server) ecsDescribeTasks(
@@ -664,6 +719,7 @@ func (s *Server) ecsDescribeTasks(
 			"Unable to describe tasks.", readOnly, eventID, verified)
 		return
 	}
+	tasks = s.syncECSTaskStatuses(r.Context(), verified.AccountID, s.ecsRegion(verified), cluster, tasks)
 
 	payload, err := ecssvc.DescribeTasksJSON(tasks)
 	if err != nil {
@@ -698,6 +754,7 @@ func (s *Server) ecsListTasks(
 			"Unable to list tasks.", readOnly, eventID, verified)
 		return
 	}
+	tasks = s.syncECSTaskStatuses(r.Context(), verified.AccountID, s.ecsRegion(verified), cluster, tasks)
 	arns := make([]string, 0, len(tasks))
 	for _, task := range tasks {
 		arns = append(arns, task.TaskARN)

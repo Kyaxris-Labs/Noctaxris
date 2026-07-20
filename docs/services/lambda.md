@@ -15,7 +15,7 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 | Aliases | Point at published version numbers. Invoke accepts bare name, `name:version`, or `name:alias` |
 | Layers | Up to five same-account layer-version ARNs per function. Merged at `/opt` on zip Invoke |
 | Invoke (sync) | `InvocationType=RequestResponse` (default). One-shot nested container |
-| Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or `DestinationConfig.OnFailure` |
+| Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
 | Resource policy | Same-account `AddPermission`, `RemovePermission`, `GetPolicy`. Invoke allows identity **or** function policy Allow |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). No host `docker.sock` on the API container |
@@ -169,7 +169,7 @@ Expect CreateFunction to succeed only when the role trusts `lambda.amazonaws.com
 ## Not yet / deferred
 
 - Full Lambda SAR (event source mappings, provisioned concurrency, weighted alias routing, Function URLs, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing)
-- EventBridge or Lambda-to-Lambda failure destinations (SQS DLQ and OnFailure to SQS only)
+- EventBridge or Lambda-to-Lambda failure destinations (OnFailure to SQS and SNS is shipped)
 - Cross-account function resource policy depth
 - Non-lab private registries (use ECR lab registry for account-local images)
 - Layers mounted on Image Invoke (layers can be attached in the API but are not mounted during image Invoke)

@@ -22,11 +22,11 @@ Bus, rule, and target metadata live in SQLite.
 
 EventBridge control-plane APIs use identity `EvaluateFull` on bus and rule ARNs.
 
-`PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). Delivery under a passed role uses internal store paths. Role session minting at delivery time remains deferred.
+`PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). At delivery time the lab mints a temporary role session and requires the role identity policies to Allow the target action (`sqs:SendMessage`, `lambda:InvokeFunction`, or `sns:Publish`). Roles without an Allow skip that target.
 
-`PutTargets` without `RoleArn` delivers only when the target resource policy Allows `events.amazonaws.com` or the account root for the required action (`sqs:SendMessage`, `lambda:InvokeFunction`, or `sns:Publish`). Missing or insufficient policy skips that target (best-effort).
+`PutTargets` without `RoleArn` delivers only when the target resource policy Allows `events.amazonaws.com` or the account root for the required action. Missing or insufficient policy skips that target (best-effort). Rule or target matches are recorded only when delivery is authorized.
 
-Bus resource policy dual evaluation beyond same-account lab paths is deferred.
+Delivery failures after authorization are logged. PutEvents still succeeds (best-effort fan-out).
 
 ## How to verify / CLI smoke
 
@@ -71,7 +71,6 @@ aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
 - Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
 - CloudWatch Logs and Kinesis targets
 - `InputPath` and `InputTransformer`
-- Role session minting for delivery under `RoleArn` (PassRole is enforced at PutTargets only)
 - Bus resource policy dual-eval depth beyond same-account lab paths
 - Exact AWS retry and jitter timing for delivery failures
 - Cross-account bus policies beyond same-account lab paths

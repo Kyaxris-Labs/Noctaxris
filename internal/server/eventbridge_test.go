@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +259,72 @@ func TestEventBridgePutTargetsPassRoleDeny(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "AccessDeniedException") {
 		t.Fatalf("expected AccessDeniedException in %q", rec.Body.String())
+	}
+}
+
+func TestEventBridgePutEventsDeliversToSNS(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	topicARN := snsCreateTopic(t, handler, "evt-bridge-sns", now)
+	topicPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sns:Publish","Resource":"` + topicARN + `"}]}`
+	setRec := mustSNSQuery(t, handler,
+		"Action=SetTopicAttributes&Version=2010-03-31&TopicArn="+url.QueryEscape(topicARN)+
+			"&AttributeName=Policy&AttributeValue="+url.QueryEscape(topicPolicy),
+		testAccessKey, testSecret, now)
+	if setRec.Code != http.StatusOK {
+		t.Fatalf("SetTopicAttributes status=%d body=%q", setRec.Code, setRec.Body.String())
+	}
+
+	createRec := mustSQSJSON(t, handler, "CreateQueue", map[string]any{
+		"QueueName": "evt-bridge-sns-q",
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateQueue status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	queueURL, _ := createOut["QueueUrl"].(string)
+	queueARN := "arn:aws:sqs:us-east-1:" + testAccountID + ":evt-bridge-sns-q"
+
+	subRec := mustSNSQuery(t, handler,
+		"Action=Subscribe&Version=2010-03-31&TopicArn="+url.QueryEscape(topicARN)+
+			"&Protocol=sqs&Endpoint="+url.QueryEscape(queueARN),
+		testAccessKey, testSecret, now)
+	if subRec.Code != http.StatusOK {
+		t.Fatalf("Subscribe status=%d body=%q", subRec.Code, subRec.Body.String())
+	}
+
+	eventsPutRule(t, handler, "sns-rule", `{"source":["noctaxris.lab"]}`, now)
+	eventsPutTargets(t, handler, "sns-rule", "1", topicARN, now)
+
+	putRec := mustEventsJSON(t, handler, "PutEvents", map[string]any{
+		"Entries": []map[string]any{{
+			"Source":     "noctaxris.lab",
+			"DetailType": "sns-demo",
+			"Detail":     `{"ok":true}`,
+		}},
+	}, now)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PutEvents status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+
+	recvRec := mustSQSJSON(t, handler, "ReceiveMessage", map[string]any{
+		"QueueUrl":            queueURL,
+		"MaxNumberOfMessages": 1,
+	}, now)
+	if recvRec.Code != http.StatusOK {
+		t.Fatalf("ReceiveMessage status=%d body=%q", recvRec.Code, recvRec.Body.String())
+	}
+	var recvOut map[string]any
+	if err := json.Unmarshal(recvRec.Body.Bytes(), &recvOut); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := recvOut["Messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("Messages len=%d body=%q", len(msgs), recvRec.Body.String())
 	}
 }

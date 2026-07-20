@@ -205,7 +205,7 @@ func (s *Store) ProcessAsyncInvocation(invocationID string, maxRetries int, atte
 }
 
 // DeliverLambdaFailure sends the failed event to DeadLetterConfig.TargetArn and/or
-// DestinationConfig.OnFailure when they reference SQS queue ARNs.
+// DestinationConfig.OnFailure when they reference SQS queue ARNs or SNS topic ARNs.
 func (s *Store) DeliverLambdaFailure(fn LambdaFunction, eventJSON string, invokeErr error) error {
 	targets := lambdaFailureTargets(fn)
 	if len(targets) == 0 {
@@ -216,7 +216,7 @@ func (s *Store) DeliverLambdaFailure(fn LambdaFunction, eventJSON string, invoke
 		return err
 	}
 	for _, arn := range targets {
-		if err := s.sendLambdaDLQMessage(fn.AccountID, arn, body); err != nil {
+		if err := s.sendLambdaFailureDestination(fn.AccountID, arn, body); err != nil {
 			return err
 		}
 	}
@@ -264,17 +264,31 @@ func lambdaFailureMessageBody(fn LambdaFunction, eventJSON string, invokeErr err
 	})
 }
 
-func (s *Store) sendLambdaDLQMessage(accountID, queueARN string, body []byte) error {
-	queueARN = strings.TrimSpace(queueARN)
-	if !strings.HasPrefix(queueARN, "arn:aws:sqs:") {
-		return fmt.Errorf("DLQ target must be an SQS queue ARN")
+func (s *Store) sendLambdaFailureDestination(accountID, destARN string, body []byte) error {
+	destARN = strings.TrimSpace(destARN)
+	switch {
+	case strings.HasPrefix(destARN, "arn:aws:sqs:"):
+		queueName, err := queueNameFromARN(destARN)
+		if err != nil {
+			return err
+		}
+		if _, err := s.SendMessage(accountID, queueName, body, false, nil, "", nil); err != nil {
+			return fmt.Errorf("send lambda failure to SQS: %w", err)
+		}
+		return nil
+	case strings.HasPrefix(destARN, "arn:aws:sns:"):
+		topic, err := s.GetTopicByARN(destARN)
+		if err != nil {
+			return fmt.Errorf("send lambda failure to SNS: %w", err)
+		}
+		if topic.AccountID != accountID {
+			return fmt.Errorf("send lambda failure to SNS: topic account mismatch")
+		}
+		if _, err := s.Publish(accountID, topic.TopicName, string(body), "", nil); err != nil {
+			return fmt.Errorf("send lambda failure to SNS: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("failure destination must be an SQS queue ARN or SNS topic ARN")
 	}
-	queueName, err := queueNameFromARN(queueARN)
-	if err != nil {
-		return err
-	}
-	if _, err := s.SendMessage(accountID, queueName, body, false, nil, "", nil); err != nil {
-		return fmt.Errorf("send lambda DLQ message: %w", err)
-	}
-	return nil
 }

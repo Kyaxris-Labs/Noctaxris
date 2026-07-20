@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/google/uuid"
@@ -385,11 +386,15 @@ func (s *Store) listConfirmedSubscriptions(topicARN string) ([]Subscription, err
 }
 
 func (s *Store) deliverSNSSubscription(msg PublishedMessage, sub Subscription) {
+	var lastErr error
 	for attempt := 0; attempt < snsDeliveryMaxAttempts; attempt++ {
-		if err := s.deliverSNSSubscriptionOnce(msg, sub); err == nil {
+		lastErr = s.deliverSNSSubscriptionOnce(msg, sub)
+		if lastErr == nil {
 			return
 		}
 	}
+	log.Printf("sns delivery failed subscription=%s protocol=%s endpoint=%s err=%v",
+		sub.SubscriptionARN, sub.Protocol, sub.Endpoint, lastErr)
 }
 
 func (s *Store) deliverSNSSubscriptionOnce(msg PublishedMessage, sub Subscription) error {
@@ -437,6 +442,13 @@ func (s *Store) resolveSQSQueueName(accountID, endpoint string) (string, error) 
 	endpoint = strings.TrimSpace(endpoint)
 	switch {
 	case strings.HasPrefix(endpoint, "arn:aws:sqs:"):
+		arnAccount, err := queueAccountFromARN(endpoint)
+		if err != nil {
+			return "", err
+		}
+		if arnAccount != accountID {
+			return "", ErrNoSuchQueue
+		}
 		return queueNameFromARN(endpoint)
 	case strings.Contains(endpoint, "://"):
 		q, err := s.GetQueueByURL(endpoint)

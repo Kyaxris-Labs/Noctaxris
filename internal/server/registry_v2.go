@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ import (
 
 const (
 	registryV2Prefix     = "/v2/"
+	registryTokenPath    = "/v2/token"
 	maxRegistryBodyBytes = 16 << 20 // lab blob/manifest limit (matches S3 PutObject)
 	registryServiceName  = "ecr"
 )
@@ -49,6 +51,10 @@ func (s *Server) handleRegistryV2(w http.ResponseWriter, r *http.Request) {
 
 	if path == "/v2/" {
 		s.handleRegistryV2Root(w, r)
+		return
+	}
+	if path == registryTokenPath || path == registryTokenPath+"/" {
+		s.handleRegistryToken(w, r)
 		return
 	}
 
@@ -107,12 +113,48 @@ func (s *Server) handleRegistryV2Root(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleRegistryToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	token := extractRegistryToken(r)
+	if token == "" {
+		s.writeRegistryTokenUnauthorized(w)
+		return
+	}
+	_, _, expiresAt, err := s.store.ValidateAuthorizationToken(token)
+	if err != nil {
+		s.writeRegistryTokenUnauthorized(w)
+		return
+	}
+	expiresIn := int(time.Until(expiresAt).Seconds())
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
+	issuedAt := s.now().UTC().Format(time.RFC3339)
+	payload, err := json.Marshal(map[string]any{
+		"token":        token,
+		"access_token": token,
+		"expires_in":   expiresIn,
+		"issued_at":    issuedAt,
+	})
+	if err != nil {
+		s.writeRegistryError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
 func (s *Server) authenticateRegistry(r *http.Request) (accountID, token string, ok bool) {
 	token = extractRegistryToken(r)
 	if token == "" {
 		return "", "", false
 	}
-	accountID, _, err := s.store.ValidateAuthorizationToken(token)
+	accountID, _, _, err := s.store.ValidateAuthorizationToken(token)
 	if err != nil {
 		return "", "", false
 	}
@@ -526,7 +568,7 @@ func ensurePathWithinRoot(root, path string) error {
 }
 
 func registryWWWAuthenticateHeader() string {
-	return fmt.Sprintf(`Bearer realm="http://%s/v2/",service="%s"`, store.LabRegistryHost, registryServiceName)
+	return fmt.Sprintf(`Bearer realm="http://%s%s",service="%s"`, store.LabRegistryHost, registryTokenPath, registryServiceName)
 }
 
 func registryDinDPullHost(listenAddr string) string {
@@ -543,6 +585,12 @@ func registryDinDPullHost(listenAddr string) string {
 
 func (s *Server) writeRegistryUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", registryWWWAuthenticateHeader())
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+func (s *Server) writeRegistryTokenUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="noctaxris-ecr"`)
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusUnauthorized)
 }

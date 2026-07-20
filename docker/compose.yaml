@@ -30,6 +30,9 @@ services:
   noctaxris-engine:
     image: docker:27-dind
     privileged: true
+    environment:
+      # Include Compose DNS name so API TLS verify against noctaxris-engine succeeds.
+      DOCKER_TLS_SAN: DNS:noctaxris-engine
     # DOCKER_TLS_CERTDIR defaults to /certs; engine listens on 2376 on the Compose network.
     volumes:
       - noctaxris-data:/var/lib/noctaxris
