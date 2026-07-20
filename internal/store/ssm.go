@@ -287,11 +287,7 @@ func (s *Store) parameterFromRow(row parameterRow, withDecryption bool) (Paramet
 	if !KeyUsableForCrypto(k.KeyState) {
 		return Parameter{}, fmt.Errorf("parameter %s: %w", row.Name, ErrInvalidKeyState)
 	}
-	cmk, err := s.UnsealKeyMaterial(row.KMSKeyID)
-	if err != nil {
-		return Parameter{}, fmt.Errorf("parameter %s: unseal key: %w", row.Name, err)
-	}
-	plain, err := DecryptUnderCMK(cmk, row.ValueSealed)
+	plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.ValueSealed)
 	if err != nil {
 		return Parameter{}, fmt.Errorf("parameter %s: decrypt: %w", row.Name, err)
 	}
@@ -324,6 +320,62 @@ func (s *Store) GetParameters(accountID string, names []string, withDecryption b
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	if out == nil {
+		out = []Parameter{}
+	}
+	return out, nil
+}
+
+// GetParametersByPath returns parameters under a hierarchy path.
+// When recursive is false, only immediate children (one extra path segment) are returned.
+func (s *Store) GetParametersByPath(accountID, path string, recursive, withDecryption bool) ([]Parameter, error) {
+	path = normalizeParameterName(path)
+	if path == "" || path == "/" {
+		return nil, fmt.Errorf("ValidationException: Path is required")
+	}
+	prefix := path
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	rows, err := s.db.Query(
+		`SELECT name, arn, param_type, value_plain, value_sealed, sealed, kms_key_id, version, last_modified
+		 FROM ssm_parameters WHERE account_id = ? AND name LIKE ? ORDER BY name`,
+		accountID, prefix+"%",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get parameters by path %s: %w", path, err)
+	}
+	defer rows.Close()
+
+	var out []Parameter
+	for rows.Next() {
+		var (
+			row     parameterRow
+			sealed  int
+			sealedB []byte
+		)
+		if err := rows.Scan(&row.Name, &row.ARN, &row.Type, &row.ValuePlain, &sealedB, &sealed, &row.KMSKeyID, &row.Version, &row.LastModified); err != nil {
+			return nil, fmt.Errorf("get parameters by path %s: %w", path, err)
+		}
+		row.Sealed = sealed == 1
+		row.ValueSealed = sealedB
+		rest := strings.TrimPrefix(row.Name, prefix)
+		if rest == "" || rest == row.Name {
+			continue
+		}
+		if !recursive && strings.Contains(rest, "/") {
+			continue
+		}
+		p, err := s.parameterFromRow(row, withDecryption)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get parameters by path %s: %w", path, err)
 	}
 	if out == nil {
 		out = []Parameter{}

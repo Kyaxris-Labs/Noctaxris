@@ -51,4 +51,4 @@ aws kinesis delete-stream --stream-name "$STREAM" --endpoint-url "$EP"
 - Multi-shard split/merge, enhanced fan-out, consumers
 - On-Demand capacity mode billing fantasy
 - Server-side encryption depth beyond a cheap flag
-- Kinesis Data Firehose and Analytics
+- Kinesis Data Analytics (Firehose is a separate lab service: [firehose.md](firehose.md))

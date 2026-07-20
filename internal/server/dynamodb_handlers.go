@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -309,32 +310,34 @@ func (s *Server) dynamoCreateTable(
 		}
 	}
 
-	var gsi *store.DynamoGSI
+	var gsis []store.DynamoGSI
 	if indexes, ok := params["GlobalSecondaryIndexes"].([]any); ok && len(indexes) > 0 {
-		if len(indexes) > 1 {
+		if len(indexes) > 2 {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				"Only one lab GSI is supported.", readOnly, eventID, verified)
+				"Lab supports at most two GSIs per table.", readOnly, eventID, verified)
 			return
 		}
-		raw, ok := indexes[0].(map[string]any)
-		if !ok {
-			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				"Invalid GlobalSecondaryIndexes entry.", readOnly, eventID, verified)
-			return
+		for _, rawIdx := range indexes {
+			raw, ok := rawIdx.(map[string]any)
+			if !ok {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					"Invalid GlobalSecondaryIndexes entry.", readOnly, eventID, verified)
+				return
+			}
+			parsed, err := dynamoParseGSISpec(raw, attrTypes)
+			if err != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					err.Error(), readOnly, eventID, verified)
+				return
+			}
+			gsis = append(gsis, parsed)
 		}
-		parsed, err := dynamoParseGSISpec(raw, attrTypes)
-		if err != nil {
-			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				err.Error(), readOnly, eventID, verified)
-			return
-		}
-		gsi = &parsed
 	}
 
-	table, err := s.store.CreateTable(
+	table, err := s.store.CreateTableWithGSIs(
 		verified.AccountID, region, tableName,
 		hashKey, hashType, rangeKey, rangeType, sseType, kmsKeyID,
-		gsi,
+		gsis,
 	)
 	if errors.Is(err, store.ErrTableAlreadyExists) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
@@ -476,6 +479,11 @@ func (s *Server) dynamoUpdateTable(
 				if errors.Is(err, store.ErrGSIAlreadyExists) {
 					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
 						"GSI already exists.", readOnly, eventID, verified)
+					return
+				}
+				if errors.Is(err, store.ErrTooManyGSIs) {
+					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+						"Lab supports at most two GSIs per table.", readOnly, eventID, verified)
 					return
 				}
 				if errors.Is(err, store.ErrInvalidKeyType) {
@@ -870,7 +878,13 @@ func (s *Server) dynamoQuery(
 	}
 	var page store.ItemPage
 	if indexName != "" {
-		page, err = s.store.QueryGSIItems(table.AccountID, table.TableName, queryPK, limit, startSK)
+		_, slot, ok := table.GSIByName(indexName)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				fmt.Sprintf("index %q not found", indexName), readOnly, eventID, verified)
+			return
+		}
+		page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, slot, queryPK, limit, startSK)
 	} else {
 		page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, limit, startSK)
 	}
@@ -1251,7 +1265,7 @@ func (s *Server) dynamoStoreItem(
 	var cmk []byte
 	keyID := ""
 	if table.SSEType == store.SSETypeKMS {
-		cmk, keyID, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
+		cmk, _, keyID, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
 		if err != nil {
 			return err
 		}
@@ -1268,7 +1282,13 @@ func (s *Server) dynamoStoreItem(
 			err.Error(), readOnly, eventID, verified)
 		return err
 	}
-	if err := s.store.PutItemBytes(table.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, data, sealed, sealedDEK); err != nil {
+	gsi2PK, gsi2SK, err := ddb.GSI2KeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return err
+	}
+	if err := s.store.PutItemBytesMultiGSI(table.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, data, sealed, sealedDEK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put item.", readOnly, eventID, verified)
 		return err
@@ -1301,14 +1321,14 @@ func (s *Server) dynamoLoadItem(
 			"Unable to get item.", readOnly, eventID, verified)
 		return nil, false, err
 	}
-	var cmk []byte
+	var materials [][]byte
 	if stored.Sealed {
-		cmk, _, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
+		_, materials, _, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
 		if err != nil {
 			return nil, false, err
 		}
 	}
-	plain, err := ddb.LoadItemJSON(table, stored, cmk)
+	plain, err := ddb.LoadItemJSONAny(table, stored, materials)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to decrypt item.", readOnly, eventID, verified)
@@ -1336,7 +1356,7 @@ func (s *Server) dynamoDecodePage(
 	table store.DynamoTable,
 	page store.ItemPage,
 ) ([]ddb.ItemMap, ddb.ItemMap, error) {
-	var cmk []byte
+	var materials [][]byte
 	var err error
 	needCMK := false
 	for _, it := range page.Items {
@@ -1346,7 +1366,7 @@ func (s *Server) dynamoDecodePage(
 		}
 	}
 	if needCMK {
-		cmk, _, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
+		_, materials, _, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1354,7 +1374,7 @@ func (s *Server) dynamoDecodePage(
 	items := make([]ddb.ItemMap, 0, len(page.Items))
 	nowUnix := time.Now().Unix()
 	for _, stored := range page.Items {
-		plain, err := ddb.LoadItemJSON(table, stored, cmk)
+		plain, err := ddb.LoadItemJSONAny(table, stored, materials)
 		if err != nil {
 			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to decrypt item.", readOnly, eventID, verified)
@@ -1391,38 +1411,44 @@ func (s *Server) dynamoUnsealTableCMK(
 	verified *authn.Verified,
 	readOnly bool,
 	table store.DynamoTable,
-) ([]byte, string, error) {
+) (cmk []byte, materials [][]byte, keyID string, err error) {
 	if table.KMSKeyID == "" {
-		err := errors.New("table KMS key missing")
+		err = errors.New("table KMS key missing")
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key is not configured.", readOnly, eventID, verified)
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	keyID, err := s.store.ResolveKeyID(verified.AccountID, table.KMSKeyID)
+	keyID, err = s.store.ResolveKeyID(verified.AccountID, table.KMSKeyID)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key not found.", readOnly, eventID, verified)
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	key, err := s.store.GetKey(keyID)
 	if err != nil || key.AccountID != verified.AccountID {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key not found.", readOnly, eventID, verified)
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	if key.KeyState != store.KeyStateEnabled {
-		err := errors.New("kms key disabled")
+		err = errors.New("kms key disabled")
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key is disabled.", readOnly, eventID, verified)
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	cmk, err := s.store.UnsealKeyMaterial(keyID)
+	materials, err = s.store.UnsealAllKeyMaterials(keyID)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to load key material.", readOnly, eventID, verified)
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	return cmk, keyID, nil
+	if len(materials) == 0 {
+		err = errors.New("no key material")
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load key material.", readOnly, eventID, verified)
+		return nil, nil, "", err
+	}
+	return materials[0], materials, keyID, nil
 }
 
 func dynamoLimit(params map[string]any) int {

@@ -38,39 +38,43 @@ func tableDescription(t store.DynamoTable) map[string]any {
 	}
 
 	if t.HasGSI() {
-		gsiAttrs := []map[string]string{
-			{"AttributeName": t.GSIHashKeyName, "AttributeType": t.GSIHashKeyType},
-		}
-		gsiKeySchema := []map[string]string{
-			{"AttributeName": t.GSIHashKeyName, "KeyType": "HASH"},
-		}
-		if t.GSIHasRangeKey() {
-			gsiAttrs = append(gsiAttrs, map[string]string{
-				"AttributeName": t.GSIRangeKeyName, "AttributeType": t.GSIRangeKeyType,
-			})
-			gsiKeySchema = append(gsiKeySchema, map[string]string{
-				"AttributeName": t.GSIRangeKeyName, "KeyType": "RANGE",
-			})
-		}
-		for _, a := range gsiAttrs {
-			found := false
-			for _, existing := range attrs {
-				if existing["AttributeName"] == a["AttributeName"] {
-					found = true
-					break
+		gsiList := []map[string]any{}
+		for _, g := range t.GSIs() {
+			gsiKeySchema := []map[string]string{
+				{"AttributeName": g.HashKeyName, "KeyType": "HASH"},
+			}
+			gsiAttrs := []map[string]string{
+				{"AttributeName": g.HashKeyName, "AttributeType": g.HashKeyType},
+			}
+			if g.HasRangeKey() {
+				gsiAttrs = append(gsiAttrs, map[string]string{
+					"AttributeName": g.RangeKeyName, "AttributeType": g.RangeKeyType,
+				})
+				gsiKeySchema = append(gsiKeySchema, map[string]string{
+					"AttributeName": g.RangeKeyName, "KeyType": "RANGE",
+				})
+			}
+			for _, a := range gsiAttrs {
+				found := false
+				for _, existing := range attrs {
+					if existing["AttributeName"] == a["AttributeName"] {
+						found = true
+						break
+					}
+				}
+				if !found {
+					attrs = append(attrs, a)
 				}
 			}
-			if !found {
-				attrs = append(attrs, a)
-			}
+			gsiList = append(gsiList, map[string]any{
+				"IndexName":   g.IndexName,
+				"KeySchema":   gsiKeySchema,
+				"Projection":  map[string]string{"ProjectionType": "ALL"},
+				"IndexStatus": "ACTIVE",
+			})
 		}
 		desc["AttributeDefinitions"] = attrs
-		desc["GlobalSecondaryIndexes"] = []map[string]any{{
-			"IndexName":   t.GSIName,
-			"KeySchema":   gsiKeySchema,
-			"Projection":  map[string]string{"ProjectionType": "ALL"},
-			"IndexStatus": "ACTIVE",
-		}}
+		desc["GlobalSecondaryIndexes"] = gsiList
 	}
 
 	ttlStatus := store.TTLStatusDisabled

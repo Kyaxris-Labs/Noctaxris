@@ -196,6 +196,12 @@ func (s *Server) handleS3(
 	switch {
 	case r.Method == http.MethodGet && bucket == "" && key == "":
 		s.s3ListBuckets(w, r, requestID, eventID, verified, readOnly)
+	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("versioning"):
+		s.s3PutBucketVersioning(w, r, body, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("versioning"):
+		s.s3GetBucketVersioning(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("versions"):
+		s.s3ListObjectVersions(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("encryption"):
 		s.s3PutBucketEncryption(w, r, body, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("encryption"):
@@ -708,7 +714,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	obj, err := s.store.PutObject(ref.accountID, bucket, key, meta)
+	obj, versionID, err := s.store.PutObjectVersioned(ref.accountID, bucket, key, meta)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "PutObject")
@@ -727,6 +733,9 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 
 	w.Header().Set(requestIDHeader, requestID)
 	w.Header().Set("ETag", `"`+obj.ETag+`"`)
+	if versionID != "" {
+		w.Header().Set("x-amz-version-id", versionID)
+	}
 	if obj.SSEAlgorithm != "" {
 		w.Header().Set(headerSSESSE, obj.SSEAlgorithm)
 	}
@@ -856,7 +865,8 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 			"Access Denied", "GetObject")
 		return
 	}
-	meta, data, err := s.store.GetObject(ref.accountID, bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	meta, vid, data, err := s.store.GetObjectVersion(ref.accountID, bucket, key, versionID)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
 			"The specified key does not exist.", "GetObject")
@@ -880,6 +890,9 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 	w.Header().Set(requestIDHeader, requestID)
 	w.Header().Set("Content-Type", meta.ContentType)
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
+	if vid != "" {
+		w.Header().Set("x-amz-version-id", vid)
+	}
 	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(plain)), 10))
 	w.Header().Set("Last-Modified", s3HTTPLastModified(meta.LastModified))
 	if meta.SSEAlgorithm != "" {
@@ -1404,11 +1417,7 @@ func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, 
 		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
 			return nil, errS3AccessDenied
 		}
-		cmk, err := s.store.UnsealKeyMaterial(keyID)
-		if err != nil {
-			return nil, err
-		}
-		dek, err := kmssvc.DecryptUnderCMK(cmk, sealedDEK)
+		dek, err := s.store.DecryptBlobWithKey(keyID, sealedDEK)
 		if err != nil {
 			return nil, err
 		}
@@ -1468,11 +1477,7 @@ func (s *Server) decryptObjectPayload(verified *authn.Verified, meta store.Objec
 		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
 			return nil, errS3AccessDenied
 		}
-		cmk, err := s.store.UnsealKeyMaterial(keyID)
-		if err != nil {
-			return nil, err
-		}
-		dek, err := kmssvc.DecryptUnderCMK(cmk, meta.SealedDEK)
+		dek, err := s.store.DecryptBlobWithKey(keyID, meta.SealedDEK)
 		if err != nil {
 			return nil, err
 		}

@@ -56,6 +56,8 @@ type Key struct {
 	DeletionDate        string
 	PendingWindowInDays int
 	KeyRotationEnabled  bool
+	LastRotationDate    string
+	RotationPeriodDays  int
 }
 
 // Alias is a KMS alias pointing at a CMK.
@@ -152,29 +154,20 @@ func (s *Store) CreateKey(accountID, creatorARN, policyOverride string) (Key, er
 	return k, nil
 }
 
-// GetKey returns a CMK by key ID.
+// GetKey returns a CMK by key ID. Runs the pending-deletion sweeper first.
 func (s *Store) GetKey(keyID string) (Key, error) {
-	var k Key
-	var rotation int
-	err := s.db.QueryRow(
-		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
-		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0)
-		 FROM kms_keys WHERE key_id = ?`,
-		keyID,
-	).Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
-		&k.DeletionDate, &rotation)
-	if err != nil {
-		return Key{}, err
-	}
-	k.KeyRotationEnabled = rotation != 0
-	return k, nil
+	return s.sweepThenGetKey(keyID)
 }
 
 // ListKeys returns CMKs for an account ordered by creation_date.
 func (s *Store) ListKeys(accountID string) ([]Key, error) {
+	if _, err := s.SweepExpiredPendingKeys(time.Now().UTC()); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Query(
 		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
-		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0)
+		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0),
+		        COALESCE(last_rotation_date, ''), COALESCE(rotation_period_days, 0)
 		 FROM kms_keys WHERE account_id = ? ORDER BY creation_date, key_id`,
 		accountID,
 	)
@@ -187,11 +180,13 @@ func (s *Store) ListKeys(accountID string) ([]Key, error) {
 	for rows.Next() {
 		var k Key
 		var rotation int
+		var period int
 		if err := rows.Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
-			&k.DeletionDate, &rotation); err != nil {
+			&k.DeletionDate, &rotation, &k.LastRotationDate, &period); err != nil {
 			return nil, fmt.Errorf("list keys %s: %w", accountID, err)
 		}
 		k.KeyRotationEnabled = rotation != 0
+		k.RotationPeriodDays = period
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
@@ -302,7 +297,7 @@ func (s *Store) CancelKeyDeletion(keyID string) error {
 }
 
 // SetKeyRotationEnabled persists automatic rotation status for a symmetric ENCRYPT_DECRYPT CMK.
-// Lab: status flag only; no background rotator.
+// When enabling, lab rotates sealed key material once immediately so rotation is more than a flag.
 func (s *Store) SetKeyRotationEnabled(keyID string, enabled bool) error {
 	k, err := s.GetKey(keyID)
 	if err != nil {
@@ -324,6 +319,11 @@ func (s *Store) SetKeyRotationEnabled(keyID string, enabled bool) error {
 	}
 	if _, err := res.RowsAffected(); err != nil {
 		return fmt.Errorf("set key rotation %s: %w", keyID, err)
+	}
+	if enabled {
+		if err := s.RotateKeyMaterial(keyID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -645,9 +645,11 @@ func (s *Store) createKeyTx(tx *sql.Tx, accountID, creatorARN, policyOverride st
 	created := nowRFC3339()
 	_, err = tx.Exec(
 		`INSERT INTO kms_keys
-		 (key_id, account_id, arn, key_state, key_usage, sealed_material, key_policy, creation_date, deletion_date, key_rotation_enabled)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0)`,
+		 (key_id, account_id, arn, key_state, key_usage, sealed_material, key_policy, creation_date, deletion_date, key_rotation_enabled,
+		  last_rotation_date, rotation_period_days)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', ?)`,
 		keyID, accountID, arn, KeyStateEnabled, KeyUsageEncryptDecrypt, sealed, policy, created,
+		DefaultLabRotationPeriodDays,
 	)
 	if err != nil {
 		return Key{}, fmt.Errorf("create key: %w", err)

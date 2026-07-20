@@ -44,6 +44,20 @@ func GetParametersJSON(params []store.Parameter, invalid []string, withDecryptio
 	})
 }
 
+// GetParametersByPathJSON builds a GetParametersByPath response.
+func GetParametersByPathJSON(params []store.Parameter, withDecryption bool) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(params))
+	for _, p := range params {
+		includeValue := p.Type == store.ParamTypeString || withDecryption
+		entry, err := parameterJSON(p, includeValue)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return json.Marshal(map[string]any{"Parameters": entries})
+}
+
 // DescribeParametersJSON builds a DescribeParameters response.
 func DescribeParametersJSON(params []store.Parameter) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(params))

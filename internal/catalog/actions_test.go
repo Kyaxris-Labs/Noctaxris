@@ -201,6 +201,7 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionSSMPutParameter,
 		catalog.ActionSSMGetParameter,
 		catalog.ActionSSMGetParameters,
+		catalog.ActionSSMGetParametersByPath,
 		catalog.ActionSSMDeleteParameter,
 		catalog.ActionSSMDescribeParameters,
 		// Secrets Manager lab
@@ -208,6 +209,8 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionSecretsGetSecretValue,
 		catalog.ActionSecretsPutSecretValue,
 		catalog.ActionSecretsDeleteSecret,
+		catalog.ActionSecretsRestoreSecret,
+		catalog.ActionSecretsRotateSecret,
 		catalog.ActionSecretsDescribeSecret,
 		catalog.ActionSecretsListSecrets,
 		catalog.ActionSecretsPutResourcePolicy,
@@ -258,8 +261,6 @@ func TestKnownActionUnknown(t *testing.T) {
 		"kms:ReEncrypt",
 		"dynamodb:CreateGlobalTable",
 		"sqs:CreateFIFOQueue",
-		"ssm:GetParametersByPath",
-		"secretsmanager:RotateSecret",
 	}
 	for _, action := range cases {
 		if catalog.KnownAction(action) {
@@ -454,12 +455,15 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionSSMPutParameter:                      "ssm:PutParameter",
 		catalog.ActionSSMGetParameter:                      "ssm:GetParameter",
 		catalog.ActionSSMGetParameters:                     "ssm:GetParameters",
+		catalog.ActionSSMGetParametersByPath:               "ssm:GetParametersByPath",
 		catalog.ActionSSMDeleteParameter:                   "ssm:DeleteParameter",
 		catalog.ActionSSMDescribeParameters:                "ssm:DescribeParameters",
 		catalog.ActionSecretsCreateSecret:                  "secretsmanager:CreateSecret",
 		catalog.ActionSecretsGetSecretValue:                "secretsmanager:GetSecretValue",
 		catalog.ActionSecretsPutSecretValue:                "secretsmanager:PutSecretValue",
 		catalog.ActionSecretsDeleteSecret:                  "secretsmanager:DeleteSecret",
+		catalog.ActionSecretsRestoreSecret:                 "secretsmanager:RestoreSecret",
+		catalog.ActionSecretsRotateSecret:                  "secretsmanager:RotateSecret",
 		catalog.ActionSecretsDescribeSecret:                "secretsmanager:DescribeSecret",
 		catalog.ActionSecretsListSecrets:                   "secretsmanager:ListSecrets",
 		catalog.ActionSecretsPutResourcePolicy:             "secretsmanager:PutResourcePolicy",

@@ -632,11 +632,7 @@ func (s *Server) decryptSQSBody(verified *authn.Verified, attrs map[string]strin
 		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
 			return nil, errSQSAccessDenied
 		}
-		cmk, err := s.store.UnsealKeyMaterial(keyID)
-		if err != nil {
-			return nil, err
-		}
-		dek, err := kmssvc.DecryptUnderCMK(cmk, msg.SealedDEK)
+		dek, err := s.store.DecryptBlobWithKey(keyID, msg.SealedDEK)
 		if err != nil {
 			return nil, err
 		}
@@ -704,29 +700,39 @@ func (s *Server) writeSQSError(
 }
 
 func sqsSendOptsFromParams(attrs map[string]string, params map[string]any) *store.SendMessageOpts {
-	if !attrTruthySQS(attrs, "FifoQueue") {
-		return nil
-	}
 	opts := &store.SendMessageOpts{}
-	if groupID, _ := params["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
-		opts.MessageGroupID = strings.TrimSpace(groupID)
+	if n := intFromJSONNumber(params["DelaySeconds"]); n > 0 {
+		opts.DelaySeconds = n
 	}
-	if dedupID, _ := params["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
-		opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+	if attrTruthySQS(attrs, "FifoQueue") {
+		if groupID, _ := params["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
+			opts.MessageGroupID = strings.TrimSpace(groupID)
+		}
+		if dedupID, _ := params["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
+			opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+		}
+	}
+	if opts.DelaySeconds == 0 && opts.MessageGroupID == "" && opts.MessageDeduplicationID == "" {
+		return nil
 	}
 	return opts
 }
 
 func sqsSendOptsFromEntry(attrs map[string]string, entry map[string]any) *store.SendMessageOpts {
-	if !attrTruthySQS(attrs, "FifoQueue") {
-		return nil
-	}
 	opts := &store.SendMessageOpts{}
-	if groupID, _ := entry["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
-		opts.MessageGroupID = strings.TrimSpace(groupID)
+	if n := intFromJSONNumber(entry["DelaySeconds"]); n > 0 {
+		opts.DelaySeconds = n
 	}
-	if dedupID, _ := entry["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
-		opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+	if attrTruthySQS(attrs, "FifoQueue") {
+		if groupID, _ := entry["MessageGroupId"].(string); strings.TrimSpace(groupID) != "" {
+			opts.MessageGroupID = strings.TrimSpace(groupID)
+		}
+		if dedupID, _ := entry["MessageDeduplicationId"].(string); strings.TrimSpace(dedupID) != "" {
+			opts.MessageDeduplicationID = strings.TrimSpace(dedupID)
+		}
+	}
+	if opts.DelaySeconds == 0 && opts.MessageGroupID == "" && opts.MessageDeduplicationID == "" {
+		return nil
 	}
 	return opts
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -706,5 +707,83 @@ func TestLambdaInvokeDeniedWithoutPolicyOrIdentity(t *testing.T) {
 	}, denyAKID, denySecret, now)
 	if invokeRec.Code != http.StatusForbidden {
 		t.Fatalf("Invoke status=%d want 403 body=%q", invokeRec.Code, invokeRec.Body.String())
+	}
+}
+
+func TestLambdaZipInvokeMicroVMOptInFailsClosed(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.ComputeRuntime = "microvm"
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "lambda-exec-microvm", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-microvm"
+
+	createRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "microvm-zip-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code": map[string]any{
+			"ZipFile": testLambdaZipB64(t),
+		},
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	invokeRec := mustLambdaJSON(t, handler, "Invoke", map[string]any{
+		"FunctionName": "microvm-zip-fn",
+		"Payload":      `{"ping":true}`,
+	}, now)
+	if invokeRec.Code == http.StatusOK {
+		t.Fatalf("expected microVM opt-in Invoke to fail closed, got 200")
+	}
+	body := invokeRec.Body.String()
+	if strings.Contains(strings.ToLower(body), "docker.sock") {
+		t.Fatalf("must not fall through to host docker.sock: %q", body)
+	}
+	if !strings.Contains(body, "microVM") && !strings.Contains(body, "Linux") && !strings.Contains(body, "WSL2") {
+		t.Fatalf("expected microVM fail-closed message in %q", body)
+	}
+}
+
+func TestLambdaImageInvokeMicroVMOptInFailsClosed(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.ComputeRuntime = "microvm"
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "lambda-exec-microvm-img", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-microvm-img"
+
+	createRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "microvm-img-fn",
+		"PackageType":  "Image",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code": map[string]any{
+			"ImageUri": "public.ecr.aws/lambda/python:3.12",
+		},
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	invokeRec := mustLambdaJSON(t, handler, "Invoke", map[string]any{
+		"FunctionName": "microvm-img-fn",
+		"Payload":      `{"ping":true}`,
+	}, now)
+	if invokeRec.Code == http.StatusOK {
+		t.Fatalf("expected microVM Image Invoke to fail closed, got 200")
+	}
+	body := invokeRec.Body.String()
+	if strings.Contains(strings.ToLower(body), "docker.sock") {
+		t.Fatalf("must not fall through to host docker.sock: %q", body)
+	}
+	if !strings.Contains(body, "microVM") && !strings.Contains(body, "Linux") && !strings.Contains(body, "WSL2") {
+		t.Fatalf("expected microVM fail-closed message in %q", body)
 	}
 }

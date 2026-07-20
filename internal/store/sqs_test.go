@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -342,5 +343,85 @@ func TestRedrivePolicyMovesMessageToDLQ(t *testing.T) {
 	}
 	if len(dlqMsgs) != 1 || !bytes.Equal(dlqMsgs[0].Body, []byte("fail-me")) {
 		t.Fatalf("dlq message=%+v", dlqMsgs)
+	}
+}
+
+func TestSQSDelaySecondsHidesUntilVisible(t *testing.T) {
+	st := openSQSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "delayed", map[string]string{
+		"DelaySeconds": "60",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessage(account, "delayed", []byte("later"), false, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ReceiveMessages(account, "delayed", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected queue DelaySeconds to hide message, got %+v", got)
+	}
+
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "permsg", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessage(account, "permsg", []byte("soon"), false, nil, "", &store.SendMessageOpts{DelaySeconds: 900}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ReceiveMessages(account, "permsg", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected per-message DelaySeconds to hide message, got %+v", got)
+	}
+	if _, err := st.SendMessage(account, "permsg", []byte("now"), false, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ReceiveMessages(account, "permsg", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || string(got[0].Body) != "now" {
+		t.Fatalf("want immediate message, got %+v", got)
+	}
+}
+
+func TestSQSRedriveAllowPolicyDenies(t *testing.T) {
+	st := openSQSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "dlq", nil); err != nil {
+		t.Fatal(err)
+	}
+	dlqARN := store.QueueARN("us-east-1", account, "dlq")
+	allow := `{"redrivePermission":"byQueue","sourceQueueArns":["arn:aws:sqs:us-east-1:000000000001:other"]}`
+	if err := st.SetQueueAttributes(account, "dlq", map[string]string{"RedriveAllowPolicy": allow}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "source", map[string]string{
+		"VisibilityTimeout": "0",
+		"RedrivePolicy":     `{"deadLetterTargetArn":"` + dlqARN + `","maxReceiveCount":"1"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessage(account, "source", []byte("fail-me"), false, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.ReceiveMessages(account, "source", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("first receive=%+v", first)
+	}
+	if err := st.ChangeMessageVisibility(account, "source", first[0].ReceiptHandle, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.ReceiveMessages(account, "source", 1)
+	if err == nil || !strings.Contains(err.Error(), "RedriveAllowPolicy") {
+		t.Fatalf("want RedriveAllowPolicy error, got %v", err)
 	}
 }

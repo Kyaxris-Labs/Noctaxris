@@ -8,12 +8,14 @@ Lab-complete Secrets Manager core: create, read, update, delete, describe, and l
 
 | Area | Actions |
 |------|---------|
-| Secrets | `CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`, `DescribeSecret`, `ListSecrets` |
+| Secrets | `CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`, `RestoreSecret`, `RotateSecret`, `DescribeSecret`, `ListSecrets` |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | Payload | `SecretString` and/or `SecretBinary` (base64 on wire) |
 | KMS | Optional `KmsKeyId` on create. Defaults to lab `alias/aws/secretsmanager` (per-account CMK seeded on first use) |
+| Delete / recovery | `DeleteSecret` schedules deletion with `RecoveryWindowInDays` (7–30, default 30). `ForceDeleteWithoutRecovery` deletes immediately. `RestoreSecret` clears a scheduled deletion. On-read sweeper hard-deletes after `DeletionDate` |
+| Rotate | Lab `RotateSecret` replaces the secret string with a new random value (no Lambda rotation function) |
 
-Secret metadata and sealed values live in SQLite. ARNs include a random six-character hex suffix (AWS-shaped). `DeleteSecret` removes the secret immediately (no recovery window).
+Secret metadata and sealed values live in SQLite. ARNs include a random six-character hex suffix (AWS-shaped).
 
 ### Authz notes
 
@@ -73,6 +75,15 @@ aws secretsmanager delete-resource-policy \
 
 aws secretsmanager delete-secret \
   --secret-id "$SECRET" \
+  --recovery-window-in-days 7 \
+  --endpoint-url "$EP"
+
+aws secretsmanager restore-secret \
+  --secret-id "$SECRET" \
+  --endpoint-url "$EP"
+
+aws secretsmanager rotate-secret \
+  --secret-id "$SECRET" \
   --endpoint-url "$EP"
 ```
 
@@ -88,6 +99,5 @@ aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --endpoint-url "$E
 
 ## Not yet / deferred
 
-- Full Secrets Manager SAR beyond the lab set (`RotateSecret`, random password generation, version stages, tags, replication, filtering on `ListSecrets`, full pagination parity)
-- Delete recovery window and scheduled deletion (lab deletes immediately)
+- Full Secrets Manager SAR beyond the lab set (Lambda-backed rotation, random password generation, version stages, tags, replication, filtering on `ListSecrets`, full pagination parity)
 - True AWS-owned `alias/aws/secretsmanager` key (lab convenience alias is a per-account CMK approximation)

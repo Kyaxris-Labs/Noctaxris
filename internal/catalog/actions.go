@@ -225,6 +225,9 @@ const (
 	ActionS3PutEncryptionConfiguration    = "s3:PutEncryptionConfiguration"
 	ActionS3GetEncryptionConfiguration    = "s3:GetEncryptionConfiguration"
 	ActionS3DeleteEncryptionConfiguration = "s3:DeleteEncryptionConfiguration"
+	ActionS3PutBucketVersioning           = "s3:PutBucketVersioning"
+	ActionS3GetBucketVersioning           = "s3:GetBucketVersioning"
+	ActionS3ListBucketVersions            = "s3:ListBucketVersions"
 )
 
 // DynamoDB lab actions (Phase 6).
@@ -268,11 +271,12 @@ const (
 
 // SSM lab actions (Phase 8).
 const (
-	ActionSSMPutParameter       = "ssm:PutParameter"
-	ActionSSMGetParameter       = "ssm:GetParameter"
-	ActionSSMGetParameters      = "ssm:GetParameters"
-	ActionSSMDeleteParameter    = "ssm:DeleteParameter"
-	ActionSSMDescribeParameters = "ssm:DescribeParameters"
+	ActionSSMPutParameter        = "ssm:PutParameter"
+	ActionSSMGetParameter        = "ssm:GetParameter"
+	ActionSSMGetParameters       = "ssm:GetParameters"
+	ActionSSMGetParametersByPath = "ssm:GetParametersByPath"
+	ActionSSMDeleteParameter     = "ssm:DeleteParameter"
+	ActionSSMDescribeParameters  = "ssm:DescribeParameters"
 )
 
 // SNS lab actions (Phase 9).
@@ -349,6 +353,8 @@ const (
 	ActionSecretsGetSecretValue       = "secretsmanager:GetSecretValue"
 	ActionSecretsPutSecretValue       = "secretsmanager:PutSecretValue"
 	ActionSecretsDeleteSecret         = "secretsmanager:DeleteSecret"
+	ActionSecretsRestoreSecret        = "secretsmanager:RestoreSecret"
+	ActionSecretsRotateSecret         = "secretsmanager:RotateSecret"
 	ActionSecretsDescribeSecret       = "secretsmanager:DescribeSecret"
 	ActionSecretsListSecrets          = "secretsmanager:ListSecrets"
 	ActionSecretsPutResourcePolicy    = "secretsmanager:PutResourcePolicy"
@@ -418,6 +424,84 @@ const (
 	ActionSFNStartExecution       = "states:StartExecution"
 	ActionSFNDescribeExecution    = "states:DescribeExecution"
 	ActionSFNGetExecutionHistory  = "states:GetExecutionHistory"
+)
+
+// CloudFormation lab actions (v4 Track B).
+const (
+	ActionCFNCreateStack    = "cloudformation:CreateStack"
+	ActionCFNDescribeStacks = "cloudformation:DescribeStacks"
+	ActionCFNDeleteStack    = "cloudformation:DeleteStack"
+	ActionCFNListStacks     = "cloudformation:ListStacks"
+)
+
+// CodePipeline lab actions (v4 Track B).
+const (
+	ActionCodePipelineCreatePipeline         = "codepipeline:CreatePipeline"
+	ActionCodePipelineGetPipeline            = "codepipeline:GetPipeline"
+	ActionCodePipelineDeletePipeline         = "codepipeline:DeletePipeline"
+	ActionCodePipelineStartPipelineExecution = "codepipeline:StartPipelineExecution"
+	ActionCodePipelineGetPipelineState       = "codepipeline:GetPipelineState"
+)
+
+// Firehose lab actions (v4 Track B).
+const (
+	ActionFirehoseCreateDeliveryStream  = "firehose:CreateDeliveryStream"
+	ActionFirehoseDeleteDeliveryStream  = "firehose:DeleteDeliveryStream"
+	ActionFirehoseDescribeDeliveryStream = "firehose:DescribeDeliveryStream"
+	ActionFirehoseListDeliveryStreams   = "firehose:ListDeliveryStreams"
+	ActionFirehosePutRecord             = "firehose:PutRecord"
+	ActionFirehosePutRecordBatch        = "firehose:PutRecordBatch"
+)
+
+// Glue Data Catalog lab actions (v4 Track B).
+const (
+	ActionGlueCreateDatabase = "glue:CreateDatabase"
+	ActionGlueGetDatabase    = "glue:GetDatabase"
+	ActionGlueGetDatabases   = "glue:GetDatabases"
+	ActionGlueDeleteDatabase = "glue:DeleteDatabase"
+	ActionGlueCreateTable    = "glue:CreateTable"
+	ActionGlueGetTable       = "glue:GetTable"
+	ActionGlueGetTables      = "glue:GetTables"
+	ActionGlueDeleteTable    = "glue:DeleteTable"
+)
+
+// WAFv2 lab actions (v4 Track B).
+const (
+	ActionWAFCreateWebACL     = "wafv2:CreateWebACL"
+	ActionWAFUpdateWebACL     = "wafv2:UpdateWebACL"
+	ActionWAFGetWebACL        = "wafv2:GetWebACL"
+	ActionWAFListWebACLs      = "wafv2:ListWebACLs"
+	ActionWAFCreateRuleGroup  = "wafv2:CreateRuleGroup"
+	ActionWAFAssociateWebACL  = "wafv2:AssociateWebACL"
+	ActionWAFEvaluate         = "wafv2:Evaluate"
+)
+
+// AWS Config lab actions (v4 Track B).
+const (
+	ActionConfigPutConfigurationRecorder      = "config:PutConfigurationRecorder"
+	ActionConfigPutDeliveryChannel            = "config:PutDeliveryChannel"
+	ActionConfigStartConfigurationRecorder    = "config:StartConfigurationRecorder"
+	ActionConfigDescribeComplianceByConfigRule = "config:DescribeComplianceByConfigRule"
+)
+
+// CodeBuild lab actions (v4 Track B).
+const (
+	ActionCodeBuildCreateProject  = "codebuild:CreateProject"
+	ActionCodeBuildStartBuild     = "codebuild:StartBuild"
+	ActionCodeBuildBatchGetBuilds = "codebuild:BatchGetBuilds"
+	ActionCodeBuildListBuilds     = "codebuild:ListBuilds"
+)
+
+// Batch lab actions (v4 Track B).
+const (
+	ActionBatchCreateComputeEnvironment    = "batch:CreateComputeEnvironment"
+	ActionBatchCreateJobQueue              = "batch:CreateJobQueue"
+	ActionBatchRegisterJobDefinition       = "batch:RegisterJobDefinition"
+	ActionBatchSubmitJob                   = "batch:SubmitJob"
+	ActionBatchDescribeComputeEnvironments = "batch:DescribeComputeEnvironments"
+	ActionBatchDescribeJobQueues           = "batch:DescribeJobQueues"
+	ActionBatchDescribeJobDefinitions      = "batch:DescribeJobDefinitions"
+	ActionBatchDescribeJobs                = "batch:DescribeJobs"
 )
 
 // Lambda lab actions (Phase 7).
@@ -583,6 +667,9 @@ func KnownAction(action string) bool {
 		ActionS3PutEncryptionConfiguration,
 		ActionS3GetEncryptionConfiguration,
 		ActionS3DeleteEncryptionConfiguration,
+		ActionS3PutBucketVersioning,
+		ActionS3GetBucketVersioning,
+		ActionS3ListBucketVersions,
 		ActionDynamoDBCreateTable,
 		ActionDynamoDBDescribeTable,
 		ActionDynamoDBDeleteTable,
@@ -638,12 +725,15 @@ func KnownAction(action string) bool {
 		ActionSSMPutParameter,
 		ActionSSMGetParameter,
 		ActionSSMGetParameters,
+		ActionSSMGetParametersByPath,
 		ActionSSMDeleteParameter,
 		ActionSSMDescribeParameters,
 		ActionSecretsCreateSecret,
 		ActionSecretsGetSecretValue,
 		ActionSecretsPutSecretValue,
 		ActionSecretsDeleteSecret,
+		ActionSecretsRestoreSecret,
+		ActionSecretsRotateSecret,
 		ActionSecretsDescribeSecret,
 		ActionSecretsListSecrets,
 		ActionSecretsPutResourcePolicy,
@@ -736,7 +826,53 @@ func KnownAction(action string) bool {
 		ActionSFNListStateMachines,
 		ActionSFNStartExecution,
 		ActionSFNDescribeExecution,
-		ActionSFNGetExecutionHistory:
+		ActionSFNGetExecutionHistory,
+		ActionCodeBuildCreateProject,
+		ActionCodeBuildStartBuild,
+		ActionCodeBuildBatchGetBuilds,
+		ActionCodeBuildListBuilds,
+		ActionBatchCreateComputeEnvironment,
+		ActionBatchCreateJobQueue,
+		ActionBatchRegisterJobDefinition,
+		ActionBatchSubmitJob,
+		ActionBatchDescribeComputeEnvironments,
+		ActionBatchDescribeJobQueues,
+		ActionBatchDescribeJobDefinitions,
+		ActionBatchDescribeJobs,
+		ActionCFNCreateStack,
+		ActionCFNDescribeStacks,
+		ActionCFNDeleteStack,
+		ActionCFNListStacks,
+		ActionCodePipelineCreatePipeline,
+		ActionCodePipelineGetPipeline,
+		ActionCodePipelineDeletePipeline,
+		ActionCodePipelineStartPipelineExecution,
+		ActionCodePipelineGetPipelineState,
+		ActionFirehoseCreateDeliveryStream,
+		ActionFirehoseDeleteDeliveryStream,
+		ActionFirehoseDescribeDeliveryStream,
+		ActionFirehoseListDeliveryStreams,
+		ActionFirehosePutRecord,
+		ActionFirehosePutRecordBatch,
+		ActionGlueCreateDatabase,
+		ActionGlueGetDatabase,
+		ActionGlueGetDatabases,
+		ActionGlueDeleteDatabase,
+		ActionGlueCreateTable,
+		ActionGlueGetTable,
+		ActionGlueGetTables,
+		ActionGlueDeleteTable,
+		ActionWAFCreateWebACL,
+		ActionWAFUpdateWebACL,
+		ActionWAFGetWebACL,
+		ActionWAFListWebACLs,
+		ActionWAFCreateRuleGroup,
+		ActionWAFAssociateWebACL,
+		ActionWAFEvaluate,
+		ActionConfigPutConfigurationRecorder,
+		ActionConfigPutDeliveryChannel,
+		ActionConfigStartConfigurationRecorder,
+		ActionConfigDescribeComplianceByConfigRule:
 		return true
 	default:
 		return false

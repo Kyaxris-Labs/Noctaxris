@@ -77,13 +77,35 @@ func SealItemJSON(cmk []byte, keyID string, plainJSON []byte) (EncryptedItem, er
 	return EncryptedItem{Ciphertext: ct, SealedDEK: sealedDEK}, nil
 }
 
-// OpenItemJSON decrypts a sealed DynamoDB item using CMK material.
+// OpenItemJSON decrypts a sealed DynamoDB item using one or more CMK materials
+// (current first, then prior generations after key rotation).
 func OpenItemJSON(cmk []byte, sealed EncryptedItem) ([]byte, error) {
-	dek, err := kmssvc.DecryptUnderCMK(cmk, sealed.SealedDEK)
-	if err != nil {
-		return nil, err
+	return OpenItemJSONAny([][]byte{cmk}, sealed)
+}
+
+// OpenItemJSONAny tries each CMK material until the wrapped DEK opens.
+func OpenItemJSONAny(materials [][]byte, sealed EncryptedItem) ([]byte, error) {
+	var lastErr error
+	for _, cmk := range materials {
+		if len(cmk) == 0 {
+			continue
+		}
+		dek, err := kmssvc.DecryptUnderCMK(cmk, sealed.SealedDEK)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		plain, err := DecryptAES256GCM(dek, sealed.Ciphertext)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return plain, nil
 	}
-	return DecryptAES256GCM(dek, sealed.Ciphertext)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unable to decrypt item")
+	}
+	return nil, lastErr
 }
 
 // StoragePayload prepares item bytes for PutItemBytes based on table SSE settings.
@@ -104,13 +126,18 @@ func StoragePayload(table store.DynamoTable, plainJSON, cmk []byte, keyID string
 
 // LoadItemJSON returns plaintext AttributeValue JSON from a stored item.
 func LoadItemJSON(table store.DynamoTable, item store.DynamoStoredItem, cmk []byte) ([]byte, error) {
+	return LoadItemJSONAny(table, item, [][]byte{cmk})
+}
+
+// LoadItemJSONAny decrypts a sealed item trying each CMK material.
+func LoadItemJSONAny(table store.DynamoTable, item store.DynamoStoredItem, materials [][]byte) ([]byte, error) {
 	if !item.Sealed {
 		return item.ItemJSON, nil
 	}
 	if table.SSEType != store.SSETypeKMS {
 		return nil, fmt.Errorf("sealed item on non-KMS table")
 	}
-	return OpenItemJSON(cmk, EncryptedItem{
+	return OpenItemJSONAny(materials, EncryptedItem{
 		Ciphertext: item.ItemJSON,
 		SealedDEK:  item.SealedDEK,
 	})

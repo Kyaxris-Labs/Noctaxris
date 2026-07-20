@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -282,6 +283,7 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
+		_ = s.store.MaybeAutoRotate(keyID, time.Time{})
 		plain, decErr := kmssvc.DecodeBinaryField(params["Plaintext"])
 		if decErr != nil || len(plain) == 0 {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -312,13 +314,7 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
-		cmk, unsealErr := s.store.UnsealKeyMaterial(keyID)
-		if unsealErr != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-				"Unable to load key material.", readOnly, eventID, verified)
-			return
-		}
-		plain, openErr := kmssvc.DecryptUnderCMK(cmk, blob)
+		plain, openErr := s.store.DecryptBlobWithKey(keyID, blob)
 		if openErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
 				"Unable to decrypt ciphertext.", readOnly, eventID, verified)
@@ -331,6 +327,7 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
+		_ = s.store.MaybeAutoRotate(keyID, time.Time{})
 		dek := make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, dek); err != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -582,19 +579,14 @@ func (s *Server) handleKMSReEncrypt(
 		return
 	}
 
-	sourceCMK, unsealErr := s.store.UnsealKeyMaterial(sourceKeyID)
-	if unsealErr != nil {
-		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to load source key material.", readOnly, eventID, verified)
-		return
-	}
-	plain, openErr := kmssvc.DecryptUnderCMK(sourceCMK, blob)
+	plain, openErr := s.store.DecryptBlobWithKey(sourceKeyID, blob)
 	if openErr != nil {
 		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
 			"Unable to decrypt ciphertext.", readOnly, eventID, verified)
 		return
 	}
 
+	_ = s.store.MaybeAutoRotate(destKeyID, time.Time{})
 	destCMK, unsealErr := s.store.UnsealKeyMaterial(destKeyID)
 	if unsealErr != nil {
 		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",

@@ -14,6 +14,24 @@ const ServicePrincipalECSTasks = "ecs-tasks.amazonaws.com"
 // ServicePrincipalStates is the AWS Step Functions service principal used in role trust.
 const ServicePrincipalStates = "states.amazonaws.com"
 
+// ServicePrincipalCloudFormation is the CloudFormation service principal used in role trust.
+const ServicePrincipalCloudFormation = "cloudformation.amazonaws.com"
+
+// ServicePrincipalCodePipeline is the CodePipeline service principal used in role trust.
+const ServicePrincipalCodePipeline = "codepipeline.amazonaws.com"
+
+// ServicePrincipalFirehose is the Kinesis Data Firehose service principal used in role trust.
+const ServicePrincipalFirehose = "firehose.amazonaws.com"
+
+// ServicePrincipalConfig is the AWS Config service principal used in role trust.
+const ServicePrincipalConfig = "config.amazonaws.com"
+
+// ServicePrincipalCodeBuild is the AWS CodeBuild service principal used in role trust.
+const ServicePrincipalCodeBuild = "codebuild.amazonaws.com"
+
+// ServicePrincipalBatch is the AWS Batch service principal used in role trust.
+const ServicePrincipalBatch = "batch.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

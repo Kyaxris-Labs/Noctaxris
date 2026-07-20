@@ -2,15 +2,15 @@
 
 **Status:** shipped
 
-Lab-complete customer-managed keys: sealed CMK material, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey*, ReEncrypt, grants, aliases (including lab `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs`), deletion lifecycle, and rotation enable/status flags.
+Lab-complete customer-managed keys: sealed CMK material, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey*, ReEncrypt, grants, aliases (including lab `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs`), deletion lifecycle with post-DeletionDate purge, and key-material rotation (not flags only).
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Keys | `CreateKey`, `DescribeKey`, `ListKeys`, `EnableKey`, `DisableKey` |
-| Lifecycle | `ScheduleKeyDeletion`, `CancelKeyDeletion` (`PendingDeletion` state. Cancel sets `Disabled`, matching AWS. No background sweeper after `DeletionDate`) |
-| Rotation flags | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` |
+| Lifecycle | `ScheduleKeyDeletion`, `CancelKeyDeletion` (`PendingDeletion` state. Cancel sets `Disabled`, matching AWS. On-read sweeper hard-deletes keys after `DeletionDate`, including aliases and grants) |
+| Rotation | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` (enable rotates sealed material immediately. Prior generations remain for Decrypt. Lab auto-rotate after `rotation_period_days`, default 365) |
 | Key policy | `GetKeyPolicy`, `PutKeyPolicy` |
 | Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` |
 | Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
@@ -62,7 +62,7 @@ aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
 
 ## Not yet / deferred
 
-- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity)
-- Background deletion after `DeletionDate` and on-demand or automatic key-material rotation (lab stores rotation enabled flags only)
+- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity, `RotateKeyOnDemand` API shape)
 - Cross-account grant flows beyond key policy dual eval
 - True AWS-owned managed key types beyond the lab convenience aliases above
+- AWS-faithful annual rotation calendar and multi-Region material replication

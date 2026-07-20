@@ -427,6 +427,46 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureKMSKeyMaterialSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCodeBuildSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureBatchSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCFNSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCodePipelineSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureFirehoseSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureGlueSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureWAFSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureConfigSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureS3VersioningSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -468,15 +508,25 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
 		`ALTER TABLE kms_keys ADD COLUMN deletion_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE kms_keys ADD COLUMN key_rotation_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE kms_keys ADD COLUMN last_rotation_date TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE kms_keys ADD COLUMN rotation_period_days INTEGER NOT NULL DEFAULT 365`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_range_key_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_range_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi2_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi2_hash_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi2_hash_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi2_range_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN gsi2_range_key_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN ttl_attribute_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN ttl_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dynamodb_items ADD COLUMN gsi_pk TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_items ADD COLUMN gsi_sk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_items ADD COLUMN gsi2_pk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_items ADD COLUMN gsi2_sk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_buckets ADD COLUMN versioning_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sqs_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sqs_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sqs_messages ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0`,

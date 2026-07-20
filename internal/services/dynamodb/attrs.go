@@ -111,12 +111,24 @@ func KeyFromCanonical(table store.DynamoTable, itemPK, itemSK string) (ItemMap, 
 }
 
 // GSIKeyStrings extracts canonical (gsiPK, gsiSK) from item attributes for the
-// table lab GSI. Empty strings are returned when the GSI keys are absent.
+// first lab GSI. Empty strings are returned when the GSI keys are absent.
 func GSIKeyStrings(table store.DynamoTable, item ItemMap) (gsiPK, gsiSK string, err error) {
 	if !table.HasGSI() {
 		return "", "", nil
 	}
-	hashAV, ok := item[table.GSIHashKeyName]
+	return gsiKeyStringsFor(table.GSIHashKeyName, table.GSIRangeKeyName, table.GSIHasRangeKey(), item)
+}
+
+// GSI2KeyStrings extracts canonical keys for the second lab GSI.
+func GSI2KeyStrings(table store.DynamoTable, item ItemMap) (gsiPK, gsiSK string, err error) {
+	if !table.HasGSI2() {
+		return "", "", nil
+	}
+	return gsiKeyStringsFor(table.GSI2HashKeyName, table.GSI2RangeKeyName, table.GSI2HasRangeKey(), item)
+}
+
+func gsiKeyStringsFor(hashName, rangeName string, hasRange bool, item ItemMap) (gsiPK, gsiSK string, err error) {
+	hashAV, ok := item[hashName]
 	if !ok {
 		return "", "", nil
 	}
@@ -124,10 +136,10 @@ func GSIKeyStrings(table store.DynamoTable, item ItemMap) (gsiPK, gsiSK string, 
 	if err != nil {
 		return "", "", err
 	}
-	if !table.GSIHasRangeKey() {
+	if !hasRange {
 		return gsiPK, "", nil
 	}
-	rangeAV, ok := item[table.GSIRangeKeyName]
+	rangeAV, ok := item[rangeName]
 	if !ok {
 		return gsiPK, "", nil
 	}
@@ -163,10 +175,11 @@ func ItemExpired(table store.DynamoTable, item ItemMap, nowUnix int64) bool {
 func HashKeyFromQueryIndex(table store.DynamoTable, indexName string, params map[string]any) (map[string]any, error) {
 	hashName := table.HashKeyName
 	if indexName != "" {
-		if !table.HasGSI() || table.GSIName != indexName {
+		gsi, _, ok := table.GSIByName(indexName)
+		if !ok {
 			return nil, fmt.Errorf("index %q not found", indexName)
 		}
-		hashName = table.GSIHashKeyName
+		hashName = gsi.HashKeyName
 	}
 	return hashKeyFromQuery(hashName, params)
 }

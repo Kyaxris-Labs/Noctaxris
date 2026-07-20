@@ -1,5 +1,30 @@
 # Changelog
 
+## v4 (lab cores shipped)
+
+Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and eight more lab services toward ~30 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Live Firecracker guest boot needs a Linux+KVM host with kernel/rootfs assets (stubs and platform matrix ship on all hosts).
+
+### Included
+
+- Compute runtime selection: `NOCTAXRIS_COMPUTE_RUNTIME=dind|microvm` (default DinD). Opt-in microVM probes KVM and Firecracker binary, fails closed on WSL2 or missing assets, never falls through to host Docker
+- Lambda zip/Image Invoke and ECS RunTask route to the microVM runner when opted in (fail-closed stubs until live guest boot on Linux+KVM)
+- KMS on-read sweeper after DeletionDate and key-material rotation (enable rotates sealed material, lab auto-rotate by period)
+- DynamoDB up to two lab GSIs per table via CreateTable / UpdateTable
+- S3 versioning lite: Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite
+- SQS DelaySeconds depth and DLQ RedriveAllowPolicy enforcement
+- Secrets Manager RotateSecret (lab random replacement), recovery window on delete with RestoreSecret, on-read sweeper
+- SSM GetParametersByPath with path hierarchy and Recursive
+- CloudFormation lite: CreateStack / DescribeStacks / DeleteStack / ListStacks for AWS::S3::Bucket and AWS::IAM::Role, PassRole when RoleARN set
+- CodeBuild nested: CreateProject, StartBuild, BatchGetBuilds, ListBuilds on DinD with PassRole for `codebuild.amazonaws.com`
+- CodePipeline lite: CreatePipeline / StartPipelineExecution / GetPipelineState with a CodeBuild action that calls nested StartBuild, PassRole when roleArn set
+- Batch lite: CreateComputeEnvironment, CreateJobQueue, RegisterJobDefinition, SubmitJob, Describe* on nested DinD with PassRole for service and job roles
+- Firehose lite: delivery stream CRUD, PutRecord(s) to S3 and Lambda (async Invoke enqueue), PassRole when RoleARN set
+- Glue Data Catalog lite: database and table CRUD over sqlite
+- WAF v2 lite: WebACL / rule group shape, AssociateWebACL, labeled Evaluate helper
+- Config lite: recorder / delivery channel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources
+
+Deferred depth: [docs/services/index.md](docs/services/index.md). Athena remains deferred. Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets.
+
 ## v3 (lab cores shipped)
 
 Multi-account honesty (cross-account dual eval, OU SCP/RCP inheritance, request-context keys) plus first expansion wave services. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
@@ -67,4 +92,4 @@ First shippable service set for Docker-first local AWS-shaped labs.
 
 ### Explicitly later
 
-See [docs/services/](docs/services/index.md) for remaining SAR depth, new lab cores, and post-v2 microVMs.
+See [docs/services/](docs/services/index.md) for remaining SAR depth and later lab cores.

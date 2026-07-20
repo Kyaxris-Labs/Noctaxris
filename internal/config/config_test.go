@@ -24,6 +24,9 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.DockerHost != "" {
 		t.Fatalf("DockerHost = %q, want empty (compute disabled)", cfg.DockerHost)
 	}
+	if cfg.ComputeRuntime != "dind" {
+		t.Fatalf("ComputeRuntime = %q, want dind default", cfg.ComputeRuntime)
+	}
 }
 
 func TestLoadFromEnvDockerHost(t *testing.T) {
@@ -39,5 +42,32 @@ func TestLoadFromEnvDockerHost(t *testing.T) {
 	}
 	if cfg.DockerTLSCertPath != "/certs/client" {
 		t.Fatalf("DockerTLSCertPath = %q, want %q", cfg.DockerTLSCertPath, "/certs/client")
+	}
+	if cfg.ComputeRuntime != "dind" {
+		t.Fatalf("ComputeRuntime = %q, want dind default", cfg.ComputeRuntime)
+	}
+}
+
+func TestLoadFromEnvComputeRuntimeMicroVM(t *testing.T) {
+	t.Setenv("NOCTAXRIS_COMPUTE_RUNTIME", "microvm")
+	t.Setenv("NOCTAXRIS_FIRECRACKER_BIN", "/opt/firecracker/firecracker")
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ComputeRuntime != "microvm" {
+		t.Fatalf("ComputeRuntime = %q, want microvm", cfg.ComputeRuntime)
+	}
+	if cfg.FirecrackerBin != "/opt/firecracker/firecracker" {
+		t.Fatalf("FirecrackerBin = %q", cfg.FirecrackerBin)
+	}
+}
+
+func TestLoadFromEnvComputeRuntimeUnknown(t *testing.T) {
+	t.Setenv("NOCTAXRIS_COMPUTE_RUNTIME", "host")
+	_, err := config.LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected unknown runtime error")
 	}
 }

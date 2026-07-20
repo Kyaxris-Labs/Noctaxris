@@ -39,6 +39,10 @@ const (
 	attrFifoQueue                  = "FifoQueue"
 	attrContentBasedDeduplication  = "ContentBasedDeduplication"
 	attrRedrivePolicy              = "RedrivePolicy"
+	attrRedriveAllowPolicy         = "RedriveAllowPolicy"
+	attrDelaySeconds               = "DelaySeconds"
+
+	maxDelaySeconds = 900
 )
 
 // Queue is an SQS queue metadata row.
@@ -70,10 +74,11 @@ type Message struct {
 	SequenceNumber         int64
 }
 
-// SendMessageOpts carries optional FIFO send parameters.
+// SendMessageOpts carries optional FIFO and delay send parameters.
 type SendMessageOpts struct {
 	MessageGroupID         string
 	MessageDeduplicationID string
+	DelaySeconds           int
 }
 
 // QueueARN builds arn:aws:sqs:REGION:ACCOUNT:NAME.
@@ -145,6 +150,59 @@ func validateFIFOQueueName(queueName string, attrs map[string]string) error {
 type redrivePolicy struct {
 	DeadLetterTargetArn string
 	MaxReceiveCount     int
+}
+
+func queueDelaySeconds(attrs map[string]string) int {
+	if v, ok := attrs[attrDelaySeconds]; ok {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil && n > 0 {
+			if n > maxDelaySeconds {
+				return maxDelaySeconds
+			}
+			return n
+		}
+	}
+	return 0
+}
+
+type redriveAllowPolicy struct {
+	RedrivePermission string   // allowAll | denyAll | byQueue
+	SourceQueueARNs   []string
+}
+
+func parseRedriveAllowPolicy(attrs map[string]string) (redriveAllowPolicy, bool) {
+	raw, ok := attrs[attrRedriveAllowPolicy]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return redriveAllowPolicy{RedrivePermission: "allowAll"}, false
+	}
+	var parsed struct {
+		RedrivePermission string   `json:"redrivePermission"`
+		SourceQueueArns   []string `json:"sourceQueueArns"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return redriveAllowPolicy{}, false
+	}
+	perm := strings.TrimSpace(parsed.RedrivePermission)
+	if perm == "" {
+		perm = "allowAll"
+	}
+	return redriveAllowPolicy{RedrivePermission: perm, SourceQueueARNs: parsed.SourceQueueArns}, true
+}
+
+func (p redriveAllowPolicy) allowsSource(sourceARN string) bool {
+	switch strings.ToLower(p.RedrivePermission) {
+	case "denyall":
+		return false
+	case "byqueue":
+		for _, arn := range p.SourceQueueARNs {
+			if strings.TrimSpace(arn) == sourceARN {
+				return true
+			}
+		}
+		return false
+	default: // allowAll
+		return true
+	}
 }
 
 func parseRedrivePolicy(attrs map[string]string) (redrivePolicy, bool) {
@@ -496,13 +554,25 @@ func (s *Store) SendMessage(
 		}
 	}
 
+	delay := queueDelaySeconds(q.Attributes)
+	if opts != nil && opts.DelaySeconds > 0 {
+		delay = opts.DelaySeconds
+		if delay > maxDelaySeconds {
+			delay = maxDelaySeconds
+		}
+	}
+	visibleAfter := ""
+	if delay > 0 {
+		visibleAfter = time.Now().UTC().Add(time.Duration(delay) * time.Second).Format(time.RFC3339)
+	}
+
 	_, err = s.db.Exec(
 		`INSERT INTO sqs_messages
 		 (message_id, account_id, queue_name, body, sealed, sealed_dek,
 		  receipt_handle, visible_after, receive_count, created_at, attributes_json,
 		  message_group_id, message_deduplication_id, sequence_number)
-		 VALUES (?, ?, ?, ?, ?, ?, NULL, '', 0, ?, ?, ?, ?, ?)`,
-		messageID, accountID, queueName, body, sealedFlag, sealedDEK, created, attrsJSON,
+		 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?)`,
+		messageID, accountID, queueName, body, sealedFlag, sealedDEK, visibleAfter, created, attrsJSON,
 		messageGroupID, dedupID, sequenceNumber,
 	)
 	if err != nil {
@@ -515,6 +585,7 @@ func (s *Store) SendMessage(
 		Body:                   body,
 		Sealed:                 sealed,
 		SealedDEK:              sealedDEK,
+		VisibleAfter:           visibleAfter,
 		ReceiveCount:           0,
 		CreatedAt:              created,
 		AttributesJSON:         attrsJSON,
@@ -571,6 +642,10 @@ func (s *Store) redriveMessage(q Queue, policy redrivePolicy, msg Message) error
 	}
 	if dlq.AccountID != q.AccountID {
 		return fmt.Errorf("dead-letter queue must be in the same account")
+	}
+	allow, hasAllow := parseRedriveAllowPolicy(dlq.Attributes)
+	if hasAllow && !allow.allowsSource(q.QueueARN) {
+		return fmt.Errorf("redrive not allowed by dead-letter queue RedriveAllowPolicy")
 	}
 
 	tx, err := s.db.Begin()

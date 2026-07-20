@@ -53,6 +53,8 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 
 Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD.
 
+Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` selects a Firecracker-class path on Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. Live guest zip/Image Invoke and ECS RunTask still require kernel/rootfs assets on a Linux+KVM host. CodeBuild and Batch stay on the DinD path.
+
 ## Authz
 
 - Same-account identity: `Evaluate` / `EvaluateFull` (identity, boundary, SCP, RCP)

@@ -35,6 +35,8 @@ func (s *Server) handleSSM(
 		s.ssmGetParameter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMGetParameters:
 		s.ssmGetParameters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMGetParametersByPath:
+		s.ssmGetParametersByPath(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMDeleteParameter:
 		s.ssmDeleteParameter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMDescribeParameters:
@@ -56,6 +58,8 @@ func ssmAction(action string) string {
 		return catalog.ActionSSMGetParameter
 	case "GetParameters":
 		return catalog.ActionSSMGetParameters
+	case "GetParametersByPath":
+		return catalog.ActionSSMGetParametersByPath
 	case "DeleteParameter":
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
@@ -233,6 +237,48 @@ func (s *Server) ssmGetParameters(
 	}
 	s.writeSSMOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "GetParameters", readOnly)
+}
+
+func (s *Server) ssmGetParametersByPath(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	path, _ := params["Path"].(string)
+	if strings.TrimSpace(path) == "" {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Path is required.", readOnly, eventID, verified)
+		return
+	}
+	recursive := ssmBoolParam(params["Recursive"], false)
+	withDecryption := ssmBoolParam(params["WithDecryption"], false)
+
+	arn := s.ssmParameterARN(verified, path)
+	if !s.authorizeSSM(verified, catalog.ActionSSMGetParametersByPath, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:GetParametersByPath.", readOnly, eventID, verified)
+		return
+	}
+
+	found, err := s.store.GetParametersByPath(verified.AccountID, path, recursive, withDecryption)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get parameters by path.", readOnly, eventID, verified)
+		return
+	}
+
+	payload, err := ssmsvc.GetParametersByPathJSON(found, withDecryption)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "GetParametersByPath", readOnly)
 }
 
 func (s *Server) ssmDeleteParameter(

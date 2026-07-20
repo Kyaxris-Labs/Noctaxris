@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -36,6 +37,8 @@ type Secret struct {
 	ResourcePolicy  string
 	CreatedDate     string
 	LastChangedDate string
+	DeletedDate     string
+	DeletionDate    string
 }
 
 const secretsSchema = `
@@ -68,7 +71,7 @@ func EnsureSecretsSchema(db *sql.DB) error {
 	if _, err := db.Exec(secretsSchema); err != nil {
 		return fmt.Errorf("ensure secrets schema: %w", err)
 	}
-	return nil
+	return EnsureSecretsRecoverySchema(db)
 }
 
 // EnsureSecretsSchema ensures Secrets Manager tables on an open store (tests and Open wiring).
@@ -169,6 +172,8 @@ type secretRow struct {
 	ResourcePolicy     string
 	CreatedDate        string
 	LastChangedDate    string
+	DeletedDate        string
+	DeletionDate       string
 }
 
 func (s *Store) resolveSecretName(accountID, nameOrARN string) (string, error) {
@@ -199,13 +204,14 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 	err := s.db.QueryRow(
 		`SELECT name, arn, arn_suffix, description, secret_string_plain, secret_string_sealed, string_sealed,
 		        secret_binary_plain, secret_binary_sealed, binary_sealed, kms_key_id, version, resource_policy,
-		        created_date, last_changed_date
+		        created_date, last_changed_date,
+		        COALESCE(deleted_date, ''), COALESCE(deletion_date, '')
 		 FROM secretsmanager_secrets WHERE account_id = ? AND name = ?`,
 		accountID, name,
 	).Scan(
 		&row.Name, &row.ARN, &row.ARNSuffix, &row.Description, &row.SecretStringPlain, &stringSealed,
 		&stringSeal, &binaryPlain, &binarySealed, &binarySeal, &row.KMSKeyID, &row.Version, &row.ResourcePolicy,
-		&row.CreatedDate, &row.LastChangedDate,
+		&row.CreatedDate, &row.LastChangedDate, &row.DeletedDate, &row.DeletionDate,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -288,6 +294,8 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		ResourcePolicy:  row.ResourcePolicy,
 		CreatedDate:     row.CreatedDate,
 		LastChangedDate: row.LastChangedDate,
+		DeletedDate:     row.DeletedDate,
+		DeletionDate:    row.DeletionDate,
 	}
 	if !withValues {
 		return out, nil
@@ -304,11 +312,7 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		if !KeyUsableForCrypto(k.KeyState) {
 			return Secret{}, fmt.Errorf("secret %s: %w", row.Name, ErrInvalidKeyState)
 		}
-		cmk, err := s.UnsealKeyMaterial(row.KMSKeyID)
-		if err != nil {
-			return Secret{}, fmt.Errorf("secret %s: unseal key: %w", row.Name, err)
-		}
-		plain, err := DecryptUnderCMK(cmk, row.SecretStringSealed)
+		plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.SecretStringSealed)
 		if err != nil {
 			return Secret{}, fmt.Errorf("secret %s: decrypt string: %w", row.Name, err)
 		}
@@ -328,11 +332,7 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		if !KeyUsableForCrypto(k.KeyState) {
 			return Secret{}, fmt.Errorf("secret %s: %w", row.Name, ErrInvalidKeyState)
 		}
-		cmk, err := s.UnsealKeyMaterial(row.KMSKeyID)
-		if err != nil {
-			return Secret{}, fmt.Errorf("secret %s: unseal key: %w", row.Name, err)
-		}
-		plain, err := DecryptUnderCMK(cmk, row.SecretBinarySealed)
+		plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.SecretBinarySealed)
 		if err != nil {
 			return Secret{}, fmt.Errorf("secret %s: decrypt binary: %w", row.Name, err)
 		}
@@ -407,6 +407,7 @@ func (s *Store) CreateSecret(
 
 // GetSecretValue returns the decrypted secret value for a name or ARN.
 func (s *Store) GetSecretValue(accountID, nameOrARN string) (Secret, error) {
+	_, _ = s.SweepExpiredSecrets(time.Time{})
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {
 		return Secret{}, err
@@ -414,6 +415,9 @@ func (s *Store) GetSecretValue(accountID, nameOrARN string) (Secret, error) {
 	row, err := s.getSecretRow(accountID, name)
 	if err != nil {
 		return Secret{}, err
+	}
+	if strings.TrimSpace(row.DeletionDate) != "" {
+		return Secret{}, ErrSecretScheduledDeletion
 	}
 	return s.secretFromRow(row, true)
 }
@@ -429,6 +433,9 @@ func (s *Store) PutSecretValue(
 	row, err := s.getSecretRow(accountID, name)
 	if err != nil {
 		return Secret{}, err
+	}
+	if strings.TrimSpace(row.DeletionDate) != "" {
+		return Secret{}, ErrSecretScheduledDeletion
 	}
 
 	stringPlain, stringSealed, stringSealFlag, binaryPlain, binarySealed, binarySealFlag, kmsKeyID, err := s.storeSecretValues(
@@ -465,7 +472,7 @@ func (s *Store) PutSecretValue(
 	return s.secretFromRow(row, true)
 }
 
-// DeleteSecret removes a secret immediately (lab: no recovery window).
+// DeleteSecret removes a secret immediately (force path / internal).
 func (s *Store) DeleteSecret(accountID, nameOrARN string) error {
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {
@@ -487,6 +494,7 @@ func (s *Store) DeleteSecret(accountID, nameOrARN string) error {
 
 // DescribeSecret returns secret metadata without values.
 func (s *Store) DescribeSecret(accountID, nameOrARN string) (Secret, error) {
+	_, _ = s.SweepExpiredSecrets(time.Time{})
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {
 		return Secret{}, err
@@ -500,10 +508,12 @@ func (s *Store) DescribeSecret(accountID, nameOrARN string) (Secret, error) {
 
 // ListSecrets returns secret metadata for an account. Values are omitted.
 func (s *Store) ListSecrets(accountID string) ([]Secret, error) {
+	_, _ = s.SweepExpiredSecrets(time.Time{})
 	rows, err := s.db.Query(
 		`SELECT name, arn, arn_suffix, description, secret_string_plain, secret_string_sealed, string_sealed,
 		        secret_binary_plain, secret_binary_sealed, binary_sealed, kms_key_id, version, resource_policy,
-		        created_date, last_changed_date
+		        created_date, last_changed_date,
+		        COALESCE(deleted_date, ''), COALESCE(deletion_date, '')
 		 FROM secretsmanager_secrets WHERE account_id = ? ORDER BY name`,
 		accountID,
 	)
@@ -515,9 +525,9 @@ func (s *Store) ListSecrets(accountID string) ([]Secret, error) {
 	var out []Secret
 	for rows.Next() {
 		var (
-			row         secretRow
-			stringSeal  int
-			binarySeal  int
+			row          secretRow
+			stringSeal   int
+			binarySeal   int
 			stringSealed []byte
 			binaryPlain  []byte
 			binarySealed []byte
@@ -525,7 +535,7 @@ func (s *Store) ListSecrets(accountID string) ([]Secret, error) {
 		if err := rows.Scan(
 			&row.Name, &row.ARN, &row.ARNSuffix, &row.Description, &row.SecretStringPlain, &stringSealed,
 			&stringSeal, &binaryPlain, &binarySealed, &binarySeal, &row.KMSKeyID, &row.Version, &row.ResourcePolicy,
-			&row.CreatedDate, &row.LastChangedDate,
+			&row.CreatedDate, &row.LastChangedDate, &row.DeletedDate, &row.DeletionDate,
 		); err != nil {
 			return nil, fmt.Errorf("list secrets %s: %w", accountID, err)
 		}

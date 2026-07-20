@@ -18,11 +18,21 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 | Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
 | Resource policy | `AddPermission`, `RemovePermission`, `GetPolicy`. Same-account Invoke allows identity **or** function policy Allow. Cross-account Invoke requires identity **and** function policy Allow |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). No host `docker.sock` on the API container |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Default runtime. No host `docker.sock` on the API container. Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed without host Docker |
 | Invoke session | Temporary AWS_* credentials for the function execution role injected into the container |
 | Egress | Function network `noctaxris-fn` with `Internal: true` (platform egress deny) |
 
-Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Without the engine, sync Invoke returns compute unavailable.
+Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables DinD compute so unit tests can run without DinD. Without the engine, sync Invoke on the default DinD path returns compute unavailable.
+
+### Compute runtime matrix
+
+| Host | DinD (default) | Opt-in microVM |
+|------|----------------|----------------|
+| Linux with usable `/dev/kvm` and Firecracker binary | Supported | Supported when opted in (guest invoke may still be deferred until assets ship) |
+| WSL2 | Supported (default and only nested path) | Unsupported (fails closed) |
+| Windows native (no Linux VM) | Unsupported for nested compute | Unsupported |
+
+Set `NOCTAXRIS_COMPUTE_RUNTIME=dind` (or leave unset) for the default path. Set `microvm` only on Linux/KVM labs. Optional `NOCTAXRIS_FIRECRACKER_BIN` points at the Firecracker binary when it is not on `PATH`. Opt-in never falls through to host Docker.
 
 Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`. Invoke issues a lab ECR authorization token and pulls with Registry V2 auth (same path as ECS RunTask). Public images are unchanged.
 
@@ -194,8 +204,9 @@ aws lambda invoke \
 - Service-principal cross-account grants on function policies
 - Non-lab private registries (Docker Hub private, third-party hosts). Lab ECR on `127.0.0.1:4566` is supported for Image Invoke
 - Layers mounted on Image Invoke (layers can be attached in the API but are not mounted during image Invoke)
-- Rootless DinD and microVM isolation (Firecracker-class, post-v2)
+- Rootless DinD
+- Live Firecracker guest zip/Image Invoke on Linux+KVM (opt-in selection and fail-closed probe ship. Real guest boot awaits a Linux+KVM host with kernel/rootfs assets)
 
-### Post-v2
+### Opt-in microVM
 
-MicroVM isolation (Firecracker-class) for Lambda. v2 keeps nested DinD. Later ECS may share the same isolation track if needed. See [index.md](index.md#cross-cutting).
+MicroVM isolation selection is opt-in via `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. DinD remains the default. Live Firecracker guest invoke for zip and Image packaging is still deferred until a Linux+KVM lab host completes asset packaging. ECS RunTask uses the same opt-in selection and fail-closed stubs. See [ecs.md](ecs.md) and [index.md](index.md#cross-cutting).

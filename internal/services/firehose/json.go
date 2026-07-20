@@ -1,0 +1,77 @@
+package firehose
+
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+)
+
+// CreateDeliveryStreamJSON builds a CreateDeliveryStream response.
+func CreateDeliveryStreamJSON(st store.FirehoseStream) ([]byte, error) {
+	return json.Marshal(map[string]any{"DeliveryStreamARN": st.StreamARN})
+}
+
+// DescribeDeliveryStreamJSON builds a DescribeDeliveryStream response.
+func DescribeDeliveryStreamJSON(st store.FirehoseStream) ([]byte, error) {
+	dest := map[string]any{}
+	switch st.DestType {
+	case "S3":
+		dest["S3DestinationDescription"] = map[string]any{
+			"BucketARN": "arn:aws:s3:::" + st.DestBucket,
+			"Prefix":    st.DestPrefix,
+			"RoleARN":   st.RoleARN,
+		}
+	case "Lambda":
+		dest["LambdaDestinationDescription"] = map[string]any{
+			"LambdaArn": st.DestLambdaARN,
+			"RoleARN":   st.RoleARN,
+		}
+	}
+	return json.Marshal(map[string]any{
+		"DeliveryStreamDescription": map[string]any{
+			"DeliveryStreamName":   st.Name,
+			"DeliveryStreamARN":    st.StreamARN,
+			"DeliveryStreamStatus": "ACTIVE",
+			"DeliveryStreamType":   "DirectPut",
+			"CreateTimestamp":      float64(st.CreatedAt) / 1000.0,
+			"Destinations":         []any{dest},
+		},
+	})
+}
+
+// ListDeliveryStreamsJSON builds a ListDeliveryStreams response.
+func ListDeliveryStreamsJSON(streams []store.FirehoseStream) ([]byte, error) {
+	names := make([]string, 0, len(streams))
+	for _, st := range streams {
+		names = append(names, st.Name)
+	}
+	return json.Marshal(map[string]any{"DeliveryStreamNames": names, "HasMoreDeliveryStreams": false})
+}
+
+// DeleteDeliveryStreamJSON is an empty OK body.
+func DeleteDeliveryStreamJSON() ([]byte, error) {
+	return []byte(`{}`), nil
+}
+
+// PutRecordJSON builds a PutRecord response.
+func PutRecordJSON(recordID string) ([]byte, error) {
+	return json.Marshal(map[string]any{"RecordId": recordID})
+}
+
+// PutRecordBatchJSON builds a PutRecordBatch response.
+func PutRecordBatchJSON(failed []int, total int) ([]byte, error) {
+	responses := make([]map[string]any, total)
+	for i := 0; i < total; i++ {
+		responses[i] = map[string]any{"RecordId": time.Now().UTC().Format("20060102150405") + "-" + string(rune('a'+i%26))}
+	}
+	for _, idx := range failed {
+		if idx >= 0 && idx < total {
+			responses[idx] = map[string]any{"ErrorCode": "ServiceUnavailable", "ErrorMessage": "failed"}
+		}
+	}
+	return json.Marshal(map[string]any{
+		"FailedPutCount":   len(failed),
+		"RequestResponses": responses,
+	})
+}

@@ -2,16 +2,16 @@
 
 **Status:** shipped
 
-Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including one lab GSI per table), BatchGet/BatchWrite, table resource policies, CMK encryption, and TTL with lazy expiry on read.
+Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GSIs per table), BatchGet/BatchWrite, table resource policies, CMK encryption, and TTL with lazy expiry on read.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Tables | `CreateTable`, `DescribeTable`, `DeleteTable`, `ListTables`, `UpdateTable` |
-| GSI | One lab global secondary index per table (`CreateTable` or `UpdateTable` `Create` GSI update) |
+| GSI | Up to two lab global secondary indexes per table (`CreateTable` or `UpdateTable` `Create` GSI updates) |
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
-| Query / Scan | `Query`, `Scan` (base table and lab GSI via `IndexName`) |
+| Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`) |
 | Batch | `BatchGetItem`, `BatchWriteItem` |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`) |
@@ -84,4 +84,4 @@ aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
 
 ## Not yet / deferred
 
-- Full DynamoDB SAR beyond the lab set (additional GSIs, LSI, Streams, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Streams, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)

@@ -486,7 +486,7 @@ func (s *Server) ecsRunTask(
 		return
 	}
 
-	if strings.TrimSpace(s.cfg.DockerHost) == "" {
+	if s.cfg.ComputeRuntime != compute.RuntimeMicroVM && strings.TrimSpace(s.cfg.DockerHost) == "" {
 		s.writeECSError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
 			"compute unavailable", readOnly, eventID, verified)
 		return
@@ -545,11 +545,6 @@ func (s *Server) executeECSTask(
 	td store.ECSTaskDefinition,
 	taskRoleARN, taskARN string,
 ) error {
-	cli, err := s.computeClient()
-	if err != nil || cli == nil {
-		return errors.New("compute unavailable")
-	}
-
 	containerDef, err := ecsPrimaryContainer(td)
 	if err != nil {
 		return err
@@ -558,6 +553,22 @@ func (s *Server) executeECSTask(
 	imageURI = strings.TrimSpace(imageURI)
 	if imageURI == "" {
 		return errors.New("container image is required")
+	}
+
+	if s.cfg.ComputeRuntime == compute.RuntimeMicroVM {
+		runner, err := compute.NewMicroVMRunner(compute.MicroVMProbeOpts{
+			FirecrackerPath: s.cfg.FirecrackerBin,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = runner.RunECSTask(ctx, compute.ECSRunOpts{ImageURI: imageURI})
+		return err
+	}
+
+	cli, err := s.computeClient()
+	if err != nil || cli == nil {
+		return errors.New("compute unavailable")
 	}
 
 	roleAccountID, _, ok := sts.ParseRoleARN(taskRoleARN)

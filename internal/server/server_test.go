@@ -40,6 +40,11 @@ func newTestServer(t *testing.T) (*server.Server, string) {
 
 func newTestServerStore(t *testing.T) (*server.Server, *store.Store, string) {
 	t.Helper()
+	return newTestServerStoreWith(t, nil)
+}
+
+func newTestServerStoreWith(t *testing.T, mutate func(*config.Config)) (*server.Server, *store.Store, string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
@@ -74,6 +79,9 @@ func newTestServerStore(t *testing.T) (*server.Server, *store.Store, string) {
 		ListenAddr: "127.0.0.1:0",
 		DataRoot:   dir,
 		AccountID:  testAccountID,
+	}
+	if mutate != nil {
+		mutate(&cfg)
 	}
 
 	return server.New(cfg, st, aud), st, auditDir

@@ -37,10 +37,15 @@ type Server struct {
 	audit *audit.Writer
 	now   func() time.Time
 
-	// Lazy nested-engine client for Lambda Invoke (cfg.DockerHost).
+	// Lazy nested-engine client for ECS / Registry (DinD, cfg.DockerHost).
 	computeOnce sync.Once
 	compute     *compute.Client
 	computeErr  error
+
+	// Lazy Lambda invoker (DinD default or opt-in microVM).
+	invokerOnce sync.Once
+	invoker     compute.FunctionInvoker
+	invokerErr  error
 }
 
 type awsError struct {
@@ -137,6 +142,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if action == "" && (strings.EqualFold(verified.Service, "batch") || isBatchRESTPath(r.URL.Path)) {
+		if restAction := resolveBatchREST(r); restAction != "" {
+			s.handleBatch(w, r, body, requestID, eventID, restAction, verified, readOnly)
+			return
+		}
+	}
+
 	if action == "" && (verified.Service == "s3" || isS3PathStyleRequest(r, body, action)) {
 		s.handleS3(w, r, body, requestID, eventID, verified, readOnly)
 		return
@@ -154,6 +166,16 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "ses" || verified.Service == "email" || strings.HasPrefix(action, "ses:") {
 		s.handleSES(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "cloudformation" || strings.HasPrefix(action, "cloudformation:") {
+		s.handleCloudFormation(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "config" || strings.HasPrefix(action, "config:") {
+		s.handleConfig(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -325,6 +347,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionSSMPutParameter, "PutParameter",
 		catalog.ActionSSMGetParameter, "GetParameter",
 		catalog.ActionSSMGetParameters, "GetParameters",
+		catalog.ActionSSMGetParametersByPath, "GetParametersByPath",
 		catalog.ActionSSMDeleteParameter, "DeleteParameter",
 		catalog.ActionSSMDescribeParameters, "DescribeParameters":
 		s.handleSSM(w, r, body, requestID, eventID, action, verified, readOnly)
@@ -332,6 +355,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSecretsGetSecretValue, "GetSecretValue",
 		catalog.ActionSecretsPutSecretValue, "PutSecretValue",
 		catalog.ActionSecretsDeleteSecret, "DeleteSecret",
+		catalog.ActionSecretsRestoreSecret, "RestoreSecret",
+		catalog.ActionSecretsRotateSecret, "RotateSecret",
 		catalog.ActionSecretsDescribeSecret, "DescribeSecret",
 		catalog.ActionSecretsListSecrets, "ListSecrets",
 		catalog.ActionSecretsPutResourcePolicy,
@@ -435,6 +460,60 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSFNDescribeExecution, "DescribeExecution",
 		catalog.ActionSFNGetExecutionHistory, "GetExecutionHistory":
 		s.handleSFN(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCodeBuildCreateProject, "CreateProject",
+		catalog.ActionCodeBuildStartBuild, "StartBuild",
+		catalog.ActionCodeBuildBatchGetBuilds, "BatchGetBuilds",
+		catalog.ActionCodeBuildListBuilds, "ListBuilds":
+		s.handleCodeBuild(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBatchCreateComputeEnvironment, "CreateComputeEnvironment",
+		catalog.ActionBatchCreateJobQueue, "CreateJobQueue",
+		catalog.ActionBatchRegisterJobDefinition, "RegisterJobDefinition",
+		catalog.ActionBatchSubmitJob, "SubmitJob",
+		catalog.ActionBatchDescribeComputeEnvironments, "DescribeComputeEnvironments",
+		catalog.ActionBatchDescribeJobQueues, "DescribeJobQueues",
+		catalog.ActionBatchDescribeJobDefinitions, "DescribeJobDefinitions",
+		catalog.ActionBatchDescribeJobs, "DescribeJobs":
+		s.handleBatch(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCFNCreateStack, "CreateStack",
+		catalog.ActionCFNDescribeStacks, "DescribeStacks",
+		catalog.ActionCFNDeleteStack, "DeleteStack",
+		catalog.ActionCFNListStacks, "ListStacks":
+		s.handleCloudFormation(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCodePipelineCreatePipeline, "CreatePipeline",
+		catalog.ActionCodePipelineGetPipeline, "GetPipeline",
+		catalog.ActionCodePipelineDeletePipeline, "DeletePipeline",
+		catalog.ActionCodePipelineStartPipelineExecution, "StartPipelineExecution",
+		catalog.ActionCodePipelineGetPipelineState, "GetPipelineState":
+		s.handleCodePipeline(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionFirehoseCreateDeliveryStream, "CreateDeliveryStream",
+		catalog.ActionFirehoseDeleteDeliveryStream, "DeleteDeliveryStream",
+		catalog.ActionFirehoseDescribeDeliveryStream, "DescribeDeliveryStream",
+		catalog.ActionFirehoseListDeliveryStreams, "ListDeliveryStreams",
+		catalog.ActionFirehosePutRecord,
+		catalog.ActionFirehosePutRecordBatch, "PutRecordBatch":
+		s.handleFirehose(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionGlueCreateDatabase, "CreateDatabase",
+		catalog.ActionGlueGetDatabase, "GetDatabase",
+		catalog.ActionGlueGetDatabases, "GetDatabases",
+		catalog.ActionGlueDeleteDatabase, "DeleteDatabase",
+		catalog.ActionGlueCreateTable,
+		catalog.ActionGlueGetTable, "GetTable",
+		catalog.ActionGlueGetTables, "GetTables",
+		catalog.ActionGlueDeleteTable:
+		s.handleGlue(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionWAFCreateWebACL, "CreateWebACL",
+		catalog.ActionWAFUpdateWebACL, "UpdateWebACL",
+		catalog.ActionWAFGetWebACL, "GetWebACL",
+		catalog.ActionWAFListWebACLs, "ListWebACLs",
+		catalog.ActionWAFCreateRuleGroup, "CreateRuleGroup",
+		catalog.ActionWAFAssociateWebACL, "AssociateWebACL",
+		catalog.ActionWAFEvaluate, "Evaluate":
+		s.handleWAFv2(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionConfigPutConfigurationRecorder, "PutConfigurationRecorder",
+		catalog.ActionConfigPutDeliveryChannel, "PutDeliveryChannel",
+		catalog.ActionConfigStartConfigurationRecorder, "StartConfigurationRecorder",
+		catalog.ActionConfigDescribeComplianceByConfigRule, "DescribeComplianceByConfigRule":
+		s.handleConfig(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -710,6 +789,21 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.Contains(strings.ToLower(prefix), "stepfunctions"),
 			strings.EqualFold(prefix, "AWSStepFunctions"):
 			return sfnAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "codebuild"):
+			return codebuildAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "awsbatch"),
+			strings.EqualFold(prefix, "Batch"):
+			return batchAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "codepipeline"):
+			return codepipelineAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "firehose"):
+			return firehoseAction(short)
+		case strings.EqualFold(prefix, "AWSGlue"),
+			strings.HasPrefix(strings.ToLower(prefix), "glue"):
+			return glueAction(short)
+		case strings.Contains(strings.ToLower(prefix), "waf"),
+			strings.HasPrefix(strings.ToLower(prefix), "awswaf"):
+			return wafAction(short)
 		}
 		return short
 	}
@@ -1044,10 +1138,28 @@ func normalizeAction(action string) string {
 		return catalog.ActionSSMGetParameter
 	case "GetParameters":
 		return catalog.ActionSSMGetParameters
+	case "GetParametersByPath":
+		return catalog.ActionSSMGetParametersByPath
 	case "DeleteParameter":
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "CreateSecret":
+		return catalog.ActionSecretsCreateSecret
+	case "GetSecretValue":
+		return catalog.ActionSecretsGetSecretValue
+	case "PutSecretValue":
+		return catalog.ActionSecretsPutSecretValue
+	case "DeleteSecret":
+		return catalog.ActionSecretsDeleteSecret
+	case "RestoreSecret":
+		return catalog.ActionSecretsRestoreSecret
+	case "RotateSecret":
+		return catalog.ActionSecretsRotateSecret
+	case "DescribeSecret":
+		return catalog.ActionSecretsDescribeSecret
+	case "ListSecrets":
+		return catalog.ActionSecretsListSecrets
 	case "PutEvents":
 		return catalog.ActionEventsPutEvents
 	case "CreateEventBus":

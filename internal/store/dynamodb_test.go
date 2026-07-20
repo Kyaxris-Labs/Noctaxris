@@ -366,6 +366,17 @@ func TestUpdateTableGSI(t *testing.T) {
 	if err := st.UpdateTableGSI(account, "Music", gsi); !errors.Is(err, store.ErrGSIAlreadyExists) {
 		t.Fatalf("want ErrGSIAlreadyExists, got %v", err)
 	}
+	gsi2 := store.DynamoGSI{IndexName: "Other", HashKeyName: "Year", HashKeyType: store.KeyTypeNumber}
+	if err := st.UpdateTableGSI(account, "Music", gsi2); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetTable(account, "Music")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasGSI2() {
+		t.Fatal("expected second GSI")
+	}
 }
 
 func TestUpdateTimeToLive(t *testing.T) {

@@ -1709,11 +1709,14 @@ func (s *Server) executeLambdaInvoke(
 	fn store.LambdaFunction,
 	executedVersion, eventJSON string,
 ) ([]byte, error) {
-	if strings.TrimSpace(s.cfg.DockerHost) == "" {
+	if s.cfg.ComputeRuntime != compute.RuntimeMicroVM && strings.TrimSpace(s.cfg.DockerHost) == "" {
 		return nil, errors.New("compute unavailable")
 	}
-	cli, err := s.computeClient()
+	cli, err := s.lambdaInvoker()
 	if err != nil {
+		if s.cfg.ComputeRuntime == compute.RuntimeMicroVM {
+			return nil, err
+		}
 		return nil, errors.New("compute unavailable")
 	}
 
@@ -1881,6 +1884,18 @@ func (s *Server) computeClient() (*compute.Client, error) {
 		s.compute, s.computeErr = compute.NewClient(s.cfg.DockerHost, s.cfg.DockerTLSCertPath)
 	})
 	return s.compute, s.computeErr
+}
+
+func (s *Server) lambdaInvoker() (compute.FunctionInvoker, error) {
+	s.invokerOnce.Do(func() {
+		s.invoker, s.invokerErr = compute.NewFunctionInvoker(compute.InvokerConfig{
+			Runtime:           s.cfg.ComputeRuntime,
+			DockerHost:        s.cfg.DockerHost,
+			DockerTLSCertPath: s.cfg.DockerTLSCertPath,
+			FirecrackerBin:    s.cfg.FirecrackerBin,
+		})
+	})
+	return s.invoker, s.invokerErr
 }
 
 func (s *Server) writeLambdaOK(w http.ResponseWriter, requestID string, payload []byte) {

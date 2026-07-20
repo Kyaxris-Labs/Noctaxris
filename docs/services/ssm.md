@@ -8,8 +8,9 @@ Lab-complete Parameter Store core: String and SecureString parameters, Put/Get/G
 
 | Area | Actions |
 |------|---------|
-| Parameters | `PutParameter`, `GetParameter`, `GetParameters`, `DeleteParameter`, `DescribeParameters` |
+| Parameters | `PutParameter`, `GetParameter`, `GetParameters`, `GetParametersByPath`, `DeleteParameter`, `DescribeParameters` |
 | Types | `String` (plaintext at rest), `SecureString` (sealed under KMS) |
+| Hierarchy | `GetParametersByPath` with `Path`, optional `Recursive`, and `WithDecryption` |
 | KMS | Optional `KeyId` on Put. Defaults to lab `alias/aws/ssm` (per-account CMK seeded on first use) |
 | Describe filters | `ParameterFilters` with `Key=Name`, `Option=BeginsWith` (optional), and `Values` prefix |
 
@@ -62,6 +63,12 @@ aws ssm get-parameters \
   --with-decryption \
   --endpoint-url "$EP"
 
+aws ssm get-parameters-by-path \
+  --path "/noctaxris" \
+  --recursive \
+  --with-decryption \
+  --endpoint-url "$EP"
+
 aws ssm describe-parameters \
   --parameter-filters "Key=Name,Option=BeginsWith,Values=/noctaxris" \
   --endpoint-url "$EP"
@@ -72,6 +79,6 @@ aws ssm delete-parameter --name "$SECURE" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Full SSM SAR beyond the lab set (StringList types, `GetParametersByPath`, parameter policies, labels, tags, hierarchy, documents, sessions, automation, associations, OpsCenter, full pagination parity)
+- Full SSM SAR beyond the lab set (StringList types, parameter policies, labels, tags, documents, sessions, automation, associations, OpsCenter, full pagination parity)
 - Cross-account parameter access beyond same-account lab paths
 - True AWS-owned `alias/aws/ssm` key (lab convenience alias is a per-account CMK approximation)

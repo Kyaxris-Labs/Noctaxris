@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -130,6 +131,39 @@ func TestECSRunTaskWithoutDockerHost(t *testing.T) {
 	}
 	if !strings.Contains(runRec.Body.String(), "compute unavailable") {
 		t.Fatalf("expected compute unavailable in %q", runRec.Body.String())
+	}
+}
+
+func TestECSRunTaskMicroVMOptInFailsClosed(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.ComputeRuntime = "microvm"
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "ecs-task-microvm", ecsTrustOK, now)
+	mustCreateIAMRole(t, handler, "ecs-exec-microvm", ecsTrustOK, now)
+	taskRoleARN := "arn:aws:iam::" + testAccountID + ":role/ecs-task-microvm"
+	execRoleARN := "arn:aws:iam::" + testAccountID + ":role/ecs-exec-microvm"
+
+	regRec := registerECSTaskDefinition(t, handler, "microvm-task", taskRoleARN, execRoleARN, now)
+	if regRec.Code != http.StatusOK {
+		t.Fatalf("RegisterTaskDefinition status=%d body=%q", regRec.Code, regRec.Body.String())
+	}
+
+	runRec := mustECSJSON(t, handler, "RunTask", map[string]any{
+		"cluster":        "default",
+		"taskDefinition": "microvm-task",
+	}, now)
+	if runRec.Code == http.StatusOK {
+		t.Fatalf("expected microVM opt-in RunTask to fail closed, got 200")
+	}
+	body := runRec.Body.String()
+	if strings.Contains(strings.ToLower(body), "docker.sock") {
+		t.Fatalf("must not fall through to host docker.sock: %q", body)
+	}
+	if !strings.Contains(body, "microVM") && !strings.Contains(body, "Linux") && !strings.Contains(body, "WSL2") {
+		t.Fatalf("expected microVM fail-closed message in %q", body)
 	}
 }
 

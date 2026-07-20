@@ -1,0 +1,188 @@
+package store_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+)
+
+func TestCFNStackS3BucketRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	tpl := `{"Resources":{"LabBucket":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-lab-bucket-1"}}}}`
+	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack", tpl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != "CREATE_COMPLETE" {
+		t.Fatalf("status=%s", created.Status)
+	}
+	stacks, err := st.DescribeCFNStacks(account, "lab-stack")
+	if err != nil || len(stacks) != 1 {
+		t.Fatalf("describe: %v %#v", err, stacks)
+	}
+	if _, err := st.GetBucketByName("cfn-lab-bucket-1"); err != nil {
+		t.Fatalf("bucket missing: %v", err)
+	}
+	if err := st.DeleteCFNStack(account, "lab-stack"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCFNRejectsUnknownType(t *testing.T) {
+	st := openTestStore(t)
+	tpl := `{"Resources":{"X":{"Type":"AWS::EC2::Instance","Properties":{}}}}`
+	_, err := st.CreateCFNStack("000000000001", "us-east-1", "bad", tpl, "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCodePipelineRequiresCodeBuild(t *testing.T) {
+	st := openTestStore(t)
+	_, err := st.CreateCodePipeline("000000000001", "us-east-1", store.CodePipelineDeclaration{
+		Name: "p1",
+		Stages: []store.CodePipelineStageDecl{{
+			Name: "Build",
+			Actions: []store.CodePipelineActionDecl{{
+				Name: "Src",
+				ActionTypeID: store.CodePipelineActionTypeID{
+					Category: "Source", Owner: "AWS", Provider: "S3", Version: "1",
+				},
+				Configuration: map[string]string{},
+			}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected CodeBuild required")
+	}
+	p, err := st.CreateCodePipeline("000000000001", "us-east-1", store.CodePipelineDeclaration{
+		Name: "p1",
+		Stages: []store.CodePipelineStageDecl{{
+			Name: "Build",
+			Actions: []store.CodePipelineActionDecl{{
+				Name: "Build",
+				ActionTypeID: store.CodePipelineActionTypeID{
+					Category: "Build", Owner: "AWS", Provider: "CodeBuild", Version: "1",
+				},
+				Configuration: map[string]string{"ProjectName": "lab-proj"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.StartCodePipelineExecution("000000000001", p.Name, nil)
+	if err != nil || e.Status != "Succeeded" {
+		t.Fatalf("exec: %v %#v", err, e)
+	}
+}
+
+func TestFirehosePutToS3(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "fh-dest"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.CreateFirehoseStream(account, "us-east-1", "lab-stream", "", "S3", "fh-dest", "out/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.PutFirehoseRecord(account, "lab-stream", []byte("hello"))
+	if err != nil || id == "" {
+		t.Fatalf("put: %v %s", err, id)
+	}
+}
+
+func TestFirehosePutToLambdaEnqueuesInvoke(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "fh-handler",
+		RoleARN:      "arn:aws:iam::000000000001:role/lambda-exec",
+		Runtime:      store.LambdaRuntimePython312,
+		Handler:      "app.handler",
+		Timeout:      3,
+		Memory:       128,
+		Zip:          zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.CreateFirehoseStream(account, "us-east-1", "lab-lam", "", "Lambda", "", "", fn.FunctionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.PutFirehoseRecord(account, "lab-lam", []byte("hello-fh"))
+	if err != nil || id == "" {
+		t.Fatalf("put: %v %s", err, id)
+	}
+	job, err := st.LatestAsyncInvocation(account, "fh-handler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(job.EventJSON, "hello-fh") && !strings.Contains(job.EventJSON, "aGVsbG8tZmg=") {
+		t.Fatalf("EventJSON=%q want firehose payload", job.EventJSON)
+	}
+	if !strings.Contains(job.EventJSON, `"recordId"`) {
+		t.Fatalf("EventJSON=%q want recordId", job.EventJSON)
+	}
+}
+
+func TestGlueCatalogRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateGlueDatabase(account, "labdb", "d"); err != nil {
+		t.Fatal(err)
+	}
+	tbl, err := st.CreateGlueTable(account, "labdb", "t1", "", "s3://b/p", []store.GlueColumn{{Name: "id", Type: "string"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetGlueTable(account, "labdb", tbl.Name)
+	if err != nil || len(got.Columns) != 1 {
+		t.Fatalf("get: %v %#v", err, got)
+	}
+}
+
+func TestWAFEvaluateBlock(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	acl, err := st.CreateWAFWebACL(account, "us-east-1", "acl1", "REGIONAL", "", "Allow", []store.WAFRule{
+		{Name: "block-bad", Priority: 1, Action: "Block", Label: "bad"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := st.EvaluateWAFRequest(account, acl.ARN, "bad")
+	if err != nil || action != "Block" {
+		t.Fatalf("eval: %v %s", err, action)
+	}
+	action, err = st.EvaluateWAFRequest(account, acl.ARN, "ok")
+	if err != nil || action != "Allow" {
+		t.Fatalf("default: %v %s", err, action)
+	}
+}
+
+func TestConfigRecorderAndCompliance(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartConfigRecorder(account, "default"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.GetConfigRecorder(account, "default")
+	if err != nil || !rec.Recording {
+		t.Fatalf("recorder: %v %#v", err, rec)
+	}
+	results, err := st.DescribeConfigComplianceByRule(account, "lab")
+	if err != nil || len(results) == 0 {
+		t.Fatalf("compliance: %v %#v", err, results)
+	}
+}

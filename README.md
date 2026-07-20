@@ -18,7 +18,7 @@ Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kya
 |---|---|
 | Lab fidelity | Identity evaluation with boundaries, SCP/RCP filters, PassRole, and condition keys |
 | Secure defaults | Loopback publish only. No host `docker.sock`. Sealed secrets and CMK material at rest |
-| Nested compute | Lambda Invoke uses Compose `noctaxris-engine` (DinD), not your host engine |
+| Nested compute | DinD via Compose `noctaxris-engine` is the default. Opt-in microVM on Linux with KVM. WSL2 stays DinD-only |
 | CLI-shaped | Latest AWS CLI v2 via `--endpoint-url` |
 
 ## Quick start
@@ -77,34 +77,34 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
       <td>KMS</td>
-      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), rotation enable/status flags.</td>
-      <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, material rotation sweeper, tags, cross-account grant flows, true AWS-owned managed keys.</td>
+      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
+      <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, tags, cross-account grant flows, true AWS-owned managed keys.</td>
     </tr>
     <tr>
       <td rowspan="7" align="center" valign="middle">Data</td>
       <td>S3</td>
-      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption.</td>
-      <td>Versioning, lifecycle, virtual-hosted style, ACL cross-account, multipart presign.</td>
+      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite).</td>
+      <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan with one lab GSI, BatchGet/BatchWrite, table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry.</td>
-      <td>LSI, Streams, Transactions, PartiQL, global tables, multi-GSI.</td>
+      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry.</td>
+      <td>More than two GSIs, LSI, Streams, Transactions, PartiQL, global tables.</td>
     </tr>
     <tr>
       <td>SQS</td>
-      <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies (same-account or, cross-account and), SSE-SQS and SSE-KMS, RedrivePolicy to DLQ.</td>
-      <td>High-throughput FIFO quotas, DLQ redrive allow policies, delay queue depth.</td>
+      <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies (same-account or, cross-account and), SSE-SQS and SSE-KMS, RedrivePolicy to DLQ with RedriveAllowPolicy enforcement, DelaySeconds (queue and per-message).</td>
+      <td>High-throughput FIFO quotas, StartMessageMoveTask parity.</td>
     </tr>
     <tr>
       <td>SSM Parameter Store</td>
-      <td>String and SecureString parameters, Put/Get/GetParameters/Delete/Describe, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz.</td>
-      <td>StringList types, parameter policies, hierarchy paths, tags, full pagination parity.</td>
+      <td>String and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz.</td>
+      <td>StringList types, parameter policies, labels, tags, full pagination parity.</td>
     </tr>
     <tr>
       <td>Secrets Manager</td>
-      <td>Create/Get/Put/Delete/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager.</td>
-      <td>RotateSecret, recovery window, tags, replication, version stages.</td>
+      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, lab RotateSecret (random replacement, no Lambda rotator).</td>
+      <td>Lambda-backed rotation, version stages, tags, replication.</td>
     </tr>
     <tr>
       <td>SNS</td>
@@ -133,10 +133,15 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Resource Groups CRUD, GroupBy, tag policy compliance, service-native tag API parity.</td>
     </tr>
     <tr>
-      <td rowspan="4" align="center" valign="middle">Streams and config</td>
+      <td rowspan="5" align="center" valign="middle">Streams and delivery</td>
       <td>Kinesis Data Streams</td>
       <td>Create/Delete/Describe/ListStreams, PutRecord/PutRecords, GetShardIterator/GetRecords on a single lab shard.</td>
-      <td>Multi-shard split/merge, enhanced fan-out, encryption depth, Firehose.</td>
+      <td>Multi-shard split/merge, enhanced fan-out, encryption depth, Kinesis Data Analytics.</td>
+    </tr>
+    <tr>
+      <td>Firehose</td>
+      <td>Delivery stream CRUD, PutRecord/PutRecordBatch. S3 destination writes objects. Lambda ARN destination persists records and enqueues async Invoke. Optional PassRole for firehose.amazonaws.com.</td>
+      <td>OpenSearch/HTTP destinations, dynamic partitioning, live Lambda Invoke from delivery.</td>
     </tr>
     <tr>
       <td>SES</td>
@@ -154,10 +159,31 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Choice/Wait/Parallel/Map, Express workflows, InputPath/ResultPath depth.</td>
     </tr>
     <tr>
-      <td rowspan="3" align="center" valign="middle">Compute</td>
+      <td rowspan="4" align="center" valign="middle">IaC and governance</td>
+      <td>CloudFormation</td>
+      <td>CreateStack/DescribeStacks/DeleteStack/ListStacks. JSON templates with AWS::S3::Bucket and AWS::IAM::Role. Unknown types fail closed. Optional PassRole for cloudformation.amazonaws.com.</td>
+      <td>YAML templates, intrinsic matrix, ChangeSets, nested stacks, broader resource catalog.</td>
+    </tr>
+    <tr>
+      <td>Glue</td>
+      <td>Data Catalog database and table CRUD over sqlite (Create/Get/GetDatabases/GetTables/Delete*). Identity authz.</td>
+      <td>Crawlers, ETL jobs, Lake Formation, Athena query engine.</td>
+    </tr>
+    <tr>
+      <td>WAF v2</td>
+      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to a lab resource ARN, labeled allow/block Evaluate helper. No real edge PoP.</td>
+      <td>CloudFront/ALB association, Bot Control, CAPTCHA, full statement catalog.</td>
+    </tr>
+    <tr>
+      <td>Config</td>
+      <td>PutConfigurationRecorder, PutDeliveryChannel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources. Optional PassRole for config.amazonaws.com.</td>
+      <td>Managed rule catalog, remediations, aggregator, organization rules.</td>
+    </tr>
+    <tr>
+      <td rowspan="6" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny.</td>
-      <td>Event source mappings, provisioned concurrency, weighted aliases, Function URLs, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, full SAR depth. Post-v2: Firecracker microVMs.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
+      <td>Event source mappings, provisioned concurrency, weighted aliases, Function URLs, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -166,8 +192,23 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>ECS</td>
-      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection.</td>
-      <td>CreateService/UpdateService, awsvpc, capacity providers, ECS Exec, Service Connect, full SAR depth. Post-v2: Firecracker microVMs.</td>
+      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection, opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (same Linux/KVM fail-closed matrix as Lambda, live guest boot deferred).</td>
+      <td>CreateService/UpdateService, awsvpc, capacity providers, ECS Exec, Service Connect, live Firecracker guest RunTask on Linux+KVM, full SAR depth.</td>
+    </tr>
+    <tr>
+      <td>CodeBuild</td>
+      <td>CreateProject, StartBuild, BatchGetBuilds, ListBuilds. Inline or S3 buildspec. PassRole with codebuild.amazonaws.com. Nested DinD via the shared compute client (no host <code>docker.sock</code>).</td>
+      <td>VPC, fleets, CodeCommit, batch build matrix, artifact publishing depth.</td>
+    </tr>
+    <tr>
+      <td>CodePipeline</td>
+      <td>CreatePipeline/GetPipeline/DeletePipeline, StartPipelineExecution, GetPipelineState. Requires at least one CodeBuild action. StartPipelineExecution calls nested CodeBuild StartBuild for each ProjectName. Optional PassRole for codepipeline.amazonaws.com.</td>
+      <td>Full action catalog, approvals, cross-region.</td>
+    </tr>
+    <tr>
+      <td>Batch</td>
+      <td>CreateComputeEnvironment, CreateJobQueue, RegisterJobDefinition, SubmitJob, Describe*. PassRole for batch.amazonaws.com service role and ecs-tasks.amazonaws.com job role. Nested DinD SubmitJob.</td>
+      <td>Array/multi-node jobs, fair-share, Fargate/EC2 capacity fidelity.</td>
     </tr>
   </tbody>
 </table>
@@ -179,7 +220,8 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Setting | Value |
 |---------|--------|
 | Listen | `127.0.0.1:4566` only |
-| Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda) |
+| Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch) |
+| Compute runtime | Default `dind`. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |
 | Authn | SigV4 on non-health paths (SAML/OIDC federation STS excepted) |

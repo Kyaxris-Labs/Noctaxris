@@ -40,6 +40,10 @@ func (s *Server) handleSecretsManager(
 		s.secretsPutSecretValue(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsDeleteSecret:
 		s.secretsDeleteSecret(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsRestoreSecret:
+		s.secretsRestoreSecret(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsRotateSecret:
+		s.secretsRotateSecret(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsDescribeSecret:
 		s.secretsDescribeSecret(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsListSecrets:
@@ -69,6 +73,10 @@ func secretsAction(action string) string {
 		return catalog.ActionSecretsPutSecretValue
 	case "DeleteSecret":
 		return catalog.ActionSecretsDeleteSecret
+	case "RestoreSecret":
+		return catalog.ActionSecretsRestoreSecret
+	case "RotateSecret":
+		return catalog.ActionSecretsRotateSecret
 	case "DescribeSecret":
 		return catalog.ActionSecretsDescribeSecret
 	case "ListSecrets":
@@ -246,6 +254,11 @@ func (s *Server) secretsGetSecretValue(
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrSecretScheduledDeletion) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"Secret is scheduled for deletion.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to get secret value.", readOnly, eventID, verified)
@@ -301,6 +314,11 @@ func (s *Server) secretsPutSecretValue(
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrSecretScheduledDeletion) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"Secret is scheduled for deletion.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put secret value.", readOnly, eventID, verified)
@@ -337,7 +355,10 @@ func (s *Server) secretsDeleteSecret(
 		return
 	}
 
-	if err := s.store.DeleteSecret(secretAccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
+	force := secretsBoolParam(params["ForceDeleteWithoutRecovery"], false)
+	recoveryDays := intFromJSONNumber(params["RecoveryWindowInDays"])
+	sec, deletion, err := s.store.DeleteSecretWithRecovery(secretAccountID, secretID, recoveryDays, force)
+	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
 		return
@@ -347,8 +368,11 @@ func (s *Server) secretsDeleteSecret(
 		return
 	}
 
-	deletionDate := time.Now().UTC().Format(time.RFC3339)
-	payload, err := sm.DeleteSecretJSON(meta, deletionDate)
+	deletionDate := deletion.UTC().Format(time.RFC3339)
+	if force {
+		deletionDate = time.Now().UTC().Format(time.RFC3339)
+	}
+	payload, err := sm.DeleteSecretJSON(sec, deletionDate)
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -356,6 +380,102 @@ func (s *Server) secretsDeleteSecret(
 	}
 	s.writeSecretsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "DeleteSecret", readOnly)
+}
+
+func (s *Server) secretsRestoreSecret(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsRestoreSecret, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:RestoreSecret.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.RestoreSecret(secretAccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
+		return
+	} else if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to restore secret.", readOnly, eventID, verified)
+		return
+	}
+	meta, err := s.store.DescribeSecret(secretAccountID, secretID)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to restore secret.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.RestoreSecretJSON(meta)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RestoreSecret", readOnly)
+}
+
+func (s *Server) secretsRotateSecret(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsRotateSecret, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:RotateSecret.", readOnly, eventID, verified)
+		return
+	}
+	sec, err := s.store.RotateSecret(secretAccountID, secretID)
+	if errors.Is(err, store.ErrSecretNotFound) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrSecretScheduledDeletion) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"Secret is scheduled for deletion.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to rotate secret.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.RotateSecretJSON(sec)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RotateSecret", readOnly)
+}
+
+func secretsBoolParam(v any, def bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return def
 }
 
 func (s *Server) secretsDescribeSecret(

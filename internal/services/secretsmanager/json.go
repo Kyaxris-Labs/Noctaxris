@@ -81,7 +81,38 @@ func DescribeSecretJSON(sec store.Secret) ([]byte, error) {
 	if sec.KmsKeyID != "" {
 		out["KmsKeyId"] = sec.KmsKeyID
 	}
+	if sec.DeletedDate != "" {
+		deleted, err := dateUnix(sec.DeletedDate)
+		if err != nil {
+			return nil, err
+		}
+		out["DeletedDate"] = deleted
+	}
+	if sec.DeletionDate != "" {
+		deletion, err := dateUnix(sec.DeletionDate)
+		if err != nil {
+			return nil, err
+		}
+		out["DeletionDate"] = deletion
+	}
 	return json.Marshal(out)
+}
+
+// RotateSecretJSON builds a RotateSecret response.
+func RotateSecretJSON(sec store.Secret) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ARN":       sec.ARN,
+		"Name":      sec.Name,
+		"VersionId": sec.VersionID,
+	})
+}
+
+// RestoreSecretJSON builds a RestoreSecret response.
+func RestoreSecretJSON(sec store.Secret) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ARN":  sec.ARN,
+		"Name": sec.Name,
+	})
 }
 
 // ListSecretsJSON builds a ListSecrets response.
