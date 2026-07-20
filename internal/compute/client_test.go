@@ -109,6 +109,19 @@ func TestValidateImageRunOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts layer host paths", func(t *testing.T) {
+		err := compute.ValidateImageRunOpts(compute.ImageRunOpts{
+			ImageURI:      "public.ecr.aws/lambda/python:3.12",
+			EventHostPath: "/var/lib/noctaxris/events",
+			Handler:       "main.handler",
+			LayerHostPaths: []string{
+				"/var/lib/noctaxris/lambda/000000000001/layers/l/versions/1/code",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestPingSkipsWithoutEngine(t *testing.T) {

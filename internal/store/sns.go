@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -22,6 +26,10 @@ var (
 	ErrNoSuchSubscription        = errors.New("SubscriptionNotFound")
 	ErrNoSuchSNSMessage          = errors.New("MessageNotFound")
 	ErrSNSPolicyStatementExists  = errors.New("ResourceConflictException: statement id already exists")
+	ErrSNSInvalidParameter       = errors.New("InvalidParameter")
+	ErrSNSEndpointNotAllowed     = errors.New("InvalidParameter: HTTP endpoint not allowlisted")
+	ErrSNSMissingMessageGroupID  = errors.New("InvalidParameter: MessageGroupId required for FIFO topic")
+	ErrSNSMissingDeduplicationID = errors.New("InvalidParameter: MessageDeduplicationId required for FIFO topic")
 )
 
 // Topic is an SNS topic metadata row.
@@ -42,6 +50,7 @@ type Subscription struct {
 	Endpoint        string
 	Confirmed       bool
 	Owner           string
+	ConfirmToken    string
 }
 
 // PublishResult is the outcome of Publish (message id for fan-out and delivery).
@@ -49,14 +58,22 @@ type PublishResult struct {
 	MessageID string
 }
 
+// PublishOpts carries optional FIFO publish parameters.
+type PublishOpts struct {
+	MessageGroupID         string
+	MessageDeduplicationID string
+}
+
 // PublishedMessage is a persisted publish metadata row.
 type PublishedMessage struct {
-	MessageID  string
-	TopicARN   string
-	Body       string
-	Subject    string
-	Attributes map[string]string
-	CreatedAt  string
+	MessageID              string
+	TopicARN               string
+	Body                   string
+	Subject                string
+	Attributes             map[string]string
+	CreatedAt              string
+	MessageGroupID         string
+	MessageDeduplicationID string
 }
 
 const snsSchema = `
@@ -75,7 +92,8 @@ CREATE TABLE IF NOT EXISTS sns_subscriptions (
   protocol TEXT NOT NULL,
   endpoint TEXT NOT NULL,
   confirmed INTEGER NOT NULL DEFAULT 0,
-  owner TEXT NOT NULL DEFAULT ''
+  owner TEXT NOT NULL DEFAULT '',
+  confirm_token TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sns_published_messages (
   message_id TEXT PRIMARY KEY,
@@ -83,9 +101,20 @@ CREATE TABLE IF NOT EXISTS sns_published_messages (
   body TEXT NOT NULL,
   subject TEXT NOT NULL DEFAULT '',
   attributes_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  message_group_id TEXT NOT NULL DEFAULT '',
+  message_deduplication_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS sns_http_catcher (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subscription_arn TEXT NOT NULL DEFAULT '',
+  topic_arn TEXT NOT NULL DEFAULT '',
+  message_type TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  received_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sns_subscriptions_topic ON sns_subscriptions(topic_arn);
+CREATE INDEX IF NOT EXISTS idx_sns_fifo_dedup ON sns_published_messages(topic_arn, message_deduplication_id);
 `
 
 // EnsureSNSSchema creates SNS tables if missing.
@@ -95,6 +124,13 @@ func EnsureSNSSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(snsSchema); err != nil {
 		return fmt.Errorf("ensure sns schema: %w", err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE sns_published_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sns_published_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sns_subscriptions ADD COLUMN confirm_token TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, _ = db.Exec(stmt) // ignore "duplicate column" on fresh schema
 	}
 	return nil
 }
@@ -134,6 +170,17 @@ func labAutoConfirmProtocol(protocol string) bool {
 	}
 }
 
+func topicIsFIFO(attrs map[string]string, topicName string) bool {
+	if strings.HasSuffix(topicName, ".fifo") {
+		return true
+	}
+	return attrTruthy(attrs, "FifoTopic")
+}
+
+func topicContentBasedDedup(attrs map[string]string) bool {
+	return attrTruthy(attrs, "ContentBasedDeduplication")
+}
+
 func scanTopic(row *sql.Row) (Topic, error) {
 	var (
 		t       Topic
@@ -162,6 +209,17 @@ func (s *Store) CreateTopic(accountID, region, topicName string, attributes map[
 	}
 	if attributes == nil {
 		attributes = map[string]string{}
+	}
+	fifo := topicIsFIFO(attributes, topicName)
+	if fifo && !strings.HasSuffix(topicName, ".fifo") {
+		return Topic{}, fmt.Errorf("%w: FIFO topic names must end with .fifo", ErrSNSInvalidParameter)
+	}
+	if strings.HasSuffix(topicName, ".fifo") {
+		attributes["FifoTopic"] = "true"
+		fifo = true
+	}
+	if fifo && attributes["FifoTopic"] == "" {
+		attributes["FifoTopic"] = "true"
 	}
 	attrsJSON, err := marshalAttributes(attributes)
 	if err != nil {
@@ -326,9 +384,34 @@ func (s *Store) SetTopicAttributes(accountID, topicName string, attrs map[string
 
 // Publish persists message metadata and fans out to confirmed subscriptions.
 func (s *Store) Publish(accountID, topicName, message, subject string, messageAttrs map[string]string) (PublishResult, error) {
+	return s.PublishWithOpts(accountID, topicName, message, subject, messageAttrs, nil)
+}
+
+// PublishWithOpts is Publish with optional FIFO parameters.
+func (s *Store) PublishWithOpts(accountID, topicName, message, subject string, messageAttrs map[string]string, opts *PublishOpts) (PublishResult, error) {
 	topic, err := s.GetTopic(accountID, topicName)
 	if err != nil {
 		return PublishResult{}, err
+	}
+	groupID := ""
+	dedupID := ""
+	if topicIsFIFO(topic.Attributes, topic.TopicName) {
+		if opts == nil || strings.TrimSpace(opts.MessageGroupID) == "" {
+			return PublishResult{}, ErrSNSMissingMessageGroupID
+		}
+		groupID = strings.TrimSpace(opts.MessageGroupID)
+		if topicContentBasedDedup(topic.Attributes) {
+			dedupID = contentBasedDedupID([]byte(message))
+		} else if opts != nil && strings.TrimSpace(opts.MessageDeduplicationID) != "" {
+			dedupID = strings.TrimSpace(opts.MessageDeduplicationID)
+		} else {
+			return PublishResult{}, ErrSNSMissingDeduplicationID
+		}
+		if existing, found, findErr := s.findSNSDedupMessage(topic.TopicARN, dedupID); findErr != nil {
+			return PublishResult{}, findErr
+		} else if found {
+			return PublishResult{MessageID: existing.MessageID}, nil
+		}
 	}
 	messageID := uuid.NewString()
 	created := nowRFC3339()
@@ -338,24 +421,56 @@ func (s *Store) Publish(accountID, topicName, message, subject string, messageAt
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO sns_published_messages
-		 (message_id, topic_arn, body, subject, attributes_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		messageID, topic.TopicARN, message, subject, attrsJSON, created,
+		 (message_id, topic_arn, body, subject, attributes_json, created_at, message_group_id, message_deduplication_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		messageID, topic.TopicARN, message, subject, attrsJSON, created, groupID, dedupID,
 	)
 	if err != nil {
 		return PublishResult{}, fmt.Errorf("publish: %w", err)
 	}
-	if err := s.fanOutTopicPublish(topic, PublishedMessage{
-		MessageID:  messageID,
-		TopicARN:   topic.TopicARN,
-		Body:       message,
-		Subject:    subject,
-		Attributes: messageAttrs,
-		CreatedAt:  created,
-	}); err != nil {
+	msg := PublishedMessage{
+		MessageID:              messageID,
+		TopicARN:               topic.TopicARN,
+		Body:                   message,
+		Subject:                subject,
+		Attributes:             messageAttrs,
+		CreatedAt:              created,
+		MessageGroupID:         groupID,
+		MessageDeduplicationID: dedupID,
+	}
+	if err := s.fanOutTopicPublish(topic, msg); err != nil {
 		return PublishResult{}, fmt.Errorf("publish fan-out: %w", err)
 	}
 	return PublishResult{MessageID: messageID}, nil
+}
+
+func (s *Store) findSNSDedupMessage(topicARN, dedupID string) (PublishedMessage, bool, error) {
+	if dedupID == "" {
+		return PublishedMessage{}, false, nil
+	}
+	var (
+		m     PublishedMessage
+		attrs string
+	)
+	err := s.db.QueryRow(
+		`SELECT message_id, topic_arn, body, subject, attributes_json, created_at,
+		        COALESCE(message_group_id,''), COALESCE(message_deduplication_id,'')
+		 FROM sns_published_messages
+		 WHERE topic_arn = ? AND message_deduplication_id = ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		topicARN, dedupID,
+	).Scan(&m.MessageID, &m.TopicARN, &m.Body, &m.Subject, &attrs, &m.CreatedAt, &m.MessageGroupID, &m.MessageDeduplicationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublishedMessage{}, false, nil
+	}
+	if err != nil {
+		return PublishedMessage{}, false, fmt.Errorf("sns dedup lookup: %w", err)
+	}
+	m.Attributes, err = unmarshalAttributes(attrs)
+	if err != nil {
+		return PublishedMessage{}, false, err
+	}
+	return m, true, nil
 }
 
 const snsDeliveryMaxAttempts = 2
@@ -374,7 +489,7 @@ func (s *Store) fanOutTopicPublish(topic Topic, msg PublishedMessage) error {
 
 func (s *Store) listConfirmedSubscriptions(topicARN string) ([]Subscription, error) {
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
 		 FROM sns_subscriptions WHERE topic_arn = ? AND confirmed = 1 ORDER BY subscription_arn`,
 		topicARN,
 	)
@@ -403,6 +518,8 @@ func (s *Store) deliverSNSSubscriptionOnce(msg PublishedMessage, sub Subscriptio
 		return s.deliverSNSToSQS(sub, msg)
 	case "lambda":
 		return s.deliverSNSToLambda(sub, msg)
+	case "http", "https":
+		return s.deliverSNSToHTTP(sub, msg)
 	default:
 		return nil
 	}
@@ -417,7 +534,20 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 	if err != nil {
 		return fmt.Errorf("marshal sns sqs envelope: %w", err)
 	}
-	if _, err := s.SendMessage(sub.Owner, queueName, body, false, nil, "", nil); err != nil {
+	var opts *SendMessageOpts
+	q, qerr := s.GetQueue(sub.Owner, queueName)
+	if qerr == nil && queueIsFIFO(q.Attributes) {
+		groupID := msg.MessageGroupID
+		if groupID == "" {
+			groupID = "sns-default"
+		}
+		dedup := msg.MessageDeduplicationID
+		if dedup == "" {
+			dedup = msg.MessageID
+		}
+		opts = &SendMessageOpts{MessageGroupID: groupID, MessageDeduplicationID: dedup}
+	}
+	if _, err := s.SendMessage(sub.Owner, queueName, body, false, nil, "", opts); err != nil {
 		return fmt.Errorf("sns sqs delivery: %w", err)
 	}
 	return nil
@@ -506,10 +636,11 @@ func (s *Store) GetPublishedMessage(messageID string) (PublishedMessage, error) 
 		attrs string
 	)
 	err := s.db.QueryRow(
-		`SELECT message_id, topic_arn, body, subject, attributes_json, created_at
+		`SELECT message_id, topic_arn, body, subject, attributes_json, created_at,
+		        COALESCE(message_group_id,''), COALESCE(message_deduplication_id,'')
 		 FROM sns_published_messages WHERE message_id = ?`,
 		messageID,
-	).Scan(&m.MessageID, &m.TopicARN, &m.Body, &m.Subject, &attrs, &m.CreatedAt)
+	).Scan(&m.MessageID, &m.TopicARN, &m.Body, &m.Subject, &attrs, &m.CreatedAt, &m.MessageGroupID, &m.MessageDeduplicationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PublishedMessage{}, ErrNoSuchSNSMessage
 	}
@@ -528,7 +659,7 @@ func scanSubscription(row *sql.Row) (Subscription, error) {
 		sub       Subscription
 		confirmed int
 	)
-	err := row.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner)
+	err := row.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Subscription{}, ErrNoSuchSubscription
 	}
@@ -559,28 +690,80 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 	if protocol == "" || endpoint == "" {
 		return Subscription{}, fmt.Errorf("subscribe: protocol and endpoint are required")
 	}
+	protoLower := strings.ToLower(protocol)
+	if protoLower == "http" || protoLower == "https" {
+		if err := validateSNSHTTPEndpoint(endpoint); err != nil {
+			return Subscription{}, err
+		}
+	}
+	if topicIsFIFO(topic.Attributes, topic.TopicName) && protoLower == "sqs" {
+		qName, qerr := s.resolveSQSQueueName(accountID, endpoint)
+		if qerr == nil {
+			q, gerr := s.GetQueue(accountID, qName)
+			if gerr == nil && !queueIsFIFO(q.Attributes) {
+				return Subscription{}, fmt.Errorf("%w: FIFO topic requires FIFO SQS subscription", ErrSNSInvalidParameter)
+			}
+		}
+	}
 	subARN := SubscriptionARN(topic.TopicARN)
+	token := ""
 	confirmed := 0
 	if labAutoConfirmProtocol(protocol) {
 		confirmed = 1
+	} else if protoLower == "http" || protoLower == "https" {
+		token = uuid.NewString()
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO sns_subscriptions
-		 (subscription_arn, topic_arn, protocol, endpoint, confirmed, owner)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		subARN, topic.TopicARN, protocol, endpoint, confirmed, accountID,
+		 (subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, confirm_token)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		subARN, topic.TopicARN, protocol, endpoint, confirmed, accountID, token,
 	)
 	if err != nil {
 		return Subscription{}, fmt.Errorf("subscribe: %w", err)
 	}
-	return Subscription{
+	sub := Subscription{
 		SubscriptionARN: subARN,
 		TopicARN:        topic.TopicARN,
 		Protocol:        protocol,
 		Endpoint:        endpoint,
 		Confirmed:       confirmed == 1,
 		Owner:           accountID,
-	}, nil
+		ConfirmToken:    token,
+	}
+	if token != "" {
+		_ = s.deliverSNSHTTPConfirmation(sub)
+	}
+	return sub, nil
+}
+
+// ConfirmSubscription confirms a pending HTTP(S) subscription by token.
+func (s *Store) ConfirmSubscription(topicARN, token string) (Subscription, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return Subscription{}, fmt.Errorf("%w: Token is required", ErrSNSInvalidParameter)
+	}
+	row := s.db.QueryRow(
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		 FROM sns_subscriptions WHERE confirm_token = ?`,
+		token,
+	)
+	sub, err := scanSubscription(row)
+	if err != nil {
+		return Subscription{}, err
+	}
+	if topicARN != "" && sub.TopicARN != topicARN {
+		return Subscription{}, ErrNoSuchSubscription
+	}
+	_, err = s.db.Exec(
+		`UPDATE sns_subscriptions SET confirmed = 1 WHERE subscription_arn = ?`,
+		sub.SubscriptionARN,
+	)
+	if err != nil {
+		return Subscription{}, fmt.Errorf("confirm subscription: %w", err)
+	}
+	sub.Confirmed = true
+	return sub, nil
 }
 
 // Unsubscribe removes a subscription by ARN.
@@ -598,7 +781,7 @@ func (s *Store) Unsubscribe(subscriptionARN string) error {
 // GetSubscription returns a subscription by ARN.
 func (s *Store) GetSubscription(subscriptionARN string) (Subscription, error) {
 	row := s.db.QueryRow(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
 		 FROM sns_subscriptions WHERE subscription_arn = ?`,
 		subscriptionARN,
 	)
@@ -632,7 +815,7 @@ func (s *Store) GetSubscriptionAttributes(subscriptionARN string) (map[string]st
 // ListSubscriptions returns all subscriptions owned by the account.
 func (s *Store) ListSubscriptions(accountID string) ([]Subscription, error) {
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
 		 FROM sns_subscriptions WHERE owner = ? ORDER BY subscription_arn`,
 		accountID,
 	)
@@ -650,7 +833,7 @@ func (s *Store) ListSubscriptionsByTopic(accountID, topicName string) ([]Subscri
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
 		 FROM sns_subscriptions WHERE topic_arn = ? ORDER BY subscription_arn`,
 		topic.TopicARN,
 	)
@@ -668,7 +851,7 @@ func scanSubscriptionRows(rows *sql.Rows) ([]Subscription, error) {
 			sub       Subscription
 			confirmed int
 		)
-		if err := rows.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner); err != nil {
+		if err := rows.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken); err != nil {
 			return nil, fmt.Errorf("scan subscriptions: %w", err)
 		}
 		sub.Confirmed = confirmed == 1
@@ -794,4 +977,134 @@ func (s *Store) RemoveTopicPermission(accountID, topicName, label string) error 
 // TopicNameFromARN parses the topic name from an SNS topic ARN.
 func TopicNameFromARN(arn string) (string, error) {
 	return topicNameFromARN(arn)
+}
+
+// LabSNSHTTPCatcherPath is the allowlisted in-process HTTP catcher path.
+const LabSNSHTTPCatcherPath = "/_noctaxris/sns-http-catcher"
+
+// SNSHTTPCatcherMessage is a caught HTTP delivery or confirmation.
+type SNSHTTPCatcherMessage struct {
+	ID               int64
+	SubscriptionARN  string
+	TopicARN         string
+	MessageType      string
+	Body             string
+	ReceivedAt       string
+}
+
+// validateSNSHTTPEndpoint allows only loopback hosts or the lab catcher path.
+func validateSNSHTTPEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("%w: invalid HTTP endpoint", ErrSNSInvalidParameter)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("%w: protocol must be http or https", ErrSNSInvalidParameter)
+	}
+	host := strings.ToLower(u.Hostname())
+	switch host {
+	case "127.0.0.1", "localhost", "::1":
+		return nil
+	default:
+		return ErrSNSEndpointNotAllowed
+	}
+}
+
+func (s *Store) deliverSNSToHTTP(sub Subscription, msg PublishedMessage) error {
+	if err := validateSNSHTTPEndpoint(sub.Endpoint); err != nil {
+		return err
+	}
+	envelope := snsNotificationEnvelope(msg)
+	envelope["Type"] = "Notification"
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	return s.postSNSHTTP(sub.Endpoint, sub.SubscriptionARN, sub.TopicARN, "Notification", raw)
+}
+
+func (s *Store) deliverSNSHTTPConfirmation(sub Subscription) error {
+	if err := validateSNSHTTPEndpoint(sub.Endpoint); err != nil {
+		return err
+	}
+	subscribeURL := fmt.Sprintf("http://127.0.0.1:4566%s?Action=ConfirmSubscription&Token=%s&TopicArn=%s",
+		LabSNSHTTPCatcherPath, url.QueryEscape(sub.ConfirmToken), url.QueryEscape(sub.TopicARN))
+	payload := map[string]any{
+		"Type":             "SubscriptionConfirmation",
+		"MessageId":        uuid.NewString(),
+		"Token":            sub.ConfirmToken,
+		"TopicArn":         sub.TopicARN,
+		"Message":          "You have chosen to subscribe to the topic.",
+		"SubscribeURL":     subscribeURL,
+		"Timestamp":        nowRFC3339(),
+		"SubscriptionArn":  sub.SubscriptionARN,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.postSNSHTTP(sub.Endpoint, sub.SubscriptionARN, sub.TopicARN, "SubscriptionConfirmation", raw)
+}
+
+func (s *Store) postSNSHTTP(endpoint, subARN, topicARN, msgType string, body []byte) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return err
+	}
+	// Lab catcher path: persist without outbound HTTP (tests + same-process delivery).
+	if strings.HasPrefix(u.Path, LabSNSHTTPCatcherPath) || u.Path == LabSNSHTTPCatcherPath {
+		return s.RecordSNSHTTPCatcher(subARN, topicARN, msgType, string(body))
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-amz-sns-message-type", msgType)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("sns http delivery status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// RecordSNSHTTPCatcher stores a lab catcher payload.
+func (s *Store) RecordSNSHTTPCatcher(subARN, topicARN, msgType, body string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO sns_http_catcher (subscription_arn, topic_arn, message_type, body, received_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		subARN, topicARN, msgType, body, nowRFC3339(),
+	)
+	if err != nil {
+		return fmt.Errorf("record sns http catcher: %w", err)
+	}
+	return nil
+}
+
+// ListSNSHTTPCatcher returns caught HTTP deliveries (newest last).
+func (s *Store) ListSNSHTTPCatcher() ([]SNSHTTPCatcherMessage, error) {
+	rows, err := s.db.Query(
+		`SELECT id, subscription_arn, topic_arn, message_type, body, received_at
+		 FROM sns_http_catcher ORDER BY id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list sns http catcher: %w", err)
+	}
+	defer rows.Close()
+	out := []SNSHTTPCatcherMessage{}
+	for rows.Next() {
+		var m SNSHTTPCatcherMessage
+		if err := rows.Scan(&m.ID, &m.SubscriptionARN, &m.TopicARN, &m.MessageType, &m.Body, &m.ReceivedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

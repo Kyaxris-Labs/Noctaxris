@@ -125,6 +125,23 @@ func SubscribeXML(subscriptionARN, requestID string) ([]byte, error) {
 	return marshalResponse(resp)
 }
 
+type confirmSubscriptionResponse struct {
+	XMLName                     xml.Name `xml:"ConfirmSubscriptionResponse"`
+	XMLNS                       string   `xml:"xmlns,attr"`
+	ConfirmSubscriptionResult   struct {
+		SubscriptionArn string `xml:"SubscriptionArn"`
+	} `xml:"ConfirmSubscriptionResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// ConfirmSubscriptionXML builds a ConfirmSubscription response.
+func ConfirmSubscriptionXML(subscriptionARN, requestID string) ([]byte, error) {
+	resp := confirmSubscriptionResponse{XMLNS: snsXMLNS}
+	resp.ConfirmSubscriptionResult.SubscriptionArn = subscriptionARN
+	resp.ResponseMetadata.RequestID = requestID
+	return marshalResponse(resp)
+}
+
 type listSubscriptionsResponse struct {
 	XMLName                 xml.Name `xml:"ListSubscriptionsResponse"`
 	XMLNS                   string   `xml:"xmlns,attr"`

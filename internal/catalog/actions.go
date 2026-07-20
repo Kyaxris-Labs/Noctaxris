@@ -252,6 +252,40 @@ const (
 	ActionDynamoDBDescribeTimeToLive   = "dynamodb:DescribeTimeToLive"
 )
 
+// DynamoDB Streams lab actions (v5).
+const (
+	ActionDynamoDBStreamsListStreams      = "dynamodbstreams:ListStreams"
+	ActionDynamoDBStreamsDescribeStream   = "dynamodbstreams:DescribeStream"
+	ActionDynamoDBStreamsGetShardIterator = "dynamodbstreams:GetShardIterator"
+	ActionDynamoDBStreamsGetRecords       = "dynamodbstreams:GetRecords"
+)
+
+// EventBridge Pipes lab actions (v5).
+const (
+	ActionPipesCreatePipe  = "pipes:CreatePipe"
+	ActionPipesDescribePipe = "pipes:DescribePipe"
+	ActionPipesDeletePipe  = "pipes:DeletePipe"
+	ActionPipesListPipes   = "pipes:ListPipes"
+)
+
+// Amazon MQ lab actions (v5).
+const (
+	ActionMQCreateBroker  = "mq:CreateBroker"
+	ActionMQDescribeBroker = "mq:DescribeBroker"
+	ActionMQListBrokers   = "mq:ListBrokers"
+	ActionMQDeleteBroker  = "mq:DeleteBroker"
+)
+
+// Transfer Family lab actions (v5).
+const (
+	ActionTransferCreateServer  = "transfer:CreateServer"
+	ActionTransferDescribeServer = "transfer:DescribeServer"
+	ActionTransferListServers   = "transfer:ListServers"
+	ActionTransferDeleteServer  = "transfer:DeleteServer"
+	ActionTransferCreateUser    = "transfer:CreateUser"
+	ActionTransferDeleteUser    = "transfer:DeleteUser"
+)
+
 // SQS lab actions (Phase 6).
 const (
 	ActionSQSCreateQueue             = "sqs:CreateQueue"
@@ -288,6 +322,7 @@ const (
 	ActionSNSSetTopicAttributes        = "sns:SetTopicAttributes"
 	ActionSNSPublish                   = "sns:Publish"
 	ActionSNSSubscribe                 = "sns:Subscribe"
+	ActionSNSConfirmSubscription       = "sns:ConfirmSubscription"
 	ActionSNSUnsubscribe               = "sns:Unsubscribe"
 	ActionSNSListSubscriptions         = "sns:ListSubscriptions"
 	ActionSNSListSubscriptionsByTopic  = "sns:ListSubscriptionsByTopic"
@@ -345,6 +380,11 @@ const (
 	ActionECSStopTask                 = "ecs:StopTask"
 	ActionECSDescribeClusters         = "ecs:DescribeClusters"
 	ActionECSListClusters             = "ecs:ListClusters"
+	ActionECSCreateService            = "ecs:CreateService"
+	ActionECSUpdateService            = "ecs:UpdateService"
+	ActionECSDeleteService            = "ecs:DeleteService"
+	ActionECSDescribeServices         = "ecs:DescribeServices"
+	ActionECSListServices             = "ecs:ListServices"
 )
 
 // Secrets Manager lab actions (Phase 8).
@@ -484,6 +524,62 @@ const (
 	ActionConfigDescribeComplianceByConfigRule = "config:DescribeComplianceByConfigRule"
 )
 
+// EventBridge Scheduler lab actions (v5 Track A).
+const (
+	ActionSchedulerCreateSchedule = "scheduler:CreateSchedule"
+	ActionSchedulerGetSchedule    = "scheduler:GetSchedule"
+	ActionSchedulerUpdateSchedule = "scheduler:UpdateSchedule"
+	ActionSchedulerDeleteSchedule = "scheduler:DeleteSchedule"
+	ActionSchedulerListSchedules  = "scheduler:ListSchedules"
+)
+
+// ACM lab actions (v5 Stream D).
+const (
+	ActionACMRequestCertificate  = "acm:RequestCertificate"
+	ActionACMDescribeCertificate = "acm:DescribeCertificate"
+	ActionACMListCertificates    = "acm:ListCertificates"
+	ActionACMDeleteCertificate   = "acm:DeleteCertificate"
+)
+
+// Route 53 lab actions (v5 Stream D).
+const (
+	ActionRoute53CreateHostedZone         = "route53:CreateHostedZone"
+	ActionRoute53DeleteHostedZone         = "route53:DeleteHostedZone"
+	ActionRoute53ListHostedZones          = "route53:ListHostedZones"
+	ActionRoute53ChangeResourceRecordSets = "route53:ChangeResourceRecordSets"
+	ActionRoute53ListResourceRecordSets   = "route53:ListResourceRecordSets"
+)
+
+// Cloud Map (Service Discovery) lab actions (v5 Stream D).
+const (
+	ActionSDCreatePrivateDnsNamespace = "servicediscovery:CreatePrivateDnsNamespace"
+	ActionSDCreateHttpNamespace       = "servicediscovery:CreateHttpNamespace"
+	ActionSDCreateService             = "servicediscovery:CreateService"
+	ActionSDRegisterInstance          = "servicediscovery:RegisterInstance"
+	ActionSDDeregisterInstance        = "servicediscovery:DeregisterInstance"
+	ActionSDDiscoverInstances         = "servicediscovery:DiscoverInstances"
+)
+
+// Pricing lab actions (v5 Stream D).
+const (
+	ActionPricingDescribeServices    = "pricing:DescribeServices"
+	ActionPricingGetAttributeValues  = "pricing:GetAttributeValues"
+	ActionPricingGetProducts         = "pricing:GetProducts"
+)
+
+// AppSync lab actions (v5 Stream D). Auth: API_KEY or AWS_IAM only (no Cognito until v6).
+const (
+	ActionAppSyncCreateGraphqlApi     = "appsync:CreateGraphqlApi"
+	ActionAppSyncDeleteGraphqlApi     = "appsync:DeleteGraphqlApi"
+	ActionAppSyncGetGraphqlApi        = "appsync:GetGraphqlApi"
+	ActionAppSyncListGraphqlApis      = "appsync:ListGraphqlApis"
+	ActionAppSyncStartSchemaCreation  = "appsync:StartSchemaCreation"
+	ActionAppSyncCreateApiKey         = "appsync:CreateApiKey"
+	ActionAppSyncCreateDataSource     = "appsync:CreateDataSource"
+	ActionAppSyncCreateResolver       = "appsync:CreateResolver"
+	ActionAppSyncGraphQL              = "appsync:GraphQL"
+)
+
 // CodeBuild lab actions (v4 Track B).
 const (
 	ActionCodeBuildCreateProject  = "codebuild:CreateProject"
@@ -527,6 +623,16 @@ const (
 	ActionLambdaAddPermission               = "lambda:AddPermission"
 	ActionLambdaRemovePermission            = "lambda:RemovePermission"
 	ActionLambdaGetPolicy                   = "lambda:GetPolicy"
+	ActionLambdaCreateEventSourceMapping    = "lambda:CreateEventSourceMapping"
+	ActionLambdaGetEventSourceMapping       = "lambda:GetEventSourceMapping"
+	ActionLambdaListEventSourceMappings     = "lambda:ListEventSourceMappings"
+	ActionLambdaUpdateEventSourceMapping    = "lambda:UpdateEventSourceMapping"
+	ActionLambdaDeleteEventSourceMapping    = "lambda:DeleteEventSourceMapping"
+	ActionLambdaCreateFunctionUrlConfig     = "lambda:CreateFunctionUrlConfig"
+	ActionLambdaGetFunctionUrlConfig        = "lambda:GetFunctionUrlConfig"
+	ActionLambdaDeleteFunctionUrlConfig     = "lambda:DeleteFunctionUrlConfig"
+	ActionLambdaListFunctionUrlConfigs      = "lambda:ListFunctionUrlConfigs"
+	ActionLambdaInvokeFunctionUrl           = "lambda:InvokeFunctionUrl"
 )
 
 // KnownAction reports whether action is recognized in the current catalog.
@@ -688,6 +794,24 @@ func KnownAction(action string) bool {
 		ActionDynamoDBDeleteResourcePolicy,
 		ActionDynamoDBUpdateTimeToLive,
 		ActionDynamoDBDescribeTimeToLive,
+		ActionDynamoDBStreamsListStreams,
+		ActionDynamoDBStreamsDescribeStream,
+		ActionDynamoDBStreamsGetShardIterator,
+		ActionDynamoDBStreamsGetRecords,
+		ActionPipesCreatePipe,
+		ActionPipesDescribePipe,
+		ActionPipesDeletePipe,
+		ActionPipesListPipes,
+		ActionMQCreateBroker,
+		ActionMQDescribeBroker,
+		ActionMQListBrokers,
+		ActionMQDeleteBroker,
+		ActionTransferCreateServer,
+		ActionTransferDescribeServer,
+		ActionTransferListServers,
+		ActionTransferDeleteServer,
+		ActionTransferCreateUser,
+		ActionTransferDeleteUser,
 		ActionSQSCreateQueue,
 		ActionSQSGetQueueUrl,
 		ActionSQSGetQueueAttributes,
@@ -722,6 +846,16 @@ func KnownAction(action string) bool {
 		ActionLambdaAddPermission,
 		ActionLambdaRemovePermission,
 		ActionLambdaGetPolicy,
+		ActionLambdaCreateEventSourceMapping,
+		ActionLambdaGetEventSourceMapping,
+		ActionLambdaListEventSourceMappings,
+		ActionLambdaUpdateEventSourceMapping,
+		ActionLambdaDeleteEventSourceMapping,
+		ActionLambdaCreateFunctionUrlConfig,
+		ActionLambdaGetFunctionUrlConfig,
+		ActionLambdaDeleteFunctionUrlConfig,
+		ActionLambdaListFunctionUrlConfigs,
+		ActionLambdaInvokeFunctionUrl,
 		ActionSSMPutParameter,
 		ActionSSMGetParameter,
 		ActionSSMGetParameters,
@@ -746,6 +880,7 @@ func KnownAction(action string) bool {
 		ActionSNSSetTopicAttributes,
 		ActionSNSPublish,
 		ActionSNSSubscribe,
+		ActionSNSConfirmSubscription,
 		ActionSNSUnsubscribe,
 		ActionSNSListSubscriptions,
 		ActionSNSListSubscriptionsByTopic,
@@ -791,6 +926,11 @@ func KnownAction(action string) bool {
 		ActionECSStopTask,
 		ActionECSDescribeClusters,
 		ActionECSListClusters,
+		ActionECSCreateService,
+		ActionECSUpdateService,
+		ActionECSDeleteService,
+		ActionECSDescribeServices,
+		ActionECSListServices,
 		ActionCloudTrailLookupEvents,
 		ActionLogsCreateLogGroup,
 		ActionLogsCreateLogStream,
@@ -872,7 +1012,39 @@ func KnownAction(action string) bool {
 		ActionConfigPutConfigurationRecorder,
 		ActionConfigPutDeliveryChannel,
 		ActionConfigStartConfigurationRecorder,
-		ActionConfigDescribeComplianceByConfigRule:
+		ActionConfigDescribeComplianceByConfigRule,
+		ActionSchedulerCreateSchedule,
+		ActionSchedulerGetSchedule,
+		ActionSchedulerUpdateSchedule,
+		ActionSchedulerDeleteSchedule,
+		ActionSchedulerListSchedules,
+		ActionACMRequestCertificate,
+		ActionACMDescribeCertificate,
+		ActionACMListCertificates,
+		ActionACMDeleteCertificate,
+		ActionRoute53CreateHostedZone,
+		ActionRoute53DeleteHostedZone,
+		ActionRoute53ListHostedZones,
+		ActionRoute53ChangeResourceRecordSets,
+		ActionRoute53ListResourceRecordSets,
+		ActionSDCreatePrivateDnsNamespace,
+		ActionSDCreateHttpNamespace,
+		ActionSDCreateService,
+		ActionSDRegisterInstance,
+		ActionSDDeregisterInstance,
+		ActionSDDiscoverInstances,
+		ActionPricingDescribeServices,
+		ActionPricingGetAttributeValues,
+		ActionPricingGetProducts,
+		ActionAppSyncCreateGraphqlApi,
+		ActionAppSyncDeleteGraphqlApi,
+		ActionAppSyncGetGraphqlApi,
+		ActionAppSyncListGraphqlApis,
+		ActionAppSyncStartSchemaCreation,
+		ActionAppSyncCreateApiKey,
+		ActionAppSyncCreateDataSource,
+		ActionAppSyncCreateResolver,
+		ActionAppSyncGraphQL:
 		return true
 	default:
 		return false

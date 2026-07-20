@@ -67,7 +67,8 @@ aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Full EventBridge SAR (Pipes, Scheduler, partner buses, archive and replay, API Destinations)
+- Full EventBridge SAR (partner buses, archive and replay, API Destinations). Pipes lab core: [pipes.md](pipes.md)
+- Legacy scheduled rules (`ScheduleExpression` on Rules). Prefer the Scheduler service for time-based labs
 - Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
 - CloudWatch Logs and Kinesis targets
 - `InputPath` and `InputTransformer`

@@ -78,6 +78,9 @@ type DynamoTable struct {
 	GSI2RangeKeyType string
 	TTLAttributeName string
 	TTLEnabled       bool
+	StreamEnabled    bool
+	StreamViewType   string
+	StreamLabel      string
 }
 
 // HasRangeKey reports whether the table uses a composite primary key.
@@ -216,13 +219,15 @@ const dynamoTableSelect = `account_id, table_name, table_arn, status, hash_key_n
 		        gsi_name, gsi_hash_key_name, gsi_hash_key_type, gsi_range_key_name, gsi_range_key_type,
 		        COALESCE(gsi2_name, ''), COALESCE(gsi2_hash_key_name, ''), COALESCE(gsi2_hash_key_type, ''),
 		        COALESCE(gsi2_range_key_name, ''), COALESCE(gsi2_range_key_type, ''),
-		        ttl_attribute_name, ttl_enabled`
+		        ttl_attribute_name, ttl_enabled,
+		        COALESCE(stream_enabled, 0), COALESCE(stream_view_type, ''), COALESCE(stream_label, '')`
 
 func scanDynamoTable(scanner interface {
 	Scan(dest ...any) error
 }) (DynamoTable, error) {
 	var t DynamoTable
 	var ttlEnabled int
+	var streamEnabled int
 	err := scanner.Scan(
 		&t.AccountID, &t.TableName, &t.TableARN, &t.Status,
 		&t.HashKeyName, &t.HashKeyType, &t.RangeKeyName, &t.RangeKeyType,
@@ -230,12 +235,22 @@ func scanDynamoTable(scanner interface {
 		&t.GSIName, &t.GSIHashKeyName, &t.GSIHashKeyType, &t.GSIRangeKeyName, &t.GSIRangeKeyType,
 		&t.GSI2Name, &t.GSI2HashKeyName, &t.GSI2HashKeyType, &t.GSI2RangeKeyName, &t.GSI2RangeKeyType,
 		&t.TTLAttributeName, &ttlEnabled,
+		&streamEnabled, &t.StreamViewType, &t.StreamLabel,
 	)
 	if err != nil {
 		return DynamoTable{}, err
 	}
 	t.TTLEnabled = ttlEnabled == 1
+	t.StreamEnabled = streamEnabled == 1
 	return t, nil
+}
+
+// StreamARN returns the DynamoDB Streams ARN when the table stream is enabled.
+func (t DynamoTable) StreamARN(region string) string {
+	if !t.StreamEnabled || t.StreamLabel == "" {
+		return ""
+	}
+	return DynamoStreamARN(region, t.AccountID, t.TableName, t.StreamLabel)
 }
 
 func validateGSI(gsi *DynamoGSI) error {

@@ -81,6 +81,38 @@ func ListClustersJSON(clusterARNs []string) ([]byte, error) {
 	return json.Marshal(map[string]any{"clusterArns": clusterARNs})
 }
 
+func serviceJSON(svc store.ECSService) map[string]any {
+	return map[string]any{
+		"serviceArn":     svc.ServiceARN,
+		"serviceName":    svc.ServiceName,
+		"clusterArn":     svc.ClusterARN,
+		"taskDefinition": svc.TaskDefinition,
+		"desiredCount":   svc.DesiredCount,
+		"runningCount":   svc.RunningCount,
+		"pendingCount":   svc.PendingCount,
+		"status":         svc.Status,
+	}
+}
+
+// CreateServiceJSON builds a CreateService / UpdateService / DeleteService response.
+func CreateServiceJSON(svc store.ECSService) ([]byte, error) {
+	return json.Marshal(map[string]any{"service": serviceJSON(svc)})
+}
+
+// DescribeServicesJSON builds a DescribeServices response.
+func DescribeServicesJSON(services []store.ECSService) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(services))
+	for _, svc := range services {
+		entries = append(entries, serviceJSON(svc))
+	}
+	return json.Marshal(map[string]any{"services": entries, "failures": []any{}})
+}
+
+// ListServicesJSON builds a ListServices response.
+func ListServicesJSON(serviceARNs []string) ([]byte, error) {
+	return json.Marshal(map[string]any{"serviceArns": serviceARNs})
+}
+
 func taskDefinitionJSON(td store.ECSTaskDefinition) map[string]any {
 	return map[string]any{
 		"taskDefinitionArn":  td.ARN,

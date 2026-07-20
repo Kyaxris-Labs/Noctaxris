@@ -375,6 +375,14 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureLambdaESMSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLambdaFunctionURLSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureSSMSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -396,6 +404,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureECSSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureECSServiceSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -464,6 +476,42 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureS3VersioningSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureDynamoDBStreamsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSchedulerSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsurePipesSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureMQSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureTransferSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureACMSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureRoute53Schema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureServiceDiscoverySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureAppSyncSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}

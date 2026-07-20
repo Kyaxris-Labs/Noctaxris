@@ -57,6 +57,16 @@ func (s *Server) handleECS(
 		s.ecsDescribeClusters(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionECSListClusters:
 		s.ecsListClusters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSCreateService:
+		s.ecsCreateService(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSUpdateService:
+		s.ecsUpdateService(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSDeleteService:
+		s.ecsDeleteService(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSDescribeServices:
+		s.ecsDescribeServices(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSListServices:
+		s.ecsListServices(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeECSError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This ECS action is not implemented.", readOnly, eventID, verified)
@@ -88,6 +98,16 @@ func ecsAction(action string) string {
 		return catalog.ActionECSDescribeClusters
 	case "ListClusters":
 		return catalog.ActionECSListClusters
+	case "CreateService":
+		return catalog.ActionECSCreateService
+	case "UpdateService":
+		return catalog.ActionECSUpdateService
+	case "DeleteService":
+		return catalog.ActionECSDeleteService
+	case "DescribeServices":
+		return catalog.ActionECSDescribeServices
+	case "ListServices":
+		return catalog.ActionECSListServices
 	default:
 		return action
 	}

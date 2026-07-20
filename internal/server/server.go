@@ -46,6 +46,10 @@ type Server struct {
 	invokerOnce sync.Once
 	invoker     compute.FunctionInvoker
 	invokerErr  error
+
+	// In-process EventBridge Scheduler ticker (ADR-0007).
+	schedulerTickerOnce   sync.Once
+	schedulerTickerCancel context.CancelFunc
 }
 
 type awsError struct {
@@ -93,8 +97,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == store.LabSNSHTTPCatcherPath || strings.HasPrefix(r.URL.Path, store.LabSNSHTTPCatcherPath+"/") {
+		s.handleSNSHTTPCatcher(w, r)
+		return
+	}
+
 	if isRegistryV2Path(r.URL.Path) {
 		s.handleRegistryV2(w, r)
+		return
+	}
+
+	if isFunctionURLPath(r.URL.Path) {
+		s.handleFunctionURLInvoke(w, r)
 		return
 	}
 
@@ -107,6 +121,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusBadRequest, "InvalidRequest",
 			"Unable to read request body.", readOnly, r, eventID, "", "", false)
+		return
+	}
+
+	if isAppSyncGraphQLPath(r.URL.Path) {
+		s.handleAppSyncGraphQLRuntime(w, r, body, requestID, eventID, readOnly)
 		return
 	}
 
@@ -179,8 +198,59 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.EqualFold(verified.Service, "dynamodbstreams") || strings.HasPrefix(action, "dynamodbstreams:") {
+		s.handleDynamoDBStreams(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "pipes") || strings.HasPrefix(action, "pipes:") {
+		s.handlePipes(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "mq") || strings.HasPrefix(action, "mq:") {
+		s.handleMQ(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "transfer") || strings.HasPrefix(action, "transfer:") {
+		s.handleTransfer(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
 	if verified.Service == "events" || strings.HasPrefix(action, "events:") {
 		s.handleEventBridge(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "scheduler" || strings.HasPrefix(action, "scheduler:") {
+		s.StartSchedulerTicker()
+		s.handleScheduler(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "acm" || strings.HasPrefix(action, "acm:") {
+		s.handleACM(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "route53" || strings.HasPrefix(action, "route53:") {
+		s.handleRoute53(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "servicediscovery" || strings.HasPrefix(action, "servicediscovery:") {
+		s.handleServiceDiscovery(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "pricing" || strings.HasPrefix(action, "pricing:") {
+		s.handlePricing(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "appsync" || strings.HasPrefix(action, "appsync:") {
+		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -410,7 +480,16 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLambdaDeleteLayerVersion, "DeleteLayerVersion",
 		catalog.ActionLambdaAddPermission, "AddPermission",
 		catalog.ActionLambdaRemovePermission, "RemovePermission",
-		catalog.ActionLambdaGetPolicy:
+		catalog.ActionLambdaGetPolicy,
+		catalog.ActionLambdaCreateEventSourceMapping, "CreateEventSourceMapping",
+		catalog.ActionLambdaGetEventSourceMapping, "GetEventSourceMapping",
+		catalog.ActionLambdaListEventSourceMappings, "ListEventSourceMappings",
+		catalog.ActionLambdaUpdateEventSourceMapping, "UpdateEventSourceMapping",
+		catalog.ActionLambdaDeleteEventSourceMapping, "DeleteEventSourceMapping",
+		catalog.ActionLambdaCreateFunctionUrlConfig, "CreateFunctionUrlConfig",
+		catalog.ActionLambdaGetFunctionUrlConfig, "GetFunctionUrlConfig",
+		catalog.ActionLambdaDeleteFunctionUrlConfig, "DeleteFunctionUrlConfig",
+		catalog.ActionLambdaListFunctionUrlConfigs, "ListFunctionUrlConfigs":
 		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionECSRegisterTaskDefinition, "RegisterTaskDefinition",
 		catalog.ActionECSDescribeTaskDefinition, "DescribeTaskDefinition",
@@ -421,7 +500,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionECSListTasks, "ListTasks",
 		catalog.ActionECSStopTask, "StopTask",
 		catalog.ActionECSDescribeClusters, "DescribeClusters",
-		catalog.ActionECSListClusters, "ListClusters":
+		catalog.ActionECSListClusters, "ListClusters",
+		catalog.ActionECSCreateService, "CreateService",
+		catalog.ActionECSUpdateService, "UpdateService",
+		catalog.ActionECSDeleteService, "DeleteService",
+		catalog.ActionECSDescribeServices, "DescribeServices",
+		catalog.ActionECSListServices, "ListServices":
 		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudTrailLookupEvents, "LookupEvents":
 		s.handleCloudTrail(w, r, body, requestID, eventID, action, verified, readOnly)
@@ -514,6 +598,59 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionConfigStartConfigurationRecorder, "StartConfigurationRecorder",
 		catalog.ActionConfigDescribeComplianceByConfigRule, "DescribeComplianceByConfigRule":
 		s.handleConfig(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionDynamoDBStreamsListStreams,
+		catalog.ActionDynamoDBStreamsDescribeStream,
+		catalog.ActionDynamoDBStreamsGetShardIterator,
+		catalog.ActionDynamoDBStreamsGetRecords:
+		s.handleDynamoDBStreams(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionPipesCreatePipe, "CreatePipe",
+		catalog.ActionPipesDescribePipe, "DescribePipe",
+		catalog.ActionPipesDeletePipe, "DeletePipe",
+		catalog.ActionPipesListPipes, "ListPipes":
+		s.handlePipes(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionMQCreateBroker, "CreateBroker",
+		catalog.ActionMQDescribeBroker, "DescribeBroker",
+		catalog.ActionMQListBrokers, "ListBrokers",
+		catalog.ActionMQDeleteBroker, "DeleteBroker":
+		s.handleMQ(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionTransferCreateServer, "CreateServer",
+		catalog.ActionTransferDescribeServer, "DescribeServer",
+		catalog.ActionTransferListServers, "ListServers",
+		catalog.ActionTransferDeleteServer, "DeleteServer",
+		catalog.ActionTransferCreateUser,
+		catalog.ActionTransferDeleteUser:
+		s.handleTransfer(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionACMRequestCertificate, "RequestCertificate",
+		catalog.ActionACMDescribeCertificate, "DescribeCertificate",
+		catalog.ActionACMListCertificates, "ListCertificates",
+		catalog.ActionACMDeleteCertificate, "DeleteCertificate":
+		s.handleACM(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionRoute53CreateHostedZone, "CreateHostedZone",
+		catalog.ActionRoute53DeleteHostedZone, "DeleteHostedZone",
+		catalog.ActionRoute53ListHostedZones, "ListHostedZones",
+		catalog.ActionRoute53ChangeResourceRecordSets, "ChangeResourceRecordSets",
+		catalog.ActionRoute53ListResourceRecordSets, "ListResourceRecordSets":
+		s.handleRoute53(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSDCreatePrivateDnsNamespace, "CreatePrivateDnsNamespace",
+		catalog.ActionSDCreateHttpNamespace, "CreateHttpNamespace",
+		catalog.ActionSDCreateService,
+		catalog.ActionSDRegisterInstance, "RegisterInstance",
+		catalog.ActionSDDeregisterInstance, "DeregisterInstance",
+		catalog.ActionSDDiscoverInstances, "DiscoverInstances":
+		s.handleServiceDiscovery(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionPricingDescribeServices,
+		catalog.ActionPricingGetAttributeValues, "GetAttributeValues",
+		catalog.ActionPricingGetProducts, "GetProducts":
+		s.handlePricing(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionAppSyncCreateGraphqlApi, "CreateGraphqlApi",
+		catalog.ActionAppSyncDeleteGraphqlApi, "DeleteGraphqlApi",
+		catalog.ActionAppSyncGetGraphqlApi, "GetGraphqlApi",
+		catalog.ActionAppSyncListGraphqlApis, "ListGraphqlApis",
+		catalog.ActionAppSyncStartSchemaCreation, "StartSchemaCreation",
+		catalog.ActionAppSyncCreateApiKey, "CreateApiKey",
+		catalog.ActionAppSyncCreateDataSource, "CreateDataSource",
+		catalog.ActionAppSyncCreateResolver, "CreateResolver":
+		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -798,12 +935,40 @@ func resolveAction(r *http.Request, body []byte) string {
 			return codepipelineAction(short)
 		case strings.HasPrefix(strings.ToLower(prefix), "firehose"):
 			return firehoseAction(short)
+		case strings.Contains(strings.ToLower(prefix), "scheduler"),
+			strings.EqualFold(prefix, "AWSScheduler"):
+			return schedulerAction(short)
 		case strings.EqualFold(prefix, "AWSGlue"),
 			strings.HasPrefix(strings.ToLower(prefix), "glue"):
 			return glueAction(short)
 		case strings.Contains(strings.ToLower(prefix), "waf"),
 			strings.HasPrefix(strings.ToLower(prefix), "awswaf"):
 			return wafAction(short)
+		case strings.Contains(strings.ToLower(prefix), "dynamodbstreams"):
+			return dynamodbstreamsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "pipes"):
+			return pipesAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "mq."),
+			strings.EqualFold(prefix, "AmazonMQ"),
+			strings.EqualFold(prefix, "mq"):
+			return mqAction(short)
+		case strings.Contains(strings.ToLower(prefix), "transfer"):
+			return transferAction(short)
+		case strings.Contains(strings.ToLower(prefix), "certificatemanager"),
+			strings.EqualFold(prefix, "ACM"):
+			return acmAction(short)
+		case strings.Contains(strings.ToLower(prefix), "route53") &&
+			!strings.Contains(strings.ToLower(prefix), "autonaming"):
+			return route53Action(short)
+		case strings.Contains(strings.ToLower(prefix), "autonaming"),
+			strings.Contains(strings.ToLower(prefix), "servicediscovery"):
+			return serviceDiscoveryAction(short)
+		case strings.Contains(strings.ToLower(prefix), "pricelist"),
+			strings.EqualFold(prefix, "AWSPriceListService"),
+			strings.EqualFold(prefix, "pricing"):
+			return pricingAction(short)
+		case strings.Contains(strings.ToLower(prefix), "appsync"):
+			return appsyncAction(short)
 		}
 		return short
 	}
@@ -1228,6 +1393,34 @@ func normalizeAction(action string) string {
 		return catalog.ActionECSDescribeClusters
 	case "ListClusters":
 		return catalog.ActionECSListClusters
+	case "CreateService":
+		return catalog.ActionECSCreateService
+	case "UpdateService":
+		return catalog.ActionECSUpdateService
+	case "DeleteService":
+		return catalog.ActionECSDeleteService
+	case "DescribeServices":
+		return catalog.ActionECSDescribeServices
+	case "ListServices":
+		return catalog.ActionECSListServices
+	case "CreateEventSourceMapping":
+		return catalog.ActionLambdaCreateEventSourceMapping
+	case "GetEventSourceMapping":
+		return catalog.ActionLambdaGetEventSourceMapping
+	case "ListEventSourceMappings":
+		return catalog.ActionLambdaListEventSourceMappings
+	case "UpdateEventSourceMapping":
+		return catalog.ActionLambdaUpdateEventSourceMapping
+	case "DeleteEventSourceMapping":
+		return catalog.ActionLambdaDeleteEventSourceMapping
+	case "CreateFunctionUrlConfig":
+		return catalog.ActionLambdaCreateFunctionUrlConfig
+	case "GetFunctionUrlConfig":
+		return catalog.ActionLambdaGetFunctionUrlConfig
+	case "DeleteFunctionUrlConfig":
+		return catalog.ActionLambdaDeleteFunctionUrlConfig
+	case "ListFunctionUrlConfigs":
+		return catalog.ActionLambdaListFunctionUrlConfigs
 	case "LookupEvents":
 		return catalog.ActionCloudTrailLookupEvents
 	case "CreateLogGroup":

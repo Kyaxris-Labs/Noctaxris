@@ -10,6 +10,7 @@ Lab-complete ECS core: task definitions (with required task and execution roles)
 |------|---------|
 | Task definitions | `RegisterTaskDefinition`, `DescribeTaskDefinition`, `ListTaskDefinitions`, `DeregisterTaskDefinition` |
 | Tasks | `RunTask`, `DescribeTasks`, `ListTasks`, `StopTask` |
+| Services | `CreateService`, `UpdateService`, `DeleteService`, `DescribeServices`, `ListServices` with DesiredCount lab reconciler (start/stop nested tasks toward desired). No awsvpc ENI |
 | Clusters | `DescribeClusters`, `ListClusters` (default cluster `default` seeded per account) |
 | Roles | `RegisterTaskDefinition` and `RunTask` require `taskRoleArn` **and** `executionRoleArn`. Caller needs `iam:PassRole` on each role. Role trust must Allow `sts:AssumeRole` for `ecs-tasks.amazonaws.com` |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Tasks run on Internal network `noctaxris-ecs`. Default runtime. No host `docker.sock` on the API container. After the container exits, task status becomes `STOPPED` (background reaper plus sync on `DescribeTasks` / `ListTasks`). Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) uses the same platform matrix as Lambda (Linux/KVM, fail-closed on WSL2 or missing binary). Live Firecracker guest RunTask remains deferred |
@@ -63,12 +64,23 @@ aws ecs run-task --cluster default --task-definition noctaxris-lab --endpoint-ur
 aws ecs list-tasks --cluster default --endpoint-url "$EP"
 ```
 
+CreateService with DesiredCount 0 (no nested start). Scale DesiredCount up only when DinD is available.
+
+```bash
+aws ecs create-service \
+  --cluster default \
+  --service-name noctaxris-svc \
+  --task-definition noctaxris-lab \
+  --desired-count 0 \
+  --endpoint-url "$EP"
+aws ecs list-services --cluster default --endpoint-url "$EP"
+```
+
 Expect `register-task-definition` to fail without both role ARNs. Expect `run-task` to return a task ARN when DinD is up. Expect `list-tasks` to include the task. After a short-lived command exits, `describe-tasks` should show `STOPPED` without calling `stop-task`.
 
 ## Not yet / deferred
 
-- `CreateService`, `UpdateService`, `DeleteService`, `DescribeServices` (service scheduler skipped for lab scope)
-- `awsvpc` networking, capacity providers, ECS Exec, Service Connect, load balancers
+- Load balancers, `awsvpc` networking, capacity providers, ECS Exec, Service Connect
 - Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix
 - Cross-account or multi-cluster depth beyond same-account `default`
 - Rootless DinD and live Firecracker guest RunTask (opt-in selection and fail-closed stubs ship with `NOCTAXRIS_COMPUTE_RUNTIME=microvm`). See [lambda.md](lambda.md#opt-in-microvm) and [index.md](index.md#cross-cutting)

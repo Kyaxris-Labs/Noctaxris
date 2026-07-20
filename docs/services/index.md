@@ -12,12 +12,16 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, deletion sweeper, key-material rotation |
 | [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, cross-account dual eval |
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, resource policies, cross-account dual eval |
+| [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
 | [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers, sync+async Invoke, cross-account policies, lab ECR Image pull, TLS DinD default, opt-in microVM selection |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, RotateSecret, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
 | [SNS](sns.md) | Shipped | Topic CRUD, publish, subscribe, topic policies, cross-account dual eval, SQS and Lambda delivery |
 | [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents routing to SQS, Lambda, and SNS (RoleArn delivery sessions) |
+| [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD, SQS or DynamoDB Streams source to Lambda or SQS target |
+| [Amazon MQ](mq.md) | Shipped | Broker CRUD control-plane stub (ActiveMQ/RabbitMQ), loopback stub endpoint |
+| [Transfer Family](transfer.md) | Shipped | Server/user CRUD, SFTP-shaped sandbox under data root |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, default cluster, PassRole, nested DinD default, opt-in microVM selection |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |

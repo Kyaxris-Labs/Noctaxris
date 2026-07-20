@@ -179,6 +179,11 @@ func normalizeECSClusterName(name string) string {
 	return name
 }
 
+// NormalizeECSClusterNamePublic exposes cluster name normalization for handlers.
+func NormalizeECSClusterNamePublic(name string) string {
+	return normalizeECSClusterName(name)
+}
+
 func (s *Store) ensureDefaultCluster(accountID, region string) error {
 	if region == "" {
 		region = DefaultECSRegion

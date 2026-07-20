@@ -84,4 +84,5 @@ aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
 
 ## Not yet / deferred
 
-- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Streams, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
+- Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views, Lambda ESM for streams)

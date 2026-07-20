@@ -354,6 +354,23 @@ func (s *Server) dynamoCreateTable(
 			"Unable to create table.", readOnly, eventID, verified)
 		return
 	}
+	if streamSpec, ok := params["StreamSpecification"].(map[string]any); ok {
+		enabled, _ := streamSpec["StreamEnabled"].(bool)
+		viewType, _ := streamSpec["StreamViewType"].(string)
+		if enabled {
+			table, err = s.store.UpdateTableStreamSpec(verified.AccountID, tableName, true, viewType)
+			if errors.Is(err, store.ErrDynamoStreamBadView) {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					"StreamViewType must be NEW_IMAGE or KEYS_ONLY.", readOnly, eventID, verified)
+				return
+			}
+			if err != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to enable stream.", readOnly, eventID, verified)
+				return
+			}
+		}
+	}
 	payload, err := ddb.CreateTableJSON(table)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -545,9 +562,28 @@ func (s *Server) dynamoUpdateTable(
 		updated = true
 	}
 
+	if streamSpec, ok := params["StreamSpecification"].(map[string]any); ok {
+		enabled, _ := streamSpec["StreamEnabled"].(bool)
+		viewType, _ := streamSpec["StreamViewType"].(string)
+		var err error
+		table, err = s.store.UpdateTableStreamSpec(verified.AccountID, tableName, enabled, viewType)
+		if errors.Is(err, store.ErrDynamoStreamBadView) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"StreamViewType must be NEW_IMAGE or KEYS_ONLY.", readOnly, eventID, verified)
+			return
+		}
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to update stream specification.", readOnly, eventID, verified)
+			return
+		}
+		updated = true
+		_ = table
+	}
+
 	if !updated {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"SSESpecification or GlobalSecondaryIndexUpdates is required.", readOnly, eventID, verified)
+			"SSESpecification, GlobalSecondaryIndexUpdates, or StreamSpecification is required.", readOnly, eventID, verified)
 		return
 	}
 	refreshed, err := s.store.GetTable(verified.AccountID, tableName)
@@ -751,11 +787,13 @@ func (s *Server) dynamoDeleteItem(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
+	keysJSON, _ := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
 	if err := s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete item.", readOnly, eventID, verified)
 		return
 	}
+	_ = s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, "REMOVE", keysJSON, nil)
 	payload, _ := ddb.DeleteItemJSON()
 	s.writeDynamoOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "DeleteItem", readOnly)
@@ -1256,6 +1294,16 @@ func (s *Server) dynamoStoreItem(
 			err.Error(), readOnly, eventID, verified)
 		return err
 	}
+	eventName := "INSERT"
+	if table.StreamEnabled {
+		if _, err := s.store.GetItemBytes(table.AccountID, table.TableName, itemPK, itemSK); err == nil {
+			eventName = "MODIFY"
+		} else if !errors.Is(err, store.ErrNoSuchItem) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to put item.", readOnly, eventID, verified)
+			return err
+		}
+	}
 	plain, err := ddb.MarshalItemJSON(item)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -1292,6 +1340,10 @@ func (s *Server) dynamoStoreItem(
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put item.", readOnly, eventID, verified)
 		return err
+	}
+	if table.StreamEnabled {
+		keysJSON, _ := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
+		_ = s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, eventName, keysJSON, plain)
 	}
 	return nil
 }

@@ -21,6 +21,10 @@ func (s *Server) prepareLambdaImageRunOpts(
 	if err != nil {
 		return compute.ImageRunOpts{}, err
 	}
+	layerPaths, err := s.store.ResolveLayerCodeDirs(s.cfg.DataRoot, accountID, fn.Layers)
+	if err != nil {
+		return compute.ImageRunOpts{}, err
+	}
 	return compute.ImageRunOpts{
 		ImageURI:         pullRef,
 		Handler:          fn.Handler,
@@ -29,6 +33,7 @@ func (s *Server) prepareLambdaImageRunOpts(
 		EventJSON:        eventJSON,
 		EndpointURL:      endpoint,
 		EventHostPath:    eventHostPath,
+		LayerHostPaths:   layerPaths,
 		LabRegistryPull:  useAuth,
 		RegistryUsername: username,
 		RegistryPassword: password,

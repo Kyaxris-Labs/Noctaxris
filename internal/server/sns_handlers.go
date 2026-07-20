@@ -62,7 +62,30 @@ func (s *Server) handleSNS(
 		}
 	default:
 		if action == catalog.ActionSNSUnsubscribe || action == "Unsubscribe" ||
-			action == catalog.ActionSNSGetSubscriptionAttributes || action == "GetSubscriptionAttributes" {
+			action == catalog.ActionSNSGetSubscriptionAttributes || action == "GetSubscriptionAttributes" ||
+			action == catalog.ActionSNSConfirmSubscription || action == "ConfirmSubscription" {
+			if action == catalog.ActionSNSConfirmSubscription || action == "ConfirmSubscription" {
+				topicARN := strings.TrimSpace(params.Get("TopicArn"))
+				if topicARN == "" {
+					s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+						"TopicArn is required.", readOnly, eventID, verified)
+					return
+				}
+				topic, err = s.store.GetTopicByARN(topicARN)
+				if err != nil {
+					if errors.Is(err, store.ErrNoSuchTopic) {
+						s.writeSNSError(w, r, requestID, http.StatusNotFound, "NotFound",
+							"Topic does not exist.", readOnly, eventID, verified)
+						return
+					}
+					s.writeSNSError(w, r, requestID, http.StatusInternalServerError, "InternalError",
+						"Unable to resolve topic.", readOnly, eventID, verified)
+					return
+				}
+				resource = topic.TopicARN
+				topicPolicy = topic.Policy
+				break
+			}
 			subARN := strings.TrimSpace(params.Get("SubscriptionArn"))
 			if subARN == "" {
 				s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
@@ -147,6 +170,8 @@ func (s *Server) handleSNS(
 		}
 	case catalog.ActionSNSSubscribe, "Subscribe":
 		payload, err = s.snsSubscribe(accountID, topic, params, requestID)
+	case catalog.ActionSNSConfirmSubscription, "ConfirmSubscription":
+		payload, err = s.snsConfirmSubscription(accountID, params, requestID)
 	case catalog.ActionSNSUnsubscribe, "Unsubscribe":
 		payload, err = s.snsUnsubscribe(params, requestID)
 	case catalog.ActionSNSListSubscriptions, "ListSubscriptions":
@@ -166,6 +191,11 @@ func (s *Server) handleSNS(
 	}
 
 	if err != nil {
+		if errors.Is(err, store.ErrSNSEndpointNotAllowed) || errors.Is(err, store.ErrSNSInvalidParameter) {
+			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 		if errors.Is(err, store.ErrTopicAlreadyExists) {
 			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "TopicAlreadyExists",
 				"Topic already exists with different attributes.", readOnly, eventID, verified)
@@ -204,6 +234,8 @@ func snsAction(action string) string {
 		return catalog.ActionSNSPublish
 	case "Subscribe":
 		return catalog.ActionSNSSubscribe
+	case "ConfirmSubscription":
+		return catalog.ActionSNSConfirmSubscription
 	case "Unsubscribe":
 		return catalog.ActionSNSUnsubscribe
 	case "ListSubscriptions":
@@ -315,11 +347,21 @@ func (s *Server) snsPublish(
 		return nil, nil
 	}
 	subject := params.Get("Subject")
-	result, err := s.store.Publish(accountID, topic.TopicName, message, subject, nil)
+	opts := &store.PublishOpts{
+		MessageGroupID:         strings.TrimSpace(params.Get("MessageGroupId")),
+		MessageDeduplicationID: strings.TrimSpace(params.Get("MessageDeduplicationId")),
+	}
+	result, err := s.store.PublishWithOpts(accountID, topic.TopicName, message, subject, nil, opts)
 	if err != nil {
 		if errors.Is(err, store.ErrNoSuchTopic) {
 			s.writeSNSError(w, r, requestID, http.StatusNotFound, "NotFound",
 				"Topic does not exist.", readOnly, eventID, verified)
+			return nil, nil
+		}
+		if errors.Is(err, store.ErrSNSMissingMessageGroupID) || errors.Is(err, store.ErrSNSMissingDeduplicationID) ||
+			errors.Is(err, store.ErrSNSInvalidParameter) {
+			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+				err.Error(), readOnly, eventID, verified)
 			return nil, nil
 		}
 		return nil, err
@@ -334,7 +376,22 @@ func (s *Server) snsSubscribe(accountID string, topic store.Topic, params url.Va
 	if err != nil {
 		return nil, err
 	}
-	return snssvc.SubscribeXML(sub.SubscriptionARN, requestID)
+	arnOut := sub.SubscriptionARN
+	if !sub.Confirmed {
+		arnOut = "pending confirmation"
+	}
+	return snssvc.SubscribeXML(arnOut, requestID)
+}
+
+func (s *Server) snsConfirmSubscription(accountID string, params url.Values, requestID string) ([]byte, error) {
+	token := strings.TrimSpace(params.Get("Token"))
+	topicARN := strings.TrimSpace(params.Get("TopicArn"))
+	sub, err := s.store.ConfirmSubscription(topicARN, token)
+	if err != nil {
+		return nil, err
+	}
+	_ = accountID
+	return snssvc.ConfirmSubscriptionXML(sub.SubscriptionARN, requestID)
 }
 
 func (s *Server) snsUnsubscribe(params url.Values, requestID string) ([]byte, error) {

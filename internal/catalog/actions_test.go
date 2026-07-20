@@ -197,6 +197,16 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionLambdaAddPermission,
 		catalog.ActionLambdaRemovePermission,
 		catalog.ActionLambdaGetPolicy,
+		catalog.ActionLambdaCreateEventSourceMapping,
+		catalog.ActionLambdaGetEventSourceMapping,
+		catalog.ActionLambdaListEventSourceMappings,
+		catalog.ActionLambdaUpdateEventSourceMapping,
+		catalog.ActionLambdaDeleteEventSourceMapping,
+		catalog.ActionLambdaCreateFunctionUrlConfig,
+		catalog.ActionLambdaGetFunctionUrlConfig,
+		catalog.ActionLambdaDeleteFunctionUrlConfig,
+		catalog.ActionLambdaListFunctionUrlConfigs,
+		catalog.ActionLambdaInvokeFunctionUrl,
 		// SSM lab
 		catalog.ActionSSMPutParameter,
 		catalog.ActionSSMGetParameter,
@@ -243,6 +253,11 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionECSStopTask,
 		catalog.ActionECSDescribeClusters,
 		catalog.ActionECSListClusters,
+		catalog.ActionECSCreateService,
+		catalog.ActionECSUpdateService,
+		catalog.ActionECSDeleteService,
+		catalog.ActionECSDescribeServices,
+		catalog.ActionECSListServices,
 	}
 	for _, action := range known {
 		if !catalog.KnownAction(action) {
@@ -452,6 +467,16 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionLambdaAddPermission:                  "lambda:AddPermission",
 		catalog.ActionLambdaRemovePermission:               "lambda:RemovePermission",
 		catalog.ActionLambdaGetPolicy:                      "lambda:GetPolicy",
+		catalog.ActionLambdaCreateEventSourceMapping:       "lambda:CreateEventSourceMapping",
+		catalog.ActionLambdaGetEventSourceMapping:          "lambda:GetEventSourceMapping",
+		catalog.ActionLambdaListEventSourceMappings:        "lambda:ListEventSourceMappings",
+		catalog.ActionLambdaUpdateEventSourceMapping:       "lambda:UpdateEventSourceMapping",
+		catalog.ActionLambdaDeleteEventSourceMapping:       "lambda:DeleteEventSourceMapping",
+		catalog.ActionLambdaCreateFunctionUrlConfig:        "lambda:CreateFunctionUrlConfig",
+		catalog.ActionLambdaGetFunctionUrlConfig:           "lambda:GetFunctionUrlConfig",
+		catalog.ActionLambdaDeleteFunctionUrlConfig:        "lambda:DeleteFunctionUrlConfig",
+		catalog.ActionLambdaListFunctionUrlConfigs:         "lambda:ListFunctionUrlConfigs",
+		catalog.ActionLambdaInvokeFunctionUrl:              "lambda:InvokeFunctionUrl",
 		catalog.ActionSSMPutParameter:                      "ssm:PutParameter",
 		catalog.ActionSSMGetParameter:                      "ssm:GetParameter",
 		catalog.ActionSSMGetParameters:                     "ssm:GetParameters",
@@ -494,6 +519,11 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionECSStopTask:                          "ecs:StopTask",
 		catalog.ActionECSDescribeClusters:                  "ecs:DescribeClusters",
 		catalog.ActionECSListClusters:                      "ecs:ListClusters",
+		catalog.ActionECSCreateService:                     "ecs:CreateService",
+		catalog.ActionECSUpdateService:                     "ecs:UpdateService",
+		catalog.ActionECSDeleteService:                     "ecs:DeleteService",
+		catalog.ActionECSDescribeServices:                  "ecs:DescribeServices",
+		catalog.ActionECSListServices:                      "ecs:ListServices",
 	}
 	for got, want := range cases {
 		if got != want {

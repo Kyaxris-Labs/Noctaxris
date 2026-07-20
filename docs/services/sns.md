@@ -2,18 +2,19 @@
 
 **Status:** shipped
 
-Lab-complete SNS core: topic CRUD, publish, subscribe, topic policies, and best-effort delivery to confirmed SQS and Lambda subscriptions. Query protocol (`Action=...`, form URL-encoded body, XML responses) for AWS CLI compatibility.
+Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lambda, and loopback HTTP), topic policies, and best-effort delivery to confirmed subscriptions. Query protocol (`Action=...`, form URL-encoded body, XML responses) for AWS CLI compatibility.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Topics | `CreateTopic`, `DeleteTopic`, `ListTopics`, `GetTopicAttributes`, `SetTopicAttributes` |
+| FIFO | Topic names ending in `.fifo` (or `FifoTopic=true`). Publish requires `MessageGroupId`. Dedup via `MessageDeduplicationId` or `ContentBasedDeduplication`. SQS FIFO subscriptions receive group and dedup ids |
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
-| Subscriptions | `Subscribe`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
+| Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
-| Protocols | `sqs` and `lambda` (lab auto-confirm on subscribe). HTTP, email, and SMS deferred |
-| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path. Best-effort with up to two attempts per target. Delivery failures are logged after retries. SQS subscription ARNs must match the subscription owner account |
+| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` to loopback only (lab catcher at `/_noctaxris/sns-http-catcher`). Non-allowlisted URLs are rejected fail-closed |
+| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
 Topic and subscription metadata live in SQLite.
@@ -75,7 +76,8 @@ aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Full SNS SAR beyond the lab set (FIFO topics, SMS, email, HTTP and HTTPS subscriptions, filter policy depth, raw message delivery edge cases)
-- HTTP, email, and SMS subscription protocols and confirmation token flows
+- Full SNS SAR beyond the lab set (SMS, email, filter policy depth, raw message delivery edge cases)
+- Open internet HTTP webhooks (egress remains deny-by-default outside loopback)
 - Exact AWS retry and jitter timing for delivery failures
 - Cross-account Subscribe and foreign-account subscription delivery depth
+- High-throughput FIFO quotas

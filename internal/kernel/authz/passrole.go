@@ -8,6 +8,9 @@ const ServicePrincipalLambda = "lambda.amazonaws.com"
 // ServicePrincipalEvents is the Amazon EventBridge service principal used in role trust.
 const ServicePrincipalEvents = "events.amazonaws.com"
 
+// ServicePrincipalScheduler is the Amazon EventBridge Scheduler service principal used in role trust.
+const ServicePrincipalScheduler = "scheduler.amazonaws.com"
+
 // ServicePrincipalECSTasks is the Amazon ECS tasks service principal used in role trust.
 const ServicePrincipalECSTasks = "ecs-tasks.amazonaws.com"
 
@@ -22,6 +25,9 @@ const ServicePrincipalCodePipeline = "codepipeline.amazonaws.com"
 
 // ServicePrincipalFirehose is the Kinesis Data Firehose service principal used in role trust.
 const ServicePrincipalFirehose = "firehose.amazonaws.com"
+
+// ServicePrincipalPipes is the EventBridge Pipes service principal used in role trust.
+const ServicePrincipalPipes = "pipes.amazonaws.com"
 
 // ServicePrincipalConfig is the AWS Config service principal used in role trust.
 const ServicePrincipalConfig = "config.amazonaws.com"

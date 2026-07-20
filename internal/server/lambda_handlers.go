@@ -85,6 +85,24 @@ func (s *Server) handleLambda(
 		s.lambdaRemovePermission(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLambdaGetPolicy:
 		s.lambdaGetPolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaCreateEventSourceMapping:
+		s.lambdaCreateEventSourceMapping(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaGetEventSourceMapping:
+		s.lambdaGetEventSourceMapping(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaListEventSourceMappings:
+		s.lambdaListEventSourceMappings(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaUpdateEventSourceMapping:
+		s.lambdaUpdateEventSourceMapping(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaDeleteEventSourceMapping:
+		s.lambdaDeleteEventSourceMapping(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaCreateFunctionUrlConfig:
+		s.lambdaCreateFunctionUrlConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaGetFunctionUrlConfig:
+		s.lambdaGetFunctionUrlConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaDeleteFunctionUrlConfig:
+		s.lambdaDeleteFunctionUrlConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaListFunctionUrlConfigs:
+		s.lambdaListFunctionUrlConfigs(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Lambda action is not implemented.", readOnly, eventID, verified)
@@ -138,6 +156,24 @@ func lambdaAction(action string) string {
 		return catalog.ActionLambdaRemovePermission
 	case "GetPolicy":
 		return catalog.ActionLambdaGetPolicy
+	case "CreateEventSourceMapping":
+		return catalog.ActionLambdaCreateEventSourceMapping
+	case "GetEventSourceMapping":
+		return catalog.ActionLambdaGetEventSourceMapping
+	case "ListEventSourceMappings":
+		return catalog.ActionLambdaListEventSourceMappings
+	case "UpdateEventSourceMapping":
+		return catalog.ActionLambdaUpdateEventSourceMapping
+	case "DeleteEventSourceMapping":
+		return catalog.ActionLambdaDeleteEventSourceMapping
+	case "CreateFunctionUrlConfig":
+		return catalog.ActionLambdaCreateFunctionUrlConfig
+	case "GetFunctionUrlConfig":
+		return catalog.ActionLambdaGetFunctionUrlConfig
+	case "DeleteFunctionUrlConfig":
+		return catalog.ActionLambdaDeleteFunctionUrlConfig
+	case "ListFunctionUrlConfigs":
+		return catalog.ActionLambdaListFunctionUrlConfigs
 	default:
 		return action
 	}

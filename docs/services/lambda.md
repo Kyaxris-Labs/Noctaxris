@@ -8,14 +8,16 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 
 | Area | Behavior |
 |------|----------|
-| APIs | `CreateFunction`, `GetFunction`, `DeleteFunction`, `ListFunctions`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `Invoke`, `PublishVersion`, `ListVersionsByFunction`, `CreateAlias`, `UpdateAlias`, `DeleteAlias`, `GetAlias`, `ListAliases`, `PublishLayerVersion`, `GetLayerVersion`, `ListLayerVersions`, `DeleteLayerVersion`, `AddPermission`, `RemovePermission`, `GetPolicy` |
+| APIs | `CreateFunction`, `GetFunction`, `DeleteFunction`, `ListFunctions`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `Invoke`, `PublishVersion`, `ListVersionsByFunction`, `CreateAlias`, `UpdateAlias`, `DeleteAlias`, `GetAlias`, `ListAliases`, `PublishLayerVersion`, `GetLayerVersion`, `ListLayerVersions`, `DeleteLayerVersion`, `AddPermission`, `RemovePermission`, `GetPolicy`, `CreateEventSourceMapping`, `GetEventSourceMapping`, `ListEventSourceMappings`, `UpdateEventSourceMapping`, `DeleteEventSourceMapping`, `CreateFunctionUrlConfig`, `GetFunctionUrlConfig`, `DeleteFunctionUrlConfig`, `ListFunctionUrlConfigs` |
 | Packaging | Zip upload (`Code.ZipFile`) or `PackageType=Image` with `Code.ImageUri` (lab ECR refs pull with Registry V2 auth) |
 | Runtimes (zip) | `python3.11`, `python3.12`, `nodejs20.x` |
 | Versions | `PublishVersion` freezes code and config. `$LATEST` stays mutable |
 | Aliases | Point at published version numbers. Invoke accepts bare name, `name:version`, or `name:alias` |
-| Layers | Up to five same-account layer-version ARNs per function. Merged at `/opt` on zip Invoke |
+| Layers | Up to five same-account layer-version ARNs per function. Merged at `/opt` on zip and Image Invoke |
 | Invoke (sync) | `InvocationType=RequestResponse` (default). One-shot nested container |
 | Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
+| SQS ESM | `CreateEventSourceMapping` for SQS ARNs only. In-process poller ReceiveMessage → sync Invoke → DeleteMessage on success. Lab `BatchSize` max 10. Disable stops polling |
+| Function URLs | `CreateFunctionUrlConfig` with `AuthType` `NONE` or `AWS_IAM`. Lab invoke path `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION` |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
 | Resource policy | `AddPermission`, `RemovePermission`, `GetPolicy`. Same-account Invoke allows identity **or** function policy Allow. Cross-account Invoke requires identity **and** function policy Allow |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Default runtime. No host `docker.sock` on the API container. Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed without host Docker |
@@ -146,7 +148,7 @@ aws lambda create-function \
 aws lambda get-function --function-name "$IMG_FN" --endpoint-url "$EP"
 ```
 
-Layer publish and attach (max five same-account layer-version ARNs). Zip Invoke merges layer contents at `/opt`. Image Invoke does not mount layers.
+Layer publish and attach (max five same-account layer-version ARNs). Zip and Image Invoke merge layer contents at `/opt`.
 
 ```bash
 mkdir -p /tmp/noctaxris-layer/python
@@ -174,6 +176,27 @@ aws lambda update-function-configuration \
 aws lambda get-function --function-name "$FN" --endpoint-url "$EP"
 ```
 
+SQS event source mapping (in-process poller). Lab `BatchSize` max is 10. Sync Invoke deletes messages on success. Without DinD the mapping still creates, but poller Invoke fails and messages stay until visibility timeout.
+
+```bash
+aws sqs create-queue --queue-name "noctaxris-esm-$RANDOM" --endpoint-url "$EP"
+Q_ARN=$(aws sqs get-queue-attributes --queue-url ... --attribute-names QueueArn --endpoint-url "$EP" --query Attributes.QueueArn --output text)
+aws lambda create-event-source-mapping \
+  --function-name "$FN" \
+  --event-source-arn "$Q_ARN" \
+  --batch-size 5 \
+  --endpoint-url "$EP"
+```
+
+Function URL lite. AuthType `NONE` skips SigV4 on `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION`. AuthType `AWS_IAM` requires SigV4 plus `lambda:InvokeFunctionUrl`.
+
+```bash
+aws lambda create-function-url-config \
+  --function-name "$FN" \
+  --auth-type NONE \
+  --endpoint-url "$EP"
+```
+
 Expect CreateFunction to succeed only when the role trusts `lambda.amazonaws.com`. Expect sync Invoke to return JSON with `"ok": true` when DinD is up. Expect alias Invoke to hit the published version. Expect async Invoke to print `StatusCode` 202. Without `NOCTAXRIS_DOCKER_HOST`, sync Invoke returns compute unavailable.
 
 Two-account cross-account Invoke (member account B owns the function, member account A user invokes via dual eval):
@@ -199,11 +222,12 @@ aws lambda invoke \
 
 ## Not yet / deferred
 
-- Full Lambda SAR (event source mappings, provisioned concurrency, weighted alias routing, Function URLs, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing)
+- Full Lambda SAR (provisioned concurrency, weighted alias routing, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing)
 - EventBridge or Lambda-to-Lambda failure destinations (OnFailure to SQS and SNS is shipped)
 - Service-principal cross-account grants on function policies
 - Non-lab private registries (Docker Hub private, third-party hosts). Lab ECR on `127.0.0.1:4566` is supported for Image Invoke
-- Layers mounted on Image Invoke (layers can be attached in the API but are not mounted during image Invoke)
+- FilterCriteria / ReportBatchItemFailures / provisioned pollers / non-SQS ESM sources (Kinesis, DynamoDB Streams, MQ)
+- Function URL CORS depth and CloudFront integration
 - Rootless DinD
 - Live Firecracker guest zip/Image Invoke on Linux+KVM (opt-in selection and fail-closed probe ship. Real guest boot awaits a Linux+KVM host with kernel/rootfs assets)
 

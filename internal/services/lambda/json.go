@@ -256,3 +256,51 @@ func DecodeZipFile(v any) ([]byte, error) {
 		return nil, fmt.Errorf("ZipFile must be base64 string")
 	}
 }
+
+func eventSourceMappingConfiguration(m store.LambdaEventSourceMapping) map[string]any {
+	return map[string]any{
+		"UUID":           m.UUID,
+		"FunctionArn":    m.FunctionARN,
+		"EventSourceArn": m.EventSourceARN,
+		"BatchSize":      m.BatchSize,
+		"State":          m.State,
+		"LastModified":   m.LastModified,
+	}
+}
+
+// EventSourceMappingJSON builds Create/Get/UpdateEventSourceMapping success body.
+func EventSourceMappingJSON(m store.LambdaEventSourceMapping) ([]byte, error) {
+	return json.Marshal(eventSourceMappingConfiguration(m))
+}
+
+// ListEventSourceMappingsJSON builds ListEventSourceMappings success body.
+func ListEventSourceMappingsJSON(mappings []store.LambdaEventSourceMapping) ([]byte, error) {
+	out := make([]map[string]any, 0, len(mappings))
+	for _, m := range mappings {
+		out = append(out, eventSourceMappingConfiguration(m))
+	}
+	return json.Marshal(map[string]any{"EventSourceMappings": out})
+}
+
+func functionURLConfiguration(u store.LambdaFunctionURL) map[string]any {
+	return map[string]any{
+		"FunctionUrl":  u.FunctionURL,
+		"FunctionArn":  u.FunctionARN,
+		"AuthType":     u.AuthType,
+		"CreationTime": u.CreationTime,
+	}
+}
+
+// FunctionURLConfigJSON builds Create/GetFunctionUrlConfig success body.
+func FunctionURLConfigJSON(u store.LambdaFunctionURL) ([]byte, error) {
+	return json.Marshal(functionURLConfiguration(u))
+}
+
+// ListFunctionURLConfigsJSON builds ListFunctionUrlConfigs success body.
+func ListFunctionURLConfigsJSON(urls []store.LambdaFunctionURL) ([]byte, error) {
+	out := make([]map[string]any, 0, len(urls))
+	for _, u := range urls {
+		out = append(out, functionURLConfiguration(u))
+	}
+	return json.Marshal(map[string]any{"FunctionUrlConfigs": out})
+}

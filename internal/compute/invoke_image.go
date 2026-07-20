@@ -29,6 +29,8 @@ type ImageRunOpts struct {
 	EndpointURL string
 	// EventHostPath is a DinD-visible writable directory for the event file.
 	EventHostPath string
+	// LayerHostPaths are unpacked layer directories as seen by DinD (mounted at /opt).
+	LayerHostPaths []string
 	// LabRegistryPull requests an authenticated pull via PullLabRegistryImage (lab ECR).
 	LabRegistryPull bool
 	// RegistryUsername is the Docker registry username (lab: "AWS").
@@ -98,6 +100,14 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	}
 	defer os.RemoveAll(opts.EventHostPath)
 
+	mergedOptDir := ""
+	if len(opts.LayerHostPaths) > 0 {
+		mergedOptDir = filepath.Join(opts.EventHostPath, ".noctaxris-opt")
+		if err := MergeLayerDirs(opts.LayerHostPaths, mergedOptDir); err != nil {
+			return InvokeResult{}, err
+		}
+	}
+
 	env := []string{
 		"AWS_LAMBDA_FUNCTION_HANDLER=" + opts.Handler,
 		"HANDLER=" + opts.Handler,
@@ -126,6 +136,9 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	stopTimeout := timeout
 	binds := []string{
 		opts.EventHostPath + ":/tmp/noctaxris:ro",
+	}
+	if mergedOptDir != "" {
+		binds = append(binds, mergedOptDir+":/opt:ro")
 	}
 	hostConfig := &container.HostConfig{
 		Binds:          binds,

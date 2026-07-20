@@ -99,6 +99,21 @@ func tableDescription(t store.DynamoTable) map[string]any {
 		}
 	}
 	desc["SSEDescription"] = sse
+
+	if t.StreamEnabled {
+		desc["StreamSpecification"] = map[string]any{
+			"StreamEnabled":  true,
+			"StreamViewType": t.StreamViewType,
+		}
+		if t.StreamLabel != "" {
+			desc["LatestStreamLabel"] = t.StreamLabel
+			desc["LatestStreamArn"] = t.StreamARN("")
+		}
+	} else {
+		desc["StreamSpecification"] = map[string]any{
+			"StreamEnabled": false,
+		}
+	}
 	return desc
 }
 
