@@ -77,6 +77,31 @@ func TestLogsCreatePutGetRoundTrip(t *testing.T) {
 	if len(groups) != 1 || groups[0].LogGroupName != "/lab/app" {
 		t.Fatalf("groups=%+v", groups)
 	}
+
+	streams, err := st.DescribeLogStreams(account, "/lab/app", "inst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) != 1 || streams[0].LogStreamName != "instance-1" {
+		t.Fatalf("streams=%+v", streams)
+	}
+
+	if err := st.DeleteLogStream(account, "/lab/app", "instance-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetLogEvents(account, "/lab/app", "instance-1", 0, 0, true, 10); !errors.Is(err, store.ErrLogStreamNotFound) {
+		t.Fatalf("err=%v want stream not found", err)
+	}
+	if err := st.DeleteLogGroup(account, "/lab/app"); err != nil {
+		t.Fatal(err)
+	}
+	groups, err = st.DescribeLogGroups(account, "/lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("groups after delete=%+v", groups)
+	}
 }
 
 func TestLogsDuplicateGroup(t *testing.T) {

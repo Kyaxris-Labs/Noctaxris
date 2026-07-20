@@ -511,6 +511,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCloudTrail(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLogsCreateLogGroup, "CreateLogGroup",
 		catalog.ActionLogsCreateLogStream, "CreateLogStream",
+		catalog.ActionLogsDeleteLogGroup, "DeleteLogGroup",
+		catalog.ActionLogsDeleteLogStream, "DeleteLogStream",
+		catalog.ActionLogsDescribeLogStreams, "DescribeLogStreams",
 		catalog.ActionLogsPutLogEvents, "PutLogEvents",
 		catalog.ActionLogsGetLogEvents, "GetLogEvents",
 		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups":
@@ -1427,6 +1430,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionLogsCreateLogGroup
 	case "CreateLogStream":
 		return catalog.ActionLogsCreateLogStream
+	case "DeleteLogGroup":
+		return catalog.ActionLogsDeleteLogGroup
+	case "DeleteLogStream":
+		return catalog.ActionLogsDeleteLogStream
+	case "DescribeLogStreams":
+		return catalog.ActionLogsDescribeLogStreams
 	case "PutLogEvents":
 		return catalog.ActionLogsPutLogEvents
 	case "GetLogEvents":

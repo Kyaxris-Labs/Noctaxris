@@ -44,6 +44,7 @@ These defaults are intentional product posture for a local emulator that people 
 - Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant, always required, plus identity for cross-account).
 - Lab Lambda configure APIs use identity Evaluate plus PassRole/trust.
 - Organizations SCP/RCP filters apply on member authorize paths, including OU-path inheritance.
+- SNS HTTP(S) subscription endpoints must be loopback or an explicit lab catcher. Arbitrary operator URLs are rejected.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS

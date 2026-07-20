@@ -168,6 +168,117 @@ func (s *Store) CreateLogStream(accountID, region, group, stream string) (LogStr
 	}, nil
 }
 
+// DeleteLogGroup deletes a log group and all streams and events under it.
+func (s *Store) DeleteLogGroup(accountID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("delete log group: name is required")
+	}
+	if _, err := s.getLogGroup(accountID, name); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete log group: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`DELETE FROM logs_events WHERE account_id = ? AND log_group_name = ?`,
+		accountID, name,
+	); err != nil {
+		return fmt.Errorf("delete log group: events: %w", err)
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM logs_streams WHERE account_id = ? AND log_group_name = ?`,
+		accountID, name,
+	); err != nil {
+		return fmt.Errorf("delete log group: streams: %w", err)
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM logs_groups WHERE account_id = ? AND log_group_name = ?`,
+		accountID, name,
+	); err != nil {
+		return fmt.Errorf("delete log group: group: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete log group: commit: %w", err)
+	}
+	return nil
+}
+
+// DeleteLogStream deletes a log stream and its events.
+func (s *Store) DeleteLogStream(accountID, group, stream string) error {
+	group = strings.TrimSpace(group)
+	stream = strings.TrimSpace(stream)
+	if group == "" || stream == "" {
+		return fmt.Errorf("delete log stream: group and stream names are required")
+	}
+	if _, err := s.getLogStream(accountID, group, stream); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete log stream: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`DELETE FROM logs_events WHERE account_id = ? AND log_group_name = ? AND log_stream_name = ?`,
+		accountID, group, stream,
+	); err != nil {
+		return fmt.Errorf("delete log stream: events: %w", err)
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM logs_streams WHERE account_id = ? AND log_group_name = ? AND log_stream_name = ?`,
+		accountID, group, stream,
+	); err != nil {
+		return fmt.Errorf("delete log stream: stream: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete log stream: commit: %w", err)
+	}
+	return nil
+}
+
+// DescribeLogStreams lists streams under a group, optional stream name prefix.
+func (s *Store) DescribeLogStreams(accountID, group, prefix string) ([]LogStream, error) {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return nil, fmt.Errorf("describe log streams: group name is required")
+	}
+	if _, err := s.getLogGroup(accountID, group); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT log_group_name, log_stream_name, arn, creation_time,
+			first_event_timestamp, last_event_timestamp, last_ingestion_time,
+			upload_sequence_token, stored_bytes
+		 FROM logs_streams WHERE account_id = ? AND log_group_name = ?
+		 ORDER BY log_stream_name`,
+		accountID, group,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describe log streams: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LogStream
+	for rows.Next() {
+		var st LogStream
+		if err := rows.Scan(
+			&st.LogGroupName, &st.LogStreamName, &st.Arn, &st.CreationTime,
+			&st.FirstEventTimestamp, &st.LastEventTimestamp, &st.LastIngestionTime,
+			&st.UploadSequenceToken, &st.StoredBytes,
+		); err != nil {
+			return nil, fmt.Errorf("describe log streams: scan: %w", err)
+		}
+		if prefix != "" && !strings.HasPrefix(st.LogStreamName, prefix) {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
 // DescribeLogGroups lists log groups, optional prefix filter.
 func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) {
 	rows, err := s.db.Query(

@@ -85,4 +85,34 @@ func TestLogsRoundTrip(t *testing.T) {
 	if desc.Code != http.StatusOK {
 		t.Fatalf("DescribeLogGroups status=%d body=%q", desc.Code, desc.Body.String())
 	}
+
+	descStreams := mustLogsJSON(t, handler, "DescribeLogStreams", map[string]any{
+		"logGroupName": "/lab/test",
+	}, now)
+	if descStreams.Code != http.StatusOK {
+		t.Fatalf("DescribeLogStreams status=%d body=%q", descStreams.Code, descStreams.Body.String())
+	}
+	var streamsOut map[string]any
+	if err := json.Unmarshal(descStreams.Body.Bytes(), &streamsOut); err != nil {
+		t.Fatal(err)
+	}
+	streams, _ := streamsOut["logStreams"].([]any)
+	if len(streams) != 1 {
+		t.Fatalf("logStreams=%v", streamsOut["logStreams"])
+	}
+
+	delStream := mustLogsJSON(t, handler, "DeleteLogStream", map[string]any{
+		"logGroupName":  "/lab/test",
+		"logStreamName": "s1",
+	}, now)
+	if delStream.Code != http.StatusOK {
+		t.Fatalf("DeleteLogStream status=%d body=%q", delStream.Code, delStream.Body.String())
+	}
+
+	delGroup := mustLogsJSON(t, handler, "DeleteLogGroup", map[string]any{
+		"logGroupName": "/lab/test",
+	}, now)
+	if delGroup.Code != http.StatusOK {
+		t.Fatalf("DeleteLogGroup status=%d body=%q", delGroup.Code, delGroup.Body.String())
+	}
 }

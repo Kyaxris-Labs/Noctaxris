@@ -33,6 +33,12 @@ func (s *Server) handleLogs(
 		s.logsCreateLogGroup(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsCreateLogStream:
 		s.logsCreateLogStream(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteLogGroup:
+		s.logsDeleteLogGroup(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteLogStream:
+		s.logsDeleteLogStream(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDescribeLogStreams:
+		s.logsDescribeLogStreams(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsPutLogEvents:
 		s.logsPutLogEvents(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsGetLogEvents:
@@ -54,6 +60,12 @@ func logsAction(action string) string {
 		return catalog.ActionLogsCreateLogGroup
 	case "CreateLogStream":
 		return catalog.ActionLogsCreateLogStream
+	case "DeleteLogGroup":
+		return catalog.ActionLogsDeleteLogGroup
+	case "DeleteLogStream":
+		return catalog.ActionLogsDeleteLogStream
+	case "DescribeLogStreams":
+		return catalog.ActionLogsDescribeLogStreams
 	case "PutLogEvents":
 		return catalog.ActionLogsPutLogEvents
 	case "GetLogEvents":
@@ -150,6 +162,124 @@ func (s *Server) logsCreateLogStream(
 	payload, _ := logssvc.EmptyOKJSON()
 	s.writeLogsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "CreateLogStream", readOnly)
+}
+
+func (s *Server) logsDeleteLogGroup(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["logGroupName"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, name)
+	if !s.authorize(verified, catalog.ActionLogsDeleteLogGroup, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteLogGroup.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteLogGroup(verified.AccountID, name)
+	if errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"The specified log group does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to delete log group.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := logssvc.EmptyOKJSON()
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteLogGroup", readOnly)
+}
+
+func (s *Server) logsDeleteLogStream(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	stream, _ := params["logStreamName"].(string)
+	if strings.TrimSpace(group) == "" || strings.TrimSpace(stream) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName and logStreamName are required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogStreamARN(s.logsRegion(verified), verified.AccountID, group, stream)
+	if !s.authorize(verified, catalog.ActionLogsDeleteLogStream, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteLogStream.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteLogStream(verified.AccountID, group, stream)
+	if errors.Is(err, store.ErrLogStreamNotFound) || errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"The specified log stream does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to delete log stream.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := logssvc.EmptyOKJSON()
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteLogStream", readOnly)
+}
+
+func (s *Server) logsDescribeLogStreams(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	if strings.TrimSpace(group) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsDescribeLogStreams, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DescribeLogStreams.", readOnly, eventID, verified)
+		return
+	}
+	prefix, _ := params["logStreamNamePrefix"].(string)
+	streams, err := s.store.DescribeLogStreams(verified.AccountID, group, prefix)
+	if errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"The specified log group does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to describe log streams.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := logssvc.DescribeLogStreamsJSON(streams)
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeLogStreams", readOnly)
 }
 
 func (s *Server) logsPutLogEvents(

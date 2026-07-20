@@ -2,14 +2,14 @@
 
 **Status:** shipped (lab core)
 
-Lab log groups and streams with Put/GetLogEvents and DescribeLogGroups. Persisted in SQLite. Identity authz only.
+Lab log groups and streams with Put/GetLogEvents, DescribeLogGroups/DescribeLogStreams, and DeleteLogGroup/DeleteLogStream. Persisted in SQLite. Identity authz only.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
-| Groups | `CreateLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
-| Streams | `CreateLogStream` |
+| Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
+| Streams | `CreateLogStream`, `DeleteLogStream`, `DescribeLogStreams` (optional `logStreamNamePrefix`) |
 | Events | `PutLogEvents` (sequence token after first put) and `GetLogEvents` (`startFromHead`, optional time bounds) |
 
 Log group ARN shape: `arn:aws:logs:REGION:ACCOUNT:log-group:NAME`. Stream ARN adds `:log-stream:STREAM`.
@@ -48,11 +48,22 @@ aws logs get-log-events \
 aws logs describe-log-groups \
   --log-group-name-prefix /noctaxris \
   --endpoint-url "$EP"
+
+aws logs describe-log-streams \
+  --log-group-name "$GROUP" \
+  --endpoint-url "$EP"
+
+aws logs delete-log-stream \
+  --log-group-name "$GROUP" \
+  --log-stream-name "$STREAM" \
+  --endpoint-url "$EP"
+
+aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 ```
 
 ## Not yet / deferred
 
 - Subscriptions, metric filters, Insights queries, export tasks
-- DeleteLogGroup / DeleteLogStream / DescribeLogStreams / FilterLogEvents
+- FilterLogEvents
 - Cross-account observability and resource policies
 - Full pagination token parity

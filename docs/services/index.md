@@ -11,21 +11,22 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance |
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, deletion sweeper, key-material rotation |
 | [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, cross-account dual eval |
-| [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, resource policies, cross-account dual eval |
+| [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
-| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers, sync+async Invoke, cross-account policies, lab ECR Image pull, TLS DinD default, opt-in microVM selection |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS ESM, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD default, opt-in microVM |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, RotateSecret, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
-| [SNS](sns.md) | Shipped | Topic CRUD, publish, subscribe, topic policies, cross-account dual eval, SQS and Lambda delivery |
+| [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, topic policies, cross-account dual eval |
 | [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents routing to SQS, Lambda, and SNS (RoleArn delivery sessions) |
+| [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS targets, in-process ticker, PassRole |
 | [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD, SQS or DynamoDB Streams source to Lambda or SQS target |
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD control-plane stub (ActiveMQ/RabbitMQ), loopback stub endpoint |
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD, SFTP-shaped sandbox under data root |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
-| [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, default cluster, PassRole, nested DinD default, opt-in microVM selection |
+| [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD default, opt-in microVM |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |
-| [CloudWatch Logs](logs.md) | Shipped | Log groups/streams, Put/GetLogEvents, DescribeLogGroups |
+| [CloudWatch Logs](logs.md) | Shipped | Log groups/streams CRUD lite, Put/GetLogEvents, DescribeLogGroups/DescribeLogStreams |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
 | [Kinesis Data Streams](kinesis.md) | Shipped | Stream CRUD, Put/Get records, single-shard iterators |
 | [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3 or Lambda (async Invoke enqueue) |
@@ -39,6 +40,11 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Glue](glue.md) | Shipped | Data Catalog database and table CRUD |
 | [WAF v2](wafv2.md) | Shipped | WebACL / rule group lite, AssociateWebACL, labeled Evaluate helper |
 | [Config](config.md) | Shipped | Recorder / delivery channel lite, compliance stub over tagged resources |
+| [ACM](acm.md) | Shipped | Request/Describe/List/DeleteCertificate, lab self-signed PEM |
+| [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets |
+| [Cloud Map](servicediscovery.md) | Shipped | Namespace/service/instance register and DiscoverInstances |
+| [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
+| [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth |
 
 ## Shared verification
 
@@ -62,7 +68,7 @@ docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
 curl http://127.0.0.1:4566/_noctaxris/health
 ```
 
-Expect body `ok`. Lambda Invoke, ECS RunTask, CodeBuild StartBuild, and Batch SubmitJob need the nested `noctaxris-engine` service from the same compose file. Skip live nested-compute smoke when Docker is unavailable (unit tests still cover PassRole and compute-unavailable).
+Expect body `ok`. Lambda Invoke, ECS RunTask/CreateService scale-up, CodeBuild StartBuild, and Batch SubmitJob need the nested `noctaxris-engine` service from the same compose file. Skip live nested-compute smoke when Docker is unavailable (unit tests still cover PassRole and compute-unavailable).
 
 Export root keys from `docker/.env`, then set a common CLI environment before any per-service smoke:
 
@@ -88,3 +94,5 @@ Per-service CLI smoke lives on each shipped service page above.
 **Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context now populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, MFA keys, and `aws:ResourceTag/*` (plus matching service ResourceTag keys) when tags exist via the Tagging API. Broader operator matrix and every global key population remain open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
 
 **Compute runtime:** Nested DinD is the default for Lambda, ECS, CodeBuild, and Batch. Opt-in microVM selection for Lambda and ECS RunTask is documented on [lambda.md](lambda.md) and [ecs.md](ecs.md). WSL2 is DinD-only. Athena and live Firecracker guest boot remain deferred.
+
+**In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS event source mappings and EventBridge Pipes reuse in-process poll patterns. SNS HTTP delivery is allowlisted loopback only (no open SSRF).

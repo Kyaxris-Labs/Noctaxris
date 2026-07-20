@@ -262,28 +262,28 @@ const (
 
 // EventBridge Pipes lab actions (v5).
 const (
-	ActionPipesCreatePipe  = "pipes:CreatePipe"
+	ActionPipesCreatePipe   = "pipes:CreatePipe"
 	ActionPipesDescribePipe = "pipes:DescribePipe"
-	ActionPipesDeletePipe  = "pipes:DeletePipe"
-	ActionPipesListPipes   = "pipes:ListPipes"
+	ActionPipesDeletePipe   = "pipes:DeletePipe"
+	ActionPipesListPipes    = "pipes:ListPipes"
 )
 
 // Amazon MQ lab actions (v5).
 const (
-	ActionMQCreateBroker  = "mq:CreateBroker"
+	ActionMQCreateBroker   = "mq:CreateBroker"
 	ActionMQDescribeBroker = "mq:DescribeBroker"
-	ActionMQListBrokers   = "mq:ListBrokers"
-	ActionMQDeleteBroker  = "mq:DeleteBroker"
+	ActionMQListBrokers    = "mq:ListBrokers"
+	ActionMQDeleteBroker   = "mq:DeleteBroker"
 )
 
 // Transfer Family lab actions (v5).
 const (
-	ActionTransferCreateServer  = "transfer:CreateServer"
+	ActionTransferCreateServer   = "transfer:CreateServer"
 	ActionTransferDescribeServer = "transfer:DescribeServer"
-	ActionTransferListServers   = "transfer:ListServers"
-	ActionTransferDeleteServer  = "transfer:DeleteServer"
-	ActionTransferCreateUser    = "transfer:CreateUser"
-	ActionTransferDeleteUser    = "transfer:DeleteUser"
+	ActionTransferListServers    = "transfer:ListServers"
+	ActionTransferDeleteServer   = "transfer:DeleteServer"
+	ActionTransferCreateUser     = "transfer:CreateUser"
+	ActionTransferDeleteUser     = "transfer:DeleteUser"
 )
 
 // SQS lab actions (Phase 6).
@@ -407,13 +407,16 @@ const (
 	ActionCloudTrailLookupEvents = "cloudtrail:LookupEvents"
 )
 
-// CloudWatch Logs lab actions (v3 N-AUDIT).
+// CloudWatch Logs lab actions (v3 N-AUDIT + v5 Task 17 polish).
 const (
-	ActionLogsCreateLogGroup    = "logs:CreateLogGroup"
-	ActionLogsCreateLogStream   = "logs:CreateLogStream"
-	ActionLogsPutLogEvents      = "logs:PutLogEvents"
-	ActionLogsGetLogEvents      = "logs:GetLogEvents"
-	ActionLogsDescribeLogGroups = "logs:DescribeLogGroups"
+	ActionLogsCreateLogGroup     = "logs:CreateLogGroup"
+	ActionLogsCreateLogStream    = "logs:CreateLogStream"
+	ActionLogsDeleteLogGroup     = "logs:DeleteLogGroup"
+	ActionLogsDeleteLogStream    = "logs:DeleteLogStream"
+	ActionLogsDescribeLogStreams = "logs:DescribeLogStreams"
+	ActionLogsPutLogEvents       = "logs:PutLogEvents"
+	ActionLogsGetLogEvents       = "logs:GetLogEvents"
+	ActionLogsDescribeLogGroups  = "logs:DescribeLogGroups"
 )
 
 // Resource Groups Tagging API lab actions (v3 N-AUDIT).
@@ -437,13 +440,13 @@ const (
 
 // AppConfig lab actions (v3 Track B).
 const (
-	ActionAppConfigCreateApplication               = "appconfig:CreateApplication"
-	ActionAppConfigCreateEnvironment               = "appconfig:CreateEnvironment"
-	ActionAppConfigCreateConfigurationProfile      = "appconfig:CreateConfigurationProfile"
+	ActionAppConfigCreateApplication                = "appconfig:CreateApplication"
+	ActionAppConfigCreateEnvironment                = "appconfig:CreateEnvironment"
+	ActionAppConfigCreateConfigurationProfile       = "appconfig:CreateConfigurationProfile"
 	ActionAppConfigCreateHostedConfigurationVersion = "appconfig:CreateHostedConfigurationVersion"
-	ActionAppConfigGetConfiguration                = "appconfig:GetConfiguration"
-	ActionAppConfigDataStartConfigurationSession   = "appconfigdata:StartConfigurationSession"
-	ActionAppConfigDataGetLatestConfiguration      = "appconfigdata:GetLatestConfiguration"
+	ActionAppConfigGetConfiguration                 = "appconfig:GetConfiguration"
+	ActionAppConfigDataStartConfigurationSession    = "appconfigdata:StartConfigurationSession"
+	ActionAppConfigDataGetLatestConfiguration       = "appconfigdata:GetLatestConfiguration"
 )
 
 // SES lab actions (v3 Track B).
@@ -485,12 +488,12 @@ const (
 
 // Firehose lab actions (v4 Track B).
 const (
-	ActionFirehoseCreateDeliveryStream  = "firehose:CreateDeliveryStream"
-	ActionFirehoseDeleteDeliveryStream  = "firehose:DeleteDeliveryStream"
+	ActionFirehoseCreateDeliveryStream   = "firehose:CreateDeliveryStream"
+	ActionFirehoseDeleteDeliveryStream   = "firehose:DeleteDeliveryStream"
 	ActionFirehoseDescribeDeliveryStream = "firehose:DescribeDeliveryStream"
-	ActionFirehoseListDeliveryStreams   = "firehose:ListDeliveryStreams"
-	ActionFirehosePutRecord             = "firehose:PutRecord"
-	ActionFirehosePutRecordBatch        = "firehose:PutRecordBatch"
+	ActionFirehoseListDeliveryStreams    = "firehose:ListDeliveryStreams"
+	ActionFirehosePutRecord              = "firehose:PutRecord"
+	ActionFirehosePutRecordBatch         = "firehose:PutRecordBatch"
 )
 
 // Glue Data Catalog lab actions (v4 Track B).
@@ -507,20 +510,20 @@ const (
 
 // WAFv2 lab actions (v4 Track B).
 const (
-	ActionWAFCreateWebACL     = "wafv2:CreateWebACL"
-	ActionWAFUpdateWebACL     = "wafv2:UpdateWebACL"
-	ActionWAFGetWebACL        = "wafv2:GetWebACL"
-	ActionWAFListWebACLs      = "wafv2:ListWebACLs"
-	ActionWAFCreateRuleGroup  = "wafv2:CreateRuleGroup"
-	ActionWAFAssociateWebACL  = "wafv2:AssociateWebACL"
-	ActionWAFEvaluate         = "wafv2:Evaluate"
+	ActionWAFCreateWebACL    = "wafv2:CreateWebACL"
+	ActionWAFUpdateWebACL    = "wafv2:UpdateWebACL"
+	ActionWAFGetWebACL       = "wafv2:GetWebACL"
+	ActionWAFListWebACLs     = "wafv2:ListWebACLs"
+	ActionWAFCreateRuleGroup = "wafv2:CreateRuleGroup"
+	ActionWAFAssociateWebACL = "wafv2:AssociateWebACL"
+	ActionWAFEvaluate        = "wafv2:Evaluate"
 )
 
 // AWS Config lab actions (v4 Track B).
 const (
-	ActionConfigPutConfigurationRecorder      = "config:PutConfigurationRecorder"
-	ActionConfigPutDeliveryChannel            = "config:PutDeliveryChannel"
-	ActionConfigStartConfigurationRecorder    = "config:StartConfigurationRecorder"
+	ActionConfigPutConfigurationRecorder       = "config:PutConfigurationRecorder"
+	ActionConfigPutDeliveryChannel             = "config:PutDeliveryChannel"
+	ActionConfigStartConfigurationRecorder     = "config:StartConfigurationRecorder"
 	ActionConfigDescribeComplianceByConfigRule = "config:DescribeComplianceByConfigRule"
 )
 
@@ -562,22 +565,22 @@ const (
 
 // Pricing lab actions (v5 Stream D).
 const (
-	ActionPricingDescribeServices    = "pricing:DescribeServices"
-	ActionPricingGetAttributeValues  = "pricing:GetAttributeValues"
-	ActionPricingGetProducts         = "pricing:GetProducts"
+	ActionPricingDescribeServices   = "pricing:DescribeServices"
+	ActionPricingGetAttributeValues = "pricing:GetAttributeValues"
+	ActionPricingGetProducts        = "pricing:GetProducts"
 )
 
 // AppSync lab actions (v5 Stream D). Auth: API_KEY or AWS_IAM only (no Cognito until v6).
 const (
-	ActionAppSyncCreateGraphqlApi     = "appsync:CreateGraphqlApi"
-	ActionAppSyncDeleteGraphqlApi     = "appsync:DeleteGraphqlApi"
-	ActionAppSyncGetGraphqlApi        = "appsync:GetGraphqlApi"
-	ActionAppSyncListGraphqlApis      = "appsync:ListGraphqlApis"
-	ActionAppSyncStartSchemaCreation  = "appsync:StartSchemaCreation"
-	ActionAppSyncCreateApiKey         = "appsync:CreateApiKey"
-	ActionAppSyncCreateDataSource     = "appsync:CreateDataSource"
-	ActionAppSyncCreateResolver       = "appsync:CreateResolver"
-	ActionAppSyncGraphQL              = "appsync:GraphQL"
+	ActionAppSyncCreateGraphqlApi    = "appsync:CreateGraphqlApi"
+	ActionAppSyncDeleteGraphqlApi    = "appsync:DeleteGraphqlApi"
+	ActionAppSyncGetGraphqlApi       = "appsync:GetGraphqlApi"
+	ActionAppSyncListGraphqlApis     = "appsync:ListGraphqlApis"
+	ActionAppSyncStartSchemaCreation = "appsync:StartSchemaCreation"
+	ActionAppSyncCreateApiKey        = "appsync:CreateApiKey"
+	ActionAppSyncCreateDataSource    = "appsync:CreateDataSource"
+	ActionAppSyncCreateResolver      = "appsync:CreateResolver"
+	ActionAppSyncGraphQL             = "appsync:GraphQL"
 )
 
 // CodeBuild lab actions (v4 Track B).
@@ -934,6 +937,9 @@ func KnownAction(action string) bool {
 		ActionCloudTrailLookupEvents,
 		ActionLogsCreateLogGroup,
 		ActionLogsCreateLogStream,
+		ActionLogsDeleteLogGroup,
+		ActionLogsDeleteLogStream,
+		ActionLogsDescribeLogStreams,
 		ActionLogsPutLogEvents,
 		ActionLogsGetLogEvents,
 		ActionLogsDescribeLogGroups,

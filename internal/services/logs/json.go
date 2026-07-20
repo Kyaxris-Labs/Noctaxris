@@ -6,9 +6,28 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-// EmptyOKJSON is the empty success body used by CreateLogGroup / CreateLogStream.
+// EmptyOKJSON is the empty success body used by Create/Delete LogGroup and LogStream.
 func EmptyOKJSON() ([]byte, error) {
 	return []byte(`{}`), nil
+}
+
+// DescribeLogStreamsJSON builds a DescribeLogStreams response.
+func DescribeLogStreamsJSON(streams []store.LogStream) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(streams))
+	for _, st := range streams {
+		entries = append(entries, map[string]any{
+			"logGroupName":        st.LogGroupName,
+			"logStreamName":       st.LogStreamName,
+			"arn":                 st.Arn,
+			"creationTime":        st.CreationTime,
+			"firstEventTimestamp": st.FirstEventTimestamp,
+			"lastEventTimestamp":  st.LastEventTimestamp,
+			"lastIngestionTime":   st.LastIngestionTime,
+			"uploadSequenceToken": st.UploadSequenceToken,
+			"storedBytes":         st.StoredBytes,
+		})
+	}
+	return json.Marshal(map[string]any{"logStreams": entries})
 }
 
 // DescribeLogGroupsJSON builds a DescribeLogGroups response.

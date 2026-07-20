@@ -55,6 +55,13 @@ Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_
 
 Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` selects a Firecracker-class path on Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. Live guest zip/Image Invoke and ECS RunTask still require kernel/rootfs assets on a Linux+KVM host. CodeBuild and Batch stay on the DinD path.
 
+## In-process delivery workers
+
+- EventBridge Scheduler advances due schedules inside the API process and delivers via existing Lambda async enqueue, SQS SendMessage, and SNS Publish helpers.
+- Lambda SQS event source mappings poll with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
+- EventBridge Pipes reuse the same poll and invoke/send helpers for SQS and DynamoDB Streams sources.
+- SNS HTTP(S) subscriptions deliver only to allowlisted loopback endpoints (lab catcher). Non-allowlisted URLs fail closed.
+
 ## Authz
 
 - Same-account identity: `Evaluate` / `EvaluateFull` (identity, boundary, SCP, RCP)

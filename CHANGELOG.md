@@ -1,5 +1,30 @@
 # Changelog
 
+## v5 (lab cores shipped)
+
+EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP depth, ECS CreateService, DynamoDB Streams, EventBridge Pipes, and nine more lab services toward ~40 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Nested Amazon MQ broker and Cognito remain deferred.
+
+### Included
+
+- EventBridge Scheduler: distinct `scheduler` API with rate/cron/`at` subset, Lambda/SQS/SNS targets, PassRole, in-process ticker
+- SNS FIFO topics (MessageGroupId / dedup) and HTTP(S) subscriptions to loopback catcher only (deny-by-default egress)
+- Lambda SQS event source mapping with in-process ReceiveMessage → sync Invoke → DeleteMessage on success
+- Lambda Function URLs lite (`NONE` or `AWS_IAM`) on `/lambda-url/ACCOUNT/FUNCTION`
+- Lambda layers mounted under `/opt` for Image Invoke (parity with zip)
+- ECS CreateService / UpdateService / DeleteService / DescribeServices / ListServices with DesiredCount reconciler
+- DynamoDB Streams lite: enable stream, DescribeStream / GetShardIterator / GetRecords
+- EventBridge Pipes lite: SQS or DynamoDB Streams source to Lambda or SQS target
+- Amazon MQ lite: broker CRUD control-plane with loopback stub endpoint (no nested broker)
+- Transfer Family lite: server/user CRUD and SFTP-shaped sandbox under the data root
+- ACM lite: RequestCertificate and lab self-signed PEM
+- Route 53 lite: hosted zones plus A/CNAME record changes
+- Cloud Map lite: namespace/service/instance register and DiscoverInstances
+- Pricing lite: GetProducts over a static embedded catalog
+- AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (no Cognito)
+- CloudWatch Logs delete and DescribeLogStreams polish
+
+Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, Cognito User Pools, API Gateway HTTP API, IoT Core, MSK, and live Firecracker guest boot remain deferred.
+
 ## v4 (lab cores shipped)
 
 Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and eight more lab services toward ~30 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Live Firecracker guest boot needs a Linux+KVM host with kernel/rootfs assets (stubs and platform matrix ship on all hosts).
