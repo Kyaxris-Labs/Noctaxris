@@ -88,6 +88,27 @@ func TestEvaluateKMSCreateKeyIdentityOnly(t *testing.T) {
 	}
 }
 
+func TestEvaluateKMSGrantRequiresKeyPolicyAllow(t *testing.T) {
+	ctx := authz.RequestContext{
+		Principal: identity.Principal{
+			Kind:      identity.KindUser,
+			AccountID: "000000000001",
+			UserName:  "bob",
+		},
+		Action:   "kms:Encrypt",
+		Resource: "arn:aws:kms:us-east-1:000000000001:key/abc",
+	}
+	got := authz.EvaluateKMS(authz.KMSRequest{
+		Caller:         ctx,
+		IdentityDocs:   nil,
+		KeyPolicyDoc:   "",
+		GrantSatisfied: true,
+	})
+	if got != authz.Deny {
+		t.Fatalf("grant without key-policy Allow got %v, want Deny", got)
+	}
+}
+
 func TestEvaluateKMSKeyPolicyDenyOverridesGrant(t *testing.T) {
 	ctx := authz.RequestContext{
 		Principal: identity.Principal{

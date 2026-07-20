@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -423,5 +424,102 @@ func TestSQSRedriveAllowPolicyDenies(t *testing.T) {
 	_, err = st.ReceiveMessages(account, "source", 1)
 	if err == nil || !strings.Contains(err.Error(), "RedriveAllowPolicy") {
 		t.Fatalf("want RedriveAllowPolicy error, got %v", err)
+	}
+}
+
+func TestReceiveMessagesConcurrentNoDuplicate(t *testing.T) {
+	st := openSQSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "jobs", map[string]string{
+		"VisibilityTimeout": "30",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 20
+	for i := 0; i < n; i++ {
+		if _, err := st.SendMessage(account, "jobs", []byte("m"), false, nil, "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		ids []string
+		err error
+	}
+	ch := make(chan result, 8)
+	for g := 0; g < 8; g++ {
+		go func() {
+			got, err := st.ReceiveMessages(account, "jobs", 5)
+			ids := make([]string, 0, len(got))
+			for _, m := range got {
+				ids = append(ids, m.MessageID)
+			}
+			ch <- result{ids: ids, err: err}
+		}()
+	}
+	seen := map[string]struct{}{}
+	total := 0
+	for g := 0; g < 8; g++ {
+		r := <-ch
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		for _, id := range r.ids {
+			if _, ok := seen[id]; ok {
+				t.Fatalf("duplicate delivery of %s", id)
+			}
+			seen[id] = struct{}{}
+			total++
+		}
+	}
+	if total != n {
+		t.Fatalf("delivered=%d want %d", total, n)
+	}
+}
+
+func TestFIFOSendConcurrentUniqueSequence(t *testing.T) {
+	st := openSQSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "orders.fifo", map[string]string{
+		"FifoQueue":         "true",
+		"VisibilityTimeout": "0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 30
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			_, err := st.SendMessage(account, "orders.fifo", []byte("x"), false, nil, "", &store.SendMessageOpts{
+				MessageGroupID:         "g1",
+				MessageDeduplicationID: "uniq-" + strconv.Itoa(i),
+			})
+			errs <- err
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	seqs := map[int64]struct{}{}
+	for i := 0; i < n; i++ {
+		msgs, err := st.ReceiveMessages(account, "orders.fifo", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("receive %d: got %d msgs", i, len(msgs))
+		}
+		if _, ok := seqs[msgs[0].SequenceNumber]; ok {
+			t.Fatalf("duplicate sequence %d", msgs[0].SequenceNumber)
+		}
+		seqs[msgs[0].SequenceNumber] = struct{}{}
+		if err := st.DeleteMessage(account, "orders.fifo", msgs[0].ReceiptHandle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(seqs) != n {
+		t.Fatalf("sequences=%d want %d", len(seqs), n)
 	}
 }

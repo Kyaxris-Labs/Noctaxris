@@ -63,6 +63,7 @@ func (s *Store) EnsureTranscribeSchema() error {
 }
 
 // StartTranscriptionJobStub creates a completed job with a canned transcript under data root.
+// MediaFileUri must be s3://bucket/key and the object must exist (HeadObject).
 func (s *Store) StartTranscriptionJobStub(accountID, region, jobName, mediaURI, languageCode string) (TranscribeJob, error) {
 	jobName = strings.TrimSpace(jobName)
 	if jobName == "" {
@@ -72,11 +73,21 @@ func (s *Store) StartTranscriptionJobStub(accountID, region, jobName, mediaURI, 
 	if mediaURI == "" {
 		return TranscribeJob{}, fmt.Errorf("%w: Media.MediaFileUri is required", ErrTranscribeBadRequest)
 	}
+	bucket, key, err := parseTranscribeS3URI(mediaURI)
+	if err != nil {
+		return TranscribeJob{}, err
+	}
+	if _, err := s.HeadObject(accountID, bucket, key); err != nil {
+		if errors.Is(err, ErrNoSuchBucket) || errors.Is(err, ErrNoSuchKey) {
+			return TranscribeJob{}, fmt.Errorf("%w: Media.MediaFileUri object not found", ErrTranscribeBadRequest)
+		}
+		return TranscribeJob{}, fmt.Errorf("%w: %v", ErrTranscribeBadRequest, err)
+	}
 	if languageCode == "" {
 		languageCode = "en-US"
 	}
 	var existing string
-	err := s.db.QueryRow(
+	err = s.db.QueryRow(
 		`SELECT job_name FROM transcribe_jobs WHERE account_id = ? AND job_name = ?`,
 		accountID, jobName,
 	).Scan(&existing)
@@ -173,4 +184,22 @@ func (s *Store) ListTranscriptionJobs(accountID string) ([]TranscribeJob, error)
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+func parseTranscribeS3URI(uri string) (bucket, key string, err error) {
+	const prefix = "s3://"
+	if !strings.HasPrefix(strings.ToLower(uri), prefix) {
+		return "", "", fmt.Errorf("%w: Media.MediaFileUri must be s3://bucket/key", ErrTranscribeBadRequest)
+	}
+	rest := uri[len(prefix):]
+	slash := strings.IndexByte(rest, '/')
+	if slash <= 0 || slash == len(rest)-1 {
+		return "", "", fmt.Errorf("%w: Media.MediaFileUri must be s3://bucket/key", ErrTranscribeBadRequest)
+	}
+	bucket = rest[:slash]
+	key = rest[slash+1:]
+	if bucket == "" || key == "" {
+		return "", "", fmt.Errorf("%w: Media.MediaFileUri must be s3://bucket/key", ErrTranscribeBadRequest)
+	}
+	return bucket, key, nil
 }

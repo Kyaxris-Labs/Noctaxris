@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core, stub executor)
 
-HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager). Unit tests use a recorded-statement stub executor. Live Postgres wire protocol (`pgx`) is not in `go.mod` yet.
+HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager). The default executor records SQL and returns canned SELECT-shaped records with an explicit stub marker (`formattedRecords` contains `noctaxrisExecutor=stub`). Live Postgres wire protocol (`pgx`) is not in `go.mod` yet.
 
 ## Implemented
 
@@ -15,7 +15,7 @@ HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite.
 
 ### Stub vs live SQL
 
-The default executor records SQL and returns canned SELECT-shaped records. It validates ARNs and authz without Docker. A live nested Postgres driver may be added later with explicit dependency buy-in.
+The default executor validates ARNs and authz without Docker. Successful SELECT responses are **stub**, not live SQL against nested Postgres. A live nested Postgres driver may be added later with explicit dependency buy-in.
 
 ## How to verify / CLI smoke
 

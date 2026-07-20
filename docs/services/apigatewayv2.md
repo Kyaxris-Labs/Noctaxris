@@ -20,7 +20,7 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 | AuthorizationType | Runtime | Notes |
 |-------------------|---------|-------|
 | `NONE` | Open on loopback | Lab open path |
-| `JWT` | Bearer token | Verifies Cognito (or other) JWKS via shared jose helper. Prefer access token (`token_use=access`). Audience matches `aud` or `client_id` |
+| `JWT` | Bearer token | Verifies lab Cognito JWKS in-process (issuer `http://127.0.0.1:4566/cognito-idp/...`). Remote JWKS issuers fail closed unless `NOCTAXRIS_ALLOW_REMOTE_JWKS=1` with a public host allowlist. Requires `token_use=access` (rejects missing or `id`). Audience matches `aud` or `client_id` |
 | `AWS_IAM` | SigV4 service `execute-api` | Identity `execute-api:Invoke` on route ARN. HTTP API resource policies are not supported |
 
 Management APIs use SigV4 service `apigateway` and `apigatewayv2:*` identity actions.

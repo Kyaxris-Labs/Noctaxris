@@ -435,7 +435,7 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 		if issuer == "" {
 			issuer = store.AppSyncCognitoIssuer(api.UserPoolRegion, api.UserPoolID)
 		}
-		if err := s.verifyAPIGatewayJWT(token, issuer, []string{api.UserPoolClientID}, s.now()); err != nil {
+		if err := s.verifyAPIGatewayJWT(token, issuer, []string{api.UserPoolClientID}, s.now(), "id"); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
@@ -448,6 +448,10 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 		w.WriteHeader(http.StatusBadRequest)
 		payload, _ := appsyncsvc.GraphQLErrorsJSON("unsupported authenticationType")
 		_, _ = w.Write(payload)
+		return
+	}
+
+	if !s.enforceAssociatedWAF(w, accountID, appSyncWAFCandidateARNs(store.DefaultAppSyncRegion, accountID, apiID)) {
 		return
 	}
 

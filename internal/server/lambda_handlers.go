@@ -1661,13 +1661,13 @@ func (s *Server) lambdaInvoke(
 		invocationType = "RequestResponse"
 	}
 	if invocationType == "Event" {
-		job, err := s.store.EnqueueAsyncInvoke(accountID, name, qualifier, eventJSON)
+		_, err := s.store.EnqueueAsyncInvoke(accountID, name, qualifier, eventJSON)
 		if err != nil {
 			s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
 				"Unable to enqueue async invoke.", readOnly, eventID, verified)
 			return
 		}
-		s.startAsyncInvoke(job, accountID, name, executedVersion)
+		// Worker starts via Store.OnAsyncEnqueue (wired in server.New).
 		if strings.Contains(r.URL.Path, "/invocations") {
 			s.writeLambdaInvokeRESTAccepted(w, requestID, executedVersion)
 			s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)

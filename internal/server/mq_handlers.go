@@ -76,6 +76,11 @@ func (s *Server) mqCreate(
 	version, _ := params["EngineVersion"].(string)
 	deploy, _ := params["DeploymentMode"].(string)
 	instance, _ := params["HostInstanceType"].(string)
+	if publiclyAccessibleTrue(params["PubliclyAccessible"]) {
+		s.writeMQError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"PubliclyAccessible brokers are not supported (control-plane stub only).", readOnly, eventID, verified)
+		return
+	}
 	if !s.authorize(verified, catalog.ActionMQCreateBroker, "*") {
 		s.writeMQError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform mq:CreateBroker.", readOnly, eventID, verified)
@@ -198,4 +203,15 @@ func (s *Server) writeMQError(
 	_ = readOnly
 	_ = eventID
 	_ = verified
+}
+
+func publiclyAccessibleTrue(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(strings.TrimSpace(t), "true")
+	default:
+		return false
+	}
 }

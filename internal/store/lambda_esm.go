@@ -26,13 +26,13 @@ const (
 var (
 	// ErrNoSuchEventSourceMapping is returned when a mapping UUID is unknown.
 	ErrNoSuchEventSourceMapping = errors.New("ResourceNotFoundException")
-	// ErrInvalidEventSourceARN is returned for non-SQS or malformed ARNs.
-	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN")
+	// ErrInvalidEventSourceARN is returned for unsupported or malformed ARNs.
+	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN or DynamoDB stream ARN")
 	// ErrInvalidESMBatchSize is returned when BatchSize is out of lab range.
 	ErrInvalidESMBatchSize = errors.New("InvalidParameterValueException: BatchSize out of range")
 )
 
-// LambdaEventSourceMapping is a Lambda SQS event source mapping row.
+// LambdaEventSourceMapping is a Lambda SQS or DynamoDB Streams event source mapping row.
 type LambdaEventSourceMapping struct {
 	UUID           string
 	AccountID      string
@@ -42,6 +42,7 @@ type LambdaEventSourceMapping struct {
 	BatchSize      int
 	Enabled        bool
 	State          string
+	SourceCursor   string
 	LastModified   string
 	CreatedAt      string
 }
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS lambda_event_source_mappings (
   batch_size INTEGER NOT NULL DEFAULT 10,
   enabled INTEGER NOT NULL DEFAULT 1,
   state TEXT NOT NULL DEFAULT 'Enabled',
+  source_cursor TEXT NOT NULL DEFAULT '',
   last_modified TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -81,13 +83,21 @@ CREATE INDEX IF NOT EXISTS idx_lambda_esm_account ON lambda_event_source_mapping
 CREATE INDEX IF NOT EXISTS idx_lambda_esm_enabled ON lambda_event_source_mappings(enabled);
 `
 
-// EnsureLambdaESMSchema creates the SQS event source mapping table.
+const lambdaESMSelectCols = `uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, last_modified, created_at`
+
+// EnsureLambdaESMSchema creates the SQS / DynamoDB Streams event source mapping table.
 func EnsureLambdaESMSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure lambda esm schema: db is nil")
 	}
 	if _, err := db.Exec(lambdaESMSchema); err != nil {
 		return fmt.Errorf("ensure lambda esm schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE lambda_event_source_mappings ADD COLUMN source_cursor TEXT NOT NULL DEFAULT ''`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("ensure lambda esm schema: source_cursor: %w", err)
+		}
 	}
 	return nil
 }
@@ -120,7 +130,37 @@ func validateSQSEventSourceARN(arn string) (accountID, queueName string, err err
 	return accountID, queueName, nil
 }
 
-// CreateEventSourceMapping inserts an SQS→Lambda mapping.
+func isDynamoStreamEventSourceARN(arn string) bool {
+	_, _, _, ok := ParseDynamoStreamARN(arn)
+	return ok
+}
+
+func (s *Store) validateEventSourceARN(accountID, arn string) error {
+	arn = strings.TrimSpace(arn)
+	if isDynamoStreamEventSourceARN(arn) {
+		acct, tableName, label, ok := ParseDynamoStreamARN(arn)
+		if !ok || acct != accountID {
+			return ErrInvalidEventSourceARN
+		}
+		if _, err := s.DescribeDynamoStream(acct, tableName, label); err != nil {
+			return ErrInvalidEventSourceARN
+		}
+		return nil
+	}
+	queueAccount, queueName, err := validateSQSEventSourceARN(arn)
+	if err != nil {
+		return err
+	}
+	if queueAccount != accountID {
+		return ErrInvalidEventSourceARN
+	}
+	if _, err := s.GetQueue(accountID, queueName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CreateEventSourceMapping inserts an SQS→Lambda or DynamoDB Streams→Lambda mapping.
 func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (LambdaEventSourceMapping, error) {
 	fnName, qualifier := ParseFunctionQualifier(strings.TrimSpace(in.FunctionName))
 	if err := ValidateFunctionName(fnName); err != nil {
@@ -130,18 +170,7 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 	if err != nil {
 		return LambdaEventSourceMapping{}, err
 	}
-	queueAccount, _, err := validateSQSEventSourceARN(in.EventSourceARN)
-	if err != nil {
-		return LambdaEventSourceMapping{}, err
-	}
-	if queueAccount != in.AccountID {
-		return LambdaEventSourceMapping{}, ErrInvalidEventSourceARN
-	}
-	queueName, err := queueNameFromARN(in.EventSourceARN)
-	if err != nil {
-		return LambdaEventSourceMapping{}, ErrInvalidEventSourceARN
-	}
-	if _, err := s.GetQueue(in.AccountID, queueName); err != nil {
+	if err := s.validateEventSourceARN(in.AccountID, in.EventSourceARN); err != nil {
 		return LambdaEventSourceMapping{}, err
 	}
 	batchSize, err := normalizeESMBatchSize(in.BatchSize)
@@ -162,11 +191,12 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 	if enabled {
 		enabledInt = 1
 	}
+	arn := strings.TrimSpace(in.EventSourceARN)
 	_, err = s.db.Exec(
 		`INSERT INTO lambda_event_source_mappings
-		 (uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, in.AccountID, fn.FunctionName, fn.FunctionARN, strings.TrimSpace(in.EventSourceARN),
+		 (uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, last_modified, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`,
+		id, in.AccountID, fn.FunctionName, fn.FunctionARN, arn,
 		batchSize, enabledInt, state, now, now,
 	)
 	if err != nil {
@@ -177,7 +207,7 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 		AccountID:      in.AccountID,
 		FunctionName:   fn.FunctionName,
 		FunctionARN:    fn.FunctionARN,
-		EventSourceARN: strings.TrimSpace(in.EventSourceARN),
+		EventSourceARN: arn,
 		BatchSize:      batchSize,
 		Enabled:        enabled,
 		State:          state,
@@ -190,7 +220,7 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 func (s *Store) GetEventSourceMapping(accountID, mappingUUID string) (LambdaEventSourceMapping, error) {
 	return s.scanEventSourceMapping(
 		s.db.QueryRow(
-			`SELECT uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at
+			`SELECT `+lambdaESMSelectCols+`
 			 FROM lambda_event_source_mappings WHERE account_id = ? AND uuid = ?`,
 			accountID, strings.TrimSpace(mappingUUID),
 		),
@@ -206,14 +236,14 @@ func (s *Store) ListEventSourceMappings(accountID, functionName string) ([]Lambd
 	)
 	if functionName == "" {
 		rows, err = s.db.Query(
-			`SELECT uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at
+			`SELECT `+lambdaESMSelectCols+`
 			 FROM lambda_event_source_mappings WHERE account_id = ? ORDER BY created_at, uuid`,
 			accountID,
 		)
 	} else {
 		base, _ := ParseFunctionQualifier(functionName)
 		rows, err = s.db.Query(
-			`SELECT uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at
+			`SELECT `+lambdaESMSelectCols+`
 			 FROM lambda_event_source_mappings WHERE account_id = ? AND function_name = ? ORDER BY created_at, uuid`,
 			accountID, base,
 		)
@@ -236,7 +266,7 @@ func (s *Store) ListEventSourceMappings(accountID, functionName string) ([]Lambd
 // ListEnabledEventSourceMappings returns all enabled mappings (poller).
 func (s *Store) ListEnabledEventSourceMappings() ([]LambdaEventSourceMapping, error) {
 	rows, err := s.db.Query(
-		`SELECT uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at
+		`SELECT ` + lambdaESMSelectCols + `
 		 FROM lambda_event_source_mappings WHERE enabled = 1 ORDER BY created_at, uuid`,
 	)
 	if err != nil {
@@ -324,12 +354,12 @@ func (s *Store) DeleteEventSourceMapping(accountID, mappingUUID string) error {
 	return nil
 }
 
-// PollEventSourceMappingOnce receives up to BatchSize messages, invokes the callback
-// synchronously with the SQS Lambda event JSON, and deletes messages on success.
-// On invoke error, messages remain invisible until the visibility timeout expires.
+// PollEventSourceMappingOnce receives up to BatchSize records from SQS or DynamoDB Streams,
+// invokes the callback synchronously with the Lambda event JSON, and advances the source on success.
+// On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB cursor is not advanced.
 func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accountID, functionName, eventJSON string) error) error {
 	row := s.db.QueryRow(
-		`SELECT uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, last_modified, created_at
+		`SELECT `+lambdaESMSelectCols+`
 		 FROM lambda_event_source_mappings WHERE uuid = ?`,
 		strings.TrimSpace(mappingUUID),
 	)
@@ -339,6 +369,9 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accou
 	}
 	if !m.Enabled {
 		return nil
+	}
+	if isDynamoStreamEventSourceARN(m.EventSourceARN) {
+		return s.pollDynamoEventSourceMappingOnce(m, invoke)
 	}
 	queueName, err := queueNameFromARN(m.EventSourceARN)
 	if err != nil {
@@ -364,6 +397,91 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accou
 		}
 	}
 	return nil
+}
+
+func (s *Store) pollDynamoEventSourceMappingOnce(m LambdaEventSourceMapping, invoke func(accountID, functionName, eventJSON string) error) error {
+	acct, tableName, label, ok := ParseDynamoStreamARN(m.EventSourceARN)
+	if !ok || acct != m.AccountID {
+		return ErrInvalidEventSourceARN
+	}
+	table, err := s.DescribeDynamoStream(acct, tableName, label)
+	if err != nil {
+		return err
+	}
+	iterator := m.SourceCursor
+	if iterator == "" {
+		it, err := s.GetDynamoStreamShardIterator(acct, tableName, LabDynamoStreamShardID, "TRIM_HORIZON", "")
+		if err != nil {
+			return err
+		}
+		iterator = it
+	}
+	records, next, err := s.GetDynamoStreamRecords(iterator, m.BatchSize)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		_ = s.setESMSourceCursor(m.UUID, next)
+		return nil
+	}
+	eventJSON, err := buildDynamoLambdaEventJSON(m.EventSourceARN, table.StreamViewType, records)
+	if err != nil {
+		return err
+	}
+	if err := invoke(m.AccountID, m.FunctionName, eventJSON); err != nil {
+		return err
+	}
+	return s.setESMSourceCursor(m.UUID, next)
+}
+
+func (s *Store) setESMSourceCursor(mappingUUID, cursor string) error {
+	_, err := s.db.Exec(
+		`UPDATE lambda_event_source_mappings SET source_cursor = ?, last_modified = ? WHERE uuid = ?`,
+		cursor, nowRFC3339(), strings.TrimSpace(mappingUUID),
+	)
+	if err != nil {
+		return fmt.Errorf("set esm source cursor: %w", err)
+	}
+	return nil
+}
+
+func buildDynamoLambdaEventJSON(streamARN, streamViewType string, records []DynamoStreamRecord) (string, error) {
+	region := DefaultDynamoRegion
+	if parts := strings.Split(streamARN, ":"); len(parts) >= 4 {
+		region = parts[3]
+	}
+	if streamViewType == "" {
+		streamViewType = StreamViewNewImage
+	}
+	out := make([]map[string]any, 0, len(records))
+	for i, rec := range records {
+		ddb := map[string]any{
+			"SequenceNumber":  rec.SequenceNumber,
+			"StreamViewType":  streamViewType,
+			"SizeBytes":       len(rec.KeysJSON) + len(rec.NewImageJSON),
+			"ApproximateCreationDateTime": float64(rec.ArrivalMS) / 1000.0,
+		}
+		if rec.KeysJSON != "" {
+			ddb["Keys"] = json.RawMessage(rec.KeysJSON)
+		}
+		if rec.NewImageJSON != "" {
+			ddb["NewImage"] = json.RawMessage(rec.NewImageJSON)
+		}
+		out = append(out, map[string]any{
+			"eventID":        fmt.Sprintf("%d", i+1),
+			"eventName":      rec.EventName,
+			"eventVersion":   "1.1",
+			"eventSource":    "aws:dynamodb",
+			"awsRegion":      region,
+			"eventSourceARN": streamARN,
+			"dynamodb":       ddb,
+		})
+	}
+	raw, err := json.Marshal(map[string]any{"Records": out})
+	if err != nil {
+		return "", fmt.Errorf("marshal dynamodb lambda event: %w", err)
+	}
+	return string(raw), nil
 }
 
 func buildSQSLambdaEventJSON(eventSourceARN string, msgs []Message) (string, error) {
@@ -404,7 +522,7 @@ func (s *Store) scanEventSourceMapping(row *sql.Row) (LambdaEventSourceMapping, 
 	var enabledInt int
 	err := row.Scan(
 		&m.UUID, &m.AccountID, &m.FunctionName, &m.FunctionARN, &m.EventSourceARN,
-		&m.BatchSize, &enabledInt, &m.State, &m.LastModified, &m.CreatedAt,
+		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.LastModified, &m.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LambdaEventSourceMapping{}, ErrNoSuchEventSourceMapping
@@ -421,7 +539,7 @@ func scanEventSourceMappingRow(rows *sql.Rows) (LambdaEventSourceMapping, error)
 	var enabledInt int
 	if err := rows.Scan(
 		&m.UUID, &m.AccountID, &m.FunctionName, &m.FunctionARN, &m.EventSourceARN,
-		&m.BatchSize, &enabledInt, &m.State, &m.LastModified, &m.CreatedAt,
+		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.LastModified, &m.CreatedAt,
 	); err != nil {
 		return LambdaEventSourceMapping{}, fmt.Errorf("scan event source mapping: %w", err)
 	}

@@ -77,4 +77,42 @@ func TestAppSyncCognitoCreateRequiresPoolConfig(t *testing.T) {
 	if api.UserPoolIssuer != store.CognitoIssuerURL("us-east-1", "us-east-1_abc") {
 		t.Fatalf("issuer=%q", api.UserPoolIssuer)
 	}
+	if _, err := st.CreateAppSyncGraphqlAPIWithConfig(acct, "us-east-1", "evil", store.AppSyncAuthCognito, store.AppSyncUserPoolConfig{
+		UserPoolID: "us-east-1_abc", ClientID: "client-1", AwsRegion: "us-east-1",
+		Issuer: "https://evil.example/oidc",
+	}); err == nil {
+		t.Fatal("expected remote issuer reject")
+	}
+}
+
+func TestAPIGatewayAuthorizerRejectsRemoteIssuer(t *testing.T) {
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	const acct = "000000000001"
+	api, err := st.CreateAPIGatewayAPI(acct, "us-east-1", "lab", "HTTP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateAPIGatewayAuthorizer(acct, api.APIID, "jwt", store.APIGatewayAuthorizerJWT,
+		"$request.header.Authorization", "https://evil.example/", []string{"aud"}); err == nil {
+		t.Fatal("expected remote issuer reject")
+	}
+	issuer := store.CognitoIssuerURL("us-east-1", "us-east-1_lab")
+	a, err := st.CreateAPIGatewayAuthorizer(acct, api.APIID, "jwt-lab", store.APIGatewayAuthorizerJWT,
+		"$request.header.Authorization", issuer, []string{"aud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.JWTIssuer != issuer {
+		t.Fatalf("issuer=%q", a.JWTIssuer)
+	}
 }

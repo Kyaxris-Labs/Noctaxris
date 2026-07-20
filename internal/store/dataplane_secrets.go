@@ -16,7 +16,7 @@ const (
 )
 
 // DataPlaneMasterSecretName builds noctaxris/<kind>/<resourceID>.
-// Stream B should use this for ElastiCache/DocumentDB create paths.
+// Used by ElastiCache/DocumentDB create paths.
 func DataPlaneMasterSecretName(kind DataPlaneSecretKind, resourceID string) string {
 	return fmt.Sprintf("noctaxris/%s/%s", kind, strings.ToLower(strings.TrimSpace(resourceID)))
 }

@@ -16,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/google/uuid"
 )
@@ -58,7 +61,7 @@ func (s *Server) handleRegistryV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID, token, ok := s.authenticateRegistry(r)
+	accountID, token, principalARN, ok := s.authenticateRegistry(r)
 	if !ok {
 		s.writeRegistryUnauthorized(w)
 		return
@@ -82,6 +85,16 @@ func (s *Server) handleRegistryV2(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	action, ok := registryV2Action(r.Method, route.remainder)
+	if !ok {
+		s.writeRegistryError(w, http.StatusNotFound, "NAME_UNKNOWN", "repository name not known to registry")
+		return
+	}
+	if !s.authorizeRegistryV2(accountID, principalARN, route.repoName, action) {
+		s.writeRegistryDenied(w)
+		return
+	}
+
 	switch {
 	case r.Method == http.MethodGet && route.remainder == "tags/list":
 		s.handleRegistryListTags(w, r, accountID, route.repoName)
@@ -101,7 +114,7 @@ func (s *Server) handleRegistryV2Root(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if _, _, ok := s.authenticateRegistry(r); !ok {
+	if _, _, _, ok := s.authenticateRegistry(r); !ok {
 		s.writeRegistryUnauthorized(w)
 		return
 	}
@@ -149,16 +162,129 @@ func (s *Server) handleRegistryToken(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-func (s *Server) authenticateRegistry(r *http.Request) (accountID, token string, ok bool) {
+func (s *Server) authenticateRegistry(r *http.Request) (accountID, token, principalARN string, ok bool) {
 	token = extractRegistryToken(r)
 	if token == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	accountID, _, _, err := s.store.ValidateAuthorizationToken(token)
+	accountID, principalARN, _, err := s.store.ValidateAuthorizationToken(token)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return accountID, token, true
+	return accountID, token, principalARN, true
+}
+
+// registryV2Action maps Registry V2 methods to ECR IAM actions used by authorizeECR.
+func registryV2Action(method, remainder string) (action string, ok bool) {
+	switch {
+	case method == http.MethodGet && remainder == "tags/list":
+		return catalog.ActionECRListImages, true
+	case strings.HasPrefix(remainder, "blobs/uploads/"):
+		switch method {
+		case http.MethodPost:
+			return catalog.ActionECRInitiateLayerUpload, true
+		case http.MethodPut, http.MethodPatch:
+			return catalog.ActionECRUploadLayerPart, true
+		default:
+			return "", false
+		}
+	case strings.HasPrefix(remainder, "blobs/"):
+		switch method {
+		case http.MethodHead, http.MethodGet:
+			return catalog.ActionECRBatchGetImage, true
+		case http.MethodPut:
+			return catalog.ActionECRUploadLayerPart, true
+		default:
+			return "", false
+		}
+	case strings.HasPrefix(remainder, "manifests/"):
+		switch method {
+		case http.MethodPut:
+			return catalog.ActionECRPutImage, true
+		case http.MethodGet, http.MethodHead:
+			return catalog.ActionECRBatchGetImage, true
+		default:
+			return "", false
+		}
+	default:
+		return "", false
+	}
+}
+
+func (s *Server) authorizeRegistryV2(accountID, principalARN, repoName, action string) bool {
+	verified := verifiedFromRegistryPrincipal(accountID, principalARN)
+	if verified == nil {
+		return false
+	}
+	policy, err := s.ecrRepositoryPolicy(accountID, repoName)
+	if err != nil {
+		return false
+	}
+	arn := store.RepositoryARN(store.DefaultECRRegion, accountID, repoName)
+	return s.authorizeECR(verified, action, arn, policy)
+}
+
+func verifiedFromRegistryPrincipal(accountID, principalARN string) *authn.Verified {
+	accountID = strings.TrimSpace(accountID)
+	principalARN = strings.TrimSpace(principalARN)
+	if accountID == "" || principalARN == "" {
+		return nil
+	}
+	p, ok := principalFromARN(accountID, principalARN)
+	if !ok {
+		return nil
+	}
+	return &authn.Verified{
+		Principal: p,
+		AccountID: accountID,
+		Region:    store.DefaultECRRegion,
+		Service:   registryServiceName,
+	}
+}
+
+func principalFromARN(accountID, arn string) (identity.Principal, bool) {
+	rootARN := fmt.Sprintf("arn:aws:iam::%s:root", accountID)
+	if arn == rootARN {
+		return identity.RootPrincipal(accountID, ""), true
+	}
+	userPrefix := fmt.Sprintf("arn:aws:iam::%s:user/", accountID)
+	if strings.HasPrefix(arn, userPrefix) {
+		name := strings.TrimPrefix(arn, userPrefix)
+		if name == "" || strings.Contains(name, "/") {
+			return identity.Principal{}, false
+		}
+		return identity.UserPrincipal(accountID, name, ""), true
+	}
+	rolePrefix := fmt.Sprintf("arn:aws:iam::%s:role/", accountID)
+	if strings.HasPrefix(arn, rolePrefix) {
+		name := strings.TrimPrefix(arn, rolePrefix)
+		if name == "" {
+			return identity.Principal{}, false
+		}
+		return identity.Principal{
+			Kind:      identity.KindRole,
+			AccountID: accountID,
+			RoleName:  name,
+		}, true
+	}
+	assumedPrefix := fmt.Sprintf("arn:aws:sts::%s:assumed-role/", accountID)
+	if strings.HasPrefix(arn, assumedPrefix) {
+		rest := strings.TrimPrefix(arn, assumedPrefix)
+		roleName, sessionName, found := strings.Cut(rest, "/")
+		if !found || roleName == "" || sessionName == "" {
+			return identity.Principal{}, false
+		}
+		return identity.RoleSessionPrincipal(accountID, roleName, sessionName, ""), true
+	}
+	fedPrefix := fmt.Sprintf("arn:aws:sts::%s:federated-user/", accountID)
+	if strings.HasPrefix(arn, fedPrefix) {
+		name := strings.TrimPrefix(arn, fedPrefix)
+		if name == "" {
+			return identity.Principal{}, false
+		}
+		return identity.FederatedUserPrincipal(accountID, name, ""), true
+	}
+	return identity.Principal{}, false
 }
 
 func extractRegistryToken(r *http.Request) string {
@@ -579,6 +705,10 @@ func (s *Server) writeRegistryUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", registryWWWAuthenticateHeader())
 	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 	w.WriteHeader(http.StatusUnauthorized)
+}
+
+func (s *Server) writeRegistryDenied(w http.ResponseWriter) {
+	s.writeRegistryError(w, http.StatusForbidden, "DENIED", "requested access to the resource is denied")
 }
 
 func (s *Server) writeRegistryTokenUnauthorized(w http.ResponseWriter) {

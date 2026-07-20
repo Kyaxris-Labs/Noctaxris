@@ -1,8 +1,17 @@
 # Changelog
 
-## v7 (lab cores shipped)
+## Unreleased
 
-Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host DB ports, RDS Data API stub on `:4566`, Athena closing the v4 deferral, OpenSearch/EMR control-plane stubs, and Bedrock/Textract/Transcribe shape stubs (~+10 toward ~60). Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
+### Security hardening (H1)
+
+- JWT / AppSync issuers: lab Cognito JWKS only by default; remote JWKS behind `NOCTAXRIS_ALLOW_REMOTE_JWKS` + public host allowlist (no redirects / no RFC1918)
+- `NOCTAXRIS_DOCKER_HOST` allowlist (default `tcp://noctaxris-engine:2376`); reject `unix://`, `npipe://`, `docker.sock`; TLS client PEMs required when host is set
+- Compose volume split: API-only `noctaxris-data` vs `noctaxris-compute` for Lambda code (engine cannot read `master.key`)
+- Image pull allowlist for DinD (lab registry + pinned lab bases; `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras with digest pins)
+
+## Nested data planes and ML stubs
+
+Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host DB ports, RDS Data API stub on `:4566`, Athena over Glue and lab S3, OpenSearch/EMR control-plane stubs, and Bedrock/Textract/Transcribe shape stubs. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
 
 ### Included
 
@@ -12,7 +21,7 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 - ElastiCache lite: Create/Describe/Delete cache cluster (redis or valkey), nested Valkey/Redis when DinD is up
 - DocumentDB lite: Create/Describe/Delete DB cluster (`Engine=docdb`), nested Mongo-compatible when DinD is up (not Neptune)
 - Athena lite: Start/Get/Stop/GetQueryResults over Glue catalog plus lab S3 CSV/JSON SELECT subset
-- Glue Track A polish: PartitionKeys and StorageDescriptor SerDe/InputFormat fields for Athena
+- Glue catalog polish: PartitionKeys and StorageDescriptor SerDe/InputFormat fields for Athena
 - OpenSearch lite: domain CRUD with loopback stub endpoint
 - EMR lite: RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows control-plane stub
 - Bedrock Runtime stub: InvokeModel allowlisted modelIds to canned JSON
@@ -21,9 +30,9 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 
 Deferred depth: [docs/services/index.md](docs/services/index.md). Live `pgx` Data API executor, MemoryDB, Neptune, real ML model runtimes, and live Firecracker guest boot remain deferred.
 
-## v6 (lab cores shipped)
+## Cognito, HTTP API, and edge stubs
 
-Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the existing loopback listener, AppSync Cognito auth, edge/governance stubs toward ~50 services, and go-jose v4 for the single JWT stack. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
+Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the existing loopback listener, AppSync Cognito auth, edge/governance stubs, and go-jose v4 for the single JWT stack. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
 
 ### Included
 
@@ -43,9 +52,9 @@ Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the exist
 
 Deferred depth: [docs/services/index.md](docs/services/index.md). REST API v1, Cognito Identity Pools / Hosted UI, real CloudFront PoPs, and live Firecracker guest boot remain deferred.
 
-## v5 (lab cores shipped)
+## Scheduler, Streams, Pipes, and edge lite
 
-EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP depth, ECS CreateService, DynamoDB Streams, EventBridge Pipes, and nine more lab services toward ~40 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Nested Amazon MQ broker remains deferred.
+EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP depth, ECS CreateService, DynamoDB Streams, EventBridge Pipes, and additional edge/control-plane lab services. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Nested Amazon MQ broker remains deferred.
 
 ### Included
 
@@ -63,14 +72,14 @@ EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP dept
 - Route 53 lite: hosted zones plus A/CNAME record changes
 - Cloud Map lite: namespace/service/instance register and DiscoverInstances
 - Pricing lite: GetProducts over a static embedded catalog
-- AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (Cognito auth added in v6)
+- AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (Cognito User Pools auth landed later)
 - CloudWatch Logs delete and DescribeLogStreams polish
 
 Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, IoT Core, MSK, and live Firecracker guest boot remain deferred.
 
-## v4 (lab cores shipped)
+## MicroVM selection and CI/CD lite
 
-Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and eight more lab services toward ~30 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Live Firecracker guest boot needs a Linux+KVM host with kernel/rootfs assets (stubs and platform matrix ship on all hosts).
+Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and CI/CD plus catalog lab services. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Live Firecracker guest boot needs a Linux+KVM host with kernel/rootfs assets (stubs and platform matrix ship on all hosts).
 
 ### Included
 
@@ -91,9 +100,9 @@ Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/Dyna
 - WAF v2 lite: WebACL / rule group shape, AssociateWebACL, labeled Evaluate helper
 - Config lite: recorder / delivery channel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets. Athena shipped in a later version.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets. Athena shipped in a later release.
 
-## v3 (lab cores shipped)
+## Multi-account honesty and audit services
 
 Multi-account honesty (cross-account dual eval, OU SCP/RCP inheritance, request-context keys) plus first expansion wave services. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
 
@@ -113,7 +122,7 @@ Multi-account honesty (cross-account dual eval, OU SCP/RCP inheritance, request-
 
 Deferred depth: [docs/services/index.md](docs/services/index.md).
 
-## v2 (lab cores shipped)
+## Identity depth and messaging / container labs
 
 Cleared in-scope deferred depth for the lab core (except microVMs), then shipped lab-complete SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
 

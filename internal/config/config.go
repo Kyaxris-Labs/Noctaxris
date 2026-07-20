@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
@@ -83,6 +84,9 @@ func LoadFromEnv() (Config, error) {
 		if err := validate.IAMName(cfg.SAMLIdPName); err != nil {
 			return Config{}, fmt.Errorf("NOCTAXRIS_SAML_IDP_NAME: %w", err)
 		}
+	}
+	if err := compute.ValidateDockerHost(cfg.DockerHost, cfg.DockerTLSCertPath); err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil

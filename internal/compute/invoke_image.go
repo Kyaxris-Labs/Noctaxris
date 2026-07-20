@@ -44,6 +44,9 @@ func ValidateImageRunOpts(opts ImageRunOpts) error {
 	if strings.TrimSpace(opts.ImageURI) == "" {
 		return fmt.Errorf("compute: ImageURI is required")
 	}
+	if err := AllowImagePull(opts.ImageURI); err != nil {
+		return err
+	}
 	if strings.TrimSpace(opts.EventHostPath) == "" {
 		return fmt.Errorf("compute: EventHostPath is required")
 	}

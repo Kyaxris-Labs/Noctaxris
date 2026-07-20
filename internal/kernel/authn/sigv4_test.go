@@ -124,6 +124,16 @@ func TestVerifySkewedTime(t *testing.T) {
 	}
 }
 
+func TestVerifyExpiresOverMax(t *testing.T) {
+	now := fixedNow()
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/bucket/key", nil)
+	signQuery(t, req, nil, testAKID, testSecret, testRegion, "s3", now, 604801)
+	_, err := authn.Verify(req, nil, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
 func TestVerifyMissingAuth(t *testing.T) {
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", nil)
 	_, err := authn.Verify(req, nil, fixedNow(), 15*time.Minute, lookupOK)
@@ -132,15 +142,39 @@ func TestVerifyMissingAuth(t *testing.T) {
 	}
 }
 
-func TestVerifyUnsignedPayloadHeader(t *testing.T) {
+func TestVerifyUnsignedPayloadHeaderRejected(t *testing.T) {
 	now := fixedNow()
 	body := []byte("ignored-for-unsigned")
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
 	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
 
-	if _, err := authn.Verify(req, body, now, 15*time.Minute, lookupOK); err != nil {
-		t.Fatalf("Verify UNSIGNED-PAYLOAD: %v", err)
+	_, err := authn.Verify(req, body, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
+func TestVerifyBodyHashMismatch(t *testing.T) {
+	now := fixedNow()
+	signedBody := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	swapped := []byte("Action=AssumeRole&Version=2011-06-15&RoleArn=arn:aws:iam::123456789012:role/Evil")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", signedBody)
+	signHeader(t, req, signedBody, testAKID, testSecret, testRegion, testSvc, now)
+
+	_, err := authn.Verify(req, swapped, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
+func TestVerifyS3QueryUnsignedPayloadOK(t *testing.T) {
+	now := fixedNow()
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/bucket/key", nil)
+	signQueryUnsigned(t, req, testAKID, testSecret, testRegion, "s3", now, 900)
+
+	if _, err := authn.Verify(req, nil, now, 15*time.Minute, lookupOK); err != nil {
+		t.Fatalf("Verify S3 query UNSIGNED-PAYLOAD: %v", err)
 	}
 }
 
@@ -263,6 +297,44 @@ func signQuery(t *testing.T, req *http.Request, body []byte, akid, secret, regio
 		payloadHash = hex.EncodeToString(sum[:])
 	}
 
+	canonicalHeaders := "host:" + headerVal(req, "host") + "\n"
+	canonicalRequest := strings.Join([]string{
+		req.Method,
+		canonicalPath(req),
+		canonicalQuery(req.URL.Query(), true),
+		canonicalHeaders,
+		"host",
+		payloadHash,
+	}, "\n")
+
+	sts := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		hexSHA256(canonicalRequest),
+	}, "\n")
+
+	sig := hex.EncodeToString(hmacSHA256(deriveKey(secret, dateStamp, region, service), sts))
+	q.Set("X-Amz-Signature", sig)
+	req.URL.RawQuery = q.Encode()
+}
+
+func signQueryUnsigned(t *testing.T, req *http.Request, akid, secret, region, service string, when time.Time, expires int) {
+	t.Helper()
+	amzDate := when.UTC().Format("20060102T150405Z")
+	dateStamp := when.UTC().Format("20060102")
+	scope := dateStamp + "/" + region + "/" + service + "/aws4_request"
+	cred := akid + "/" + scope
+
+	q := req.URL.Query()
+	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	q.Set("X-Amz-Credential", cred)
+	q.Set("X-Amz-Date", amzDate)
+	q.Set("X-Amz-Expires", fmt.Sprintf("%d", expires))
+	q.Set("X-Amz-SignedHeaders", "host")
+	req.URL.RawQuery = q.Encode()
+
+	payloadHash := "UNSIGNED-PAYLOAD"
 	canonicalHeaders := "host:" + headerVal(req, "host") + "\n"
 	canonicalRequest := strings.Join([]string{
 		req.Method,

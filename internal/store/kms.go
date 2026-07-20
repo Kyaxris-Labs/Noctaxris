@@ -491,16 +491,25 @@ func (s *Store) ResolveKeyID(accountID, keyIdOrAliasOrArn string) (string, error
 		if len(parts) < 6 {
 			return "", fmt.Errorf("resolve key id: invalid ARN %q", id)
 		}
+		arnAccount := parts[4]
 		resource := parts[5]
 		if strings.HasPrefix(resource, "key/") {
 			keyID := strings.TrimPrefix(resource, "key/")
-			if _, err := s.GetKey(keyID); err != nil {
+			key, err := s.GetKey(keyID)
+			if err != nil {
 				return "", err
+			}
+			if arnAccount != "" && key.AccountID != arnAccount {
+				return "", sql.ErrNoRows
 			}
 			return keyID, nil
 		}
 		if strings.HasPrefix(resource, "alias/") {
-			return s.resolveAlias(accountID, "alias/"+strings.TrimPrefix(resource, "alias/"))
+			aliasAccount := arnAccount
+			if aliasAccount == "" {
+				aliasAccount = accountID
+			}
+			return s.resolveAlias(aliasAccount, "alias/"+strings.TrimPrefix(resource, "alias/"))
 		}
 		return "", fmt.Errorf("resolve key id: unsupported ARN resource %q", resource)
 	}

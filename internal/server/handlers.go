@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +24,11 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
-const defaultAssumeRoleDuration = time.Hour
+const (
+	defaultAssumeRoleDuration = time.Hour
+	minAssumeRoleSeconds      = 900
+	maxAssumeRoleSeconds      = 43200
+)
 
 func (s *Server) lookupKey(accessKeyID string) (authn.ResolvedKey, error) {
 	ak, err := s.store.LookupAccessKeyRecord(accessKeyID)
@@ -63,6 +68,11 @@ func (s *Server) handleGetCallerIdentity(
 		identityType = "FederatedUser"
 	} else if !verified.Principal.IsRoot {
 		userID = verified.AccessKeyID
+		if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.UserName != "" {
+			if u, err := s.store.GetUser(verified.AccountID, ak.UserName); err == nil && u.UserID != "" {
+				userID = u.UserID
+			}
+		}
 		arn = verified.Principal.ARN()
 		if arn == "" {
 			arn = fmt.Sprintf("arn:aws:iam::%s:user/%s", verified.AccountID, verified.AccessKeyID)
@@ -288,6 +298,14 @@ func (s *Server) handleAssumeRole(
 		roleARN = storedARN
 	}
 
+	// Gate caller with EvaluateFull (SCP / boundary / session) before trust eval.
+	if !s.authorize(verified, catalog.ActionSTSAssumeRole, roleARN) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:AssumeRole on the specified resource.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+
 	callerDocs := s.identityDocs(verified.Principal)
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
@@ -321,8 +339,46 @@ func (s *Server) handleAssumeRole(
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := s.now().UTC().Add(defaultAssumeRoleDuration)
-	accessKeyID, err := s.store.MintTempCredentials(accountID, roleARN, sessionName, secret, sessionToken, expires)
+
+	sessionPolicy := ""
+	if policy := params.Get("Policy"); policy != "" {
+		if unesc, err := url.QueryUnescape(policy); err == nil && unesc != "" {
+			sessionPolicy = unesc
+		} else {
+			sessionPolicy = policy
+		}
+	} else if policyARN := params.Get("PolicyArns.member.1.arn"); policyARN != "" {
+		p, err := s.store.GetManagedPolicy(policyARN)
+		if err != nil {
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+				"Policy ARN not found.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		sessionPolicy = p.Document
+	}
+
+	duration := defaultAssumeRoleDuration
+	if raw := strings.TrimSpace(params.Get("DurationSeconds")); raw != "" {
+		secs, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || secs < minAssumeRoleSeconds || secs > maxAssumeRoleSeconds {
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+				"DurationSeconds must be between 900 and 43200.", readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		duration = time.Duration(secs) * time.Second
+	}
+	expires := s.now().UTC().Add(duration)
+	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
+		AccountID:     accountID,
+		RoleARN:       roleARN,
+		SessionName:   sessionName,
+		Secret:        secret,
+		SessionToken:  sessionToken,
+		Expires:       expires,
+		SessionPolicy: sessionPolicy,
+	})
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to store temporary credentials.", readOnly, r, eventID,
@@ -581,7 +637,11 @@ func (s *Server) identityDocs(principal identity.Principal) []string {
 			return docs
 		}
 	}
+	// Assumed-role sessions use sts:assumed-role/... ARNs; IAM attachments live on the role ARN.
 	arn := principal.ARN()
+	if principal.Kind == identity.KindRole && principal.RoleName != "" {
+		arn = principalArnForCondition(principal)
+	}
 	docs, _ := s.store.ListAttachedPolicyDocuments(arn)
 	inline, _ := s.store.ListInlinePolicies(arn)
 	for _, p := range inline {

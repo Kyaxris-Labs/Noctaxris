@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func TestBedrockInvokeModelREST(t *testing.T) {
@@ -71,9 +73,18 @@ func TestTextractDetectDocumentText(t *testing.T) {
 }
 
 func TestTranscribeStartGetList(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := st.CreateBucket(testAccountID, "lab"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(testAccountID, "lab", "audio.wav", store.PutObjectMeta{
+		Data: []byte("fake-audio"), PlainSize: 10, ContentType: "audio/wav",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	start := mustJSONTarget(t, handler, "Transcribe.StartTranscriptionJob", "transcribe", map[string]any{
 		"TranscriptionJobName": "srv-job-1",

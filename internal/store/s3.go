@@ -364,7 +364,8 @@ func (s *Store) CopyObject(accountID, srcBucket, srcKey, destBucket, destKey str
 	if dest.PlainSize == 0 {
 		dest.PlainSize = srcMeta.Size
 	}
-	return s.PutObject(accountID, destBucket, destKey, dest)
+	out, _, err := s.PutObjectVersioned(accountID, destBucket, destKey, dest)
+	return out, err
 }
 
 // DeleteBucketPolicy clears the bucket policy.

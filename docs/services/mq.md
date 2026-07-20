@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core, control-plane stub)
 
-Broker CRUD for ActiveMQ or RabbitMQ engine strings. Returns a loopback-only stub endpoint (`stub://127.0.0.1/mq/...`). No nested broker process and no WAN-published broker ports.
+Broker CRUD for ActiveMQ or RabbitMQ engine strings. Returns a loopback-only stub endpoint (`stub://127.0.0.1/mq/...`). BrokerState is `CREATION_FAILED` (stub-only; no nested broker). `PubliclyAccessible=true` is rejected. No nested broker process and no WAN-published broker ports.
 
 ## Implemented
 
@@ -27,14 +27,14 @@ aws mq create-broker \
   --engine-version 3.13 \
   --host-instance-type mq.t3.micro \
   --deployment-mode SINGLE_INSTANCE \
-  --publicly-accessible \
+  --no-publicly-accessible \
   --users Username=lab,Password=lab-password-1 \
   --endpoint-url "$EP"
 
 aws mq list-brokers --endpoint-url "$EP"
 ```
 
-DescribeBroker shows the stub endpoint. Do not expect a live AMQP/MQTT connection on that URL.
+DescribeBroker shows the stub endpoint and `CREATION_FAILED`. Do not expect a live AMQP/MQTT connection on that URL.
 
 ## Not yet / deferred
 

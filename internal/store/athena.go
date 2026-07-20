@@ -281,7 +281,7 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 	listed, err := s.ListObjectsV2(accountID, bucket, prefix, "")
 	if err != nil {
 		if errors.Is(err, ErrNoSuchBucket) {
-			return colInfos, [][]string{}, nil
+			return nil, nil, fmt.Errorf("%w: S3 location bucket does not exist: %s", ErrAthenaBadRequest, bucket)
 		}
 		return nil, nil, err
 	}

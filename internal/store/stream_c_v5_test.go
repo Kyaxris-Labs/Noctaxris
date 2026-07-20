@@ -76,6 +76,10 @@ func TestPipesSQSToSQS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pipes.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"` + dst.QueueARN + `"}]}`
+	if err := st.SetQueueAttributes(account, dst.QueueName, map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
 	p, err := st.CreatePipe(account, "us-east-1", "lab-pipe", "", src.QueueARN, dst.QueueARN, "", "RUNNING")
 	if err != nil || p.ARN == "" {
 		t.Fatalf("create pipe: %+v err=%v", p, err)
@@ -96,6 +100,33 @@ func TestPipesSQSToSQS(t *testing.T) {
 	}
 	if err := st.DeletePipe(account, p.Name); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPipesDeliveryDeniedWithoutTargetPolicy(t *testing.T) {
+	st := openStreamCStore(t)
+	account := "000000000001"
+	src, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "pipe-deny-src", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "pipe-deny-dst", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreatePipe(account, "us-east-1", "deny-pipe", "", src.QueueARN, dst.QueueARN, "", "RUNNING")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessage(account, src.QueueName, []byte(`{"x":1}`), false, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PollPipeOnce(account, p.Name, nil); err == nil {
+		t.Fatal("expected delivery deny without RoleArn or target policy")
+	}
+	got, err := st.ReceiveMessages(account, dst.QueueName, 10)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("dst msgs=%v err=%v want none", got, err)
 	}
 }
 
@@ -128,6 +159,9 @@ func TestTransferServerUserSandbox(t *testing.T) {
 	sv, err := st.CreateTransferServer(account, "us-east-1", []string{"SFTP"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sv.EndpointType != "VPC" || sv.State != "OFFLINE" {
+		t.Fatalf("want VPC/OFFLINE without listener, got EndpointType=%q State=%q", sv.EndpointType, sv.State)
 	}
 	u, err := st.CreateTransferUser(account, sv.ServerID, "alice", "/alice", "")
 	if err != nil || u.UserName != "alice" {

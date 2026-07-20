@@ -38,6 +38,8 @@ func (s *Server) handleSES(
 		s.sesListIdentities(w, r, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSESGetSendStatistics:
 		s.sesGetSendStatistics(w, r, requestID, eventID, verified, readOnly)
+	case catalog.ActionSESSetIdentityNotificationTopic:
+		s.sesSetIdentityNotificationTopic(w, r, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeSESError(w, r, requestID, http.StatusBadRequest, "InvalidAction",
 			"This SES action is not implemented.", readOnly, eventID, verified)
@@ -59,6 +61,8 @@ func sesAction(action string) string {
 		return catalog.ActionSESListIdentities
 	case "GetSendStatistics":
 		return catalog.ActionSESGetSendStatistics
+	case "SetIdentityNotificationTopic":
+		return catalog.ActionSESSetIdentityNotificationTopic
 	default:
 		return action
 	}
@@ -203,6 +207,39 @@ func (s *Server) sesGetSendStatistics(
 	payload, _ := sessvc.GetSendStatisticsXML(stats, requestID)
 	s.writeSESOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, sesEventSource, "GetSendStatistics", readOnly)
+}
+
+func (s *Server) sesSetIdentityNotificationTopic(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	identity := strings.TrimSpace(params.Get("Identity"))
+	notifType := strings.TrimSpace(params.Get("NotificationType"))
+	topicARN := strings.TrimSpace(params.Get("SnsTopic"))
+	if identity == "" || notifType == "" {
+		s.writeSESError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
+			"Identity and NotificationType are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSESSetIdentityNotificationTopic, "*") {
+		s.writeSESError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform ses:SetIdentityNotificationTopic.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.SetSESIdentityNotificationTopic(verified.AccountID, identity, notifType, topicARN)
+	if errors.Is(err, store.ErrSESIdentityNotFound) {
+		s.writeSESError(w, r, requestID, http.StatusBadRequest, "MessageRejected",
+			"Email address is not verified.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSESError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := sessvc.SetIdentityNotificationTopicXML(requestID)
+	s.writeSESOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, sesEventSource, "SetIdentityNotificationTopic", readOnly)
 }
 
 func collectSESDestinations(params url.Values) []string {

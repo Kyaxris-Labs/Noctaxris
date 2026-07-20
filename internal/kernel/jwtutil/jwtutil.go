@@ -124,26 +124,51 @@ func ClaimString(claims map[string]any, key string) string {
 // ClaimExpired reports whether exp (unix seconds) is in the past relative to now.
 // Missing or non-numeric exp is treated as expired (fail closed).
 func ClaimExpired(claims map[string]any, now time.Time) bool {
-	v, ok := claims["exp"]
+	exp, ok := claimUnixSeconds(claims, "exp")
 	if !ok {
 		return true
 	}
-	var exp int64
+	return now.UTC().Unix() >= exp
+}
+
+// ClaimNotYetValid reports whether nbf (unix seconds) is in the future relative to now.
+// Missing nbf is treated as valid (claim optional). Non-numeric nbf fails closed.
+func ClaimNotYetValid(claims map[string]any, now time.Time) bool {
+	if claims == nil {
+		return false
+	}
+	if _, present := claims["nbf"]; !present {
+		return false
+	}
+	nbf, ok := claimUnixSeconds(claims, "nbf")
+	if !ok {
+		return true
+	}
+	return now.UTC().Unix() < nbf
+}
+
+func claimUnixSeconds(claims map[string]any, key string) (int64, bool) {
+	if claims == nil {
+		return 0, false
+	}
+	v, ok := claims[key]
+	if !ok {
+		return 0, false
+	}
 	switch t := v.(type) {
 	case float64:
-		exp = int64(t)
+		return int64(t), true
 	case json.Number:
 		n, err := t.Int64()
 		if err != nil {
-			return true
+			return 0, false
 		}
-		exp = n
+		return n, true
 	case int64:
-		exp = t
+		return t, true
 	case int:
-		exp = int64(t)
+		return int64(t), true
 	default:
-		return true
+		return 0, false
 	}
-	return now.UTC().Unix() >= exp
 }

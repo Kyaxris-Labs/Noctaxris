@@ -10,7 +10,7 @@ All 11 STS actions are routed. Federation is fail-closed without configured IdP.
 |--------|----------|
 | `GetCallerIdentity` | After SigV4 only (no IAM permission check) |
 | `AssumeRole` | Temp credentials, trust evaluation, cross-account dual eval when needed |
-| `GetSessionToken` | Lab MFA token (not RFC 6238 TOTP). Does not require `sts:GetSessionToken` after SigV4 |
+| `GetSessionToken` | Lab MFA token (not RFC 6238 TOTP). Requires long-term IAM user or root credentials (not temporary/role). Does not require `sts:GetSessionToken` after SigV4 |
 | `GetFederationToken` | Session with optional session policy intersection |
 | `AssumeRoleWithSAML` | Crypto against configured SAML IdP (no SigV4) |
 | `AssumeRoleWithWebIdentity` | Crypto against configured OIDC issuer (no SigV4) |
@@ -24,9 +24,11 @@ Session policies intersect via `EvaluateWithSession` / `EvaluateFull`. Temporary
 
 ### Authz notes
 
-Most STS control-plane actions use `EvaluateFull` (identity, boundary, session, SCP, RCP). `GetCallerIdentity` skips IAM Evaluate after successful SigV4. SAML and web-identity federation skip SigV4 and require configured IdP metadata or OIDC issuer. Without IdP, those paths deny.
+Most STS control-plane actions use `EvaluateFull` (identity, boundary, session, SCP, RCP). `GetCallerIdentity` skips IAM Evaluate after successful SigV4. SAML and web-identity federation skip SigV4 and require configured IdP metadata or OIDC issuer. Without IdP, those paths deny. `AssumeRoleWithWebIdentity` JWT verify requires `exp` (missing or expired fails closed) and rejects not-yet-valid `nbf` when present.
 
-Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus role trust).
+`GetSessionToken` must be called with long-term credentials. Sessions it mints cannot call IAM unless MFA was used to mint them, and cannot call STS except `AssumeRole` and `GetCallerIdentity`.
+
+Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus role trust). Assumed-role sessions load identity policies from the IAM role ARN (not the STS session ARN), so role attachments apply to SigV4 calls that use temporary credentials.
 
 ## How to verify / CLI smoke
 

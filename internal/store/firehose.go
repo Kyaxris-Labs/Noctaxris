@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/google/uuid"
 )
 
@@ -182,6 +183,8 @@ func (s *Store) DeleteFirehoseStream(accountID, name string) error {
 }
 
 // PutFirehoseRecord delivers one record to S3 and/or enqueues a Lambda async invoke.
+// Delivery requires RoleARN session Allow (like Scheduler) or a destination resource
+// policy Allow for firehose.amazonaws.com when RoleARN is omitted.
 func (s *Store) PutFirehoseRecord(accountID, streamName string, data []byte) (recordID string, err error) {
 	st, err := s.GetFirehoseStream(accountID, streamName)
 	if err != nil {
@@ -189,6 +192,9 @@ func (s *Store) PutFirehoseRecord(accountID, streamName string, data []byte) (re
 	}
 	if len(data) == 0 {
 		return "", fmt.Errorf("%w: Data required", ErrFirehoseBadReq)
+	}
+	if !s.firehoseDeliveryAuthorized(accountID, st) {
+		return "", fmt.Errorf("%w: delivery not authorized for destination", ErrFirehoseBadReq)
 	}
 	recordID = uuid.NewString()
 	now := time.Now().UTC().UnixMilli()
@@ -218,6 +224,37 @@ func (s *Store) PutFirehoseRecord(accountID, streamName string, data []byte) (re
 		}
 	}
 	return recordID, nil
+}
+
+func (s *Store) firehoseDeliveryAuthorized(accountID string, st FirehoseStream) bool {
+	targetARN, action, ok := firehoseDestinationTarget(st)
+	if !ok {
+		return false
+	}
+	roleARN := strings.TrimSpace(st.RoleARN)
+	if roleARN == "" {
+		return s.deliveryTargetResourcePolicyAllows(accountID, targetARN, action, authz.ServicePrincipalFirehose)
+	}
+	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, "firehose-delivery", DefaultFirehoseRegion)
+}
+
+func firehoseDestinationTarget(st FirehoseStream) (targetARN, action string, ok bool) {
+	switch st.DestType {
+	case "S3":
+		bucket := strings.TrimSpace(st.DestBucket)
+		if bucket == "" {
+			return "", "", false
+		}
+		return BucketARN(bucket), actionS3PutObject, true
+	case "Lambda":
+		arn := strings.TrimSpace(st.DestLambdaARN)
+		if arn == "" {
+			return "", "", false
+		}
+		return arn, actionLambdaInvokeFunction, true
+	default:
+		return "", "", false
+	}
 }
 
 func (s *Store) deliverFirehoseToLambda(accountID string, st FirehoseStream, recordID string, data []byte, arrivalMs int64) error {

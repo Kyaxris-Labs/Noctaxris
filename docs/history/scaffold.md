@@ -1,6 +1,6 @@
-# Phase 0 status
+# Scaffold (historical)
 
-Phase 0 is the runnable scaffold. It proves packaging, persistence, audit plumbing, and a fail-closed HTTP gate before real AWS API fidelity.
+Historical ship snapshot: the runnable scaffold. It proves packaging, persistence, audit plumbing, and a fail-closed HTTP gate before real AWS API fidelity.
 
 ## Delivered
 
@@ -16,7 +16,7 @@ Phase 0 is the runnable scaffold. It proves packaging, persistence, audit plumbi
 | Docker multi-stage + Compose secure defaults | Done |
 | Security regression tests (compose sock, unauth 403 + audit) | Done |
 
-## Explicitly not in Phase 0
+## Explicitly deferred at this ship
 
 - Full SigV4 signature verification (header and query)
 - IAM policy evaluation

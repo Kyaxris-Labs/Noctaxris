@@ -238,6 +238,10 @@ func (s *Server) cdCreateDeployment(
 			})
 		}
 	}
+	// Optional: PublishVersion when group references a Lambda function name (lite deploy hook).
+	if dg.LambdaFunctionName != "" {
+		_, _ = s.store.PublishVersion(verified.AccountID, dg.LambdaFunctionName)
+	}
 	dep, err := s.store.CreateCodeDeployDeployment(verified.AccountID, appName, dgName, description)
 	if err != nil {
 		s.writeCodeDeployError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",

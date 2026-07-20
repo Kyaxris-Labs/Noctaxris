@@ -34,6 +34,10 @@ func TestSNSFIFOTopicPublishAndSQSDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, q.QueueName, map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Subscribe(account, topic.TopicARN, "sqs", q.QueueARN); err != nil {
 		t.Fatal(err)
 	}

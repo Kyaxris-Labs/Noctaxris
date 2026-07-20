@@ -709,6 +709,23 @@ func (s *Server) dynamoPutItem(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
+	if cond, _ := params["ConditionExpression"].(string); strings.TrimSpace(cond) != "" {
+		itemPK, itemSK, keyErr := ddb.PrimaryKeyStrings(table, item)
+		if keyErr != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				keyErr.Error(), readOnly, eventID, verified)
+			return
+		}
+		key, keyErr := ddb.KeyFromCanonical(table, itemPK, itemSK)
+		if keyErr != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				keyErr.Error(), readOnly, eventID, verified)
+			return
+		}
+		if !s.dynamoCheckCondition(w, r, body, requestID, eventID, verified, readOnly, table, params, key) {
+			return
+		}
+	}
 	if err := s.dynamoStoreItem(w, r, body, requestID, eventID, verified, readOnly, table, item); err != nil {
 		return
 	}
@@ -781,6 +798,9 @@ func (s *Server) dynamoDeleteItem(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
+	if !s.dynamoCheckCondition(w, r, body, requestID, eventID, verified, readOnly, table, params, key) {
+		return
+	}
 	itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, key)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -835,6 +855,9 @@ func (s *Server) dynamoUpdateItem(
 	if !found {
 		existing = ddb.ItemMap{}
 	}
+	if !s.dynamoEvalConditionOnItem(w, r, body, requestID, eventID, verified, readOnly, params, existing) {
+		return
+	}
 	updated, err := ddb.ApplyUpdateExpression(existing, key, updateExpr, names, values)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -874,13 +897,13 @@ func (s *Server) dynamoQuery(
 		return
 	}
 	indexName, _ := params["IndexName"].(string)
-	hashAV, err := ddb.HashKeyFromQueryIndex(table, indexName, params)
+	keyCond, err := ddb.KeyConditionFromQueryIndex(table, indexName, params)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	queryPK, err := ddb.CanonicalAV(hashAV)
+	queryPK, err := ddb.CanonicalAV(keyCond.HashAV)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			err.Error(), readOnly, eventID, verified)
@@ -888,6 +911,18 @@ func (s *Server) dynamoQuery(
 	}
 	limit := dynamoLimit(params)
 	startSK := ""
+	gsiSlot := 0
+	rangeAttr := table.RangeKeyName
+	if indexName != "" {
+		gsi, slot, ok := table.GSIByName(indexName)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				fmt.Sprintf("index %q not found", indexName), readOnly, eventID, verified)
+			return
+		}
+		gsiSlot = slot
+		rangeAttr = gsi.RangeKeyName
+	}
 	if esk, ok := params["ExclusiveStartKey"]; ok && esk != nil {
 		startKey, parseErr := ddb.ParseItemMap(esk)
 		if parseErr != nil {
@@ -901,8 +936,8 @@ func (s *Server) dynamoQuery(
 				err.Error(), readOnly, eventID, verified)
 			return
 		}
-		if indexName != "" {
-			_, startSK, err = s.store.GetItemGSIKeys(table.AccountID, table.TableName, itemPK, itemSK)
+		if gsiSlot > 0 {
+			_, startSK, err = s.store.GetItemGSISlotKeys(table.AccountID, table.TableName, itemPK, itemSK, gsiSlot)
 			if errors.Is(err, store.ErrNoSuchItem) {
 				startSK = ""
 			} else if err != nil {
@@ -915,16 +950,18 @@ func (s *Server) dynamoQuery(
 		}
 	}
 	var page store.ItemPage
-	if indexName != "" {
-		_, slot, ok := table.GSIByName(indexName)
-		if !ok {
-			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				fmt.Sprintf("index %q not found", indexName), readOnly, eventID, verified)
-			return
+	fetchLimit := limit
+	if keyCond.RangeOp != "" && limit > 0 {
+		// Over-fetch so sort-key filtering can still fill Limit.
+		fetchLimit = limit * 4
+		if fetchLimit < 32 {
+			fetchLimit = 32
 		}
-		page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, slot, queryPK, limit, startSK)
+	}
+	if gsiSlot > 0 {
+		page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, gsiSlot, queryPK, fetchLimit, startSK)
 	} else {
-		page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, limit, startSK)
+		page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, fetchLimit, startSK)
 	}
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -933,6 +970,49 @@ func (s *Server) dynamoQuery(
 	}
 	items, lastKey, err := s.dynamoDecodePage(w, r, body, requestID, eventID, verified, readOnly, table, page)
 	if err != nil {
+		return
+	}
+	if keyCond.RangeOp != "" {
+		filtered := make([]ddb.ItemMap, 0, len(items))
+		for _, it := range items {
+			if ddb.ItemMatchesSortKey(it, rangeAttr, keyCond.RangeOp, keyCond.RangeValues) {
+				filtered = append(filtered, it)
+			}
+		}
+		hasMore := page.HasMore
+		if limit > 0 && len(filtered) > limit {
+			filtered = filtered[:limit]
+			hasMore = true
+		} else if limit > 0 && len(filtered) == limit && page.HasMore {
+			hasMore = true
+		} else if !page.HasMore {
+			hasMore = false
+		}
+		var filteredLast ddb.ItemMap
+		if hasMore && len(filtered) > 0 {
+			last := filtered[len(filtered)-1]
+			itemPK, itemSK, keyErr := ddb.PrimaryKeyStrings(table, last)
+			if keyErr != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+				return
+			}
+			filteredLast, keyErr = ddb.KeyFromCanonical(table, itemPK, itemSK)
+			if keyErr != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+				return
+			}
+		}
+		items = filtered
+		payload, err := ddb.QueryJSON(items, filteredLast, hasMore)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build response.", readOnly, eventID, verified)
+			return
+		}
+		s.writeDynamoOK(w, requestID, payload)
+		s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "Query", readOnly)
 		return
 	}
 	payload, err := ddb.QueryJSON(items, lastKey, page.HasMore)
@@ -1017,11 +1097,9 @@ func (s *Server) dynamoBatchGetItem(
 		return
 	}
 	responses := map[string][]ddb.ItemMap{}
+	unprocessed := map[string]any{}
 	total := 0
 	for tableName, raw := range reqItems {
-		if total >= dynamoBatchLimit {
-			break
-		}
 		entry, ok := raw.(map[string]any)
 		if !ok {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -1039,8 +1117,10 @@ func (s *Server) dynamoBatchGetItem(
 		}
 		keys, _ := entry["Keys"].([]any)
 		out := []ddb.ItemMap{}
-		for _, kraw := range keys {
+		var leftover []any
+		for i, kraw := range keys {
 			if total >= dynamoBatchLimit {
+				leftover = keys[i:]
 				break
 			}
 			total++
@@ -1059,8 +1139,18 @@ func (s *Server) dynamoBatchGetItem(
 			}
 		}
 		responses[tableName] = out
+		if len(leftover) > 0 {
+			rest := map[string]any{"Keys": leftover}
+			if proj, ok := entry["ProjectionExpression"]; ok {
+				rest["ProjectionExpression"] = proj
+			}
+			if attrs, ok := entry["AttributesToGet"]; ok {
+				rest["AttributesToGet"] = attrs
+			}
+			unprocessed[tableName] = rest
+		}
 	}
-	payload, err := ddb.BatchGetItemJSON(responses, map[string]any{})
+	payload, err := ddb.BatchGetItemJSON(responses, unprocessed)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -1085,6 +1175,7 @@ func (s *Server) dynamoBatchWriteItem(
 			"RequestItems is required.", readOnly, eventID, verified)
 		return
 	}
+	unprocessed := map[string]any{}
 	total := 0
 	for tableName, raw := range reqItems {
 		ops, ok := raw.([]any)
@@ -1102,8 +1193,10 @@ func (s *Server) dynamoBatchWriteItem(
 				"User is not authorized to perform dynamodb:BatchWriteItem.", readOnly, eventID, verified)
 			return
 		}
-		for _, opRaw := range ops {
+		var leftover []any
+		for i, opRaw := range ops {
 			if total >= dynamoBatchLimit {
+				leftover = ops[i:]
 				break
 			}
 			total++
@@ -1149,8 +1242,11 @@ func (s *Server) dynamoBatchWriteItem(
 				"PutRequest or DeleteRequest is required.", readOnly, eventID, verified)
 			return
 		}
+		if len(leftover) > 0 {
+			unprocessed[tableName] = leftover
+		}
 	}
-	payload, _ := ddb.BatchWriteItemJSON(map[string]any{})
+	payload, _ := ddb.BatchWriteItemJSON(unprocessed)
 	s.writeDynamoOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "BatchWriteItem", readOnly)
 }
@@ -1398,6 +1494,62 @@ func (s *Server) dynamoLoadItem(
 	return item, true, nil
 }
 
+// dynamoCheckCondition loads the current item for key and evaluates ConditionExpression.
+// Returns false when the handler already wrote an error response.
+func (s *Server) dynamoCheckCondition(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	table store.DynamoTable,
+	params map[string]any,
+	key ddb.ItemMap,
+) bool {
+	cond, _ := params["ConditionExpression"].(string)
+	if strings.TrimSpace(cond) == "" {
+		return true
+	}
+	existing, _, err := s.dynamoLoadItem(w, r, body, requestID, eventID, verified, readOnly, table, key)
+	if err != nil {
+		return false
+	}
+	if existing == nil {
+		existing = ddb.ItemMap{}
+	}
+	return s.dynamoEvalConditionOnItem(w, r, body, requestID, eventID, verified, readOnly, params, existing)
+}
+
+func (s *Server) dynamoEvalConditionOnItem(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+	item ddb.ItemMap,
+) bool {
+	cond, _ := params["ConditionExpression"].(string)
+	if strings.TrimSpace(cond) == "" {
+		return true
+	}
+	names, _ := params["ExpressionAttributeNames"].(map[string]any)
+	values, _ := params["ExpressionAttributeValues"].(map[string]any)
+	if err := ddb.EvaluateConditionExpression(item, cond, names, values); err != nil {
+		if errors.Is(err, ddb.ErrConditionalCheckFailed) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ConditionalCheckFailedException",
+				"The conditional request failed", readOnly, eventID, verified)
+			return false
+		}
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return false
+	}
+	return true
+}
+
 func (s *Server) dynamoDecodePage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1470,14 +1622,15 @@ func (s *Server) dynamoUnsealTableCMK(
 			"Table SSE-KMS key is not configured.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
-	keyID, err = s.store.ResolveKeyID(verified.AccountID, table.KMSKeyID)
+	// Resolve under the table owner account (XA GetItem uses caller credentials).
+	keyID, err = s.store.ResolveKeyID(table.AccountID, table.KMSKeyID)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key not found.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
 	key, err := s.store.GetKey(keyID)
-	if err != nil || key.AccountID != verified.AccountID {
+	if err != nil || key.AccountID != table.AccountID {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key not found.", readOnly, eventID, verified)
 		return nil, nil, "", err
@@ -1486,6 +1639,12 @@ func (s *Server) dynamoUnsealTableCMK(
 		err = errors.New("kms key disabled")
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Table SSE-KMS key is disabled.", readOnly, eventID, verified)
+		return nil, nil, "", err
+	}
+	if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, key) {
+		err = errors.New("kms decrypt denied")
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kms:Decrypt on the table SSE-KMS key.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
 	materials, err = s.store.UnsealAllKeyMaterials(keyID)

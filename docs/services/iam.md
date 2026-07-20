@@ -17,7 +17,7 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 | Roles | `CreateRole`, `GetRole`, `ListRoles`, `DeleteRole`, `UpdateAssumeRolePolicy` |
 | Groups | `CreateGroup`, `DeleteGroup`, `GetGroup`, `ListGroups`, `AddUserToGroup`, `RemoveUserFromGroup` |
 | Group policies | `AttachGroupPolicy`, `DetachGroupPolicy`, `ListAttachedGroupPolicies`, `PutGroupPolicy`, `GetGroupPolicy`, `DeleteGroupPolicy`, `ListGroupPolicies` |
-| Boundaries | `PutUserPermissionsBoundary`, `GetUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `GetRolePermissionsBoundary`, `DeleteRolePermissionsBoundary` |
+| Boundaries | `PutUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `DeleteRolePermissionsBoundary`. Lab-only: `GetUserPermissionsBoundary` / `GetRolePermissionsBoundary` (AWS embeds boundary on GetUser/GetRole; GetUser/GetRole boundary XML fields remain deferred) |
 | Instance profiles | `CreateInstanceProfile`, `DeleteInstanceProfile`, `GetInstanceProfile`, `AddRoleToInstanceProfile`, `RemoveRoleFromInstanceProfile`, `ListInstanceProfiles` |
 | OIDC IdP | `CreateOpenIDConnectProvider`, `DeleteOpenIDConnectProvider`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider` |
 | SAML IdP | `CreateSAMLProvider`, `DeleteSAMLProvider`, `ListSAMLProviders`, `GetSAMLProvider` |
@@ -27,7 +27,7 @@ Group-attached and inline policies feed identity documents for authorization. Ac
 
 ### Authz notes
 
-IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection.
+IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection. Assumed-role sessions resolve identity documents from the IAM role ARN (attachments and inline role policies), not the STS session ARN.
 
 Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Broader request-context population for every global key remains open. See [index.md](index.md#cross-cutting).
 
@@ -89,4 +89,5 @@ aws iam enable-mfa-device --user-name mfa-user --serial-number "$SERIAL" --endpo
 
 - Service-linked roles
 - Full IAM pagination, tagging, and API parity beyond the lab subset
+- Embed `PermissionsBoundary` / `CreateDate` on GetUser/GetRole XML (AWS-shaped); prefer that over Get*PermissionsBoundary for SDK labs
 - PassRole on non-Lambda service configure APIs when those services gain role ARNs later

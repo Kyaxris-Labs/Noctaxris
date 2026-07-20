@@ -14,14 +14,24 @@ import (
 )
 
 var (
-	ecsServiceReconcilerOnce sync.Once
-	ecsServiceReconcilerStop chan struct{}
+	ecsServiceReconcilerOnce     sync.Once
+	ecsServiceReconcilerStop     chan struct{}
+	ecsServiceReconcilerStopOnce sync.Once
 )
 
 func (s *Server) ensureECSServiceReconciler() {
 	ecsServiceReconcilerOnce.Do(func() {
 		ecsServiceReconcilerStop = make(chan struct{})
 		go s.runECSServiceReconciler(ecsServiceReconcilerStop)
+	})
+}
+
+// StopECSServiceReconciler stops the ECS DesiredCount reconciler if running.
+func (s *Server) StopECSServiceReconciler() {
+	ecsServiceReconcilerStopOnce.Do(func() {
+		if ecsServiceReconcilerStop != nil {
+			close(ecsServiceReconcilerStop)
+		}
 	})
 }
 

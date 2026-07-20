@@ -110,6 +110,52 @@ func TestComposeSharesEngineCertsVolume(t *testing.T) {
 	}
 }
 
+func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	noctaxris := serviceBlock(content, "noctaxris")
+	engine := serviceBlock(content, "noctaxris-engine")
+	if !strings.Contains(noctaxris, "noctaxris-data:/var/lib/noctaxris") {
+		t.Fatal("noctaxris must mount noctaxris-data for API state (master.key / state.db)")
+	}
+	if !strings.Contains(noctaxris, "noctaxris-compute:/var/lib/noctaxris/lambda") {
+		t.Fatal("noctaxris must mount noctaxris-compute for Lambda code shared with DinD")
+	}
+	if !strings.Contains(engine, "noctaxris-compute:/var/lib/noctaxris/lambda") {
+		t.Fatal("noctaxris-engine must mount noctaxris-compute for task code")
+	}
+	if strings.Contains(engine, "noctaxris-data:") {
+		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose master.key to privileged DinD)")
+	}
+	if !strings.Contains(content, "noctaxris-compute:") {
+		t.Fatal("compose must declare noctaxris-compute volume")
+	}
+}
+
+func TestComposeDependsOnEngineHealthy(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noctaxris := serviceBlock(string(b), "noctaxris")
+	if !strings.Contains(noctaxris, "condition: service_healthy") {
+		t.Fatal("noctaxris must depend_on noctaxris-engine with condition: service_healthy")
+	}
+	if !strings.Contains(noctaxris, "healthcheck:") {
+		t.Fatal("noctaxris must define a healthcheck")
+	}
+	if !strings.Contains(noctaxris, "/noctaxris") || !strings.Contains(noctaxris, "healthcheck") {
+		t.Fatal("noctaxris healthcheck must invoke /noctaxris healthcheck")
+	}
+	engine := serviceBlock(string(b), "noctaxris-engine")
+	if !strings.Contains(engine, "healthcheck:") {
+		t.Fatal("noctaxris-engine must define a healthcheck")
+	}
+}
+
 // hasDockerSockVolumeEntry reports a non-comment YAML volume list item that
 // mounts a path ending in docker.sock or uses a docker.sock: host bind.
 // English comments such as "# DO NOT add docker.sock" are allowed.

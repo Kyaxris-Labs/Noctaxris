@@ -187,7 +187,7 @@ func (s *Server) handleS3(
 	bucket, key, ok := parseS3Path(r.URL.Path)
 	if !ok {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotImplemented, "NotImplemented",
-			"This S3 API is not implemented in Noctaxris Phase 5.", "Unknown")
+			"This S3 API is not implemented in Noctaxris.", "Unknown")
 		return
 	}
 
@@ -249,7 +249,7 @@ func (s *Server) handleS3(
 		s.s3HeadObject(w, r, requestID, eventID, verified, readOnly, bucket, key)
 	default:
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotImplemented, "NotImplemented",
-			"This S3 API is not implemented in Noctaxris Phase 5.", eventNameForRequest(r))
+			"This S3 API is not implemented in Noctaxris.", eventNameForRequest(r))
 	}
 }
 
@@ -761,6 +761,11 @@ func (s *Server) s3CopyObject(w http.ResponseWriter, r *http.Request, requestID,
 	if !ok {
 		return
 	}
+	if srcRef.accountID != destRef.accountID {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidRequest",
+			"CopyObject is same-account only in this lab", "CopyObject")
+		return
+	}
 	srcResource := store.ObjectARN(srcBucket, srcKey)
 	destResource := store.ObjectARN(destBucket, strings.TrimPrefix(destKey, "/"))
 	if !s.authorizeS3(verified, catalog.ActionS3GetObject, srcResource, srcRef.policy, srcRef.accountID) {
@@ -1117,7 +1122,7 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		}
 		putMeta.Data = encrypted
 	}
-	obj, err := s.store.PutObject(ref.accountID, bucket, key, putMeta)
+	obj, versionID, err := s.store.PutObjectVersioned(ref.accountID, bucket, key, putMeta)
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "CompleteMultipartUpload"); mapErr {
 		return
 	}
@@ -1132,6 +1137,9 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		Bucket:   obj.Bucket,
 		Key:      obj.Key,
 		ETag:     `"` + obj.ETag + `"`,
+	}
+	if versionID != "" {
+		w.Header().Set("x-amz-version-id", versionID)
 	}
 	s.writeS3XML(w, requestID, http.StatusOK, out)
 	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "CompleteMultipartUpload", readOnly)

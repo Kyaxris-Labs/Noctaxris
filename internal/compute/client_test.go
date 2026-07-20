@@ -17,12 +17,12 @@ func TestNewClientEmptyHost(t *testing.T) {
 	}
 }
 
-func TestNewClientPlainTCP(t *testing.T) {
-	cli, err := compute.NewClient("tcp://127.0.0.1:1", "")
-	if err != nil {
-		t.Fatal(err)
+func TestNewClientRejectsWithoutTLS(t *testing.T) {
+	t.Setenv(compute.EnvDockerHostAllowlist, "tcp://127.0.0.1:1")
+	_, err := compute.NewClient("tcp://127.0.0.1:1", "")
+	if err == nil {
+		t.Fatal("expected error when TLS cert path is empty")
 	}
-	cli.Close()
 }
 
 func TestNewClientInvalidTLSCertPath(t *testing.T) {
@@ -32,6 +32,7 @@ func TestNewClientInvalidTLSCertPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Setenv(compute.EnvDockerHostAllowlist, "tcp://127.0.0.1:1")
 	_, err := compute.NewClient("tcp://127.0.0.1:1", dir)
 	if err == nil {
 		t.Fatal("expected error for invalid TLS PEMs")

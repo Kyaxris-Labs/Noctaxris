@@ -486,6 +486,52 @@ func (s *Store) findDedupMessage(accountID, queueName, dedupID string) (Message,
 	return m, true, nil
 }
 
+func (s *Store) nextSequenceNumberTx(tx *sql.Tx, accountID, queueName, messageGroupID string) (int64, error) {
+	var next int64
+	err := tx.QueryRow(
+		`SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM sqs_messages
+		 WHERE account_id = ? AND queue_name = ? AND message_group_id = ?`,
+		accountID, queueName, messageGroupID,
+	).Scan(&next)
+	if err != nil {
+		return 0, fmt.Errorf("next sequence number: %w", err)
+	}
+	return next, nil
+}
+
+func (s *Store) findDedupMessageTx(tx *sql.Tx, accountID, queueName, dedupID string) (Message, bool, error) {
+	if dedupID == "" {
+		return Message{}, false, nil
+	}
+	cutoff := time.Now().UTC().Add(-FIFODedupWindow).Format(time.RFC3339)
+	row := tx.QueryRow(
+		`SELECT message_id, body, sealed, sealed_dek, receive_count, created_at, attributes_json,
+		        message_group_id, message_deduplication_id, sequence_number
+		 FROM sqs_messages
+		 WHERE account_id = ? AND queue_name = ? AND message_deduplication_id = ? AND created_at >= ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		accountID, queueName, dedupID, cutoff,
+	)
+	var (
+		m      Message
+		sealed int
+	)
+	err := row.Scan(
+		&m.MessageID, &m.Body, &sealed, &m.SealedDEK, &m.ReceiveCount, &m.CreatedAt, &m.AttributesJSON,
+		&m.MessageGroupID, &m.MessageDeduplicationID, &m.SequenceNumber,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Message{}, false, nil
+	}
+	if err != nil {
+		return Message{}, false, fmt.Errorf("find dedup message: %w", err)
+	}
+	m.AccountID = accountID
+	m.QueueName = queueName
+	m.Sealed = sealed == 1
+	return m, true, nil
+}
+
 func (s *Store) nextSequenceNumber(accountID, queueName, messageGroupID string) (int64, error) {
 	var next int64
 	err := s.db.QueryRow(
@@ -509,6 +555,9 @@ func (s *Store) SendMessage(
 	messageAttributesJSON string,
 	opts *SendMessageOpts,
 ) (Message, error) {
+	s.sqsMu.Lock()
+	defer s.sqsMu.Unlock()
+
 	q, err := s.GetQueue(accountID, queueName)
 	if err != nil {
 		return Message{}, err
@@ -516,7 +565,8 @@ func (s *Store) SendMessage(
 
 	messageGroupID := ""
 	dedupID := ""
-	if queueIsFIFO(q.Attributes) {
+	fifo := queueIsFIFO(q.Attributes)
+	if fifo {
 		if opts == nil || strings.TrimSpace(opts.MessageGroupID) == "" {
 			return Message{}, ErrMissingMessageGroupID
 		}
@@ -527,11 +577,6 @@ func (s *Store) SendMessage(
 			dedupID = strings.TrimSpace(opts.MessageDeduplicationID)
 		} else {
 			return Message{}, ErrMissingMessageDeduplication
-		}
-		if existing, found, findErr := s.findDedupMessage(accountID, queueName, dedupID); findErr != nil {
-			return Message{}, findErr
-		} else if found {
-			return existing, nil
 		}
 	}
 
@@ -546,14 +591,6 @@ func (s *Store) SendMessage(
 		attrsJSON = "{}"
 	}
 
-	var sequenceNumber int64
-	if messageGroupID != "" {
-		sequenceNumber, err = s.nextSequenceNumber(accountID, queueName, messageGroupID)
-		if err != nil {
-			return Message{}, err
-		}
-	}
-
 	delay := queueDelaySeconds(q.Attributes)
 	if opts != nil && opts.DelaySeconds > 0 {
 		delay = opts.DelaySeconds
@@ -566,6 +603,54 @@ func (s *Store) SendMessage(
 		visibleAfter = time.Now().UTC().Add(time.Duration(delay) * time.Second).Format(time.RFC3339)
 	}
 
+	if fifo {
+		tx, err := s.beginImmediate()
+		if err != nil {
+			return Message{}, err
+		}
+		defer tx.Rollback()
+
+		if existing, found, findErr := s.findDedupMessageTx(tx, accountID, queueName, dedupID); findErr != nil {
+			return Message{}, findErr
+		} else if found {
+			return existing, nil
+		}
+		sequenceNumber, err := s.nextSequenceNumberTx(tx, accountID, queueName, messageGroupID)
+		if err != nil {
+			return Message{}, err
+		}
+		_, err = tx.Exec(
+			`INSERT INTO sqs_messages
+			 (message_id, account_id, queue_name, body, sealed, sealed_dek,
+			  receipt_handle, visible_after, receive_count, created_at, attributes_json,
+			  message_group_id, message_deduplication_id, sequence_number)
+			 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?)`,
+			messageID, accountID, queueName, body, sealedFlag, sealedDEK, visibleAfter, created, attrsJSON,
+			messageGroupID, dedupID, sequenceNumber,
+		)
+		if err != nil {
+			return Message{}, fmt.Errorf("send message: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return Message{}, fmt.Errorf("send message: %w", err)
+		}
+		return Message{
+			MessageID:              messageID,
+			AccountID:              accountID,
+			QueueName:              queueName,
+			Body:                   body,
+			Sealed:                 sealed,
+			SealedDEK:              sealedDEK,
+			VisibleAfter:           visibleAfter,
+			ReceiveCount:           0,
+			CreatedAt:              created,
+			AttributesJSON:         attrsJSON,
+			MessageGroupID:         messageGroupID,
+			MessageDeduplicationID: dedupID,
+			SequenceNumber:         sequenceNumber,
+		}, nil
+	}
+
 	_, err = s.db.Exec(
 		`INSERT INTO sqs_messages
 		 (message_id, account_id, queue_name, body, sealed, sealed_dek,
@@ -573,7 +658,7 @@ func (s *Store) SendMessage(
 		  message_group_id, message_deduplication_id, sequence_number)
 		 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?, ?, ?, ?)`,
 		messageID, accountID, queueName, body, sealedFlag, sealedDEK, visibleAfter, created, attrsJSON,
-		messageGroupID, dedupID, sequenceNumber,
+		messageGroupID, dedupID, int64(0),
 	)
 	if err != nil {
 		return Message{}, fmt.Errorf("send message: %w", err)
@@ -591,7 +676,7 @@ func (s *Store) SendMessage(
 		AttributesJSON:         attrsJSON,
 		MessageGroupID:         messageGroupID,
 		MessageDeduplicationID: dedupID,
-		SequenceNumber:         sequenceNumber,
+		SequenceNumber:         0,
 	}, nil
 }
 
@@ -606,6 +691,35 @@ func (s *Store) SendMessageBatch(accountID, queueName string, bodies [][]byte) (
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+func (s *Store) beginImmediate() (*sql.Tx, error) {
+	// Caller must hold sqsMu. Begin is deferred; sqsMu + CAS on visibility updates
+	// keep concurrent receivers from double-delivering without global _txlock.
+	return s.db.Begin()
+}
+
+func (s *Store) fifoBlockedGroupsTx(tx *sql.Tx, accountID, queueName, nowStr string) (map[string]struct{}, error) {
+	rows, err := tx.Query(
+		`SELECT DISTINCT message_group_id FROM sqs_messages
+		 WHERE account_id = ? AND queue_name = ? AND message_group_id != ''
+		   AND receipt_handle IS NOT NULL AND receipt_handle != ''
+		   AND visible_after > ?`,
+		accountID, queueName, nowStr,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("fifo blocked groups: %w", err)
+	}
+	defer rows.Close()
+	blocked := map[string]struct{}{}
+	for rows.Next() {
+		var groupID string
+		if err := rows.Scan(&groupID); err != nil {
+			return nil, fmt.Errorf("fifo blocked groups: %w", err)
+		}
+		blocked[groupID] = struct{}{}
+	}
+	return blocked, rows.Err()
 }
 
 func (s *Store) fifoBlockedGroups(accountID, queueName, nowStr string) (map[string]struct{}, error) {
@@ -632,27 +746,47 @@ func (s *Store) fifoBlockedGroups(accountID, queueName, nowStr string) (map[stri
 }
 
 func (s *Store) redriveMessage(q Queue, policy redrivePolicy, msg Message) error {
-	dlqName, err := queueNameFromARN(policy.DeadLetterTargetArn)
-	if err != nil {
-		return err
-	}
-	dlq, err := s.GetQueue(q.AccountID, dlqName)
-	if err != nil {
-		return err
-	}
-	if dlq.AccountID != q.AccountID {
-		return fmt.Errorf("dead-letter queue must be in the same account")
-	}
-	allow, hasAllow := parseRedriveAllowPolicy(dlq.Attributes)
-	if hasAllow && !allow.allowsSource(q.QueueARN) {
-		return fmt.Errorf("redrive not allowed by dead-letter queue RedriveAllowPolicy")
-	}
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("redrive message: %w", err)
 	}
 	defer tx.Rollback()
+	if err := s.redriveMessageTx(tx, q, policy, msg); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) redriveMessageTx(tx *sql.Tx, q Queue, policy redrivePolicy, msg Message) error {
+	dlqName, err := queueNameFromARN(policy.DeadLetterTargetArn)
+	if err != nil {
+		return err
+	}
+	var (
+		attrsJSON  string
+		dlqAccount string
+	)
+	err = tx.QueryRow(
+		`SELECT account_id, attributes_json FROM sqs_queues WHERE account_id = ? AND queue_name = ?`,
+		q.AccountID, dlqName,
+	).Scan(&dlqAccount, &attrsJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoSuchQueue
+	}
+	if err != nil {
+		return err
+	}
+	if dlqAccount != q.AccountID {
+		return fmt.Errorf("dead-letter queue must be in the same account")
+	}
+	dlqAttrs, err := unmarshalAttributes(attrsJSON)
+	if err != nil {
+		return err
+	}
+	allow, hasAllow := parseRedriveAllowPolicy(dlqAttrs)
+	if hasAllow && !allow.allowsSource(q.QueueARN) {
+		return fmt.Errorf("redrive not allowed by dead-letter queue RedriveAllowPolicy")
+	}
 
 	newID := uuid.NewString()
 	created := nowRFC3339()
@@ -664,7 +798,7 @@ func (s *Store) redriveMessage(q Queue, policy redrivePolicy, msg Message) error
 	dlqGroupID := msg.MessageGroupID
 	dlqDedupID := msg.MessageDeduplicationID
 	dlqSeq := int64(0)
-	if queueIsFIFO(dlq.Attributes) {
+	if queueIsFIFO(dlqAttrs) {
 		if dlqGroupID == "" {
 			dlqGroupID = "redriven"
 		}
@@ -673,7 +807,7 @@ func (s *Store) redriveMessage(q Queue, policy redrivePolicy, msg Message) error
 			dlqDedupID = hex.EncodeToString(sum[:])
 		}
 		var seqErr error
-		dlqSeq, seqErr = s.nextSequenceNumber(q.AccountID, dlqName, dlqGroupID)
+		dlqSeq, seqErr = s.nextSequenceNumberTx(tx, q.AccountID, dlqName, dlqGroupID)
 		if seqErr != nil {
 			return seqErr
 		}
@@ -693,13 +827,18 @@ func (s *Store) redriveMessage(q Queue, policy redrivePolicy, msg Message) error
 	if _, err := tx.Exec(`DELETE FROM sqs_messages WHERE message_id = ?`, msg.MessageID); err != nil {
 		return fmt.Errorf("redrive delete: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // ReceiveMessages returns up to max currently visible messages. Each returned
 // message gets a fresh receipt handle, an incremented receive count, and a
 // visibility deadline of now plus the queue VisibilityTimeout.
+// Claims run in a single write transaction with CAS on visibility so concurrent
+// receivers cannot deliver the same message twice.
 func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message, error) {
+	s.sqsMu.Lock()
+	defer s.sqsMu.Unlock()
+
 	q, err := s.GetQueue(accountID, queueName)
 	if err != nil {
 		return nil, err
@@ -713,9 +852,15 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 	fifo := queueIsFIFO(q.Attributes)
 	policy, hasRedrive := parseRedrivePolicy(q.Attributes)
 
+	tx, err := s.beginImmediate()
+	if err != nil {
+		return nil, fmt.Errorf("receive messages: %w", err)
+	}
+	defer tx.Rollback()
+
 	var blocked map[string]struct{}
 	if fifo {
-		blocked, err = s.fifoBlockedGroups(accountID, queueName, nowStr)
+		blocked, err = s.fifoBlockedGroupsTx(tx, accountID, queueName, nowStr)
 		if err != nil {
 			return nil, err
 		}
@@ -726,9 +871,9 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 		orderClause = `ORDER BY sequence_number, message_id`
 	}
 
-	rows, err := s.db.Query(
+	rows, err := tx.Query(
 		`SELECT message_id, body, sealed, sealed_dek, receive_count, created_at, attributes_json,
-		        message_group_id, message_deduplication_id, sequence_number
+		        message_group_id, message_deduplication_id, sequence_number, visible_after
 		 FROM sqs_messages
 		 WHERE account_id = ? AND queue_name = ? AND (visible_after = '' OR visible_after <= ?)
 		 `+orderClause,
@@ -737,7 +882,6 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 	if err != nil {
 		return nil, fmt.Errorf("receive messages: %w", err)
 	}
-	defer rows.Close()
 
 	var pending []Message
 	seenGroups := map[string]struct{}{}
@@ -748,8 +892,9 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 		)
 		if err := rows.Scan(
 			&m.MessageID, &m.Body, &sealed, &m.SealedDEK, &m.ReceiveCount, &m.CreatedAt, &m.AttributesJSON,
-			&m.MessageGroupID, &m.MessageDeduplicationID, &m.SequenceNumber,
+			&m.MessageGroupID, &m.MessageDeduplicationID, &m.SequenceNumber, &m.VisibleAfter,
 		); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("receive messages: %w", err)
 		}
 		m.AccountID = accountID
@@ -770,6 +915,7 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("receive messages: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -783,18 +929,19 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 	for _, m := range pending {
 		newReceiveCount := m.ReceiveCount + 1
 		if hasRedrive && newReceiveCount > policy.MaxReceiveCount {
-			if err := s.redriveMessage(q, policy, m); err != nil {
+			if err := s.redriveMessageTx(tx, q, policy, m); err != nil {
 				return nil, fmt.Errorf("redrive message: %w", err)
 			}
 			continue
 		}
 
 		handle := uuid.NewString()
-		res, err := s.db.Exec(
+		res, err := tx.Exec(
 			`UPDATE sqs_messages
 			 SET receipt_handle = ?, visible_after = ?, receive_count = receive_count + 1
-			 WHERE message_id = ?`,
-			handle, visibleAfter, m.MessageID,
+			 WHERE message_id = ?
+			   AND (visible_after = '' OR visible_after <= ?)`,
+			handle, visibleAfter, m.MessageID, nowStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("receive messages: %w", err)
@@ -807,12 +954,18 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 		m.ReceiveCount = newReceiveCount
 		out = append(out, m)
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("receive messages: %w", err)
+	}
 	return out, nil
 }
 
 // DeleteMessage removes a message by receipt handle. A stale or unknown handle
 // returns ErrNoSuchMessage.
 func (s *Store) DeleteMessage(accountID, queueName, receiptHandle string) error {
+	s.sqsMu.Lock()
+	defer s.sqsMu.Unlock()
+
 	if _, err := s.GetQueue(accountID, queueName); err != nil {
 		return err
 	}
@@ -832,6 +985,9 @@ func (s *Store) DeleteMessage(accountID, queueName, receiptHandle string) error 
 // ChangeMessageVisibility resets the visibility deadline for a received message
 // to now plus visibilityTimeoutSeconds.
 func (s *Store) ChangeMessageVisibility(accountID, queueName, receiptHandle string, visibilityTimeoutSeconds int) error {
+	s.sqsMu.Lock()
+	defer s.sqsMu.Unlock()
+
 	if _, err := s.GetQueue(accountID, queueName); err != nil {
 		return err
 	}

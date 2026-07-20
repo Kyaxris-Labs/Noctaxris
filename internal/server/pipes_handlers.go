@@ -139,6 +139,7 @@ func (s *Server) pipesCreate(
 			"Unable to create pipe.", readOnly, eventID, verified)
 		return
 	}
+	s.StartPipesTicker()
 	payload, _ := pipessvc.CreatePipeJSON(p)
 	s.writePipesOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, pipesEventSource, "CreatePipe", readOnly)

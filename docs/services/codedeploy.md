@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-CreateApplication, CreateDeploymentGroup, CreateDeployment, GetDeployment, and ListDeployments. Deployments record `Succeeded` synchronously. Optional PassRole when `serviceRoleArn` is set (`codedeploy.amazonaws.com` trust). When a deployment group references an ECS service name, CreateDeployment best-effort refreshes DesiredCount via existing ECS helpers. No host docker.sock. No EC2 agent.
+CreateApplication, CreateDeploymentGroup, CreateDeployment, GetDeployment, and ListDeployments. Deployments record `Succeeded` synchronously. Optional PassRole when `serviceRoleArn` is set (`codedeploy.amazonaws.com` trust). When a deployment group references an ECS service name, CreateDeployment best-effort refreshes DesiredCount via existing ECS helpers. When it references `lambdaFunctionName`, CreateDeployment best-effort calls Lambda `PublishVersion`. No host docker.sock. No EC2 agent.
 
 ## Implemented
 
@@ -34,4 +34,4 @@ Live Compose smoke skipped when Docker is unavailable.
 - Blue/green traffic shifting depth
 - CodeDeploy agent on EC2
 - On-premises instances
-- Lambda alias traffic shifting beyond name string storage
+- Weighted alias traffic shifting beyond PublishVersion on named function

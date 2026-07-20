@@ -45,21 +45,25 @@ type Client struct {
 // When tlsCertPath is non-empty, client TLS is enabled using ca.pem, cert.pem,
 // and key.pem under that directory (Compose: NOCTAXRIS_DOCKER_CERT_PATH=/certs/client).
 // An empty dockerHost returns an error so callers can treat compute as disabled.
+// Host must be allowlisted (default tcp://noctaxris-engine:2376); unix://, npipe://,
+// and docker.sock are always rejected. TLS client PEMs are required when host is set.
 func NewClient(dockerHost, tlsCertPath string) (*Client, error) {
 	if strings.TrimSpace(dockerHost) == "" {
 		return nil, fmt.Errorf("compute: NOCTAXRIS_DOCKER_HOST is empty (compute disabled)")
+	}
+	if err := ValidateDockerHost(dockerHost, tlsCertPath); err != nil {
+		return nil, err
 	}
 	opts := []client.Opt{
 		client.WithHost(dockerHost),
 		client.WithAPIVersionNegotiation(),
 	}
-	if p := strings.TrimSpace(tlsCertPath); p != "" {
-		opts = append(opts, client.WithTLSClientConfig(
-			filepath.Join(p, "ca.pem"),
-			filepath.Join(p, "cert.pem"),
-			filepath.Join(p, "key.pem"),
-		))
-	}
+	p := strings.TrimSpace(tlsCertPath)
+	opts = append(opts, client.WithTLSClientConfig(
+		filepath.Join(p, "ca.pem"),
+		filepath.Join(p, "cert.pem"),
+		filepath.Join(p, "key.pem"),
+	))
 	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("compute: docker client: %w", err)
@@ -126,6 +130,9 @@ func (c *Client) EnsureImage(ctx context.Context, runtime string) (string, error
 }
 
 func (c *Client) pullImage(ctx context.Context, ref string) error {
+	if err := AllowImagePull(ref); err != nil {
+		return err
+	}
 	rc, err := c.cli.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
 		return err

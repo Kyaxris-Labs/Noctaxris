@@ -81,6 +81,15 @@ func TestTranscribeJobLifecycle(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 
+	if _, err := st.CreateBucket(account, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(account, "bucket", "audio.wav", store.PutObjectMeta{
+		Data: []byte("fake-audio"), PlainSize: 10, ContentType: "audio/wav",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	job, err := st.StartTranscriptionJobStub(account, "us-east-1", "job-1", "s3://bucket/audio.wav", "en-US")
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +119,14 @@ func TestTranscribeJobLifecycle(t *testing.T) {
 	_, err = st.StartTranscriptionJobStub(account, "us-east-1", "", "s3://b/a", "en-US")
 	if !errors.Is(err, store.ErrTranscribeBadRequest) {
 		t.Fatalf("want bad request, got %v", err)
+	}
+	_, err = st.StartTranscriptionJobStub(account, "us-east-1", "job-https", "https://evil.example/a.wav", "en-US")
+	if !errors.Is(err, store.ErrTranscribeBadRequest) {
+		t.Fatalf("want bad request for non-s3 uri, got %v", err)
+	}
+	_, err = st.StartTranscriptionJobStub(account, "us-east-1", "job-missing", "s3://bucket/missing.wav", "en-US")
+	if !errors.Is(err, store.ErrTranscribeBadRequest) {
+		t.Fatalf("want bad request for missing object, got %v", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwksfetch"
 	"github.com/google/uuid"
 )
 
@@ -180,6 +181,9 @@ func (s *Store) CreateAppSyncGraphqlAPIWithConfig(accountID, region, name, authT
 		}
 		if pool.Issuer == "" {
 			pool.Issuer = AppSyncCognitoIssuer(pool.AwsRegion, pool.UserPoolID)
+		}
+		if err := jwksfetch.ValidateIssuerForConfig(pool.Issuer); err != nil {
+			return AppSyncAPI{}, fmt.Errorf("%w: userPoolConfig.issuer: %v", ErrAppSyncBadRequest, err)
 		}
 	default:
 		return AppSyncAPI{}, fmt.Errorf("%w: authenticationType must be API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS", ErrAppSyncBadRequest)

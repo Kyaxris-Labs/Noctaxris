@@ -63,7 +63,7 @@ func (s *Server) handleKMS(
 		}
 		keyID, err = s.store.ResolveKeyID(accountID, targetID)
 		if err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -76,7 +76,7 @@ func (s *Server) handleKMS(
 		if keyParam != "" {
 			keyID, err = s.store.ResolveKeyID(accountID, keyParam)
 			if err != nil {
-				s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 					"Key not found.", readOnly, eventID, verified)
 				return
 			}
@@ -95,7 +95,7 @@ func (s *Server) handleKMS(
 			}
 			keyID, err = s.store.ResolveKeyID(accountID, embedded)
 			if err != nil {
-				s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 					"Key not found.", readOnly, eventID, verified)
 				return
 			}
@@ -118,7 +118,7 @@ func (s *Server) handleKMS(
 		}
 		keyID, err = s.store.ResolveKeyID(accountID, keyParam)
 		if err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -127,7 +127,7 @@ func (s *Server) handleKMS(
 	if needsKey && keyID != "" {
 		key, err = s.store.GetKey(keyID)
 		if err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -177,7 +177,7 @@ func (s *Server) handleKMS(
 					"Key is pending deletion.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -189,7 +189,7 @@ func (s *Server) handleKMS(
 					"Key is pending deletion.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -203,7 +203,7 @@ func (s *Server) handleKMS(
 					"Key is not in a valid state for deletion.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -215,7 +215,7 @@ func (s *Server) handleKMS(
 					"Key is not pending deletion.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -232,7 +232,7 @@ func (s *Server) handleKMS(
 					"Key is not in a valid state for rotation.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -249,7 +249,7 @@ func (s *Server) handleKMS(
 					"Key is not in a valid state for rotation.", readOnly, eventID, verified)
 				return
 			}
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -257,7 +257,7 @@ func (s *Server) handleKMS(
 	case catalog.ActionKMSGetKeyRotationStatus, "GetKeyRotationStatus":
 		enabled, rotErr := s.store.GetKeyRotationEnabled(keyID)
 		if rotErr != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -265,7 +265,7 @@ func (s *Server) handleKMS(
 	case catalog.ActionKMSGetKeyPolicy, "GetKeyPolicy":
 		policy, getErr := s.store.GetKeyPolicy(keyID)
 		if getErr != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -376,7 +376,7 @@ func (s *Server) handleKMS(
 		grantID, _ := params["GrantId"].(string)
 		if err := s.store.RetireGrant(grantID, verified.Principal.ARN()); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 					"Grant not found.", readOnly, eventID, verified)
 				return
 			}
@@ -388,7 +388,7 @@ func (s *Server) handleKMS(
 	case catalog.ActionKMSRevokeGrant, "RevokeGrant":
 		grantID, _ := params["GrantId"].(string)
 		if err := s.store.RevokeGrant(grantID); err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Grant not found.", readOnly, eventID, verified)
 			return
 		}
@@ -426,7 +426,7 @@ func (s *Server) handleKMS(
 			return
 		}
 		if err := s.store.DeleteAlias(accountID, aliasParam); err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Alias not found.", readOnly, eventID, verified)
 			return
 		}
@@ -445,12 +445,12 @@ func (s *Server) handleKMS(
 		}
 		target, resolveErr := s.store.ResolveKeyID(accountID, targetParam)
 		if resolveErr != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Target key not found.", readOnly, eventID, verified)
 			return
 		}
 		if err := s.store.UpdateAlias(accountID, aliasParam, target); err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Alias not found.", readOnly, eventID, verified)
 			return
 		}
@@ -503,7 +503,7 @@ func (s *Server) handleKMSReEncrypt(
 	if strings.TrimSpace(sourceParam) != "" {
 		sourceKeyID, err = s.store.ResolveKeyID(accountID, sourceParam)
 		if err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Source key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -524,7 +524,7 @@ func (s *Server) handleKMSReEncrypt(
 		}
 		sourceKeyID, err = s.store.ResolveKeyID(accountID, embedded)
 		if err != nil {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Source key not found.", readOnly, eventID, verified)
 			return
 		}
@@ -532,20 +532,20 @@ func (s *Server) handleKMSReEncrypt(
 
 	destKeyID, err := s.store.ResolveKeyID(accountID, destParam)
 	if err != nil {
-		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 			"Destination key not found.", readOnly, eventID, verified)
 		return
 	}
 
 	sourceKey, err := s.store.GetKey(sourceKeyID)
 	if err != nil || sourceKey.AccountID != accountID {
-		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 			"Source key not found.", readOnly, eventID, verified)
 		return
 	}
 	destKey, err := s.store.GetKey(destKeyID)
 	if err != nil || destKey.AccountID != accountID {
-		s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 			"Destination key not found.", readOnly, eventID, verified)
 		return
 	}

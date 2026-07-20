@@ -195,6 +195,7 @@ func (s *Server) cfgStartRecorder(
 			"Unable to start configuration recorder.", readOnly, eventID, verified)
 		return
 	}
+	s.store.NotifyConfigDeliveryChannelsSNS(verified.AccountID, name)
 	payload, _ := configsvc.StartConfigurationRecorderXML(requestID)
 	s.writeConfigOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, configEventSource, "StartConfigurationRecorder", readOnly)

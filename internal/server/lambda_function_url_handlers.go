@@ -241,6 +241,9 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if !s.enforceAssociatedWAF(w, accountID, []string{u.FunctionARN}) {
+		return
+	}
 
 	// CORS lite for AuthType NONE (lab browser invoke). IAM URLs stay SigV4-only.
 	if u.AuthType == store.FunctionURLAuthNone {

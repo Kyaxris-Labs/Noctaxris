@@ -316,3 +316,58 @@ func TestDynamoDBSSEKMSPutGet(t *testing.T) {
 		t.Fatalf("val=%q want sse-kms-secret body=%q", got, getRec.Body.String())
 	}
 }
+
+func TestDynamoDBConditionExpressionPutItem(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustDynamoJSON(t, handler, "CreateTable", map[string]any{
+		"TableName": "cond-items",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+		},
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateTable status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	first := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "cond-items",
+		"Item": map[string]any{
+			"pk": map[string]any{"S": "a"},
+		},
+		"ConditionExpression": "attribute_not_exists(pk)",
+	}, now)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first PutItem status=%d body=%q", first.Code, first.Body.String())
+	}
+
+	second := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "cond-items",
+		"Item": map[string]any{
+			"pk": map[string]any{"S": "a"},
+		},
+		"ConditionExpression": "attribute_not_exists(pk)",
+	}, now)
+	if second.Code != http.StatusBadRequest || !strings.Contains(second.Body.String(), "ConditionalCheckFailedException") {
+		t.Fatalf("second PutItem want ConditionalCheckFailed, status=%d body=%q", second.Code, second.Body.String())
+	}
+
+	unsupported := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "cond-items",
+		"Item": map[string]any{
+			"pk": map[string]any{"S": "b"},
+		},
+		"ConditionExpression": "size(tags) > :n",
+		"ExpressionAttributeValues": map[string]any{
+			":n": map[string]any{"N": "1"},
+		},
+	}, now)
+	if unsupported.Code != http.StatusBadRequest || !strings.Contains(unsupported.Body.String(), "ValidationException") {
+		t.Fatalf("unsupported want ValidationException, status=%d body=%q", unsupported.Code, unsupported.Body.String())
+	}
+}

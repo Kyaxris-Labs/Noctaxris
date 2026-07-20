@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Web ACL and rule group shape lite, AssociateWebACL with a lab resource ARN string, and a cheap Evaluate helper for labeled allow/block rules. Identity authz. No real edge PoP.
+Web ACL and rule group shape lite, AssociateWebACL with a lab resource ARN string, invoke-path enforcement for associated ACLs (default-action gate), and a cheap Evaluate helper for labeled allow/block rules. Identity authz. No real edge PoP / full statement catalog.
 
 ## Implemented
 
@@ -10,12 +10,13 @@ Web ACL and rule group shape lite, AssociateWebACL with a lab resource ARN strin
 |------|---------|
 | Web ACL | `CreateWebACL`, `UpdateWebACL`, `GetWebACL`, `ListWebACLs` |
 | Rule group | `CreateRuleGroup` |
-| Association | `AssociateWebACL` (HTTP API / execute-api / ALB / AppSync / Cognito ARNs, fail closed on unknown) |
+| Association | `AssociateWebACL` (HTTP API / execute-api / ALB / AppSync / Cognito / Lambda function ARNs, fail closed on unknown) |
+| Invoke gate | Associated Web ACL DefaultAction on HTTP API, AppSync GraphQL, and Function URL invoke |
 | Lab helper | `Evaluate` (label match Allow/Block) |
 
 Rules use a `Label` string match. DefaultAction is Allow or Block.
 
-`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]` and `arn:aws:execute-api:...`. Unknown resource ARN services fail closed.
+`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]`, `arn:aws:execute-api:...`, AppSync / Cognito ARNs, and Lambda function ARNs for Function URL labs. Unknown resource ARN services fail closed.
 
 ### Authz notes
 
@@ -44,7 +45,9 @@ aws wafv2 associate-web-acl \
   --endpoint-url "$EP"
 ```
 
+A Block default action on that association returns HTTP 403 on `/http-api/...` invoke.
+
 ## Not yet / deferred
 
-- Real edge PoP enforcement of associated Web ACLs
-- Bot Control, CAPTCHA, full statement catalog
+- Real edge PoP / CAPTCHA / Bot Control beyond DefaultAction + label rules
+- Full WAF statement catalog

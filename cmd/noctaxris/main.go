@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
@@ -20,6 +26,10 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "healthcheck" {
+		return runHealthcheck()
+	}
+
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		return err
@@ -63,8 +73,34 @@ func run(args []string) error {
 	}
 	defer aud.Close()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	srv := server.New(cfg, st, aud)
-	return srv.ListenAndServe()
+	return srv.ListenAndServeContext(ctx)
+}
+
+// runHealthcheck probes readiness for Compose/distroless HEALTHCHECK (no curl).
+func runHealthcheck() error {
+	addr := strings.TrimSpace(os.Getenv("NOCTAXRIS_LISTEN"))
+	if addr == "" {
+		addr = "127.0.0.1:4566"
+	}
+	// Container listens on 0.0.0.0; probe loopback.
+	if strings.HasPrefix(addr, "0.0.0.0:") {
+		addr = "127.0.0.1:" + strings.TrimPrefix(addr, "0.0.0.0:")
+	}
+	url := "http://" + addr + "/_noctaxris/ready"
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthcheck: status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func seedIdPFromConfig(st *store.Store, cfg config.Config) error {

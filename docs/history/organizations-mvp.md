@@ -1,6 +1,6 @@
-# Phase 2 status
+# Organizations MVP (historical)
 
-Phase 2 adds Organizations MVP, cross-account dual evaluation, and a minimal `sts:AssumeRole` path.
+Historical ship snapshot: Organizations MVP, cross-account dual evaluation, and a minimal `sts:AssumeRole` path.
 
 ## Delivered
 
@@ -18,7 +18,7 @@ Phase 2 adds Organizations MVP, cross-account dual evaluation, and a minimal `st
 
 See [../services/organizations.md](../services/organizations.md) for CreateAccount and [../services/sts.md](../services/sts.md) for AssumeRole into `OrganizationAccountAccessRole`.
 
-## Explicitly not in Phase 2
+## Explicitly deferred at this ship
 
 - OUs, SCPs, invites, ListAccounts
 - Full STS surface beyond AssumeRole + GetCallerIdentity

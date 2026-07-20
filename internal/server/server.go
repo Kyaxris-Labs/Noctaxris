@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,10 +26,12 @@ import (
 const (
 	eventVersion    = "1.11"
 	healthPath      = "/_noctaxris/health"
+	readyPath       = "/_noctaxris/ready"
 	requestIDHeader = "x-amz-request-id"
 	maxBodyBytes    = 1 << 20  // 1 MiB
 	maxS3BodyBytes  = 16 << 20 // 16 MiB lab PutObject
 	sigv4Skew       = 15 * time.Minute
+	shutdownTimeout = 10 * time.Second
 )
 
 type Server struct {
@@ -50,6 +53,10 @@ type Server struct {
 	// In-process EventBridge Scheduler ticker (ADR-0007).
 	schedulerTickerOnce   sync.Once
 	schedulerTickerCancel context.CancelFunc
+
+	// In-process EventBridge Pipes poller.
+	pipesTickerOnce   sync.Once
+	pipesTickerCancel context.CancelFunc
 }
 
 type awsError struct {
@@ -67,12 +74,17 @@ type awsErrorResponse struct {
 }
 
 func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
-	return &Server{
+	s := &Server{
 		cfg:   cfg,
 		store: st,
 		audit: aud,
 		now:   time.Now,
 	}
+	// CS-016: any EnqueueAsyncInvoke (SNS/EB/Scheduler/Firehose/Invoke Event) starts the worker.
+	st.SetOnAsyncEnqueue(func(job store.LambdaAsyncInvocation) {
+		s.startAsyncInvoke(job, job.AccountID, job.FunctionName, "")
+	})
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -80,20 +92,63 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) ListenAndServe() error {
+	return s.ListenAndServeContext(context.Background())
+}
+
+// ListenAndServeContext serves until ctx is cancelled, then drains tickers and
+// shuts down the HTTP server with a timeout.
+func (s *Server) ListenAndServeContext(ctx context.Context) error {
 	srv := &http.Server{
-		Addr:    s.cfg.ListenAddr,
-		Handler: s.Handler(),
+		Addr:              s.cfg.ListenAddr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
-	if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
-		return srv.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	errCh := make(chan error, 1)
+	go func() {
+		var err error
+		if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
+			err = srv.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		s.StopBackgroundWorkers()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		err := <-errCh
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
 	}
-	return srv.ListenAndServe()
+}
+
+// StopBackgroundWorkers stops in-process Scheduler, ESM, Pipes, and ECS reconciler tickers.
+func (s *Server) StopBackgroundWorkers() {
+	s.StopSchedulerTicker()
+	s.StopESMPoller()
+	s.StopPipesTicker()
+	s.StopECSServiceReconciler()
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == healthPath {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == readyPath {
+		s.handleReady(w, r)
 		return
 	}
 
@@ -223,6 +278,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.EqualFold(verified.Service, "pipes") || strings.HasPrefix(action, "pipes:") {
+		s.StartPipesTicker()
 		s.handlePipes(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
@@ -887,7 +943,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
-			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
+			"This API action is not implemented in Noctaxris.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 	}
 }
@@ -1748,6 +1804,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionSESListIdentities
 	case "GetSendStatistics":
 		return catalog.ActionSESGetSendStatistics
+	case "SetIdentityNotificationTopic":
+		return catalog.ActionSESSetIdentityNotificationTopic
 	case "CreateApplication":
 		return catalog.ActionAppConfigCreateApplication
 	case "CreateEnvironment":

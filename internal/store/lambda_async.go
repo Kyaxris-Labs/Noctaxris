@@ -85,16 +85,36 @@ func (s *Store) EnqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON
 	if err != nil {
 		return LambdaAsyncInvocation{}, fmt.Errorf("enqueue async invoke: %w", err)
 	}
-	return LambdaAsyncInvocation{
+	job := LambdaAsyncInvocation{
 		InvocationID: invocationID,
-		AccountID:      accountID,
-		FunctionName:   functionName,
-		Qualifier:      qualifier,
-		EventJSON:      eventJSON,
-		Attempts:       0,
-		Status:         lambdaAsyncStatusPending,
-		CreatedAt:      created,
-	}, nil
+		AccountID:    accountID,
+		FunctionName: functionName,
+		Qualifier:    qualifier,
+		EventJSON:    eventJSON,
+		Attempts:     0,
+		Status:       lambdaAsyncStatusPending,
+		CreatedAt:    created,
+	}
+	s.notifyAsyncEnqueue(job)
+	return job, nil
+}
+
+// SetOnAsyncEnqueue registers a hook invoked after a successful EnqueueAsyncInvoke.
+// Server wires this to startAsyncInvoke so SNS/EventBridge/Scheduler/Firehose
+// deliveries actually run the function (CS-016).
+func (s *Store) SetOnAsyncEnqueue(fn func(job LambdaAsyncInvocation)) {
+	s.asyncEnqueueMu.Lock()
+	defer s.asyncEnqueueMu.Unlock()
+	s.onAsyncEnqueue = fn
+}
+
+func (s *Store) notifyAsyncEnqueue(job LambdaAsyncInvocation) {
+	s.asyncEnqueueMu.Lock()
+	fn := s.onAsyncEnqueue
+	s.asyncEnqueueMu.Unlock()
+	if fn != nil {
+		fn(job)
+	}
 }
 
 // GetAsyncInvocation returns a queued async invoke job for tests and diagnostics.

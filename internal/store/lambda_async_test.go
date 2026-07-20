@@ -135,6 +135,10 @@ func TestAsyncInvokeDestinationOnFailureSNS(t *testing.T) {
 	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "lambda-fail-q", nil); err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, "lambda-fail-q", map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Subscribe(account, "lambda-fail-topic", "sqs", store.QueueARN("us-east-1", account, "lambda-fail-q")); err != nil {
 		t.Fatal(err)
 	}

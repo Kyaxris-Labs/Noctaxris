@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwksfetch"
 	"github.com/google/uuid"
 )
 
@@ -347,6 +348,9 @@ func (s *Store) CreateAPIGatewayAuthorizer(accountID, apiID, name, authorizerTyp
 	}
 	if issuer == "" {
 		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer required", ErrAPIGatewayBadRequest)
+	}
+	if err := jwksfetch.ValidateIssuerForConfig(issuer); err != nil {
+		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer: %v", ErrAPIGatewayBadRequest, err)
 	}
 	if len(audience) == 0 {
 		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Audience required", ErrAPIGatewayBadRequest)

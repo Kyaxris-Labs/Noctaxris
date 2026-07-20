@@ -1,6 +1,6 @@
-# Phase 4 status
+# Lab-complete KMS (historical)
 
-Phase 4 delivers a lab-complete KMS core: customer-managed keys with sealed material, key-policy explicit-allow evaluation, Encrypt/Decrypt/GenerateDataKey, grants, and aliases.
+Historical ship snapshot: a lab-complete KMS core with customer-managed keys, sealed material, key-policy explicit-allow evaluation, Encrypt/Decrypt/GenerateDataKey, grants, and aliases.
 
 ## Delivered
 
@@ -23,6 +23,6 @@ KMS key policies are special. Identity Allow alone never authorizes a key-scoped
 
 See [../services/kms.md](../services/kms.md) for CreateKey, Encrypt/Decrypt, GenerateDataKey, and CreateAlias.
 
-## Explicitly not in Phase 4
+## Explicitly deferred at this ship
 
-Current deferred depth: [../services/kms.md](../services/kms.md). At Phase 4 ship time there was no S3/SSE, DynamoDB, SQS, Lambda, or full KMS SAR parity.
+Current deferred depth: [../services/kms.md](../services/kms.md). At this ship there was no S3/SSE, DynamoDB, SQS, Lambda, or full KMS SAR parity.

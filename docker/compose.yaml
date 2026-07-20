@@ -18,7 +18,10 @@ services:
       # host.docker.internal (Docker Desktop). Override for Linux or custom wiring.
       NOCTAXRIS_LAMBDA_ENDPOINT_URL: "${NOCTAXRIS_LAMBDA_ENDPOINT_URL:-http://host.docker.internal:4566}"
     volumes:
+      # API-only sealed state (master.key, state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris
+      # Lambda zip/code shared with nested engine (no master.key on privileged DinD).
+      - noctaxris-compute:/var/lib/noctaxris/lambda
       - noctaxris-engine-certs:/certs:ro
     # DO NOT add docker.sock
     read_only: true
@@ -26,7 +29,13 @@ services:
       - /tmp
     depends_on:
       noctaxris-engine:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/noctaxris", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
   noctaxris-engine:
     image: docker:27-dind
     privileged: true
@@ -35,11 +44,18 @@ services:
       DOCKER_TLS_SAN: DNS:noctaxris-engine
     # DOCKER_TLS_CERTDIR defaults to /certs; engine listens on 2376 on the Compose network.
     volumes:
-      - noctaxris-data:/var/lib/noctaxris
+      - noctaxris-compute:/var/lib/noctaxris/lambda
       - noctaxris-engine-certs:/certs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Engine API stays on the Compose network only; do not add host mappings for 2375/2376.
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
 volumes:
   noctaxris-data:
+  noctaxris-compute:
   noctaxris-engine-certs:

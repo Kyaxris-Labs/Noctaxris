@@ -94,7 +94,7 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 
 	if mat.queryAuth && mat.expires != "" {
 		secs, err := strconv.ParseInt(mat.expires, 10, 64)
-		if err != nil || secs < 0 {
+		if err != nil || secs < 0 || secs > 604800 {
 			return nil, newError(CodeSignatureDoesNotMatch, "invalid X-Amz-Expires")
 		}
 		if now.UTC().After(reqTime.Add(time.Duration(secs) * time.Second)) {
@@ -127,7 +127,10 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 		}
 	}
 
-	payloadHash := payloadHash(r, body, mat)
+	payloadHash, err := resolvePayloadHash(r, body, mat)
+	if err != nil {
+		return nil, err
+	}
 	canonicalReq := buildCanonicalRequest(r, mat, payloadHash)
 	stringToSign := buildStringToSign(mat.amzDate, credDate, mat.region, mat.service, canonicalReq)
 	signingKey := deriveSigningKey(cred.Secret, credDate, mat.region, mat.service)
@@ -296,23 +299,50 @@ func parseAmzDate(s string) (time.Time, error) {
 	return time.Parse("20060102T150405Z", s)
 }
 
-func payloadHash(r *http.Request, body []byte, mat *authMaterial) string {
-	h := r.Header.Get("X-Amz-Content-Sha256")
-	if h == "" {
-		h = r.Header.Get("x-amz-content-sha256")
-	}
-	if h != "" {
-		return h
-	}
-	// AWS S3 presigned URLs sign with UNSIGNED-PAYLOAD when the header is omitted.
-	if mat != nil && mat.queryAuth && strings.EqualFold(mat.service, "s3") {
-		return "UNSIGNED-PAYLOAD"
-	}
+const unsignedPayload = "UNSIGNED-PAYLOAD"
+
+func bodySHA256Hex(body []byte) string {
 	if len(body) == 0 {
 		return emptyPayload
 	}
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
+}
+
+func claimedContentSHA256(r *http.Request) string {
+	h := r.Header.Get("X-Amz-Content-Sha256")
+	if h == "" {
+		h = r.Header.Get("x-amz-content-sha256")
+	}
+	return strings.TrimSpace(h)
+}
+
+func allowUnsignedPayload(mat *authMaterial) bool {
+	return mat != nil && mat.queryAuth && strings.EqualFold(mat.service, "s3")
+}
+
+// resolvePayloadHash binds X-Amz-Content-Sha256 to the request body except for
+// S3 query-auth UNSIGNED-PAYLOAD (presigned URLs). Mismatch fails closed.
+func resolvePayloadHash(r *http.Request, body []byte, mat *authMaterial) (string, error) {
+	actual := bodySHA256Hex(body)
+	claimed := claimedContentSHA256(r)
+	if claimed == "" {
+		// AWS S3 presigned URLs sign with UNSIGNED-PAYLOAD when the header is omitted.
+		if allowUnsignedPayload(mat) {
+			return unsignedPayload, nil
+		}
+		return actual, nil
+	}
+	if strings.EqualFold(claimed, unsignedPayload) {
+		if !allowUnsignedPayload(mat) {
+			return "", newError(CodeSignatureDoesNotMatch, "UNSIGNED-PAYLOAD is only allowed for S3 query authentication")
+		}
+		return unsignedPayload, nil
+	}
+	if !strings.EqualFold(claimed, actual) {
+		return "", newError(CodeSignatureDoesNotMatch, "X-Amz-Content-Sha256 does not match the request body")
+	}
+	return claimed, nil
 }
 
 func buildCanonicalRequest(r *http.Request, mat *authMaterial, payloadHash string) string {

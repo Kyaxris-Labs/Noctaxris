@@ -11,8 +11,8 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Tables | `CreateTable`, `DescribeTable`, `DeleteTable`, `ListTables`, `UpdateTable` |
 | GSI | Up to two lab global secondary indexes per table (`CreateTable` or `UpdateTable` `Create` GSI updates) |
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
-| Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`) |
-| Batch | `BatchGetItem`, `BatchWriteItem` |
+| Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`) |
+| Batch | `BatchGetItem`, `BatchWriteItem` (lab soft cap 25; overflow returned in `UnprocessedKeys` / `UnprocessedItems`) |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`) |
 | Encryption | Table SSE with AWS-owned or customer-managed KMS |
@@ -23,7 +23,7 @@ Table and item metadata live in SQLite. Item ciphertext uses table SSE. Expired 
 
 DynamoDB uses `EvaluateDynamoDB` via `authorizeDataplaneOR` with the table owner account from the table ARN. Same-account access: allow if identity **or** table resource policy Allows. Cross-account access: allow only when identity **and** table resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. A resource policy alone can grant access in the same account (unlike KMS). Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs.
+Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs. SSE-KMS tables resolve the CMK under the table owner account and require `kms:Decrypt` via EvaluateKMS (identity plus key policy), matching S3 SSE-KMS.
 
 ## How to verify / CLI smoke
 
@@ -85,4 +85,4 @@ aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
 ## Not yet / deferred
 
 - Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
-- Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views, Lambda ESM for streams)
+- Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views; DynamoDB Streams Lambda ESM ships in [lambda.md](lambda.md))

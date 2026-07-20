@@ -17,7 +17,7 @@ type KMSRequest struct {
 // EvaluateKMS applies lab KMS authorization:
 //  1. Explicit Deny in identity or key policy → Deny
 //  2. Catalog-unknown condition key → Deny
-//  3. If GrantSatisfied → Allow (still Deny if step 1/2 hit)
+//  3. If GrantSatisfied → key policy must still Allow (grant is not a key-policy bypass)
 //  4. Else key policy must Allow (no root short-circuit on key policy)
 //  5. AND identity must Allow (root short-circuit OK via Evaluate)
 //  6. Else Deny
@@ -41,6 +41,9 @@ func EvaluateKMS(req KMSRequest) Decision {
 		return Deny
 	}
 	if req.GrantSatisfied {
+		if !keyAllow {
+			return Deny
+		}
 		return Allow
 	}
 	if !keyAllow {

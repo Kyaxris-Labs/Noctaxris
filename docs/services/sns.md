@@ -9,12 +9,12 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 | Area | Actions |
 |------|---------|
 | Topics | `CreateTopic`, `DeleteTopic`, `ListTopics`, `GetTopicAttributes`, `SetTopicAttributes` |
-| FIFO | Topic names ending in `.fifo` (or `FifoTopic=true`). Publish requires `MessageGroupId`. Dedup via `MessageDeduplicationId` or `ContentBasedDeduplication`. SQS FIFO subscriptions receive group and dedup ids |
+| FIFO | Topic names ending in `.fifo` (or `FifoTopic=true`). Publish requires `MessageGroupId`. Dedup via `MessageDeduplicationId` or `ContentBasedDeduplication` within a 5-minute window (same as SQS FIFO). SQS FIFO subscriptions receive group and dedup ids |
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
 | Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
 | Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` to loopback only (lab catcher at `/_noctaxris/sns-http-catcher`). Non-allowlisted URLs are rejected fail-closed |
-| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
+| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
 Topic and subscription metadata live in SQLite.
@@ -22,6 +22,8 @@ Topic and subscription metadata live in SQLite.
 ### Authz notes
 
 SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account from the topic ARN. Same-account access: allow if identity **or** topic policy Allows. Cross-account access: allow only when identity **and** topic policy both Allow. Empty topic policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
+
+Subscription delivery to SQS or Lambda also requires the destination resource policy to Allow `sns.amazonaws.com` (EventBridge-style service principal check). Missing policy skips that subscription (logged).
 
 Cross-account `Publish` uses `TopicArn` of the owner account. Lab subscription delivery still requires same-account SQS or Lambda endpoints unless already supported.
 
@@ -37,6 +39,12 @@ QUEUE_ARN=$(aws sqs get-queue-attributes \
   --attribute-names QueueArn \
   --endpoint-url "$EP" \
   --query Attributes.QueueArn --output text)
+
+SNS_Q_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}'
+aws sqs set-queue-attributes \
+  --queue-url "$QUEUE_URL" \
+  --attributes Policy="$SNS_Q_POLICY" \
+  --endpoint-url "$EP"
 
 aws sns subscribe \
   --topic-arn "$TOPIC_ARN" \

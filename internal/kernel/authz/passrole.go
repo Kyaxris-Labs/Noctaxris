@@ -29,6 +29,10 @@ const ServicePrincipalFirehose = "firehose.amazonaws.com"
 // ServicePrincipalPipes is the EventBridge Pipes service principal used in role trust.
 const ServicePrincipalPipes = "pipes.amazonaws.com"
 
+// ServicePrincipalSNS is the Amazon SNS service principal used for subscription delivery
+// to SQS queues and Lambda functions (resource-policy checks).
+const ServicePrincipalSNS = "sns.amazonaws.com"
+
 // ServicePrincipalConfig is the AWS Config service principal used in role trust.
 const ServicePrincipalConfig = "config.amazonaws.com"
 
@@ -53,7 +57,7 @@ const ServicePrincipalAPIGateway = "apigateway.amazonaws.com"
 const ServicePrincipalCognitoIDP = "cognito-idp.amazonaws.com"
 
 // ServicePrincipalRDS is reserved for future RDS configure APIs that accept RoleArn
-// (for example MonitoringRoleArn). v7 lab create paths do not expose RoleArn yet.
+// (for example MonitoringRoleArn). Lab create paths do not expose RoleArn yet.
 const ServicePrincipalRDS = "rds.amazonaws.com"
 
 const actionPassRole = "iam:PassRole"

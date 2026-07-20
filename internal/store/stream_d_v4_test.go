@@ -85,6 +85,10 @@ func TestFirehosePutToS3(t *testing.T) {
 	if _, err := st.CreateBucket(account, "fh-dest"); err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"firehose.amazonaws.com"},"Action":"s3:PutObject","Resource":"*"}]}`
+	if err := st.PutBucketPolicy(account, "fh-dest", policy); err != nil {
+		t.Fatal(err)
+	}
 	_, err := st.CreateFirehoseStream(account, "us-east-1", "lab-stream", "", "S3", "fh-dest", "out/", "")
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +117,9 @@ func TestFirehosePutToLambdaEnqueuesInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.AddFunctionPermission(account, "fh-handler", "fh-allow", "lambda:InvokeFunction", "firehose.amazonaws.com", ""); err != nil {
+		t.Fatal(err)
+	}
 	_, err = st.CreateFirehoseStream(account, "us-east-1", "lab-lam", "", "Lambda", "", "", fn.FunctionARN)
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +137,20 @@ func TestFirehosePutToLambdaEnqueuesInvoke(t *testing.T) {
 	}
 	if !strings.Contains(job.EventJSON, `"recordId"`) {
 		t.Fatalf("EventJSON=%q want recordId", job.EventJSON)
+	}
+}
+
+func TestFirehosePutDeniedWithoutRoleOrPolicy(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "fh-deny"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateFirehoseStream(account, "us-east-1", "deny-stream", "", "S3", "fh-deny", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutFirehoseRecord(account, "deny-stream", []byte("hello")); err == nil {
+		t.Fatal("expected Put denied without RoleARN or bucket policy")
 	}
 }
 

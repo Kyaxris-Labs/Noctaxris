@@ -1,6 +1,8 @@
-# Architecture (Phase 7)
+# Architecture
 
 One Go binary runs in the API container. There is no sidecar API gateway and no host Docker socket mount. Compose also starts `noctaxris-engine` (Docker-in-Docker) on the Compose network so Lambda Invoke can run nested function containers.
+
+Early delivery history lives under [history/](history/index.md) (history only, not a live roadmap).
 
 ## Overview
 
@@ -59,7 +61,8 @@ Noctaxris/
 
 ```text
 HTTP request
-  ├─ GET /_noctaxris/health → 200 ok
+  ├─ GET /_noctaxris/health → 200 ok (liveness)
+  ├─ GET /_noctaxris/ready → 200 ready / 503 (SQLite ping; engine TLS dial when DockerHost set)
   ├─ GET /cognito-idp/{region}/{pool}/.well-known/jwks.json → JWKS (no SigV4)
   ├─ /http-api/{apiId}/{stage}/{path} → Gateway invoke (NONE / JWT / IAM)
   ├─ /lambda-url/{account}/{function} → Function URL invoke
@@ -77,11 +80,11 @@ HTTP request
        └─ unknown → 501 NotImplemented
 ```
 
-Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
+Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume (API-only `noctaxris-data` holds `master.key` / `state.db` and is not mounted on the privileged engine). Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
 
 ## Compute path
 
-Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD.
+Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
 
 Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` selects a Firecracker-class path on Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. Live guest zip/Image Invoke and ECS RunTask still require kernel/rootfs assets on a Linux+KVM host. CodeBuild and Batch stay on the DinD path.
 
@@ -109,15 +112,15 @@ When DinD is unset, create paths keep control-plane rows and nested start is a n
 ## In-process delivery workers
 
 - EventBridge Scheduler advances due schedules inside the API process and delivers via existing Lambda async enqueue, SQS SendMessage, and SNS Publish helpers.
-- Lambda SQS event source mappings poll with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
-- EventBridge Pipes reuse the same poll and invoke/send helpers for SQS and DynamoDB Streams sources.
+- Lambda SQS event source mappings poll continuously with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
+- EventBridge Pipes expose the same poll helpers for SQS and DynamoDB Streams sources, but delivery is **manual** via `PollPipeOnce` (tests and operators). There is no continuous Pipes ticker yet.
 - SNS HTTP(S) subscriptions deliver only to allowlisted loopback endpoints (lab catcher). Non-allowlisted URLs fail closed.
 
 ## Edge identity
 
 - Cognito issues RS256 ID and access tokens and serves JWKS on the same `:4566` listener. Issuer shape: `http://127.0.0.1:4566/cognito-idp/<region>/<userPoolId>`.
-- API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS. IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
-- AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM.
+- API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS (in-process; no remote JWKS by default). IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
+- AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM. Custom issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` and a public host allowlist.
 - Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust.
 - CloudFront and ELBv2 are config-shaped stubs (no real PoP, no EC2 targets). Gateway must not open HTTP_PROXY to arbitrary URLs.
 
@@ -137,7 +140,7 @@ When DinD is unset, create paths keep control-plane rows and nested start is a n
 - Env-injected keys are management account root
 - IAM user secrets and KMS CMK material sealed at rest
 - S3 SSE-S3 DEKs sealed with the data-root master key
-- SSE-KMS uses Phase 4 GenerateDataKey / Decrypt under the caller
+- SSE-KMS uses lab KMS GenerateDataKey / Decrypt under the caller
 - DynamoDB item ciphertext uses table SSE (AWS-owned or customer-managed KMS)
 - SQS message bodies use SSE-SQS or SSE-KMS when queue attributes request encryption
 - Lambda Invoke injects temporary AWS_* credentials for the function execution role

@@ -269,6 +269,10 @@ func TestPublishDeliversToSubscribedSQSQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, "sns-target", map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Subscribe(account, "alerts", "sqs", queue.QueueARN); err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +307,30 @@ func TestPublishDeliversToSubscribedSQSQueue(t *testing.T) {
 	}
 }
 
+func TestPublishSkipsSQSWithoutQueuePolicy(t *testing.T) {
+	st := openSNSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTopic(account, "us-east-1", "alerts", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "sns-deny", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Subscribe(account, "alerts", "sqs", "arn:aws:sqs:us-east-1:"+account+":sns-deny"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Publish(account, "alerts", "no-policy", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ReceiveMessages(account, "sns-deny", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no delivery without queue policy, got %d", len(msgs))
+	}
+}
+
 func TestPublishDeliversToSubscribedLambda(t *testing.T) {
 	st := openSNSStore(t)
 	account := "000000000001"
@@ -322,6 +350,9 @@ func TestPublishDeliversToSubscribedLambda(t *testing.T) {
 		Zip:          zip,
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddFunctionPermission(account, "sns-handler", "sns-allow", "lambda:InvokeFunction", "sns.amazonaws.com", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Subscribe(account, "alerts", "lambda", fn.FunctionARN); err != nil {

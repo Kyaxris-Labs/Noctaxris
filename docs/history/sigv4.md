@@ -1,6 +1,6 @@
-# Phase 1 status
+# SigV4 and GetCallerIdentity (historical)
 
-Phase 1 adds SigV4 verification and the first real STS API: `GetCallerIdentity`.
+Historical ship snapshot: SigV4 verification and the first real STS API, `GetCallerIdentity`.
 
 ## Delivered
 
@@ -25,7 +25,7 @@ Phase 1 adds SigV4 verification and the first real STS API: `GetCallerIdentity`.
 
 See [../services/sts.md](../services/sts.md) (`sts get-caller-identity`).
 
-## Explicitly not in Phase 1
+## Explicitly deferred at this ship
 
 - IAM user/role control-plane APIs
 - Remaining STS actions

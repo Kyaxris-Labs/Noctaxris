@@ -5,6 +5,7 @@
 ```bash
 docker compose -f docker/compose.yaml --env-file docker/.env up --build
 curl http://127.0.0.1:4566/_noctaxris/health
+curl http://127.0.0.1:4566/_noctaxris/ready
 # ok
 ```
 
@@ -32,6 +33,7 @@ cp docker/.env.example docker/.env
 docker compose -f docker/compose.yaml --env-file docker/.env up --build
 
 curl http://127.0.0.1:4566/_noctaxris/health
+curl http://127.0.0.1:4566/_noctaxris/ready
 
 export AWS_ACCESS_KEY_ID=AKIAROOTEXAMPLE01
 export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
@@ -118,13 +120,13 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>SNS</td>
-      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe, List*, Get/SetTopicAttributes, Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery plus loopback HTTP(S) catcher (deny-by-default egress).</td>
+      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe, List*, Get/SetTopicAttributes, Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
       <td>SMS, email, open-internet webhooks, filter policy depth, foreign-account subscription delivery, exact AWS retry timing.</td>
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutEvents with lab pattern match (source, detail-type, simple detail keys). Targets SQS, Lambda, SNS. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. RoleArn delivery mints a role session and requires role identity Allow. Without RoleArn, target resource policy must Allow events.amazonaws.com or account root.</td>
-      <td>Archive and replay, legacy scheduled rules, CloudWatch Logs and Kinesis targets, InputPath and InputTransformer, full pattern language, bus policy dual-eval depth.</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutEvents with lab pattern match (source, detail-type, simple detail keys). Targets SQS, Lambda, SNS. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. RoleArn delivery mints a role session and requires role identity Allow. Without RoleArn, target resource policy must Allow events.amazonaws.com or account root. Lab InputPath JSONPath subset on delivery.</td>
+      <td>Archive and replay, legacy scheduled rules, CloudWatch Logs and Kinesis targets, InputTransformer, full pattern language, bus policy dual-eval depth.</td>
     </tr>
     <tr>
       <td>EventBridge Scheduler</td>
@@ -133,8 +135,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>EventBridge Pipes</td>
-      <td>Create/Describe/Delete/ListPipes. Source SQS or DynamoDB Streams to target Lambda or SQS. PassRole for pipes.amazonaws.com.</td>
-      <td>Enrichment, filter partner matrix, EventBridge bus source.</td>
+      <td>Create/Describe/Delete/ListPipes. Source SQS or DynamoDB Streams to target Lambda or SQS. PassRole for pipes.amazonaws.com when RoleArn set. Delivery is manual PollPipeOnce (no continuous ticker). RoleArn session or target resource policy on deliver.</td>
+      <td>Enrichment, filter partner matrix, EventBridge bus source, continuous ticker.</td>
     </tr>
     <tr>
       <td>S3 Vectors</td>
@@ -148,7 +150,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement plus Begin/Commit/Rollback lite on <code>:4566</code>. Requires resourceArn and secretArn. Default recorded-statement stub executor (no <code>pgx</code>).</td>
+      <td>ExecuteStatement plus Begin/Commit/Rollback lite on <code>:4566</code>. Requires resourceArn and secretArn. Recorded-statement <strong>stub</strong> executor with explicit stub marker (no <code>pgx</code>).</td>
       <td>Live nested Postgres wire executor, BatchExecuteStatement, full result type matrix.</td>
     </tr>
     <tr>
@@ -185,18 +187,18 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Firehose</td>
-      <td>Delivery stream CRUD, PutRecord/PutRecordBatch. S3 destination writes objects. Lambda ARN destination persists records and enqueues async Invoke. Optional PassRole for firehose.amazonaws.com.</td>
+      <td>Delivery stream CRUD, PutRecord/PutRecordBatch. S3 destination writes objects. Lambda ARN destination persists records and enqueues async Invoke. PassRole for firehose.amazonaws.com; Put evaluates RoleARN session or destination resource policy.</td>
       <td>OpenSearch/HTTP destinations, dynamic partitioning, live Lambda Invoke from delivery.</td>
     </tr>
     <tr>
       <td>Amazon MQ</td>
-      <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. EngineType ActiveMQ or RabbitMQ. Control-plane plus loopback stub endpoint (no nested broker, no WAN ports).</td>
+      <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. EngineType ActiveMQ or RabbitMQ. <strong>Control-plane stub</strong> with loopback <code>stub://</code> endpoint; BrokerState CREATION_FAILED; PubliclyAccessible=true rejected. No nested broker, no WAN ports.</td>
       <td>Nested DinD broker, MSK/Kafka, full admin APIs, public broker endpoints.</td>
     </tr>
     <tr>
       <td>Transfer Family</td>
-      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DeleteUser. SFTP-shaped sandbox filesystem under the data root. Loopback only.</td>
-      <td>AS2, FTPS depth, IdP integration, WAN expose.</td>
+      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DeleteUser. SFTP-shaped sandbox under the data root. Describe reports VPC/OFFLINE (no listener).</td>
+      <td>AS2, FTPS depth, IdP integration, WAN expose, live SFTP listener.</td>
     </tr>
     <tr>
       <td>SES</td>
@@ -231,12 +233,12 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>WAF v2</td>
-      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / ALB / AppSync / Cognito ARNs (fail closed on unknown), labeled allow/block Evaluate helper. No real edge PoP.</td>
-      <td>Real PoP enforcement, Bot Control, CAPTCHA, full statement catalog.</td>
+      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / ALB / AppSync / Cognito / Lambda function ARNs (fail closed on unknown), invoke-path DefaultAction gate, labeled Evaluate helper. No real edge PoP.</td>
+      <td>Real PoP / CAPTCHA / Bot Control, full statement catalog.</td>
     </tr>
     <tr>
       <td>Config</td>
-      <td>PutConfigurationRecorder, PutDeliveryChannel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources. Optional PassRole for config.amazonaws.com.</td>
+      <td>PutConfigurationRecorder, PutDeliveryChannel, StartConfigurationRecorder (SNS Publish when delivery channel has snsTopicARN), DescribeComplianceByConfigRule stub over tagged resources. Optional PassRole for config.amazonaws.com.</td>
       <td>Managed rule catalog, remediations, aggregator, organization rules.</td>
     </tr>
     <tr>
@@ -267,8 +269,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS event source mapping with in-process poller, Function URLs lite (NONE with simple CORS or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
-      <td>Non-SQS ESM sources, FilterCriteria depth, provisioned concurrency, weighted aliases, Function URL CORS config object depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller, Function URLs lite (NONE with simple CORS or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
+      <td>Kinesis/MQ ESM sources, FilterCriteria depth, provisioned concurrency, weighted aliases, Function URL CORS config object depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -292,7 +294,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>CodeDeploy</td>
-      <td>CreateApplication/CreateDeploymentGroup/CreateDeployment/GetDeployment/ListDeployments. Sync Succeeded. Optional PassRole for codedeploy.amazonaws.com. Optional ECS DesiredCount refresh when a group stores an ECS service name.</td>
+      <td>CreateApplication/CreateDeploymentGroup/CreateDeployment/GetDeployment/ListDeployments. Sync Succeeded. Optional PassRole for codedeploy.amazonaws.com. Optional ECS DesiredCount refresh or Lambda PublishVersion when a group stores those targets.</td>
       <td>Blue/green traffic shifting, EC2 agent, on-premises instances.</td>
     </tr>
     <tr>
@@ -314,17 +316,17 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON. Optional ResultConfiguration OutputLocation.</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
       <td>Full SQL, CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>
-      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. Loopback stub endpoint (MQ-style). No nested OpenSearch required.</td>
+      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. <strong>Control-plane stub</strong> loopback <code>stub://</code> endpoint. No nested OpenSearch.</td>
       <td>Nested DinD OpenSearch cluster, full query DSL proxy, fine-grained access control.</td>
     </tr>
     <tr>
       <td>EMR</td>
-      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows control-plane stub. No host Spark/Hadoop.</td>
+      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows <strong>control-plane stub</strong>. No host Spark/Hadoop.</td>
       <td>Full step matrix, nested Spark engines, EMR Serverless and Studio.</td>
     </tr>
     <tr>
@@ -339,7 +341,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Transcribe</td>
-      <td>StartTranscriptionJob / GetTranscriptionJob / ListTranscriptionJobs. Canned transcript under the data root. No real ASR.</td>
+      <td>StartTranscriptionJob / GetTranscriptionJob / ListTranscriptionJobs. Requires existing lab <code>s3://</code> media object. Canned transcript under the data root. No real ASR.</td>
       <td>Streaming transcription, Call Analytics, writing transcripts into lab S3.</td>
     </tr>
     <tr>
@@ -360,8 +362,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Budgets</td>
-      <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. Notification stubs stored only (no SNS fan-out).</td>
-      <td>Budget actions that mutate accounts, RI/SP coverage, SNS publish.</td>
+      <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. SNS subscriber ARNs under NotificationsWithSubscribers receive one lab ACTUAL threshold Publish on CreateBudget.</td>
+      <td>Budget actions that mutate accounts, RI/SP coverage, live CE-driven threshold evaluation.</td>
     </tr>
   </tbody>
 </table>
@@ -378,7 +380,7 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of Postgres, Redis/Valkey, Mongo, or OpenSearch |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |
-| Authn | SigV4 on non-health paths (SAML/OIDC federation STS excepted) |
+| Authn | SigV4 on AWS API paths except documented open/alternate-auth routes (health, ready, JWKS, federation STS, Function URL NONE, HTTP API NONE, AppSync auth types) |
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
 ## Architecture

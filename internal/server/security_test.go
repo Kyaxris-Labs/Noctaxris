@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// Phase 0 security regressions: unauthenticated AWS-shaped calls fail closed,
+// Security regressions: unauthenticated AWS-shaped calls fail closed,
 // health stays open for container checks, and secrets never appear in audit.
 
 func TestUnauthenticatedAWSPathReturns403(t *testing.T) {

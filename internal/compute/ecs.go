@@ -29,7 +29,7 @@ func ValidateECSRunOpts(opts ECSRunOpts) error {
 	if strings.TrimSpace(opts.ImageURI) == "" {
 		return fmt.Errorf("compute: ImageURI is required")
 	}
-	return nil
+	return AllowImagePull(opts.ImageURI)
 }
 
 // EnsureECSNetwork creates (or reuses) an Internal Docker network for ECS tasks.

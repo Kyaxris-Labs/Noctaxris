@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 )
 
 var (
@@ -251,6 +254,10 @@ func (s *Store) pollPipeFromSQS(accountID string, p Pipe, sourceARN, targetARN s
 		return nil
 	}
 	for _, msg := range msgs {
+		if !s.pipeDeliveryAuthorized(accountID, p, targetARN) {
+			log.Printf("pipes delivery denied pipe=%s target=%s", p.ARN, targetARN)
+			return fmt.Errorf("%w: delivery not authorized for target", ErrPipeBadReq)
+		}
 		if err := s.deliverPipePayload(accountID, targetARN, string(msg.Body), invoke); err != nil {
 			return err
 		}
@@ -293,6 +300,10 @@ func (s *Store) pollPipeFromDynamoStream(accountID string, p Pipe, sourceARN, ta
 			payloadMap["newImage"] = json.RawMessage(rec.NewImageJSON)
 		}
 		payload, _ := json.Marshal(payloadMap)
+		if !s.pipeDeliveryAuthorized(accountID, p, targetARN) {
+			log.Printf("pipes delivery denied pipe=%s target=%s", p.ARN, targetARN)
+			return fmt.Errorf("%w: delivery not authorized for target", ErrPipeBadReq)
+		}
 		if err := s.deliverPipePayload(accountID, targetARN, string(payload), invoke); err != nil {
 			return err
 		}
@@ -321,4 +332,19 @@ func (s *Store) deliverPipePayload(accountID, targetARN, body string, invoke fun
 	default:
 		return fmt.Errorf("%w: unsupported Target ARN", ErrPipeBadReq)
 	}
+}
+
+// pipeDeliveryAuthorized mirrors Scheduler: RoleArn session EvaluateFull, or
+// target resource policy Allow for pipes.amazonaws.com / account root.
+func (s *Store) pipeDeliveryAuthorized(accountID string, p Pipe, targetARN string) bool {
+	arn := strings.TrimSpace(targetARN)
+	action, ok := deliveryActionForARN(arn)
+	if !ok {
+		return false
+	}
+	roleARN := strings.TrimSpace(p.RoleARN)
+	if roleARN == "" {
+		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalPipes)
+	}
+	return s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "pipes-delivery", DefaultPipesRegion)
 }

@@ -1,6 +1,6 @@
-# Phase 6 status
+# Lab-complete DynamoDB and SQS (historical)
 
-Phase 6 delivers lab-complete DynamoDB and SQS cores: tables and item CRUD with basic Query/Scan and batch APIs, table resource policies, encryption at rest with customer-managed KMS, standard queues with send/receive/delete (including batch and visibility), queue policies via attributes, SSE-SQS, and SSE-KMS.
+Historical ship snapshot: lab-complete DynamoDB and SQS cores with tables and item CRUD, basic Query/Scan and batch APIs, table resource policies, encryption at rest with customer-managed KMS, standard queues with send/receive/delete (including batch and visibility), queue policies via attributes, SSE-SQS, and SSE-KMS.
 
 ## Delivered
 
@@ -28,6 +28,6 @@ Same-account DynamoDB uses identity **or** table resource policy Allow. Same-acc
 
 See [../services/dynamodb.md](../services/dynamodb.md) and [../services/sqs.md](../services/sqs.md) for create-table/put-item/get-item and create-queue/send/receive/delete.
 
-## Explicitly not in Phase 6
+## Explicitly deferred at this ship
 
-Current deferred depth: [../services/dynamodb.md](../services/dynamodb.md), [../services/sqs.md](../services/sqs.md). At Phase 6 ship time there was no lab GSI/TTL, FIFO/RedrivePolicy, or Lambda (those landed later).
+Current deferred depth: [../services/dynamodb.md](../services/dynamodb.md), [../services/sqs.md](../services/sqs.md). At this ship there was no lab GSI/TTL, FIFO/RedrivePolicy, or Lambda (those landed later).

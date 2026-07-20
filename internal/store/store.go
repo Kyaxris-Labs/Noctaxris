@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -132,6 +133,7 @@ CREATE TABLE IF NOT EXISTS s3_buckets (
   bucket_policy TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, name)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_s3_buckets_name ON s3_buckets(name);
 CREATE TABLE IF NOT EXISTS s3_objects (
   account_id TEXT NOT NULL,
   bucket TEXT NOT NULL,
@@ -335,6 +337,13 @@ type Store struct {
 	db       *sql.DB
 	master   MasterKey
 	dataRoot string
+
+	asyncEnqueueMu sync.Mutex
+	onAsyncEnqueue func(job LambdaAsyncInvocation)
+
+	// sqsMu serializes receive/send so claim+CAS and FIFO sequence stay atomic
+	// under concurrent goroutines without global BEGIN IMMEDIATE (nested writers).
+	sqsMu sync.Mutex
 }
 
 func Open(dataRoot string, master MasterKey) (*Store, error) {
@@ -342,10 +351,15 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	dbPath := filepath.Join(dataRoot, "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	// Apply busy_timeout on every pooled connection (DSN pragma, not a one-shot Exec).
+	// Do not set global _txlock=immediate: nested writers (e.g. CFN → CreateBucket)
+	// would busy-wait against an open outer transaction.
+	dsn := "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	// Single API process only against one data root (multi-instance unsupported).
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
@@ -591,12 +605,69 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.ensureSchemaVersion(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
 // DataRoot returns the store data directory (object bytes live under s3/).
 func (s *Store) DataRoot() string {
 	return s.dataRoot
+}
+
+// Ping verifies the SQLite connection is usable (readiness).
+func (s *Store) Ping() error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store is closed")
+	}
+	if err := s.db.Ping(); err != nil {
+		return fmt.Errorf("sqlite ping: %w", err)
+	}
+	return nil
+}
+
+const schemaVersionCurrent = 1
+
+func (s *Store) ensureSchemaVersion() error {
+	const ddl = `
+CREATE TABLE IF NOT EXISTS schema_version (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  version INTEGER NOT NULL
+);`
+	if _, err := s.db.Exec(ddl); err != nil {
+		return fmt.Errorf("ensure schema_version: %w", err)
+	}
+	var ver int
+	err := s.db.QueryRow(`SELECT version FROM schema_version WHERE id = 1`).Scan(&ver)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = s.db.Exec(`INSERT INTO schema_version (id, version) VALUES (1, ?)`, schemaVersionCurrent)
+		if err != nil {
+			return fmt.Errorf("insert schema_version: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read schema_version: %w", err)
+	}
+	if ver < schemaVersionCurrent {
+		_, err = s.db.Exec(`UPDATE schema_version SET version = ? WHERE id = 1`, schemaVersionCurrent)
+		if err != nil {
+			return fmt.Errorf("update schema_version: %w", err)
+		}
+	}
+	return nil
+}
+
+// SchemaVersion returns the stored schema version row.
+func (s *Store) SchemaVersion() (int, error) {
+	var ver int
+	err := s.db.QueryRow(`SELECT version FROM schema_version WHERE id = 1`).Scan(&ver)
+	if err != nil {
+		return 0, fmt.Errorf("schema version: %w", err)
+	}
+	return ver, nil
 }
 
 // SealWithMaster seals plaintext under the store master key.
@@ -656,6 +727,7 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE sqs_messages ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_algorithm TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_kms_key_id TEXT NOT NULL DEFAULT ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_s3_buckets_name ON s3_buckets(name)`,
 	}
 	for _, stmt := range alters {
 		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
@@ -669,7 +741,9 @@ func isDuplicateColumnErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "duplicate column")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate column") ||
+		strings.Contains(msg, "already exists")
 }
 
 func (s *Store) Close() error {

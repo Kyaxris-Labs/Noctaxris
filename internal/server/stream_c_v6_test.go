@@ -45,6 +45,61 @@ func TestWAFAssociateHTTPAPIAndRejectUnknown(t *testing.T) {
 	}
 }
 
+func TestWAFAssociateBlocksHTTPAPIInvoke(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "waf-block-role", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/waf-block-role"
+	fnRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "waf-block-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if fnRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d", fnRec.Code)
+	}
+	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:waf-block-fn"
+	apiID, integrationID := mustCreateHTTPAPIWithIntegration(t, handler, "waf-http", lambdaARN, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
+		"ApiId": apiID, "RouteKey": "GET /blocked", "Target": "integrations/" + integrationID,
+		"AuthorizationType": "NONE",
+	}, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateStage", "apigateway", map[string]any{
+		"ApiId": apiID, "StageName": "$default",
+	}, now)
+
+	create := mustJSONTarget(t, handler, "AWSWAF_20190729.CreateWebACL", "wafv2", map[string]any{
+		"Name": "block-acl", "Scope": "REGIONAL",
+		"DefaultAction": map[string]any{"Block": map[string]any{}},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateWebACL status=%d body=%q", create.Code, create.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(create.Body.Bytes(), &out)
+	sum, _ := out["Summary"].(map[string]any)
+	aclARN, _ := sum["ARN"].(string)
+
+	assoc := mustJSONTarget(t, handler, "AWSWAF_20190729.AssociateWebACL", "wafv2", map[string]any{
+		"WebACLArn":   aclARN,
+		"ResourceArn": "arn:aws:apigateway:us-east-1::/apis/" + apiID + "/stages/$default",
+	}, now)
+	if assoc.Code != http.StatusOK {
+		t.Fatalf("AssociateWebACL status=%d body=%q", assoc.Code, assoc.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/blocked", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("WAF block invoke status=%d want 403 body=%q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCloudFrontCreateListDelete(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

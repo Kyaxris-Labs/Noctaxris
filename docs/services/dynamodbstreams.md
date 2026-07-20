@@ -56,5 +56,5 @@ aws dynamodbstreams get-records --shard-iterator "$IT" --endpoint-url "$EP"
 ## Not yet / deferred
 
 - Global tables and parallel shard fan-out
-- Lambda event source mapping for DynamoDB Streams (SQS ESM only in this version)
 - OLD_IMAGE / NEW_AND_OLD_IMAGE view types
+- FilterCriteria / parallelization factor on Lambda ESM (basic DynamoDB Streams ESM ships in [lambda.md](lambda.md))

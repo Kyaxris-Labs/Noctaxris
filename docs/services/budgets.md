@@ -2,13 +2,14 @@
 
 **Status:** shipped (lab core)
 
-CreateBudget, DescribeBudget, DescribeBudgets, and DeleteBudget. Optional notification stubs are stored only (no SNS fan-out). Identity authz.
+CreateBudget, DescribeBudget, DescribeBudgets, and DeleteBudget. Optional `NotificationsWithSubscribers` are stored; SNS subscriber ARNs receive one lab ACTUAL threshold Publish on CreateBudget (best-effort). Identity authz.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Budgets | `CreateBudget`, `DescribeBudget`, `DescribeBudgets`, `DeleteBudget` |
+| Notify | CreateBudget Publishes to SNS topics listed under `NotificationsWithSubscribers[].Subscribers` with `SubscriptionType=SNS` |
 
 ### Authz notes
 
@@ -30,4 +31,4 @@ Live Compose smoke skipped when Docker is unavailable.
 
 - Budget actions that mutate accounts
 - RI/SP coverage budgets
-- SNS publish for threshold alerts
+- Threshold evaluation against live Cost Explorer spend (notify is CreateBudget fan-out only)

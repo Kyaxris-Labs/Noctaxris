@@ -47,10 +47,6 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	if principal == "" {
 		return "", fmt.Errorf("validation: Principal is required")
 	}
-	normalized, err := normalizeLambdaPrincipal(s, accountID, principal)
-	if err != nil {
-		return "", err
-	}
 	if src := strings.TrimSpace(sourceAccount); src != "" && src != accountID {
 		return "", fmt.Errorf("validation: SourceAccount must match function account")
 	}
@@ -63,12 +59,27 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 		return "", ErrLambdaPolicyStatementExists
 	}
 
-	stmt := map[string]any{
-		"Sid":       statementID,
-		"Effect":    "Allow",
-		"Principal": map[string]any{"AWS": normalized},
-		"Action":    action,
-		"Resource":  fn.FunctionARN,
+	var stmt map[string]any
+	if isLabServicePrincipal(principal) {
+		stmt = map[string]any{
+			"Sid":       statementID,
+			"Effect":    "Allow",
+			"Principal": map[string]any{"Service": principal},
+			"Action":    action,
+			"Resource":  fn.FunctionARN,
+		}
+	} else {
+		normalized, nerr := normalizeLambdaPrincipal(s, accountID, principal)
+		if nerr != nil {
+			return "", nerr
+		}
+		stmt = map[string]any{
+			"Sid":       statementID,
+			"Effect":    "Allow",
+			"Principal": map[string]any{"AWS": normalized},
+			"Action":    action,
+			"Resource":  fn.FunctionARN,
+		}
 	}
 	statements, err := lambdaPolicyStatements(doc)
 	if err != nil {
@@ -185,6 +196,22 @@ func resolveFunctionName(accountID, nameOrARN string) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+func isLabServicePrincipal(principal string) bool {
+	switch strings.ToLower(strings.TrimSpace(principal)) {
+	case "sns.amazonaws.com",
+		"events.amazonaws.com",
+		"scheduler.amazonaws.com",
+		"firehose.amazonaws.com",
+		"pipes.amazonaws.com",
+		"sqs.amazonaws.com",
+		"dynamodb.amazonaws.com",
+		"s3.amazonaws.com":
+		return true
+	default:
+		return false
+	}
 }
 
 // normalizeLambdaPrincipal accepts a lab IAM ARN or 12-digit account id.

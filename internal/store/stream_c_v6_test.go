@@ -17,6 +17,7 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/lab/abc",
 		"arn:aws:appsync:us-east-1:000000000001:apis/gql1",
 		"arn:aws:cognito-idp:us-east-1:000000000001:userpool/us-east-1_abc",
+		"arn:aws:lambda:us-east-1:000000000001:function:fn",
 	}
 	for _, arn := range ok {
 		if !store.IsWAFAssociableResourceARN(arn) {
@@ -28,7 +29,6 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 		"not-an-arn",
 		"arn:aws:s3:::bucket",
 		"arn:aws:apigateway:us-east-1::/unknown/x",
-		"arn:aws:lambda:us-east-1:000000000001:function:fn",
 	}
 	for _, arn := range bad {
 		if store.IsWAFAssociableResourceARN(arn) {

@@ -566,13 +566,23 @@ func (s *Store) GetItemBytes(accountID, table, itemPK, itemSK string) (DynamoSto
 	return it, nil
 }
 
-// GetItemGSIKeys returns stored GSI key columns for an item.
+// GetItemGSIKeys returns stored first-slot GSI key columns for an item.
 func (s *Store) GetItemGSIKeys(accountID, table, itemPK, itemSK string) (gsiPK, gsiSK string, err error) {
-	err = s.db.QueryRow(
-		`SELECT gsi_pk, gsi_sk FROM dynamodb_items
+	return s.GetItemGSISlotKeys(accountID, table, itemPK, itemSK, 1)
+}
+
+// GetItemGSISlotKeys returns stored GSI key columns for slot 1 or 2.
+func (s *Store) GetItemGSISlotKeys(accountID, table, itemPK, itemSK string, slot int) (gsiPK, gsiSK string, err error) {
+	pkCol, skCol := "gsi_pk", "gsi_sk"
+	if slot == 2 {
+		pkCol, skCol = "COALESCE(gsi2_pk, '')", "COALESCE(gsi2_sk, '')"
+	}
+	query := fmt.Sprintf(
+		`SELECT %s, %s FROM dynamodb_items
 		 WHERE account_id = ? AND table_name = ? AND item_pk = ? AND item_sk = ?`,
-		accountID, table, itemPK, itemSK,
-	).Scan(&gsiPK, &gsiSK)
+		pkCol, skCol,
+	)
+	err = s.db.QueryRow(query, accountID, table, itemPK, itemSK).Scan(&gsiPK, &gsiSK)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", ErrNoSuchItem
 	}

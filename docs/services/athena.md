@@ -14,7 +14,7 @@ In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON ob
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3 when the bucket exists |
 | WorkGroup | Optional. Defaults to `primary` |
 
-Unsupported SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`.
+Unsupported SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED).
 
 ### Authz notes
 

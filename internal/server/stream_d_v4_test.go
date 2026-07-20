@@ -183,6 +183,10 @@ func TestFirehosePutRecord(t *testing.T) {
 	if _, err := st.CreateBucket(testAccountID, "fh-srv-bucket"); err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"firehose.amazonaws.com"},"Action":"s3:PutObject","Resource":"*"}]}`
+	if err := st.PutBucketPolicy(testAccountID, "fh-srv-bucket", policy); err != nil {
+		t.Fatal(err)
+	}
 
 	create := mustJSONTarget(t, handler, "Firehose_20150804.CreateDeliveryStream", "firehose", map[string]any{
 		"DeliveryStreamName": "lab-fh",

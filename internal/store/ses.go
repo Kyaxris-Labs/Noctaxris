@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS ses_identities (
   identity TEXT NOT NULL,
   identity_type TEXT NOT NULL,
   verified INTEGER NOT NULL DEFAULT 1,
+  bounce_topic_arn TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, identity)
 );
@@ -40,9 +42,10 @@ CREATE INDEX IF NOT EXISTS idx_ses_messages_created ON ses_messages(account_id, 
 
 // SESIdentity is a verified email or domain identity.
 type SESIdentity struct {
-	Identity string
-	Type     string // EmailAddress or Domain
-	Verified bool
+	Identity       string
+	Type           string // EmailAddress or Domain
+	Verified       bool
+	BounceTopicARN string
 }
 
 // SESMessage is a caught outbound email.
@@ -73,6 +76,12 @@ func EnsureSESSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(sesSchema); err != nil {
 		return fmt.Errorf("ensure ses schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE ses_identities ADD COLUMN bounce_topic_arn TEXT NOT NULL DEFAULT ''`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("ensure ses schema: bounce_topic_arn: %w", err)
+		}
 	}
 	return nil
 }
@@ -113,7 +122,7 @@ func (s *Store) VerifySESEmailIdentity(accountID, email string) error {
 // ListSESIdentities lists identities, optional type filter (EmailAddress|Domain|"").
 func (s *Store) ListSESIdentities(accountID, identityType string) ([]SESIdentity, error) {
 	rows, err := s.db.Query(
-		`SELECT identity, identity_type, verified FROM ses_identities WHERE account_id = ? ORDER BY identity`,
+		`SELECT identity, identity_type, verified, bounce_topic_arn FROM ses_identities WHERE account_id = ? ORDER BY identity`,
 		accountID,
 	)
 	if err != nil {
@@ -124,7 +133,7 @@ func (s *Store) ListSESIdentities(accountID, identityType string) ([]SESIdentity
 	for rows.Next() {
 		var id SESIdentity
 		var verified int
-		if err := rows.Scan(&id.Identity, &id.Type, &verified); err != nil {
+		if err := rows.Scan(&id.Identity, &id.Type, &verified, &id.BounceTopicARN); err != nil {
 			return nil, fmt.Errorf("list ses identities: scan: %w", err)
 		}
 		id.Verified = verified == 1
@@ -136,7 +145,41 @@ func (s *Store) ListSESIdentities(accountID, identityType string) ([]SESIdentity
 	return out, rows.Err()
 }
 
+// SetSESIdentityNotificationTopic stores a Bounce SNS topic ARN for an identity (lab Bounce only).
+func (s *Store) SetSESIdentityNotificationTopic(accountID, identity, notificationType, topicARN string) error {
+	identity = strings.TrimSpace(strings.ToLower(identity))
+	notificationType = strings.TrimSpace(notificationType)
+	topicARN = strings.TrimSpace(topicARN)
+	if identity == "" {
+		return fmt.Errorf("set identity notification topic: Identity is required")
+	}
+	if !strings.EqualFold(notificationType, "Bounce") {
+		return fmt.Errorf("set identity notification topic: only NotificationType Bounce is supported in lab")
+	}
+	if topicARN != "" && !strings.HasPrefix(topicARN, "arn:aws:sns:") {
+		return fmt.Errorf("set identity notification topic: SnsTopic must be an SNS topic ARN")
+	}
+	if !s.sesIdentityVerified(accountID, identity) {
+		return ErrSESIdentityNotFound
+	}
+	if topicARN != "" {
+		topic, err := s.GetTopicByARN(topicARN)
+		if err != nil || topic.AccountID != accountID {
+			return fmt.Errorf("set identity notification topic: SNS topic not found in account")
+		}
+	}
+	_, err := s.db.Exec(
+		`UPDATE ses_identities SET bounce_topic_arn = ? WHERE account_id = ? AND identity = ?`,
+		topicARN, accountID, identity,
+	)
+	if err != nil {
+		return fmt.Errorf("set identity notification topic: %w", err)
+	}
+	return nil
+}
+
 // SendSESEmail persists a caught email. Source must be a verified identity (lab).
+// Destinations that contain "bounce@" (case-insensitive) trigger a Bounce SNS publish when configured.
 func (s *Store) SendSESEmail(accountID, source string, destinations []string, subject, bodyText, bodyHTML string) (string, error) {
 	source = strings.TrimSpace(strings.ToLower(source))
 	if source == "" {
@@ -165,6 +208,7 @@ func (s *Store) SendSESEmail(accountID, source string, destinations []string, su
 	if err != nil {
 		return "", fmt.Errorf("send email: %w", err)
 	}
+	s.maybePublishSESBounce(accountID, source, dest, msgID)
 	return msgID, nil
 }
 
@@ -249,4 +293,49 @@ func (s *Store) sesIdentityVerified(accountID, email string) bool {
 		accountID, email,
 	).Scan(&verified)
 	return err == nil && verified == 1
+}
+
+func (s *Store) sesBounceTopicARN(accountID, identity string) string {
+	var arn string
+	_ = s.db.QueryRow(
+		`SELECT bounce_topic_arn FROM ses_identities WHERE account_id = ? AND identity = ?`,
+		accountID, identity,
+	).Scan(&arn)
+	return strings.TrimSpace(arn)
+}
+
+func (s *Store) maybePublishSESBounce(accountID, source string, destinations []string, messageID string) {
+	var bounced []string
+	for _, d := range destinations {
+		if strings.Contains(strings.ToLower(d), "bounce@") {
+			bounced = append(bounced, d)
+		}
+	}
+	if len(bounced) == 0 {
+		return
+	}
+	topicARN := s.sesBounceTopicARN(accountID, source)
+	if topicARN == "" {
+		return
+	}
+	topic, err := s.GetTopicByARN(topicARN)
+	if err != nil || topic.AccountID != accountID {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"notificationType": "Bounce",
+		"mail": map[string]any{
+			"messageId":   messageID,
+			"source":      source,
+			"destination": bounced,
+		},
+		"bounce": map[string]any{
+			"bounceType":        "Permanent",
+			"bouncedRecipients": bounced,
+		},
+	})
+	if err != nil {
+		return
+	}
+	_, _ = s.Publish(accountID, topic.TopicName, string(payload), "Amazon SES Email Event Message", nil)
 }

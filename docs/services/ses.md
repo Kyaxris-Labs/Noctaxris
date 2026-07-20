@@ -8,8 +8,8 @@ Local email catcher. Verify identities, send mail into the store, list identitie
 
 | Area | Actions |
 |------|---------|
-| Identities | `VerifyEmailIdentity` (lab auto-verify), `ListIdentities` |
-| Send | `SendEmail`, `SendRawEmail` (persist only) |
+| Identities | `VerifyEmailIdentity` (lab auto-verify), `ListIdentities`, `SetIdentityNotificationTopic` (Bounce SNS topic only) |
+| Send | `SendEmail`, `SendRawEmail` (persist only). Destinations containing `bounce@` Publish a Bounce notification when Bounce SNS is configured |
 | Stats | `GetSendStatistics` stub (`DeliveryAttempts` equals caught message count) |
 
 ### Authz notes
@@ -36,6 +36,6 @@ aws ses get-send-statistics --endpoint-url "$EP"
 ## Not yet / deferred
 
 - Real SMTP relay or receipt rules
-- Configuration sets, templates, bounce/complaint feedback
+- Configuration sets, templates, Complaint/Delivery feedback (Bounce SNS stub ships)
 - Domain identity DKIM depth
 - SES v2 API surface

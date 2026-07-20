@@ -423,6 +423,10 @@ func TestPutEventsDeliversToSNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqsPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, "evt-sns-sub", map[string]string{"Policy": sqsPolicy}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Subscribe(account, "evt-sns", "sqs", queue.QueueARN); err != nil {
 		t.Fatal(err)
 	}
@@ -561,5 +565,48 @@ func TestPutEventsRoleArnDeliversWithRoleIdentityAllow(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Fatalf("expected RoleArn delivery, got %d", len(msgs))
+	}
+}
+
+func TestPutEventsInputPathExtractsDetail(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	if _, err := st.PutRule(account, "us-east-1", "default", "path-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "evt-inputpath", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, "evt-inputpath", map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "path-rule", []store.EventTargetInput{{
+		ID:        "1",
+		ARN:       queue.QueueARN,
+		InputPath: "$.detail",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source:     "noctaxris.lab",
+		DetailType: "demo",
+		Detail:     `{"ok":true,"n":2}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("matches=%v err=%v", matches, err)
+	}
+	msgs, err := st.ReceiveMessages(account, "evt-inputpath", 1)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("msgs=%v err=%v", msgs, err)
+	}
+	body := string(msgs[0].Body)
+	if !strings.Contains(body, `"ok":true`) || strings.Contains(body, `"detail-type"`) {
+		t.Fatalf("Body=%q want detail only", body)
 	}
 }

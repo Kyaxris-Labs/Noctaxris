@@ -1,6 +1,6 @@
 package catalog
 
-// STS actions (all 11 Phase 3 routes).
+// STS actions (all 11 lab routes).
 
 // ActionSTSGetCallerIdentity is the IAM action for STS GetCallerIdentity.
 const ActionSTSGetCallerIdentity = "sts:GetCallerIdentity"
@@ -35,7 +35,7 @@ const ActionSTSGetDelegatedAccessToken = "sts:GetDelegatedAccessToken"
 // ActionSTSGetWebIdentityToken is the IAM action for STS GetWebIdentityToken.
 const ActionSTSGetWebIdentityToken = "sts:GetWebIdentityToken"
 
-// Organizations actions (Phase 2).
+// Organizations actions.
 
 // ActionOrgsCreateAccount is the IAM action for Organizations CreateAccount.
 const ActionOrgsCreateAccount = "organizations:CreateAccount"
@@ -56,7 +56,7 @@ const (
 	ActionOrgsMoveAccount                      = "organizations:MoveAccount"
 )
 
-// IAM lab actions (Phase 3).
+// IAM lab actions.
 
 // Users
 const (
@@ -174,7 +174,7 @@ const (
 	ActionIAMDeactivateMFADevice    = "iam:DeactivateMFADevice"
 )
 
-// KMS lab actions (Phase 4).
+// KMS lab actions.
 const (
 	ActionKMSCreateKey                       = "kms:CreateKey"
 	ActionKMSDescribeKey                     = "kms:DescribeKey"
@@ -204,7 +204,7 @@ const (
 	ActionKMSReEncryptTo                     = "kms:ReEncryptTo"
 )
 
-// S3 lab actions (Phase 5).
+// S3 lab actions.
 const (
 	ActionS3CreateBucket                  = "s3:CreateBucket"
 	ActionS3DeleteBucket                  = "s3:DeleteBucket"
@@ -230,7 +230,7 @@ const (
 	ActionS3ListBucketVersions            = "s3:ListBucketVersions"
 )
 
-// DynamoDB lab actions (Phase 6).
+// DynamoDB lab actions.
 const (
 	ActionDynamoDBCreateTable          = "dynamodb:CreateTable"
 	ActionDynamoDBDescribeTable        = "dynamodb:DescribeTable"
@@ -252,7 +252,7 @@ const (
 	ActionDynamoDBDescribeTimeToLive   = "dynamodb:DescribeTimeToLive"
 )
 
-// DynamoDB Streams lab actions (v5).
+// DynamoDB Streams lab actions.
 const (
 	ActionDynamoDBStreamsListStreams      = "dynamodbstreams:ListStreams"
 	ActionDynamoDBStreamsDescribeStream   = "dynamodbstreams:DescribeStream"
@@ -260,7 +260,7 @@ const (
 	ActionDynamoDBStreamsGetRecords       = "dynamodbstreams:GetRecords"
 )
 
-// EventBridge Pipes lab actions (v5).
+// EventBridge Pipes lab actions.
 const (
 	ActionPipesCreatePipe   = "pipes:CreatePipe"
 	ActionPipesDescribePipe = "pipes:DescribePipe"
@@ -268,7 +268,7 @@ const (
 	ActionPipesListPipes    = "pipes:ListPipes"
 )
 
-// Amazon MQ lab actions (v5).
+// Amazon MQ lab actions.
 const (
 	ActionMQCreateBroker   = "mq:CreateBroker"
 	ActionMQDescribeBroker = "mq:DescribeBroker"
@@ -276,14 +276,14 @@ const (
 	ActionMQDeleteBroker   = "mq:DeleteBroker"
 )
 
-// RDS lab actions (v7).
+// RDS lab actions.
 const (
 	ActionRDSCreateDBInstance    = "rds:CreateDBInstance"
 	ActionRDSDescribeDBInstances = "rds:DescribeDBInstances"
 	ActionRDSDeleteDBInstance    = "rds:DeleteDBInstance"
 )
 
-// RDS Data API lab actions (v7).
+// RDS Data API lab actions.
 const (
 	ActionRDSDataExecuteStatement    = "rds-data:ExecuteStatement"
 	ActionRDSDataBeginTransaction    = "rds-data:BeginTransaction"
@@ -291,21 +291,21 @@ const (
 	ActionRDSDataRollbackTransaction = "rds-data:RollbackTransaction"
 )
 
-// ElastiCache lab actions (v7).
+// ElastiCache lab actions.
 const (
 	ActionElastiCacheCreateCacheCluster    = "elasticache:CreateCacheCluster"
 	ActionElastiCacheDescribeCacheClusters = "elasticache:DescribeCacheClusters"
 	ActionElastiCacheDeleteCacheCluster    = "elasticache:DeleteCacheCluster"
 )
 
-// DocumentDB lab actions (v7). IAM action names use the rds: prefix (AWS DocumentDB shares RDS control-plane IAM).
+// DocumentDB lab actions. IAM action names use the rds: prefix (AWS DocumentDB shares RDS control-plane IAM).
 const (
 	ActionDocDBCreateDBCluster    = "rds:CreateDBCluster"
 	ActionDocDBDescribeDBClusters = "rds:DescribeDBClusters"
 	ActionDocDBDeleteDBCluster    = "rds:DeleteDBCluster"
 )
 
-// Transfer Family lab actions (v5).
+// Transfer Family lab actions.
 const (
 	ActionTransferCreateServer   = "transfer:CreateServer"
 	ActionTransferDescribeServer = "transfer:DescribeServer"
@@ -315,7 +315,7 @@ const (
 	ActionTransferDeleteUser     = "transfer:DeleteUser"
 )
 
-// SQS lab actions (Phase 6).
+// SQS lab actions.
 const (
 	ActionSQSCreateQueue             = "sqs:CreateQueue"
 	ActionSQSGetQueueUrl             = "sqs:GetQueueUrl"
@@ -332,7 +332,7 @@ const (
 	ActionSQSChangeMessageVisibility = "sqs:ChangeMessageVisibility"
 )
 
-// SSM lab actions (Phase 8).
+// SSM lab actions.
 const (
 	ActionSSMPutParameter        = "ssm:PutParameter"
 	ActionSSMGetParameter        = "ssm:GetParameter"
@@ -342,7 +342,7 @@ const (
 	ActionSSMDescribeParameters  = "ssm:DescribeParameters"
 )
 
-// SNS lab actions (Phase 9).
+// SNS lab actions.
 const (
 	ActionSNSCreateTopic               = "sns:CreateTopic"
 	ActionSNSDeleteTopic               = "sns:DeleteTopic"
@@ -360,7 +360,7 @@ const (
 	ActionSNSRemovePermission          = "sns:RemovePermission"
 )
 
-// EventBridge lab actions (Phase 9).
+// EventBridge lab actions.
 const (
 	ActionEventsPutEvents         = "events:PutEvents"
 	ActionEventsCreateEventBus    = "events:CreateEventBus"
@@ -378,7 +378,7 @@ const (
 	ActionEventsListTargetsByRule = "events:ListTargetsByRule"
 )
 
-// ECR lab actions (Phase 9).
+// ECR lab actions.
 const (
 	ActionECRCreateRepository            = "ecr:CreateRepository"
 	ActionECRDescribeRepositories        = "ecr:DescribeRepositories"
@@ -397,7 +397,7 @@ const (
 	ActionECRBatchCheckLayerAvailability = "ecr:BatchCheckLayerAvailability"
 )
 
-// ECS lab actions (Phase 9).
+// ECS lab actions.
 const (
 	ActionECSRegisterTaskDefinition   = "ecs:RegisterTaskDefinition"
 	ActionECSDescribeTaskDefinition   = "ecs:DescribeTaskDefinition"
@@ -416,7 +416,7 @@ const (
 	ActionECSListServices             = "ecs:ListServices"
 )
 
-// Secrets Manager lab actions (Phase 8).
+// Secrets Manager lab actions.
 const (
 	ActionSecretsCreateSecret         = "secretsmanager:CreateSecret"
 	ActionSecretsGetSecretValue       = "secretsmanager:GetSecretValue"
@@ -431,12 +431,12 @@ const (
 	ActionSecretsDeleteResourcePolicy = "secretsmanager:DeleteResourcePolicy"
 )
 
-// CloudTrail lab actions (v3 N-AUDIT).
+// CloudTrail lab actions.
 const (
 	ActionCloudTrailLookupEvents = "cloudtrail:LookupEvents"
 )
 
-// CloudWatch Logs lab actions (v3 N-AUDIT + v5 Task 17 polish).
+// CloudWatch Logs lab actions.
 const (
 	ActionLogsCreateLogGroup     = "logs:CreateLogGroup"
 	ActionLogsCreateLogStream    = "logs:CreateLogStream"
@@ -448,14 +448,14 @@ const (
 	ActionLogsDescribeLogGroups  = "logs:DescribeLogGroups"
 )
 
-// Resource Groups Tagging API lab actions (v3 N-AUDIT).
+// Resource Groups Tagging API lab actions.
 const (
 	ActionTaggingTagResources   = "tag:TagResources"
 	ActionTaggingUntagResources = "tag:UntagResources"
 	ActionTaggingGetResources   = "tag:GetResources"
 )
 
-// Kinesis lab actions (v3 Track B).
+// Kinesis lab actions.
 const (
 	ActionKinesisCreateStream     = "kinesis:CreateStream"
 	ActionKinesisDeleteStream     = "kinesis:DeleteStream"
@@ -467,7 +467,7 @@ const (
 	ActionKinesisGetRecords       = "kinesis:GetRecords"
 )
 
-// AppConfig lab actions (v3 Track B).
+// AppConfig lab actions.
 const (
 	ActionAppConfigCreateApplication                = "appconfig:CreateApplication"
 	ActionAppConfigCreateEnvironment                = "appconfig:CreateEnvironment"
@@ -478,16 +478,17 @@ const (
 	ActionAppConfigDataGetLatestConfiguration       = "appconfigdata:GetLatestConfiguration"
 )
 
-// SES lab actions (v3 Track B).
+// SES lab actions.
 const (
 	ActionSESVerifyEmailIdentity = "ses:VerifyEmailIdentity"
 	ActionSESListIdentities      = "ses:ListIdentities"
 	ActionSESSendEmail           = "ses:SendEmail"
 	ActionSESSendRawEmail        = "ses:SendRawEmail"
 	ActionSESGetSendStatistics   = "ses:GetSendStatistics"
+	ActionSESSetIdentityNotificationTopic = "ses:SetIdentityNotificationTopic"
 )
 
-// Step Functions lab actions (v3 Track B).
+// Step Functions lab actions.
 const (
 	ActionSFNCreateStateMachine   = "states:CreateStateMachine"
 	ActionSFNDeleteStateMachine   = "states:DeleteStateMachine"
@@ -498,7 +499,7 @@ const (
 	ActionSFNGetExecutionHistory  = "states:GetExecutionHistory"
 )
 
-// CloudFormation lab actions (v4 Track B).
+// CloudFormation lab actions.
 const (
 	ActionCFNCreateStack    = "cloudformation:CreateStack"
 	ActionCFNDescribeStacks = "cloudformation:DescribeStacks"
@@ -506,7 +507,7 @@ const (
 	ActionCFNListStacks     = "cloudformation:ListStacks"
 )
 
-// CodePipeline lab actions (v4 Track B).
+// CodePipeline lab actions.
 const (
 	ActionCodePipelineCreatePipeline         = "codepipeline:CreatePipeline"
 	ActionCodePipelineGetPipeline            = "codepipeline:GetPipeline"
@@ -515,7 +516,7 @@ const (
 	ActionCodePipelineGetPipelineState       = "codepipeline:GetPipelineState"
 )
 
-// Firehose lab actions (v4 Track B).
+// Firehose lab actions.
 const (
 	ActionFirehoseCreateDeliveryStream   = "firehose:CreateDeliveryStream"
 	ActionFirehoseDeleteDeliveryStream   = "firehose:DeleteDeliveryStream"
@@ -525,7 +526,7 @@ const (
 	ActionFirehosePutRecordBatch         = "firehose:PutRecordBatch"
 )
 
-// Glue Data Catalog lab actions (v4 Track B).
+// Glue Data Catalog lab actions.
 const (
 	ActionGlueCreateDatabase = "glue:CreateDatabase"
 	ActionGlueGetDatabase    = "glue:GetDatabase"
@@ -537,7 +538,7 @@ const (
 	ActionGlueDeleteTable    = "glue:DeleteTable"
 )
 
-// Athena lab actions (v7 Track B).
+// Athena lab actions.
 const (
 	ActionAthenaStartQueryExecution = "athena:StartQueryExecution"
 	ActionAthenaGetQueryExecution   = "athena:GetQueryExecution"
@@ -545,7 +546,7 @@ const (
 	ActionAthenaStopQueryExecution  = "athena:StopQueryExecution"
 )
 
-// OpenSearch Service lab actions (v7 Track B). IAM uses es: prefix.
+// OpenSearch Service lab actions. IAM uses es: prefix.
 const (
 	ActionOpenSearchCreateDomain    = "es:CreateDomain"
 	ActionOpenSearchDescribeDomain  = "es:DescribeDomain"
@@ -553,7 +554,7 @@ const (
 	ActionOpenSearchDeleteDomain    = "es:DeleteDomain"
 )
 
-// WAFv2 lab actions (v4 Track B).
+// WAFv2 lab actions.
 const (
 	ActionWAFCreateWebACL    = "wafv2:CreateWebACL"
 	ActionWAFUpdateWebACL    = "wafv2:UpdateWebACL"
@@ -564,7 +565,7 @@ const (
 	ActionWAFEvaluate        = "wafv2:Evaluate"
 )
 
-// AWS Config lab actions (v4 Track B).
+// AWS Config lab actions.
 const (
 	ActionConfigPutConfigurationRecorder       = "config:PutConfigurationRecorder"
 	ActionConfigPutDeliveryChannel             = "config:PutDeliveryChannel"
@@ -572,7 +573,7 @@ const (
 	ActionConfigDescribeComplianceByConfigRule = "config:DescribeComplianceByConfigRule"
 )
 
-// EventBridge Scheduler lab actions (v5 Track A).
+// EventBridge Scheduler lab actions.
 const (
 	ActionSchedulerCreateSchedule = "scheduler:CreateSchedule"
 	ActionSchedulerGetSchedule    = "scheduler:GetSchedule"
@@ -581,7 +582,7 @@ const (
 	ActionSchedulerListSchedules  = "scheduler:ListSchedules"
 )
 
-// ACM lab actions (v5 Stream D).
+// ACM lab actions.
 const (
 	ActionACMRequestCertificate  = "acm:RequestCertificate"
 	ActionACMDescribeCertificate = "acm:DescribeCertificate"
@@ -589,7 +590,7 @@ const (
 	ActionACMDeleteCertificate   = "acm:DeleteCertificate"
 )
 
-// Route 53 lab actions (v5 Stream D).
+// Route 53 lab actions.
 const (
 	ActionRoute53CreateHostedZone         = "route53:CreateHostedZone"
 	ActionRoute53DeleteHostedZone         = "route53:DeleteHostedZone"
@@ -598,7 +599,7 @@ const (
 	ActionRoute53ListResourceRecordSets   = "route53:ListResourceRecordSets"
 )
 
-// Cloud Map (Service Discovery) lab actions (v5 Stream D).
+// Cloud Map (Service Discovery) lab actions.
 const (
 	ActionSDCreatePrivateDnsNamespace = "servicediscovery:CreatePrivateDnsNamespace"
 	ActionSDCreateHttpNamespace       = "servicediscovery:CreateHttpNamespace"
@@ -608,14 +609,14 @@ const (
 	ActionSDDiscoverInstances         = "servicediscovery:DiscoverInstances"
 )
 
-// Pricing lab actions (v5 Stream D).
+// Pricing lab actions.
 const (
 	ActionPricingDescribeServices   = "pricing:DescribeServices"
 	ActionPricingGetAttributeValues = "pricing:GetAttributeValues"
 	ActionPricingGetProducts        = "pricing:GetProducts"
 )
 
-// AppSync lab actions (v5 Stream D). Cognito User Pools auth added in v6.
+// AppSync lab actions. Cognito User Pools auth included.
 const (
 	ActionAppSyncCreateGraphqlApi    = "appsync:CreateGraphqlApi"
 	ActionAppSyncDeleteGraphqlApi    = "appsync:DeleteGraphqlApi"
@@ -628,7 +629,7 @@ const (
 	ActionAppSyncGraphQL             = "appsync:GraphQL"
 )
 
-// API Gateway HTTP API (v2) lab actions (v6 Stream B).
+// API Gateway HTTP API (v2) lab actions.
 const (
 	ActionAPIGatewayV2CreateApi         = "apigatewayv2:CreateApi"
 	ActionAPIGatewayV2GetApi            = "apigatewayv2:GetApi"
@@ -643,7 +644,7 @@ const (
 // execute-api invoke (HTTP API IAM authorizer). Not an HTTP API resource policy.
 const ActionExecuteAPIInvoke = "execute-api:Invoke"
 
-// Cognito User Pools lab actions (v6 Stream A).
+// Cognito User Pools lab actions.
 const (
 	ActionCognitoCreateUserPool         = "cognito-idp:CreateUserPool"
 	ActionCognitoDescribeUserPool       = "cognito-idp:DescribeUserPool"
@@ -660,7 +661,7 @@ const (
 	ActionCognitoAdminInitiateAuth      = "cognito-idp:AdminInitiateAuth"
 )
 
-// Cloud Control API lab actions (v6 Stream D).
+// Cloud Control API lab actions.
 const (
 	ActionCloudControlCreateResource = "cloudcontrol:CreateResource"
 	ActionCloudControlGetResource    = "cloudcontrol:GetResource"
@@ -668,7 +669,7 @@ const (
 	ActionCloudControlDeleteResource = "cloudcontrol:DeleteResource"
 )
 
-// BCM Data Exports lab actions (v6 Stream D).
+// BCM Data Exports lab actions.
 const (
 	ActionBCMCreateExport = "bcm-data-exports:CreateExport"
 	ActionBCMGetExport    = "bcm-data-exports:GetExport"
@@ -676,13 +677,13 @@ const (
 	ActionBCMDeleteExport = "bcm-data-exports:DeleteExport"
 )
 
-// Cost Explorer lab actions (v6 Stream D).
+// Cost Explorer lab actions.
 const (
 	ActionCEGetCostAndUsage = "ce:GetCostAndUsage"
 	ActionCEGetCostForecast = "ce:GetCostForecast"
 )
 
-// Budgets lab actions (v6 Stream D).
+// Budgets lab actions.
 const (
 	ActionBudgetsCreateBudget    = "budgets:CreateBudget"
 	ActionBudgetsDescribeBudget  = "budgets:DescribeBudget"
@@ -690,7 +691,7 @@ const (
 	ActionBudgetsDeleteBudget    = "budgets:DeleteBudget"
 )
 
-// CodeDeploy lab actions (v6 Stream D).
+// CodeDeploy lab actions.
 const (
 	ActionCodeDeployCreateApplication     = "codedeploy:CreateApplication"
 	ActionCodeDeployCreateDeploymentGroup = "codedeploy:CreateDeploymentGroup"
@@ -699,7 +700,7 @@ const (
 	ActionCodeDeployListDeployments       = "codedeploy:ListDeployments"
 )
 
-// CloudFront lab actions (v6 Stream C).
+// CloudFront lab actions.
 const (
 	ActionCloudFrontCreateDistribution = "cloudfront:CreateDistribution"
 	ActionCloudFrontGetDistribution    = "cloudfront:GetDistribution"
@@ -707,7 +708,7 @@ const (
 	ActionCloudFrontDeleteDistribution = "cloudfront:DeleteDistribution"
 )
 
-// Elastic Load Balancing v2 lab actions (v6 Stream C).
+// Elastic Load Balancing v2 lab actions.
 const (
 	ActionELBv2CreateLoadBalancer    = "elasticloadbalancing:CreateLoadBalancer"
 	ActionELBv2DescribeLoadBalancers = "elasticloadbalancing:DescribeLoadBalancers"
@@ -722,7 +723,7 @@ const (
 	ActionELBv2DescribeTargetHealth  = "elasticloadbalancing:DescribeTargetHealth"
 )
 
-// S3 Vectors lab actions (v6 Stream C).
+// S3 Vectors lab actions.
 const (
 	ActionS3VectorsCreateVectorBucket = "s3vectors:CreateVectorBucket"
 	ActionS3VectorsListVectorBuckets  = "s3vectors:ListVectorBuckets"
@@ -734,25 +735,25 @@ const (
 	ActionS3VectorsQueryVectors       = "s3vectors:QueryVectors"
 )
 
-// Bedrock Runtime lab actions (v7 Stream D). IAM action prefix is bedrock:.
+// Bedrock Runtime lab actions. IAM action prefix is bedrock:.
 const (
 	ActionBedrockInvokeModel = "bedrock:InvokeModel"
 )
 
-// Textract lab actions (v7 Stream D).
+// Textract lab actions.
 const (
 	ActionTextractDetectDocumentText = "textract:DetectDocumentText"
 	ActionTextractAnalyzeDocument    = "textract:AnalyzeDocument"
 )
 
-// Transcribe lab actions (v7 Stream D).
+// Transcribe lab actions.
 const (
 	ActionTranscribeStartTranscriptionJob = "transcribe:StartTranscriptionJob"
 	ActionTranscribeGetTranscriptionJob   = "transcribe:GetTranscriptionJob"
 	ActionTranscribeListTranscriptionJobs = "transcribe:ListTranscriptionJobs"
 )
 
-// EMR (Elastic MapReduce) lab actions (v7 Stream D).
+// EMR (Elastic MapReduce) lab actions.
 const (
 	ActionEMRRunJobFlow         = "elasticmapreduce:RunJobFlow"
 	ActionEMRDescribeCluster    = "elasticmapreduce:DescribeCluster"
@@ -760,7 +761,7 @@ const (
 	ActionEMRTerminateJobFlows  = "elasticmapreduce:TerminateJobFlows"
 )
 
-// CodeBuild lab actions (v4 Track B).
+// CodeBuild lab actions.
 const (
 	ActionCodeBuildCreateProject  = "codebuild:CreateProject"
 	ActionCodeBuildStartBuild     = "codebuild:StartBuild"
@@ -768,7 +769,7 @@ const (
 	ActionCodeBuildListBuilds     = "codebuild:ListBuilds"
 )
 
-// Batch lab actions (v4 Track B).
+// Batch lab actions.
 const (
 	ActionBatchCreateComputeEnvironment    = "batch:CreateComputeEnvironment"
 	ActionBatchCreateJobQueue              = "batch:CreateJobQueue"
@@ -780,7 +781,7 @@ const (
 	ActionBatchDescribeJobs                = "batch:DescribeJobs"
 )
 
-// Lambda lab actions (Phase 7).
+// Lambda lab actions.
 const (
 	ActionLambdaCreateFunction              = "lambda:CreateFunction"
 	ActionLambdaGetFunction                 = "lambda:GetFunction"
@@ -1156,6 +1157,7 @@ func KnownAction(action string) bool {
 		ActionSESSendEmail,
 		ActionSESSendRawEmail,
 		ActionSESGetSendStatistics,
+		ActionSESSetIdentityNotificationTopic,
 		ActionSFNCreateStateMachine,
 		ActionSFNDeleteStateMachine,
 		ActionSFNDescribeStateMachine,

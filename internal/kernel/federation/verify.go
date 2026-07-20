@@ -10,11 +10,11 @@ import (
 	"encoding/pem"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwksfetch"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwtutil"
 )
 
@@ -190,33 +190,28 @@ type OIDCClaims struct {
 
 // VerifyWebIdentityJWT validates a JWT against JWKS fetched from issuer.
 // Requires matching iss and aud (clientID). Fail-closed on any error.
+// Remote JWKS requires NOCTAXRIS_ALLOW_REMOTE_JWKS with a public host allowlist (SSRF fail-closed).
 func VerifyWebIdentityJWT(token, issuerURL, clientID string, httpClient *http.Client) (OIDCClaims, error) {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
-	}
 	issuerURL = strings.TrimRight(issuerURL, "/")
 	if issuerURL == "" || clientID == "" || token == "" {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "OIDC token validation inputs incomplete")
 	}
-
-	jwksURL := issuerURL + "/.well-known/jwks.json"
-	resp, err := httpClient.Get(jwksURL)
+	if jwksfetch.IsLabCognitoIssuer(issuerURL) {
+		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "lab Cognito issuer requires in-process JWKS path")
+	}
+	body, err := jwksfetch.FetchRemoteJWKS(issuerURL, httpClient)
 	if err != nil {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWKS unreachable; assertion rejected")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWKS unreachable; assertion rejected")
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWKS read failed")
 	}
 
 	claimsMap, err := jwtutil.VerifyCompactRS256(token, body)
 	if err != nil {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT signature verification failed")
 	}
+	return validateWebIdentityClaims(claimsMap, issuerURL, clientID, time.Now().UTC())
+}
+
+func validateWebIdentityClaims(claimsMap map[string]any, issuerURL, clientID string, now time.Time) (OIDCClaims, error) {
 	iss := jwtutil.ClaimString(claimsMap, "iss")
 	sub := jwtutil.ClaimString(claimsMap, "sub")
 	if !issuerMatches(iss, issuerURL) {
@@ -225,6 +220,12 @@ func VerifyWebIdentityJWT(token, issuerURL, clientID string, httpClient *http.Cl
 	auds := normalizeAud(claimsMap["aud"])
 	if !containsString(auds, clientID) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT aud mismatch")
+	}
+	if jwtutil.ClaimExpired(claimsMap, now) {
+		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT exp missing or expired")
+	}
+	if jwtutil.ClaimNotYetValid(claimsMap, now) {
+		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT nbf not yet valid")
 	}
 	return OIDCClaims{Issuer: iss, Subject: sub, Audience: auds}, nil
 }

@@ -43,6 +43,28 @@ func TestSignAndVerifyRS256(t *testing.T) {
 	}
 }
 
+func TestClaimNotYetValid(t *testing.T) {
+	now := time.Now().UTC()
+	if jwtutil.ClaimNotYetValid(map[string]any{"exp": now.Add(time.Hour).Unix()}, now) {
+		t.Fatal("missing nbf should be valid")
+	}
+	if !jwtutil.ClaimNotYetValid(map[string]any{
+		"exp": now.Add(time.Hour).Unix(),
+		"nbf": now.Add(time.Hour).Unix(),
+	}, now) {
+		t.Fatal("future nbf should be not yet valid")
+	}
+	if jwtutil.ClaimNotYetValid(map[string]any{
+		"exp": now.Add(time.Hour).Unix(),
+		"nbf": now.Add(-time.Minute).Unix(),
+	}, now) {
+		t.Fatal("past nbf should be valid")
+	}
+	if !jwtutil.ClaimNotYetValid(map[string]any{"nbf": "bad"}, now) {
+		t.Fatal("non-numeric nbf should fail closed")
+	}
+}
+
 func TestVerifyRejectsHS256(t *testing.T) {
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte("0123456789abcdef0123456789abcdef")}, nil)
 	if err != nil {

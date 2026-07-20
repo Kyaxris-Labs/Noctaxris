@@ -116,7 +116,7 @@ func (s *Store) CreateMQBroker(accountID, region, name, engineType, engineVersio
 	_, err = s.db.Exec(
 		`INSERT INTO mq_brokers
 		 (account_id, broker_id, broker_name, broker_arn, engine_type, engine_version, deployment_mode, broker_state, host_instance_type, stub_endpoint, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'CREATION_FAILED', ?, ?, ?)`,
 		accountID, id, name, arn, engineType, engineVersion, deploymentMode, instanceType, stub, now,
 	)
 	if err != nil {
@@ -125,7 +125,8 @@ func (s *Store) CreateMQBroker(accountID, region, name, engineType, engineVersio
 	return MQBroker{
 		BrokerID: id, BrokerName: name, BrokerARN: arn,
 		EngineType: engineType, EngineVersion: engineVersion, DeploymentMode: deploymentMode,
-		BrokerState: "RUNNING", HostInstanceType: instanceType, StubEndpoint: stub, CreatedAt: now,
+		// Stub-only: no nested broker process.
+		BrokerState: "CREATION_FAILED", HostInstanceType: instanceType, StubEndpoint: stub, CreatedAt: now,
 	}, nil
 }
 

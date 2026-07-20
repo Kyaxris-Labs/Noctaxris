@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
@@ -30,8 +32,14 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnvDockerHost(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"ca.pem", "cert.pem", "key.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("NOCTAXRIS_DOCKER_HOST", "tcp://noctaxris-engine:2376")
-	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", "/certs/client")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", dir)
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -40,11 +48,29 @@ func TestLoadFromEnvDockerHost(t *testing.T) {
 	if cfg.DockerHost != "tcp://noctaxris-engine:2376" {
 		t.Fatalf("DockerHost = %q, want %q", cfg.DockerHost, "tcp://noctaxris-engine:2376")
 	}
-	if cfg.DockerTLSCertPath != "/certs/client" {
-		t.Fatalf("DockerTLSCertPath = %q, want %q", cfg.DockerTLSCertPath, "/certs/client")
+	if cfg.DockerTLSCertPath != dir {
+		t.Fatalf("DockerTLSCertPath = %q, want %q", cfg.DockerTLSCertPath, dir)
 	}
 	if cfg.ComputeRuntime != "dind" {
 		t.Fatalf("ComputeRuntime = %q, want dind default", cfg.ComputeRuntime)
+	}
+}
+
+func TestLoadFromEnvDockerHostRejectsSock(t *testing.T) {
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "unix:///var/run/docker.sock")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", t.TempDir())
+	_, err := config.LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected error for docker.sock host")
+	}
+}
+
+func TestLoadFromEnvDockerHostRequiresCertPath(t *testing.T) {
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "tcp://noctaxris-engine:2376")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", "")
+	_, err := config.LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected error when cert path missing")
 	}
 }
 

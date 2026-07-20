@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. No WAN listener. Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory.
+Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. No WAN listener and no loopback SFTP listener. Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe reports `EndpointType=VPC` and `State=OFFLINE` so control-plane shape does not claim a public online listener.
 
 ## Implemented
 

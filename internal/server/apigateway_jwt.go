@@ -2,22 +2,23 @@ package server
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwksfetch"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwtutil"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 // verifyAPIGatewayJWT validates a Bearer JWT for HTTP API JWT authorizers and AppSync Cognito.
 // Uses shared jwtutil (go-jose v4, RS256 only). Checks iss, aud or client_id, exp,
-// and prefers token_use=access (also accepts id when audience matches).
-func (s *Server) verifyAPIGatewayJWT(token, issuer string, audience []string, now time.Time) error {
+// and requires token_use to be one of allowedTokenUses (empty/missing is rejected).
+func (s *Server) verifyAPIGatewayJWT(token, issuer string, audience []string, now time.Time, allowedTokenUses ...string) error {
 	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
 	if token == "" || issuer == "" || len(audience) == 0 {
 		return fmt.Errorf("jwt inputs incomplete")
+	}
+	if len(allowedTokenUses) == 0 {
+		return fmt.Errorf("token_use allowlist required")
 	}
 	jwksJSON, err := s.loadJWKSForIssuer(issuer)
 	if err != nil {
@@ -34,7 +35,17 @@ func (s *Server) verifyAPIGatewayJWT(token, issuer string, audience []string, no
 		return fmt.Errorf("token expired")
 	}
 	tokenUse := strings.ToLower(strings.TrimSpace(jwtutil.ClaimString(claims, "token_use")))
-	if tokenUse != "" && tokenUse != "access" && tokenUse != "id" {
+	if tokenUse == "" {
+		return fmt.Errorf("missing token_use")
+	}
+	allowed := false
+	for _, want := range allowedTokenUses {
+		if tokenUse == strings.ToLower(strings.TrimSpace(want)) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return fmt.Errorf("unexpected token_use")
 	}
 	auds := normalizeJWTAudience(claims["aud"])
@@ -47,54 +58,17 @@ func (s *Server) verifyAPIGatewayJWT(token, issuer string, audience []string, no
 	return nil
 }
 
-// loadJWKSForIssuer prefers in-process Cognito store JWKS for lab issuers (httptest-safe),
-// otherwise fetches <issuer>/.well-known/jwks.json over HTTP.
+// loadJWKSForIssuer prefers in-process Cognito store JWKS for lab issuers (httptest-safe).
+// Non-lab issuers require NOCTAXRIS_ALLOW_REMOTE_JWKS with a public host allowlist (fail-closed SSRF).
 func (s *Server) loadJWKSForIssuer(issuer string) ([]byte, error) {
-	if _, poolID, ok := parseLabCognitoIssuer(issuer); ok {
+	if _, poolID, ok := jwksfetch.ParseLabCognitoIssuer(issuer); ok {
 		jwks, err := s.store.CognitoJWKSJSON(poolID)
 		if err != nil {
 			return nil, fmt.Errorf("cognito jwks: %w", err)
 		}
 		return jwks, nil
 	}
-	jwksURL := issuer + "/.well-known/jwks.json"
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(jwksURL)
-	if err != nil {
-		return nil, fmt.Errorf("jwks unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("jwks read: %w", err)
-	}
-	return body, nil
-}
-
-func parseLabCognitoIssuer(issuer string) (region, poolID string, ok bool) {
-	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
-	const prefix = store.CognitoLabIssuerHost + "/cognito-idp/"
-	if !strings.HasPrefix(issuer, prefix) {
-		// Also accept host-less path form used in some lab docs.
-		pathPrefix := "/cognito-idp/"
-		if strings.HasPrefix(issuer, pathPrefix) {
-			rest := strings.TrimPrefix(issuer, pathPrefix)
-			parts := strings.Split(rest, "/")
-			if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-				return parts[0], parts[1], true
-			}
-		}
-		return "", "", false
-	}
-	rest := strings.TrimPrefix(issuer, prefix)
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
+	return jwksfetch.FetchRemoteJWKS(issuer, nil)
 }
 
 func issuerEqual(iss, configured string) bool {

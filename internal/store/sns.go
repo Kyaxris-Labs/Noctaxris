@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/google/uuid"
 )
 
@@ -183,9 +184,9 @@ func topicContentBasedDedup(attrs map[string]string) bool {
 
 func scanTopic(row *sql.Row) (Topic, error) {
 	var (
-		t       Topic
-		attrs   string
-		policy  string
+		t      Topic
+		attrs  string
+		policy string
 	)
 	err := row.Scan(&t.AccountID, &t.TopicName, &t.TopicARN, &policy, &attrs, &t.CreationDate)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -452,13 +453,14 @@ func (s *Store) findSNSDedupMessage(topicARN, dedupID string) (PublishedMessage,
 		m     PublishedMessage
 		attrs string
 	)
+	cutoff := time.Now().UTC().Add(-FIFODedupWindow).Format(time.RFC3339)
 	err := s.db.QueryRow(
 		`SELECT message_id, topic_arn, body, subject, attributes_json, created_at,
 		        COALESCE(message_group_id,''), COALESCE(message_deduplication_id,'')
 		 FROM sns_published_messages
-		 WHERE topic_arn = ? AND message_deduplication_id = ?
+		 WHERE topic_arn = ? AND message_deduplication_id = ? AND created_at >= ?
 		 ORDER BY created_at DESC LIMIT 1`,
-		topicARN, dedupID,
+		topicARN, dedupID, cutoff,
 	).Scan(&m.MessageID, &m.TopicARN, &m.Body, &m.Subject, &attrs, &m.CreatedAt, &m.MessageGroupID, &m.MessageDeduplicationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PublishedMessage{}, false, nil
@@ -530,6 +532,17 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 	if err != nil {
 		return err
 	}
+	queueARN := sub.Endpoint
+	if !strings.HasPrefix(strings.TrimSpace(queueARN), "arn:aws:sqs:") {
+		q, qerr := s.GetQueue(sub.Owner, queueName)
+		if qerr != nil {
+			return qerr
+		}
+		queueARN = q.QueueARN
+	}
+	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS) {
+		return fmt.Errorf("sns sqs delivery: queue policy does not Allow sns.amazonaws.com")
+	}
 	body, err := json.Marshal(snsNotificationEnvelope(msg))
 	if err != nil {
 		return fmt.Errorf("marshal sns sqs envelope: %w", err)
@@ -557,6 +570,13 @@ func (s *Store) deliverSNSToLambda(sub Subscription, msg PublishedMessage) error
 	functionName, qualifier := ParseFunctionQualifier(sub.Endpoint)
 	if functionName == "" {
 		return fmt.Errorf("sns lambda delivery: empty function endpoint")
+	}
+	fn, err := s.GetFunction(sub.Owner, functionName)
+	if err != nil {
+		return fmt.Errorf("sns lambda delivery: %w", err)
+	}
+	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalSNS) {
+		return fmt.Errorf("sns lambda delivery: function policy does not Allow sns.amazonaws.com")
 	}
 	eventJSON, err := snsLambdaEventJSON(sub, msg)
 	if err != nil {
@@ -794,11 +814,11 @@ func subscriptionAttributes(sub Subscription) map[string]string {
 		confirmed = "true"
 	}
 	return map[string]string{
-		"SubscriptionArn": sub.SubscriptionARN,
-		"TopicArn":        sub.TopicARN,
-		"Protocol":        sub.Protocol,
-		"Endpoint":        sub.Endpoint,
-		"Owner":           sub.Owner,
+		"SubscriptionArn":              sub.SubscriptionARN,
+		"TopicArn":                     sub.TopicARN,
+		"Protocol":                     sub.Protocol,
+		"Endpoint":                     sub.Endpoint,
+		"Owner":                        sub.Owner,
 		"ConfirmationWasAuthenticated": confirmed,
 	}
 }
@@ -984,12 +1004,12 @@ const LabSNSHTTPCatcherPath = "/_noctaxris/sns-http-catcher"
 
 // SNSHTTPCatcherMessage is a caught HTTP delivery or confirmation.
 type SNSHTTPCatcherMessage struct {
-	ID               int64
-	SubscriptionARN  string
-	TopicARN         string
-	MessageType      string
-	Body             string
-	ReceivedAt       string
+	ID              int64
+	SubscriptionARN string
+	TopicARN        string
+	MessageType     string
+	Body            string
+	ReceivedAt      string
 }
 
 // validateSNSHTTPEndpoint allows only loopback hosts or the lab catcher path.
@@ -1031,14 +1051,14 @@ func (s *Store) deliverSNSHTTPConfirmation(sub Subscription) error {
 	subscribeURL := fmt.Sprintf("http://127.0.0.1:4566%s?Action=ConfirmSubscription&Token=%s&TopicArn=%s",
 		LabSNSHTTPCatcherPath, url.QueryEscape(sub.ConfirmToken), url.QueryEscape(sub.TopicARN))
 	payload := map[string]any{
-		"Type":             "SubscriptionConfirmation",
-		"MessageId":        uuid.NewString(),
-		"Token":            sub.ConfirmToken,
-		"TopicArn":         sub.TopicARN,
-		"Message":          "You have chosen to subscribe to the topic.",
-		"SubscribeURL":     subscribeURL,
-		"Timestamp":        nowRFC3339(),
-		"SubscriptionArn":  sub.SubscriptionARN,
+		"Type":            "SubscriptionConfirmation",
+		"MessageId":       uuid.NewString(),
+		"Token":           sub.ConfirmToken,
+		"TopicArn":        sub.TopicARN,
+		"Message":         "You have chosen to subscribe to the topic.",
+		"SubscribeURL":    subscribeURL,
+		"Timestamp":       nowRFC3339(),
+		"SubscriptionArn": sub.SubscriptionARN,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

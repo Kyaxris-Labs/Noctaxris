@@ -22,6 +22,13 @@ func (s *Server) handleIAM(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	// AWS: GetSessionToken credentials cannot call IAM unless MFA was used to mint them.
+	if s.getSessionTokenSessionBlocksIAM(verified) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call IAM without MFA.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := requestParams(r, body)
 	resource := "*"
 	if !s.authorize(verified, action, resource) {
@@ -85,6 +92,11 @@ func (s *Server) handleIAM(
 	case catalog.ActionIAMDeleteUser, "DeleteUser":
 		userName := params["UserName"]
 		if err := s.store.DeleteUser(accountID, userName); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"User not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "DeleteConflict",
 				"Unable to delete user.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
@@ -97,13 +109,13 @@ func (s *Server) handleIAM(
 		}
 		keyID, secret, createErr := s.store.CreateUserAccessKey(accountID, userName)
 		if createErr != nil {
-			s.writeAWSError(w, requestID, http.StatusBadRequest, "NoSuchEntity",
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Unable to create access key.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
 		payload, err = iam.CreateAccessKeyXML(userName, keyID, secret, requestID)
 	case catalog.ActionIAMDeleteAccessKey, "DeleteAccessKey":
-		if err := s.store.DeleteAccessKey(params["AccessKeyId"]); err != nil {
+		if err := s.store.DeleteAccessKeyInAccount(accountID, params["AccessKeyId"]); err != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Access key not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
@@ -122,7 +134,7 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.ListAccessKeysXML(keys, requestID)
 	case catalog.ActionIAMUpdateAccessKey, "UpdateAccessKey":
-		if err := s.store.UpdateAccessKey(params["AccessKeyId"], params["Status"]); err != nil {
+		if err := s.store.UpdateAccessKeyInAccount(accountID, params["AccessKeyId"], params["Status"]); err != nil {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
 				"Unable to update access key.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
@@ -173,28 +185,28 @@ func (s *Server) handleIAM(
 		payload, err = iam.DeletePolicyXML(requestID)
 	case catalog.ActionIAMAttachUserPolicy, "AttachUserPolicy":
 		if err := s.store.AttachUserPolicy(accountID, params["UserName"], params["PolicyArn"]); err != nil {
-			s.writeAWSError(w, requestID, http.StatusBadRequest, "NoSuchEntity",
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Unable to attach user policy.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
 		payload, err = iam.AttachUserPolicyXML(requestID)
 	case catalog.ActionIAMDetachUserPolicy, "DetachUserPolicy":
 		if err := s.store.DetachUserPolicy(accountID, params["UserName"], params["PolicyArn"]); err != nil {
-			s.writeAWSError(w, requestID, http.StatusBadRequest, "NoSuchEntity",
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Unable to detach user policy.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
 		payload, err = iam.DetachUserPolicyXML(requestID)
 	case catalog.ActionIAMAttachRolePolicy, "AttachRolePolicy":
 		if err := s.store.AttachRolePolicy(accountID, params["RoleName"], params["PolicyArn"]); err != nil {
-			s.writeAWSError(w, requestID, http.StatusBadRequest, "NoSuchEntity",
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Unable to attach role policy.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
 		payload, err = iam.AttachRolePolicyXML(requestID)
 	case catalog.ActionIAMDetachRolePolicy, "DetachRolePolicy":
 		if err := s.store.DetachRolePolicy(accountID, params["RoleName"], params["PolicyArn"]); err != nil {
-			s.writeAWSError(w, requestID, http.StatusBadRequest, "NoSuchEntity",
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Unable to detach role policy.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}

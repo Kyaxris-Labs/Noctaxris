@@ -20,7 +20,7 @@ GraphQL API CRUD lite, schema store, Lambda data source and one Query field reso
 |--------------------|--------------|-------|
 | `API_KEY` | Header `x-api-key` | CreateApiKey returns the key in `apiKey.id` |
 | `AWS_IAM` | SigV4 service `appsync` + `appsync:GraphQL` | Unsigned requests rejected |
-| `AMAZON_COGNITO_USER_POOLS` | Bearer JWT | `userPoolConfig` with `userPoolId`, `clientId` (audience), optional `issuer`. Verifies via shared jose helper against lab Cognito JWKS |
+| `AMAZON_COGNITO_USER_POOLS` | Bearer JWT | `userPoolConfig` with `userPoolId`, `clientId` (audience), optional `issuer` (lab Cognito shape by default). Verifies via shared jose helper against lab Cognito JWKS. Requires `token_use=id`. Non-lab issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` |
 
 ### Authz notes
 
@@ -41,10 +41,10 @@ curl -s -H "x-api-key: $KEY" -H "content-type: application/json" \
   -d '{"query":"{ hello }"}' "http://127.0.0.1:4566/appsync/$API/graphql"
 ```
 
-Cognito auth example: create the API with `--authentication-type AMAZON_COGNITO_USER_POOLS` and a `userPoolConfig`, obtain an access token from Cognito `InitiateAuth`, then:
+Cognito auth example: create the API with `--authentication-type AMAZON_COGNITO_USER_POOLS` and a `userPoolConfig`, obtain an **IdToken** from Cognito `InitiateAuth`, then:
 
 ```bash
-curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "content-type: application/json" \
+curl -s -H "Authorization: Bearer $ID_TOKEN" -H "content-type: application/json" \
   -d '{"query":"{ hello }"}' "http://127.0.0.1:4566/appsync/$API/graphql"
 ```
 

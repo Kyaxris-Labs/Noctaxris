@@ -748,6 +748,7 @@ func (s *Store) recordEventRuleMatch(entryID, ruleARN, targetARN, targetID, crea
 // events.amazonaws.com or the account root for the target action (best-effort skip).
 // With RoleArn, PassRole is enforced at PutTargets and delivery mints a role session
 // then requires the role identity policies to Allow the target action.
+// Constant Input overrides the envelope. Otherwise InputPath (JSONPath subset) is applied.
 func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tgt EventTarget, source, detailType, detailJSON, created string) {
 	body, err := eventBridgeDeliveryBody(accountID, entryID, DefaultEventsRegion, source, detailType, detailJSON, created)
 	if err != nil {
@@ -756,6 +757,13 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 	}
 	if input := strings.TrimSpace(tgt.Input); input != "" {
 		body = input
+	} else if path := strings.TrimSpace(tgt.InputPath); path != "" {
+		extracted, pathErr := applyEventBridgeInputPath(body, path)
+		if pathErr != nil {
+			log.Printf("events InputPath failed entry=%s target=%s path=%s err=%v", entryID, tgt.ARN, path, pathErr)
+			return
+		}
+		body = extracted
 	}
 	arn := strings.TrimSpace(tgt.ARN)
 	var deliverErr error

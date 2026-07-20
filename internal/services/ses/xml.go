@@ -88,6 +88,14 @@ func GetSendStatisticsXML(stats store.SESSendStatistics, requestID string) ([]by
 	return marshal("GetSendStatisticsResponse", r, requestID)
 }
 
+// SetIdentityNotificationTopicXML builds a SetIdentityNotificationTopic response.
+func SetIdentityNotificationTopicXML(requestID string) ([]byte, error) {
+	type result struct {
+		XMLName xml.Name `xml:"SetIdentityNotificationTopicResult"`
+	}
+	return marshal("SetIdentityNotificationTopicResponse", result{}, requestID)
+}
+
 // ErrorXML builds an SES error response.
 func ErrorXML(code, message, requestID string) ([]byte, error) {
 	type errBody struct {

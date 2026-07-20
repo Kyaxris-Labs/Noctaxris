@@ -177,3 +177,59 @@ func TestCodeDeployCreateDeploymentSucceeded(t *testing.T) {
 		t.Fatalf("GetDeployment status=%d body=%q", get.Code, get.Body.String())
 	}
 }
+
+func TestCodeDeployLambdaPublishVersionHook(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "cd-lambda-role", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cd-lambda-role"
+	createFn := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "cd-hook-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if createFn.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createFn.Code, createFn.Body.String())
+	}
+
+	app := mustJSONTarget(t, handler, "CodeDeploy_20141006.CreateApplication", "codedeploy", map[string]any{
+		"applicationName": "LambdaApp",
+		"computePlatform": "Lambda",
+	}, now)
+	if app.Code != http.StatusOK {
+		t.Fatalf("CreateApplication status=%d", app.Code)
+	}
+	dg := mustJSONTarget(t, handler, "CodeDeploy_20141006.CreateDeploymentGroup", "codedeploy", map[string]any{
+		"applicationName":     "LambdaApp",
+		"deploymentGroupName": "LambdaDG",
+		"lambdaFunctionName":  "cd-hook-fn",
+	}, now)
+	if dg.Code != http.StatusOK {
+		t.Fatalf("CreateDeploymentGroup status=%d body=%q", dg.Code, dg.Body.String())
+	}
+	dep := mustJSONTarget(t, handler, "CodeDeploy_20141006.CreateDeployment", "codedeploy", map[string]any{
+		"applicationName":     "LambdaApp",
+		"deploymentGroupName": "LambdaDG",
+	}, now)
+	if dep.Code != http.StatusOK {
+		t.Fatalf("CreateDeployment status=%d body=%q", dep.Code, dep.Body.String())
+	}
+	versions, err := st.ListVersionsByFunction(testAccountID, "cd-hook-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, v := range versions {
+		if v.Version >= 1 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected PublishVersion from CodeDeploy hook, versions=%+v", versions)
+	}
+}

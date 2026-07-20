@@ -20,6 +20,47 @@ import (
 
 const defaultSessionDuration = time.Hour
 
+// lookupGetSessionTokenSession returns the access-key row when verified is a
+// GetSessionToken-minted user/root session (not AssumeRole / federation).
+func (s *Server) lookupGetSessionTokenSession(verified *authn.Verified) (store.AccessKey, bool) {
+	if verified == nil || verified.SessionToken == "" {
+		return store.AccessKey{}, false
+	}
+	if verified.Principal.Kind == identity.KindRole || verified.Principal.Kind == identity.KindFederated {
+		return store.AccessKey{}, false
+	}
+	ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID)
+	if err != nil || ak.RoleARN != "" || ak.FederatedUser != "" {
+		return store.AccessKey{}, false
+	}
+	return ak, true
+}
+
+// getSessionTokenSessionBlocksIAM is true when a GetSessionToken session lacks MFA
+// (AWS: those credentials cannot call IAM without MFA).
+func (s *Server) getSessionTokenSessionBlocksIAM(verified *authn.Verified) bool {
+	ak, ok := s.lookupGetSessionTokenSession(verified)
+	if !ok {
+		return false
+	}
+	return !ak.MFAAuthenticated
+}
+
+// getSessionTokenSessionBlocksSTS is true when a GetSessionToken session cannot
+// call the given STS action (AWS allows only AssumeRole and GetCallerIdentity).
+func (s *Server) getSessionTokenSessionBlocksSTS(verified *authn.Verified, action string) bool {
+	if _, ok := s.lookupGetSessionTokenSession(verified); !ok {
+		return false
+	}
+	switch action {
+	case catalog.ActionSTSAssumeRole, "AssumeRole",
+		catalog.ActionSTSGetCallerIdentity, "GetCallerIdentity":
+		return false
+	default:
+		return true
+	}
+}
+
 func (s *Server) handleGetSessionToken(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -28,7 +69,16 @@ func (s *Server) handleGetSessionToken(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	// AWS: GetSessionToken requires SigV4 only. No IAM permission check.
+	// AWS: GetSessionToken requires long-term credentials of an IAM user or root.
+	// No IAM permission check for sts:GetSessionToken after SigV4.
+	if verified.SessionToken != "" ||
+		verified.Principal.Kind == identity.KindRole ||
+		verified.Principal.Kind == identity.KindFederated {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"GetSessionToken must be called with long-term credentials.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	serial := params.Get("SerialNumber")
 	tokenCode := params.Get("TokenCode")
@@ -122,15 +172,21 @@ func (s *Server) handleGetFederationToken(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSGetFederationToken) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:GetFederationToken.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	name := params.Get("Name")
 	policy := params.Get("Policy")
 	if policy == "" {
 		policy = params.Get("PolicyArns.member.1.arn")
 	}
-	if name == "" || policy == "" {
+	if name == "" {
 		s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
-			"Name and Policy (or PolicyArns) are required.", readOnly, r, eventID,
+			"Name is required.", readOnly, r, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -140,13 +196,19 @@ func (s *Server) handleGetFederationToken(
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	sessionPolicy := policy
-	if strings.HasPrefix(policy, "arn:") {
-		if p, err := s.store.GetManagedPolicy(policy); err == nil {
+	sessionPolicy := ""
+	if policy != "" {
+		sessionPolicy = policy
+		if strings.HasPrefix(policy, "arn:") {
+			p, err := s.store.GetManagedPolicy(policy)
+			if err != nil {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy ARN not found.", readOnly, r, eventID,
+					verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
 			sessionPolicy = p.Document
-		}
-	} else {
-		if unesc, err := url.QueryUnescape(policy); err == nil && unesc != "" {
+		} else if unesc, err := url.QueryUnescape(policy); err == nil && unesc != "" {
 			sessionPolicy = unesc
 		}
 	}
@@ -206,6 +268,12 @@ func (s *Server) handleGetAccessKeyInfo(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSGetAccessKeyInfo) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:GetAccessKeyInfo.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	akid := params.Get("AccessKeyId")
 	if akid == "" {
@@ -237,6 +305,18 @@ func (s *Server) handleDecodeAuthorizationMessage(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSDecodeAuthorizationMessage) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:DecodeAuthorizationMessage.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSTSDecodeAuthorizationMessage, "*") {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:DecodeAuthorizationMessage.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	encoded := params.Get("EncodedMessage")
 	decoded, err := sts.DecodeAuthorizationMessage(encoded)
@@ -264,6 +344,12 @@ func (s *Server) handleAssumeRoot(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSAssumeRoot) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:AssumeRoot.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	target := params.Get("TargetAccount")
 	if target == "" {
@@ -508,6 +594,12 @@ func (s *Server) handleGetDelegatedAccessToken(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSGetDelegatedAccessToken) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:GetDelegatedAccessToken.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	err := sts.GetDelegatedAccessToken()
 	s.writeAWSError(w, requestID, http.StatusForbidden, sts.CodeOf(err),
 		err.Error(), readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
@@ -521,6 +613,12 @@ func (s *Server) handleGetWebIdentityToken(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
+	if s.getSessionTokenSessionBlocksSTS(verified, catalog.ActionSTSGetWebIdentityToken) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Temporary credentials from GetSessionToken cannot call sts:GetWebIdentityToken.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	providers, _ := s.store.ListOIDCProviders(verified.AccountID)
 	params := formParams(r, body)
 	err := sts.GetWebIdentityToken(len(providers) > 0, params.Get("Audience"))

@@ -133,6 +133,51 @@ func (s *Store) PutConfigDeliveryChannel(accountID, name, bucket, prefix, snsARN
 	return ConfigDeliveryChannel{Name: name, S3BucketName: bucket, S3KeyPrefix: prefix, SNSTopicARN: snsARN, CreatedAt: now}, nil
 }
 
+// ListConfigDeliveryChannels returns delivery channels for an account.
+func (s *Store) ListConfigDeliveryChannels(accountID string) ([]ConfigDeliveryChannel, error) {
+	rows, err := s.db.Query(
+		`SELECT name, s3_bucket_name, s3_key_prefix, sns_topic_arn, created_at
+		 FROM config_delivery_channels WHERE account_id = ? ORDER BY created_at, name`,
+		accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list config delivery channels: %w", err)
+	}
+	defer rows.Close()
+	var out []ConfigDeliveryChannel
+	for rows.Next() {
+		var ch ConfigDeliveryChannel
+		if err := rows.Scan(&ch.Name, &ch.S3BucketName, &ch.S3KeyPrefix, &ch.SNSTopicARN, &ch.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list config delivery channels scan: %w", err)
+		}
+		out = append(out, ch)
+	}
+	return out, rows.Err()
+}
+
+// NotifyConfigDeliveryChannelsSNS publishes a lab start notification to each delivery channel SNS topic (best-effort).
+func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) {
+	channels, err := s.ListConfigDeliveryChannels(accountID)
+	if err != nil {
+		return
+	}
+	msg := fmt.Sprintf(
+		`{"messageType":"ConfigurationHistoryDeliveryStarted","configurationRecorderName":"%s"}`,
+		recorderName,
+	)
+	for _, ch := range channels {
+		arn := strings.TrimSpace(ch.SNSTopicARN)
+		if arn == "" {
+			continue
+		}
+		topic, err := s.GetTopicByARN(arn)
+		if err != nil || topic.AccountID != accountID {
+			continue
+		}
+		_, _ = s.Publish(accountID, topic.TopicName, msg, "AWS Config Notification", nil)
+	}
+}
+
 // StartConfigRecorder marks a recorder as recording.
 func (s *Store) StartConfigRecorder(accountID, name string) error {
 	name = strings.TrimSpace(name)

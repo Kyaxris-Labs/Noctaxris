@@ -173,15 +173,34 @@ func ItemExpired(table store.DynamoTable, item ItemMap, nowUnix int64) bool {
 // HashKeyFromQueryIndex extracts the hash AttributeValue for a lab Query against
 // the base table or a named GSI.
 func HashKeyFromQueryIndex(table store.DynamoTable, indexName string, params map[string]any) (map[string]any, error) {
+	kc, err := KeyConditionFromQueryIndex(table, indexName, params)
+	if err != nil {
+		return nil, err
+	}
+	return kc.HashAV, nil
+}
+
+// KeyCondition holds parsed hash equality and optional sort-key range from a Query.
+type KeyCondition struct {
+	HashAV      map[string]any
+	RangeOp     string // "", EQ, LT, LE, GT, GE, BETWEEN, BEGINS_WITH
+	RangeValues []map[string]any
+}
+
+// KeyConditionFromQueryIndex parses KeyConditions or KeyConditionExpression for
+// the base table or a named GSI, including lab sort-key operators.
+func KeyConditionFromQueryIndex(table store.DynamoTable, indexName string, params map[string]any) (KeyCondition, error) {
 	hashName := table.HashKeyName
+	rangeName := table.RangeKeyName
 	if indexName != "" {
 		gsi, _, ok := table.GSIByName(indexName)
 		if !ok {
-			return nil, fmt.Errorf("index %q not found", indexName)
+			return KeyCondition{}, fmt.Errorf("index %q not found", indexName)
 		}
 		hashName = gsi.HashKeyName
+		rangeName = gsi.RangeKeyName
 	}
-	return hashKeyFromQuery(hashName, params)
+	return keyConditionFromQuery(hashName, rangeName, params)
 }
 
 // HashKeyFromQuery extracts the hash AttributeValue for a lab Query on the base table.
@@ -189,33 +208,74 @@ func HashKeyFromQuery(table store.DynamoTable, params map[string]any) (map[strin
 	return HashKeyFromQueryIndex(table, "", params)
 }
 
-func hashKeyFromQuery(hashName string, params map[string]any) (map[string]any, error) {
+func keyConditionFromQuery(hashName, rangeName string, params map[string]any) (KeyCondition, error) {
 	if kc, ok := params["KeyConditions"].(map[string]any); ok {
 		entry, ok := kc[hashName].(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("KeyConditions must include hash key %q", hashName)
+			return KeyCondition{}, fmt.Errorf("KeyConditions must include hash key %q", hashName)
 		}
 		op, _ := entry["ComparisonOperator"].(string)
 		if op != "" && !strings.EqualFold(op, "EQ") {
-			return nil, fmt.Errorf("only EQ ComparisonOperator is supported")
+			return KeyCondition{}, fmt.Errorf("only EQ ComparisonOperator is supported for hash key")
 		}
 		list, ok := entry["AttributeValueList"].([]any)
 		if !ok || len(list) == 0 {
-			return nil, fmt.Errorf("AttributeValueList is required")
+			return KeyCondition{}, fmt.Errorf("AttributeValueList is required")
 		}
 		av, ok := list[0].(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("invalid AttributeValue in KeyConditions")
+			return KeyCondition{}, fmt.Errorf("invalid AttributeValue in KeyConditions")
 		}
-		return av, nil
+		out := KeyCondition{HashAV: av}
+		if rangeName != "" {
+			if re, ok := kc[rangeName].(map[string]any); ok {
+				rop, _ := re["ComparisonOperator"].(string)
+				rlist, _ := re["AttributeValueList"].([]any)
+				vals, err := avListToMaps(rlist)
+				if err != nil {
+					return KeyCondition{}, err
+				}
+				out.RangeOp = strings.ToUpper(strings.TrimSpace(rop))
+				out.RangeValues = vals
+				if err := validateRangeOp(out.RangeOp, len(out.RangeValues)); err != nil {
+					return KeyCondition{}, err
+				}
+			}
+		}
+		return out, nil
 	}
 
 	expr, _ := params["KeyConditionExpression"].(string)
 	values, _ := params["ExpressionAttributeValues"].(map[string]any)
 	names, _ := params["ExpressionAttributeNames"].(map[string]any)
 	if strings.TrimSpace(expr) == "" || values == nil {
-		return nil, fmt.Errorf("KeyConditions or KeyConditionExpression is required")
+		return KeyCondition{}, fmt.Errorf("KeyConditions or KeyConditionExpression is required")
 	}
+	hashAV, err := hashKeyFromExpression(hashName, expr, names, values)
+	if err != nil {
+		return KeyCondition{}, err
+	}
+	out := KeyCondition{HashAV: hashAV}
+	if rangeName != "" {
+		rop, rvals, rerr := rangeKeyFromExpression(rangeName, expr, names, values)
+		if rerr != nil {
+			return KeyCondition{}, rerr
+		}
+		out.RangeOp = rop
+		out.RangeValues = rvals
+	}
+	return out, nil
+}
+
+func hashKeyFromQuery(hashName string, params map[string]any) (map[string]any, error) {
+	kc, err := keyConditionFromQuery(hashName, "", params)
+	if err != nil {
+		return nil, err
+	}
+	return kc.HashAV, nil
+}
+
+func hashKeyFromExpression(hashName, expr string, names, values map[string]any) (map[string]any, error) {
 	hashNameExpr := hashName
 	for k, v := range names {
 		if s, ok := v.(string); ok && s == hashName {
@@ -236,7 +296,7 @@ func hashKeyFromQuery(hashName string, params map[string]any) (map[string]any, e
 		}
 		if name == hashName || token == hashNameExpr || token == hashName {
 			if i+2 < len(parts) && parts[i+1] == "=" {
-				placeholder = strings.Trim(parts[i+2], "()")
+				placeholder = strings.Trim(parts[i+2], "(),")
 				break
 			}
 		}
@@ -249,6 +309,193 @@ func hashKeyFromQuery(hashName string, params map[string]any) (map[string]any, e
 		return nil, fmt.Errorf("ExpressionAttributeValues missing %s", placeholder)
 	}
 	return av, nil
+}
+
+func rangeKeyFromExpression(rangeName, expr string, names, values map[string]any) (op string, vals []map[string]any, err error) {
+	rangeNameExpr := rangeName
+	for k, v := range names {
+		if s, ok := v.(string); ok && s == rangeName {
+			rangeNameExpr = k
+			break
+		}
+	}
+	normalized := strings.ReplaceAll(expr, "(", " ")
+	normalized = strings.ReplaceAll(normalized, ")", " ")
+	normalized = strings.ReplaceAll(normalized, ",", " ")
+	parts := strings.Fields(normalized)
+	for i, p := range parts {
+		token := strings.Trim(p, ",")
+		name := resolveExprName(token, names)
+		if name != rangeName && token != rangeNameExpr && token != rangeName {
+			// begins_with(#sk, :p) form
+			if strings.EqualFold(token, "begins_with") && i+2 < len(parts) {
+				attrTok := strings.Trim(parts[i+1], ",")
+				attrName := resolveExprName(attrTok, names)
+				if attrName != rangeName && attrTok != rangeNameExpr && attrTok != rangeName {
+					continue
+				}
+				ph := strings.Trim(parts[i+2], ",")
+				if !strings.HasPrefix(ph, ":") {
+					return "", nil, fmt.Errorf("begins_with requires a value placeholder")
+				}
+				av, ok := values[ph].(map[string]any)
+				if !ok {
+					return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+				}
+				return "BEGINS_WITH", []map[string]any{av}, nil
+			}
+			continue
+		}
+		if i+1 >= len(parts) {
+			break
+		}
+		cmp := strings.ToUpper(strings.Trim(parts[i+1], ","))
+		switch cmp {
+		case "=", "EQ":
+			if i+2 >= len(parts) {
+				return "", nil, fmt.Errorf("incomplete sort key EQ in KeyConditionExpression")
+			}
+			ph := strings.Trim(parts[i+2], ",")
+			av, ok := values[ph].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+			}
+			return "EQ", []map[string]any{av}, nil
+		case "<", "LT":
+			ph := strings.Trim(parts[i+2], ",")
+			av, ok := values[ph].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+			}
+			return "LT", []map[string]any{av}, nil
+		case "<=", "LE":
+			ph := strings.Trim(parts[i+2], ",")
+			av, ok := values[ph].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+			}
+			return "LE", []map[string]any{av}, nil
+		case ">", "GT":
+			ph := strings.Trim(parts[i+2], ",")
+			av, ok := values[ph].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+			}
+			return "GT", []map[string]any{av}, nil
+		case ">=", "GE":
+			ph := strings.Trim(parts[i+2], ",")
+			av, ok := values[ph].(map[string]any)
+			if !ok {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing %s", ph)
+			}
+			return "GE", []map[string]any{av}, nil
+		case "BETWEEN":
+			if i+4 >= len(parts) || !strings.EqualFold(parts[i+3], "AND") {
+				return "", nil, fmt.Errorf("invalid BETWEEN in KeyConditionExpression")
+			}
+			ph1 := strings.Trim(parts[i+2], ",")
+			ph2 := strings.Trim(parts[i+4], ",")
+			av1, ok1 := values[ph1].(map[string]any)
+			av2, ok2 := values[ph2].(map[string]any)
+			if !ok1 || !ok2 {
+				return "", nil, fmt.Errorf("ExpressionAttributeValues missing BETWEEN placeholders")
+			}
+			return "BETWEEN", []map[string]any{av1, av2}, nil
+		}
+	}
+	return "", nil, nil
+}
+
+func resolveExprName(token string, names map[string]any) string {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(token, "#") {
+		if mapped, ok := names[token].(string); ok {
+			return mapped
+		}
+	}
+	return token
+}
+
+func avListToMaps(list []any) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(list))
+	for _, raw := range list {
+		av, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("invalid AttributeValue in KeyConditions")
+		}
+		out = append(out, av)
+	}
+	return out, nil
+}
+
+func validateRangeOp(op string, n int) error {
+	switch op {
+	case "EQ", "LT", "LE", "GT", "GE", "BEGINS_WITH":
+		if n != 1 {
+			return fmt.Errorf("sort key %s requires one value", op)
+		}
+	case "BETWEEN":
+		if n != 2 {
+			return fmt.Errorf("sort key BETWEEN requires two values")
+		}
+	case "":
+		return nil
+	default:
+		return fmt.Errorf("unsupported sort key ComparisonOperator %q", op)
+	}
+	return nil
+}
+
+// ItemMatchesSortKey reports whether item's range attribute satisfies the condition.
+func ItemMatchesSortKey(item ItemMap, rangeName string, op string, values []map[string]any) bool {
+	if op == "" || rangeName == "" {
+		return true
+	}
+	av, ok := item[rangeName]
+	if !ok {
+		return false
+	}
+	itemCanon, err := CanonicalAV(av)
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "EQ":
+		want, err := CanonicalAV(values[0])
+		return err == nil && itemCanon == want
+	case "LT":
+		want, err := CanonicalAV(values[0])
+		return err == nil && itemCanon < want
+	case "LE":
+		want, err := CanonicalAV(values[0])
+		return err == nil && itemCanon <= want
+	case "GT":
+		want, err := CanonicalAV(values[0])
+		return err == nil && itemCanon > want
+	case "GE":
+		want, err := CanonicalAV(values[0])
+		return err == nil && itemCanon >= want
+	case "BETWEEN":
+		lo, err1 := CanonicalAV(values[0])
+		hi, err2 := CanonicalAV(values[1])
+		return err1 == nil && err2 == nil && itemCanon >= lo && itemCanon <= hi
+	case "BEGINS_WITH":
+		prefix := scalarString(values[0])
+		got := scalarString(av)
+		return prefix != "" && strings.HasPrefix(got, prefix)
+	default:
+		return false
+	}
+}
+
+func scalarString(av map[string]any) string {
+	if s, ok := av["S"].(string); ok {
+		return s
+	}
+	if n, ok := av["N"].(string); ok {
+		return n
+	}
+	return ""
 }
 
 // ApplyUpdateExpression applies lab SET/REMOVE on top-level attributes.

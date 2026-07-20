@@ -57,7 +57,8 @@ func (s *Store) EnsureBudgetsSchema() error {
 	return EnsureBudgetsSchema(s.db)
 }
 
-// CreateBudget creates a budget with optional notification stubs (stored only).
+// CreateBudget creates a budget with optional notification stubs.
+// When NotificationsWithSubscribers include SNS subscriber ARNs, publishes one lab threshold alert per topic (best-effort).
 func (s *Store) CreateBudget(accountID, name, budgetType, timeUnit, amount, unit string, notifications any) (Budget, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -95,10 +96,74 @@ func (s *Store) CreateBudget(accountID, name, budgetType, timeUnit, amount, unit
 		}
 		return Budget{}, fmt.Errorf("create budget: %w", err)
 	}
-	return Budget{
+	b := Budget{
 		AccountID: accountID, BudgetName: name, BudgetType: budgetType, TimeUnit: timeUnit,
 		LimitAmount: amount, LimitUnit: unit, Notifications: notifJSON, CreatedAt: now,
-	}, nil
+	}
+	s.notifyBudgetSNS(accountID, name, amount, unit, notifications)
+	return b, nil
+}
+
+// notifyBudgetSNS publishes a lab ACTUAL threshold alert to SNS topics listed under NotificationsWithSubscribers.
+func (s *Store) notifyBudgetSNS(accountID, budgetName, amount, unit string, notifications any) {
+	topicARNs := extractBudgetSNSTopicARNs(notifications)
+	if len(topicARNs) == 0 {
+		return
+	}
+	msg := fmt.Sprintf(
+		`{"notificationType":"ACTUAL","budgetName":"%s","budgetLimit":{"amount":"%s","unit":"%s"},"message":"Noctaxris lab budget threshold notification"}`,
+		budgetName, amount, unit,
+	)
+	for _, arn := range topicARNs {
+		topic, err := s.GetTopicByARN(arn)
+		if err != nil || topic.AccountID != accountID {
+			continue
+		}
+		_, _ = s.Publish(accountID, topic.TopicName, msg, "AWS Budgets Notification", nil)
+	}
+}
+
+func extractBudgetSNSTopicARNs(notifications any) []string {
+	list, ok := notifications.([]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	seen := map[string]struct{}{}
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		subs, _ := m["Subscribers"].([]any)
+		for _, sub := range subs {
+			sm, ok := sub.(map[string]any)
+			if !ok {
+				continue
+			}
+			subType, _ := sm["SubscriptionType"].(string)
+			if subType == "" {
+				subType, _ = sm["subscriptionType"].(string)
+			}
+			if !strings.EqualFold(subType, "SNS") {
+				continue
+			}
+			addr, _ := sm["Address"].(string)
+			if addr == "" {
+				addr, _ = sm["address"].(string)
+			}
+			addr = strings.TrimSpace(addr)
+			if addr == "" || !strings.HasPrefix(addr, "arn:aws:sns:") {
+				continue
+			}
+			if _, dup := seen[addr]; dup {
+				continue
+			}
+			seen[addr] = struct{}{}
+			out = append(out, addr)
+		}
+	}
+	return out
 }
 
 // DescribeBudget returns one budget.

@@ -283,6 +283,7 @@ func regionOrDefault(region string) string {
 //   - arn:aws:elasticloadbalancing:REGION:ACCOUNT:loadbalancer/...
 //   - arn:aws:appsync:REGION:ACCOUNT:apis/APIID
 //   - arn:aws:cognito-idp:REGION:ACCOUNT:userpool/POOLID
+//   - arn:aws:lambda:REGION:ACCOUNT:function:NAME (lab Function URL associate)
 func IsWAFAssociableResourceARN(resourceARN string) bool {
 	resourceARN = strings.TrimSpace(resourceARN)
 	if resourceARN == "" || !strings.HasPrefix(resourceARN, "arn:aws:") {
@@ -322,6 +323,9 @@ func IsWAFAssociableResourceARN(resourceARN string) bool {
 		return strings.HasPrefix(resource, "apis/") && len(strings.TrimPrefix(resource, "apis/")) > 0
 	case "cognito-idp":
 		return strings.HasPrefix(resource, "userpool/") && len(strings.TrimPrefix(resource, "userpool/")) > 0
+	case "lambda":
+		// Lab Function URL association: arn:aws:lambda:REGION:ACCOUNT:function:NAME
+		return strings.HasPrefix(resource, "function:") && len(strings.TrimPrefix(resource, "function:")) > 0
 	default:
 		return false
 	}
@@ -347,6 +351,55 @@ func (s *Store) AssociateWAFWebACL(accountID, webACLARN, resourceARN string) err
 		return fmt.Errorf("associate web acl: %w", err)
 	}
 	return nil
+}
+
+// LookupWAFAssociation returns the Web ACL ARN associated with resourceARN, if any.
+func (s *Store) LookupWAFAssociation(accountID, resourceARN string) (webACLARN string, ok bool, err error) {
+	resourceARN = strings.TrimSpace(resourceARN)
+	if accountID == "" || resourceARN == "" {
+		return "", false, nil
+	}
+	err = s.db.QueryRow(
+		`SELECT web_acl_arn FROM wafv2_associations WHERE account_id = ? AND resource_arn = ?`,
+		accountID, resourceARN,
+	).Scan(&webACLARN)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("lookup waf association: %w", err)
+	}
+	return webACLARN, true, nil
+}
+
+// EvaluateAssociatedWAF checks candidate resource ARNs for an association and evaluates
+// the Web ACL (empty request label uses DefaultAction). Returns associated=false when
+// no association matches.
+func (s *Store) EvaluateAssociatedWAF(accountID string, candidateARNs []string, requestLabel string) (action string, associated bool, err error) {
+	seen := map[string]struct{}{}
+	for _, arn := range candidateARNs {
+		arn = strings.TrimSpace(arn)
+		if arn == "" {
+			continue
+		}
+		if _, dup := seen[arn]; dup {
+			continue
+		}
+		seen[arn] = struct{}{}
+		webACLARN, ok, lookupErr := s.LookupWAFAssociation(accountID, arn)
+		if lookupErr != nil {
+			return "", false, lookupErr
+		}
+		if !ok {
+			continue
+		}
+		action, evalErr := s.EvaluateWAFRequest(accountID, webACLARN, requestLabel)
+		if evalErr != nil {
+			return "", true, evalErr
+		}
+		return action, true, nil
+	}
+	return "", false, nil
 }
 
 // EvaluateWAFRequest applies Web ACL rules to a labeled request. Returns Allow or Block.

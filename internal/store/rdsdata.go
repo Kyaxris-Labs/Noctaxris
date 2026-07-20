@@ -106,9 +106,13 @@ func (e *StubRDSDataExecutor) Execute(req RDSDataExecuteRequest) (RDSDataExecute
 			Records: [][]RDSDataField{
 				{{StringValue: &val, IsNull: &null}},
 			},
+			FormattedRecords: `{"noctaxrisExecutor":"stub"}`,
 		}, nil
 	}
-	return RDSDataExecuteResult{NumberOfRecordsUpdated: 1}, nil
+	return RDSDataExecuteResult{
+		NumberOfRecordsUpdated: 1,
+		FormattedRecords:       `{"noctaxrisExecutor":"stub"}`,
+	}, nil
 }
 
 // EnsureRDSDataSchema creates RDS Data API tables if missing.

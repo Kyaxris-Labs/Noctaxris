@@ -288,25 +288,35 @@ func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) 
 	if err != nil {
 		return nil, fmt.Errorf("describe log groups: %w", err)
 	}
-	defer rows.Close()
-
 	var out []LogGroup
 	for rows.Next() {
 		var g LogGroup
 		if err := rows.Scan(&g.LogGroupName, &g.Arn, &g.CreationTime); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("describe log groups: scan: %w", err)
 		}
 		if prefix != "" && !strings.HasPrefix(g.LogGroupName, prefix) {
 			continue
 		}
-		bytes, err := s.sumLogGroupBytes(accountID, g.LogGroupName)
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("describe log groups: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("describe log groups: %w", err)
+	}
+	// Sum bytes after closing the listing cursor so nested queries cannot deadlock
+	// a single-connection pool.
+	for i := range out {
+		bytes, err := s.sumLogGroupBytes(accountID, out[i].LogGroupName)
 		if err != nil {
 			return nil, err
 		}
-		g.StoredBytes = bytes
-		out = append(out, g)
+		out[i].StoredBytes = bytes
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // PutLogEvents appends events and returns the next sequence token.

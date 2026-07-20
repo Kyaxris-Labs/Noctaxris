@@ -200,6 +200,25 @@ func (s *Store) DeleteAccessKey(accessKeyID string) error {
 	return nil
 }
 
+// DeleteAccessKeyInAccount removes an access key only when it belongs to accountID.
+func (s *Store) DeleteAccessKeyInAccount(accountID, accessKeyID string) error {
+	res, err := s.db.Exec(
+		`DELETE FROM access_keys WHERE access_key_id = ? AND account_id = ?`,
+		accessKeyID, accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete access key %s: %w", accessKeyID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete access key %s: %w", accessKeyID, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // UpdateAccessKey sets status to Active or Inactive.
 func (s *Store) UpdateAccessKey(accessKeyID, status string) error {
 	switch status {
@@ -210,6 +229,30 @@ func (s *Store) UpdateAccessKey(accessKeyID, status string) error {
 	res, err := s.db.Exec(
 		`UPDATE access_keys SET status = ? WHERE access_key_id = ?`,
 		status, accessKeyID,
+	)
+	if err != nil {
+		return fmt.Errorf("update access key %s: %w", accessKeyID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update access key %s: %w", accessKeyID, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateAccessKeyInAccount updates an access key only when it belongs to accountID.
+func (s *Store) UpdateAccessKeyInAccount(accountID, accessKeyID, status string) error {
+	switch status {
+	case AccessKeyStatusActive, AccessKeyStatusInactive:
+	default:
+		return fmt.Errorf("update access key %s: status must be %q or %q", accessKeyID, AccessKeyStatusActive, AccessKeyStatusInactive)
+	}
+	res, err := s.db.Exec(
+		`UPDATE access_keys SET status = ? WHERE access_key_id = ? AND account_id = ?`,
+		status, accessKeyID, accountID,
 	)
 	if err != nil {
 		return fmt.Errorf("update access key %s: %w", accessKeyID, err)

@@ -118,6 +118,16 @@ func TestKMSAliasResolve(t *testing.T) {
 	if got != k.KeyID {
 		t.Fatalf("resolve ARN got %q want %q", got, k.KeyID)
 	}
+
+	other := "000000000002"
+	aliasARN := "arn:aws:kms:us-east-1:" + accountID + ":alias/lab"
+	got, err = st.ResolveKeyID(other, aliasARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != k.KeyID {
+		t.Fatalf("resolve alias ARN with caller account %s got %q want %q", other, got, k.KeyID)
+	}
 }
 
 func TestKMSGrantList(t *testing.T) {

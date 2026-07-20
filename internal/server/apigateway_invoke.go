@@ -63,6 +63,11 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 
+	region := store.DefaultAPIGatewayRegion
+	if !s.enforceAssociatedWAF(w, accountID, httpAPIWAFCandidateARNs(region, accountID, apiID, stage)) {
+		return
+	}
+
 	route, err := s.store.MatchAPIGatewayRoute(accountID, apiID, r.Method, routePath)
 	if errors.Is(err, store.ErrAPIGatewayNotFound) {
 		http.Error(w, "route not found", http.StatusNotFound)
@@ -73,7 +78,6 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 
-	region := store.DefaultAPIGatewayRegion
 	var verified *authn.Verified
 	switch route.AuthorizationType {
 	case store.APIGatewayAuthNone:
@@ -89,7 +93,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if err := s.verifyAPIGatewayJWT(token, authz.JWTIssuer, authz.JWTAudience, s.now()); err != nil {
+		if err := s.verifyAPIGatewayJWT(token, authz.JWTIssuer, authz.JWTAudience, s.now(), "access"); err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

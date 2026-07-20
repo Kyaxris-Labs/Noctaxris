@@ -14,7 +14,7 @@ Lab-complete EventBridge core: default and custom event buses, rules, targets, a
 | Events | `PutEvents` matches enabled rules and fans out to targets |
 | Pattern | Lab match on `source`, `detail-type`, and simple `detail` key equality |
 | Targets | SQS (`sqs:SendMessage`), Lambda (async invoke), SNS (`sns:Publish`) |
-| Input | Constant `Input` JSON on a target overrides the generated EventBridge envelope when set |
+| Input | Constant `Input` JSON on a target overrides the generated EventBridge envelope when set. Otherwise lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys like `$.detail-type`) extracts a portion of the event |
 
 Bus, rule, and target metadata live in SQLite.
 
@@ -71,7 +71,7 @@ aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
 - Legacy scheduled rules (`ScheduleExpression` on Rules). Prefer the Scheduler service for time-based labs
 - Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
 - CloudWatch Logs and Kinesis targets
-- `InputPath` and `InputTransformer`
+- `InputTransformer` (and InputPath bracket/wildcard notation)
 - Bus resource policy dual-eval depth beyond same-account lab paths
 - Exact AWS retry and jitter timing for delivery failures
 - Cross-account bus policies beyond same-account lab paths

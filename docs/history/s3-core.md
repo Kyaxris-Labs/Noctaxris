@@ -1,6 +1,6 @@
-# Phase 5 status
+# Lab-complete S3 (historical)
 
-Phase 5 delivers a lab-complete S3 core: path-style buckets and objects, bucket policies, SSE-S3 and SSE-KMS (via Phase 4 KMS), and SigV4 query (presigned) GET/PUT.
+Historical ship snapshot: a lab-complete S3 core with path-style buckets and objects, bucket policies, SSE-S3 and SSE-KMS (via lab KMS), and SigV4 query (presigned) GET/PUT.
 
 ## Delivered
 
@@ -23,6 +23,6 @@ Same-account S3 uses identity **or** bucket policy Allow. Explicit Deny in eithe
 
 See [../services/s3.md](../services/s3.md) for `aws s3 mb/cp/ls`, SSE headers, and `aws s3 presign`.
 
-## Explicitly not in Phase 5
+## Explicitly deferred at this ship
 
-Current deferred depth: [../services/s3.md](../services/s3.md). At Phase 5 ship time there was no multipart, versioning, virtual-hosted-style, DynamoDB, SQS, or Lambda.
+Current deferred depth: [../services/s3.md](../services/s3.md). At this ship there was no multipart, versioning, virtual-hosted-style, DynamoDB, SQS, or Lambda.

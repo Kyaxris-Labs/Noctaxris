@@ -1,6 +1,6 @@
 module github.com/Kyaxris-Labs/Noctaxris
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/docker/docker v28.3.3+incompatible

@@ -220,6 +220,15 @@ func TestAPIGatewayJWTAuthorizerWithCognito(t *testing.T) {
 	if okRec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("valid JWT invoke status=%d want 503 body=%q", okRec.Code, okRec.Body.String())
 	}
+
+	idToken := mustCognitoIDToken(t, handler, clientID, "dave", "Secret4!", now)
+	idReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/jwt", nil)
+	idReq.Header.Set("Authorization", "Bearer "+idToken)
+	idRec := httptest.NewRecorder()
+	handler.ServeHTTP(idRec, idReq)
+	if idRec.Code != http.StatusUnauthorized {
+		t.Fatalf("id token on Gateway JWT status=%d want 401 body=%q", idRec.Code, idRec.Body.String())
+	}
 }
 
 func TestAppSyncCognitoAuthRejectsMissingBearer(t *testing.T) {
@@ -257,7 +266,7 @@ func TestAppSyncCognitoAuthRejectsMissingBearer(t *testing.T) {
 		t.Fatalf("expected 401 without Bearer, got %d body=%q", rec.Code, rec.Body.String())
 	}
 
-	token := mustCognitoAccessToken(t, handler, clientID, "erin", "Secret5!", now)
+	token := mustCognitoIDToken(t, handler, clientID, "erin", "Secret5!", now)
 	okReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/appsync/"+apiID+"/graphql", body)
 	okReq.Header.Set("Content-Type", "application/json")
 	okReq.Header.Set("Authorization", "Bearer "+token)
@@ -265,10 +274,20 @@ func TestAppSyncCognitoAuthRejectsMissingBearer(t *testing.T) {
 	handler.ServeHTTP(okRec, okReq)
 	// Resolver missing -> 400 with errors (auth passed)
 	if okRec.Code == http.StatusUnauthorized || okRec.Code == http.StatusForbidden {
-		t.Fatalf("valid Cognito token should pass auth, got %d body=%q", okRec.Code, okRec.Body.String())
+		t.Fatalf("valid Cognito id token should pass auth, got %d body=%q", okRec.Code, okRec.Body.String())
 	}
 	if !strings.Contains(okRec.Body.String(), "errors") && !strings.Contains(okRec.Body.String(), "not found") {
 		t.Fatalf("expected resolver error after auth, body=%q", okRec.Body.String())
+	}
+
+	accessTok := mustCognitoAccessToken(t, handler, clientID, "erin", "Secret5!", now)
+	accReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/appsync/"+apiID+"/graphql", body)
+	accReq.Header.Set("Content-Type", "application/json")
+	accReq.Header.Set("Authorization", "Bearer "+accessTok)
+	accRec := httptest.NewRecorder()
+	handler.ServeHTTP(accRec, accReq)
+	if accRec.Code != http.StatusUnauthorized {
+		t.Fatalf("access token on AppSync Cognito status=%d want 401 body=%q", accRec.Code, accRec.Body.String())
 	}
 }
 
@@ -330,6 +349,26 @@ func mustCreateCognitoPoolClientUser(t *testing.T, handler http.Handler, poolNam
 
 func mustCognitoAccessToken(t *testing.T, handler http.Handler, clientID, user, pass string, now time.Time) string {
 	t.Helper()
+	result := mustCognitoAuthResult(t, handler, clientID, user, pass, now)
+	accessToken, _ := result["AccessToken"].(string)
+	if accessToken == "" {
+		t.Fatalf("missing AccessToken")
+	}
+	return accessToken
+}
+
+func mustCognitoIDToken(t *testing.T, handler http.Handler, clientID, user, pass string, now time.Time) string {
+	t.Helper()
+	result := mustCognitoAuthResult(t, handler, clientID, user, pass, now)
+	idToken, _ := result["IdToken"].(string)
+	if idToken == "" {
+		t.Fatalf("missing IdToken")
+	}
+	return idToken
+}
+
+func mustCognitoAuthResult(t *testing.T, handler http.Handler, clientID, user, pass string, now time.Time) map[string]any {
+	t.Helper()
 	auth := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.InitiateAuth", "cognito-idp", map[string]any{
 		"ClientId": clientID,
 		"AuthFlow": "USER_PASSWORD_AUTH",
@@ -344,11 +383,10 @@ func mustCognitoAccessToken(t *testing.T, handler http.Handler, clientID, user, 
 	var authResp map[string]any
 	_ = json.Unmarshal(auth.Body.Bytes(), &authResp)
 	result, _ := authResp["AuthenticationResult"].(map[string]any)
-	accessToken, _ := result["AccessToken"].(string)
-	if accessToken == "" {
-		t.Fatalf("missing AccessToken: %s", auth.Body.String())
+	if result == nil {
+		t.Fatalf("missing AuthenticationResult: %s", auth.Body.String())
 	}
-	return accessToken
+	return result
 }
 
 const apigatewayTrustOK = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"apigateway.amazonaws.com"},"Action":"sts:AssumeRole"}]}`

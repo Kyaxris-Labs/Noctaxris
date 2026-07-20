@@ -290,6 +290,17 @@ func TestEventBridgePutEventsDeliversToSNS(t *testing.T) {
 	queueURL, _ := createOut["QueueUrl"].(string)
 	queueARN := "arn:aws:sqs:us-east-1:" + testAccountID + ":evt-bridge-sns-q"
 
+	sqsPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	setQ := mustSQSJSON(t, handler, "SetQueueAttributes", map[string]any{
+		"QueueUrl": queueURL,
+		"Attributes": map[string]string{
+			"Policy": sqsPolicy,
+		},
+	}, now)
+	if setQ.Code != http.StatusOK {
+		t.Fatalf("SetQueueAttributes status=%d body=%q", setQ.Code, setQ.Body.String())
+	}
+
 	subRec := mustSNSQuery(t, handler,
 		"Action=Subscribe&Version=2010-03-31&TopicArn="+url.QueryEscape(topicARN)+
 			"&Protocol=sqs&Endpoint="+url.QueryEscape(queueARN),

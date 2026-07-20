@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -102,6 +103,61 @@ func TestHealthOK(t *testing.T) {
 		t.Fatalf("body=%q want ok", body)
 	}
 }
+
+func TestReadyOKWithoutDockerHost(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/_noctaxris/ready", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if body := rec.Body.String(); body != "ready" {
+		t.Fatalf("body=%q want ready", body)
+	}
+}
+
+func TestReadyRejectsWhenEngineUnreachable(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.DockerHost = "tcp://127.0.0.1:1"
+		cfg.DockerTLSCertPath = ""
+	})
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/_noctaxris/ready", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d body=%q", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
+func TestListenAndServeContextShutdown(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.ListenAddr = "127.0.0.1:0"
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServeContext(ctx)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timed out")
+	}
+}
+
 
 func TestAWSPathRejectsMissingAuth(t *testing.T) {
 	srv, auditDir := newTestServer(t)
@@ -234,8 +290,8 @@ func TestSignedUnknownActionNotImplemented(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "NotImplemented") {
 		t.Fatalf("expected NotImplemented in %q", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Phase 7") && !strings.Contains(rec.Body.String(), "not implemented") {
-		t.Fatalf("expected Phase 7 message in %q", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "not implemented") {
+		t.Fatalf("expected not-implemented message in %q", rec.Body.String())
 	}
 
 	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))

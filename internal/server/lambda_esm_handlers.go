@@ -15,14 +15,24 @@ import (
 )
 
 var (
-	esmPollerOnce sync.Once
-	esmPollerStop chan struct{}
+	esmPollerOnce     sync.Once
+	esmPollerStop     chan struct{}
+	esmPollerStopOnce sync.Once
 )
 
 func (s *Server) ensureESMPoller() {
 	esmPollerOnce.Do(func() {
 		esmPollerStop = make(chan struct{})
 		go s.runESMPoller(esmPollerStop)
+	})
+}
+
+// StopESMPoller stops the in-process ESM poller if running.
+func (s *Server) StopESMPoller() {
+	esmPollerStopOnce.Do(func() {
+		if esmPollerStop != nil {
+			close(esmPollerStop)
+		}
 	})
 }
 

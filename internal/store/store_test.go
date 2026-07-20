@@ -31,4 +31,11 @@ func TestEnsureRootEncrypted(t *testing.T) {
 	if bytes.Contains(raw, []byte("secret-root-value")) {
 		t.Fatal("plaintext secret found in db file")
 	}
+	ver, err := st.SchemaVersion()
+	if err != nil || ver < 1 {
+		t.Fatalf("schema version=%d err=%v", ver, err)
+	}
+	if err := st.Ping(); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
 }
