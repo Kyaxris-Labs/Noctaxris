@@ -399,6 +399,34 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureOrgAccountPlacementSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLogsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureTaggingSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureKinesisSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSESSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureAppConfigSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSFNSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

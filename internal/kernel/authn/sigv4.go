@@ -29,6 +29,8 @@ type Verified struct {
 	Region          string
 	Service         string
 	AccountID       string
+	// SourceIP is the caller address for aws:SourceIp (set by the HTTP server).
+	SourceIP string
 }
 
 // ResolvedKey is the credential material returned by KeyLookup.

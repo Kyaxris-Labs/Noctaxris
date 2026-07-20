@@ -31,6 +31,7 @@ func TestKnownActionPhase4(t *testing.T) {
 		catalog.ActionOrgsAttachPolicy,
 		catalog.ActionOrgsDetachPolicy,
 		catalog.ActionOrgsDescribePolicy,
+		catalog.ActionOrgsMoveAccount,
 		// IAM lab
 		catalog.ActionIAMCreateUser,
 		catalog.ActionIAMGetUser,
@@ -290,6 +291,7 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionOrgsAttachPolicy:                     "organizations:AttachPolicy",
 		catalog.ActionOrgsDetachPolicy:                     "organizations:DetachPolicy",
 		catalog.ActionOrgsDescribePolicy:                   "organizations:DescribePolicy",
+		catalog.ActionOrgsMoveAccount:                      "organizations:MoveAccount",
 		catalog.ActionIAMCreateUser:                        "iam:CreateUser",
 		catalog.ActionIAMGetUser:                           "iam:GetUser",
 		catalog.ActionIAMListUsers:                         "iam:ListUsers",

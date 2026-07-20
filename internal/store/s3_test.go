@@ -137,3 +137,22 @@ func TestDeleteBucketNotEmpty(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestS3GetBucketByNameGlobalUniqueness(t *testing.T) {
+	st := openS3Store(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "global-lookup"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetBucketByName("global-lookup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccountID != account || got.Name != "global-lookup" {
+		t.Fatalf("bucket=%+v", got)
+	}
+	_, err = st.CreateBucket("000000000002", "global-lookup")
+	if !errors.Is(err, store.ErrBucketAlreadyExists) {
+		t.Fatalf("err=%v want BucketAlreadyExists", err)
+	}
+}

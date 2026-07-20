@@ -127,6 +127,11 @@ func (s *Store) CreateBucket(accountID, name string) (Bucket, error) {
 	if err := ValidateBucketName(name); err != nil {
 		return Bucket{}, err
 	}
+	if _, err := s.GetBucketByName(name); err == nil {
+		return Bucket{}, ErrBucketAlreadyExists
+	} else if !errors.Is(err, ErrNoSuchBucket) {
+		return Bucket{}, err
+	}
 	created := nowRFC3339()
 	_, err := s.db.Exec(
 		`INSERT INTO s3_buckets (account_id, name, creation_date, bucket_policy) VALUES (?, ?, ?, '')`,
@@ -196,6 +201,27 @@ func (s *Store) ListBuckets(accountID string) ([]Bucket, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// GetBucketByName returns bucket metadata by global lab bucket name.
+// Bucket names are unique in the lab; use this to resolve the owner account.
+func (s *Store) GetBucketByName(name string) (Bucket, error) {
+	if err := ValidateBucketName(name); err != nil {
+		return Bucket{}, err
+	}
+	var b Bucket
+	err := s.db.QueryRow(
+		`SELECT account_id, name, creation_date, bucket_policy FROM s3_buckets
+		 WHERE name = ? LIMIT 1`,
+		name,
+	).Scan(&b.AccountID, &b.Name, &b.CreationDate, &b.BucketPolicy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Bucket{}, ErrNoSuchBucket
+	}
+	if err != nil {
+		return Bucket{}, fmt.Errorf("get bucket by name: %w", err)
+	}
+	return b, nil
 }
 
 // GetBucket returns bucket metadata or ErrNoSuchBucket.

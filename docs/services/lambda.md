@@ -2,14 +2,14 @@
 
 **Status:** shipped
 
-Lab-complete Lambda with zip and container image packaging, versions and aliases, layers, sync and async Invoke, same-account resource policies, multi-runtime zip support, nested DinD compute with TLS to the engine, execution-role session injection, and platform egress deny for function containers.
+Lab-complete Lambda with zip and container image packaging, versions and aliases, layers, sync and async Invoke, function resource policies (including lab cross-account principals), multi-runtime zip support, nested DinD compute with TLS to the engine, execution-role session injection, and platform egress deny for function containers.
 
 ## Implemented
 
 | Area | Behavior |
 |------|----------|
 | APIs | `CreateFunction`, `GetFunction`, `DeleteFunction`, `ListFunctions`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `Invoke`, `PublishVersion`, `ListVersionsByFunction`, `CreateAlias`, `UpdateAlias`, `DeleteAlias`, `GetAlias`, `ListAliases`, `PublishLayerVersion`, `GetLayerVersion`, `ListLayerVersions`, `DeleteLayerVersion`, `AddPermission`, `RemovePermission`, `GetPolicy` |
-| Packaging | Zip upload (`Code.ZipFile`) or `PackageType=Image` with `Code.ImageUri` |
+| Packaging | Zip upload (`Code.ZipFile`) or `PackageType=Image` with `Code.ImageUri` (lab ECR refs pull with Registry V2 auth) |
 | Runtimes (zip) | `python3.11`, `python3.12`, `nodejs20.x` |
 | Versions | `PublishVersion` freezes code and config. `$LATEST` stays mutable |
 | Aliases | Point at published version numbers. Invoke accepts bare name, `name:version`, or `name:alias` |
@@ -17,22 +17,22 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 | Invoke (sync) | `InvocationType=RequestResponse` (default). One-shot nested container |
 | Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
-| Resource policy | Same-account `AddPermission`, `RemovePermission`, `GetPolicy`. Invoke allows identity **or** function policy Allow |
+| Resource policy | `AddPermission`, `RemovePermission`, `GetPolicy`. Same-account Invoke allows identity **or** function policy Allow. Cross-account Invoke requires identity **and** function policy Allow |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). No host `docker.sock` on the API container |
 | Invoke session | Temporary AWS_* credentials for the function execution role injected into the container |
 | Egress | Function network `noctaxris-fn` with `Internal: true` (platform egress deny) |
 
 Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Without the engine, sync Invoke returns compute unavailable.
 
-Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`.
+Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`. Invoke issues a lab ECR authorization token and pulls with Registry V2 auth (same path as ECS RunTask). Public images are unchanged.
 
 ### Authz notes
 
-Lambda configure APIs use identity `EvaluateFull` plus `CheckPassRole` (caller `iam:PassRole` and Lambda service trust). Data-plane APIs including Invoke use identity **or** function resource policy Allow via `authorizeDataplaneOR` (explicit Deny wins, boundary and SCP/RCP when identity Allows). Invoke still mints temporary credentials for the function role so in-function SDK calls can hit the same emulator endpoint (`NOCTAXRIS_LAMBDA_ENDPOINT_URL`).
+Lambda configure APIs use identity `EvaluateFull` plus `CheckPassRole` (caller `iam:PassRole` and Lambda service trust). Data-plane APIs including Invoke use `authorizeDataplaneOR` with the function owner account from the function ARN. Same-account access: allow if identity **or** function policy Allows. Cross-account access (Invoke with a full function ARN in another lab account): allow only when identity **and** function policy both Allow. Empty function policy denies cross-account callers. Explicit Deny wins. Boundary and SCP/RCP apply when identity Allows.
+
+`AddPermission` accepts other lab account IAM user/role ARNs, account root ARNs, or a 12-digit lab account id (stored as account root). Wildcard `*` principals remain rejected. Service principal cross-account grants stay deferred.
 
 `CreateAlias`, `UpdateAlias`, `DeleteAlias`, and `ListAliases` share short names with KMS. Send `X-Amz-Target: AWSLambda.CreateAlias` (and similar) so JSON requests route to Lambda. Query-string `Action=CreateAlias` still maps to KMS.
-
-Cross-account principals and service principals on function policies are rejected in the lab.
 
 ## How to verify / CLI smoke
 
@@ -166,12 +166,33 @@ aws lambda get-function --function-name "$FN" --endpoint-url "$EP"
 
 Expect CreateFunction to succeed only when the role trusts `lambda.amazonaws.com`. Expect sync Invoke to return JSON with `"ok": true` when DinD is up. Expect alias Invoke to hit the published version. Expect async Invoke to print `StatusCode` 202. Without `NOCTAXRIS_DOCKER_HOST`, sync Invoke returns compute unavailable.
 
+Two-account cross-account Invoke (member account B owns the function, member account A user invokes via dual eval):
+
+```bash
+# Account B: create function then grant account A principal
+aws lambda add-permission \
+  --function-name "$FN" \
+  --statement-id xa-invoke \
+  --action lambda:InvokeFunction \
+  --principal arn:aws:iam::ACCOUNT_A:user/invoker \
+  --endpoint-url "$EP" --profile account-b
+
+# Account A: identity policy plus function policy must both Allow
+FN_ARN="arn:aws:lambda:us-east-1:ACCOUNT_B:function:$FN"
+aws lambda invoke \
+  --function-name "$FN_ARN" \
+  --payload '{"xa":true}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/noctaxris-xa-out.json \
+  --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full Lambda SAR (event source mappings, provisioned concurrency, weighted alias routing, Function URLs, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing)
 - EventBridge or Lambda-to-Lambda failure destinations (OnFailure to SQS and SNS is shipped)
-- Cross-account function resource policy depth
-- Non-lab private registries (use ECR lab registry for account-local images)
+- Service-principal cross-account grants on function policies
+- Non-lab private registries (Docker Hub private, third-party hosts). Lab ECR on `127.0.0.1:4566` is supported for Image Invoke
 - Layers mounted on Image Invoke (layers can be attached in the API but are not mounted during image Invoke)
 - Rootless DinD and microVM isolation (Firecracker-class, post-v2)
 

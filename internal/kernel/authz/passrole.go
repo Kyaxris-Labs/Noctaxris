@@ -11,6 +11,9 @@ const ServicePrincipalEvents = "events.amazonaws.com"
 // ServicePrincipalECSTasks is the Amazon ECS tasks service principal used in role trust.
 const ServicePrincipalECSTasks = "ecs-tasks.amazonaws.com"
 
+// ServicePrincipalStates is the AWS Step Functions service principal used in role trust.
+const ServicePrincipalStates = "states.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

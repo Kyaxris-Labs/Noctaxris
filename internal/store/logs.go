@@ -1,0 +1,369 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var (
+	ErrLogGroupAlreadyExists  = errors.New("ResourceAlreadyExistsException")
+	ErrLogStreamAlreadyExists = errors.New("ResourceAlreadyExistsException")
+	ErrLogGroupNotFound       = errors.New("ResourceNotFoundException")
+	ErrLogStreamNotFound      = errors.New("ResourceNotFoundException")
+	ErrInvalidSequenceToken   = errors.New("InvalidSequenceTokenException")
+)
+
+// LogGroup is a CloudWatch Logs log group row.
+type LogGroup struct {
+	LogGroupName      string
+	Arn               string
+	CreationTime      int64 // epoch millis
+	StoredBytes       int64
+	MetricFilterCount int
+}
+
+// LogStream is a CloudWatch Logs log stream row.
+type LogStream struct {
+	LogGroupName        string
+	LogStreamName       string
+	Arn                 string
+	CreationTime        int64
+	FirstEventTimestamp int64
+	LastEventTimestamp  int64
+	LastIngestionTime   int64
+	UploadSequenceToken string
+	StoredBytes         int64
+}
+
+// LogEvent is one ingested log event.
+type LogEvent struct {
+	Timestamp     int64
+	Message       string
+	IngestionTime int64
+	EventID       string
+}
+
+const logsSchema = `
+CREATE TABLE IF NOT EXISTS logs_groups (
+  account_id TEXT NOT NULL,
+  log_group_name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  creation_time INTEGER NOT NULL,
+  PRIMARY KEY (account_id, log_group_name)
+);
+CREATE TABLE IF NOT EXISTS logs_streams (
+  account_id TEXT NOT NULL,
+  log_group_name TEXT NOT NULL,
+  log_stream_name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  creation_time INTEGER NOT NULL,
+  first_event_timestamp INTEGER NOT NULL DEFAULT 0,
+  last_event_timestamp INTEGER NOT NULL DEFAULT 0,
+  last_ingestion_time INTEGER NOT NULL DEFAULT 0,
+  upload_sequence_token TEXT NOT NULL DEFAULT '',
+  stored_bytes INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, log_group_name, log_stream_name)
+);
+CREATE TABLE IF NOT EXISTS logs_events (
+  account_id TEXT NOT NULL,
+  log_group_name TEXT NOT NULL,
+  log_stream_name TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  ingestion_time INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  PRIMARY KEY (account_id, log_group_name, log_stream_name, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_logs_events_ts ON logs_events(account_id, log_group_name, log_stream_name, timestamp);
+`
+
+// EnsureLogsSchema creates CloudWatch Logs tables if missing.
+func EnsureLogsSchema(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("ensure logs schema: db is nil")
+	}
+	if _, err := db.Exec(logsSchema); err != nil {
+		return fmt.Errorf("ensure logs schema: %w", err)
+	}
+	return nil
+}
+
+// EnsureLogsSchema ensures logs tables on an open store.
+func (s *Store) EnsureLogsSchema() error {
+	return EnsureLogsSchema(s.db)
+}
+
+// LogGroupARN builds arn:aws:logs:REGION:ACCOUNT:log-group:NAME
+func LogGroupARN(region, accountID, name string) string {
+	if region == "" {
+		region = DefaultSSMRegion
+	}
+	return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s", region, accountID, name)
+}
+
+// LogStreamARN builds arn:aws:logs:REGION:ACCOUNT:log-group:GROUP:log-stream:STREAM
+func LogStreamARN(region, accountID, group, stream string) string {
+	if region == "" {
+		region = DefaultSSMRegion
+	}
+	return fmt.Sprintf("arn:aws:logs:%s:%s:log-group:%s:log-stream:%s", region, accountID, group, stream)
+}
+
+// CreateLogGroup creates a log group.
+func (s *Store) CreateLogGroup(accountID, region, name string) (LogGroup, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return LogGroup{}, fmt.Errorf("create log group: name is required")
+	}
+	if _, err := s.getLogGroup(accountID, name); err == nil {
+		return LogGroup{}, ErrLogGroupAlreadyExists
+	} else if !errors.Is(err, ErrLogGroupNotFound) {
+		return LogGroup{}, err
+	}
+	now := time.Now().UTC().UnixMilli()
+	arn := LogGroupARN(region, accountID, name)
+	_, err := s.db.Exec(
+		`INSERT INTO logs_groups (account_id, log_group_name, arn, creation_time) VALUES (?, ?, ?, ?)`,
+		accountID, name, arn, now,
+	)
+	if err != nil {
+		return LogGroup{}, fmt.Errorf("create log group: %w", err)
+	}
+	return LogGroup{LogGroupName: name, Arn: arn, CreationTime: now}, nil
+}
+
+// CreateLogStream creates a log stream under an existing group.
+func (s *Store) CreateLogStream(accountID, region, group, stream string) (LogStream, error) {
+	group = strings.TrimSpace(group)
+	stream = strings.TrimSpace(stream)
+	if group == "" || stream == "" {
+		return LogStream{}, fmt.Errorf("create log stream: group and stream names are required")
+	}
+	if _, err := s.getLogGroup(accountID, group); err != nil {
+		return LogStream{}, err
+	}
+	if _, err := s.getLogStream(accountID, group, stream); err == nil {
+		return LogStream{}, ErrLogStreamAlreadyExists
+	} else if !errors.Is(err, ErrLogStreamNotFound) {
+		return LogStream{}, err
+	}
+	now := time.Now().UTC().UnixMilli()
+	arn := LogStreamARN(region, accountID, group, stream)
+	_, err := s.db.Exec(
+		`INSERT INTO logs_streams (
+			account_id, log_group_name, log_stream_name, arn, creation_time,
+			first_event_timestamp, last_event_timestamp, last_ingestion_time, upload_sequence_token, stored_bytes
+		) VALUES (?, ?, ?, ?, ?, 0, 0, 0, '', 0)`,
+		accountID, group, stream, arn, now,
+	)
+	if err != nil {
+		return LogStream{}, fmt.Errorf("create log stream: %w", err)
+	}
+	return LogStream{
+		LogGroupName: group, LogStreamName: stream, Arn: arn, CreationTime: now,
+	}, nil
+}
+
+// DescribeLogGroups lists log groups, optional prefix filter.
+func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) {
+	rows, err := s.db.Query(
+		`SELECT log_group_name, arn, creation_time FROM logs_groups WHERE account_id = ? ORDER BY log_group_name`,
+		accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describe log groups: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LogGroup
+	for rows.Next() {
+		var g LogGroup
+		if err := rows.Scan(&g.LogGroupName, &g.Arn, &g.CreationTime); err != nil {
+			return nil, fmt.Errorf("describe log groups: scan: %w", err)
+		}
+		if prefix != "" && !strings.HasPrefix(g.LogGroupName, prefix) {
+			continue
+		}
+		bytes, err := s.sumLogGroupBytes(accountID, g.LogGroupName)
+		if err != nil {
+			return nil, err
+		}
+		g.StoredBytes = bytes
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// PutLogEvents appends events and returns the next sequence token.
+// sequenceToken may be empty on the first put for a stream.
+func (s *Store) PutLogEvents(
+	accountID, group, stream, sequenceToken string, events []LogEvent,
+) (nextToken string, rejected []LogEvent, err error) {
+	st, err := s.getLogStream(accountID, group, stream)
+	if err != nil {
+		return "", nil, err
+	}
+	if st.UploadSequenceToken != "" && sequenceToken != st.UploadSequenceToken {
+		return st.UploadSequenceToken, nil, ErrInvalidSequenceToken
+	}
+	if len(events) == 0 {
+		return st.UploadSequenceToken, nil, nil
+	}
+
+	now := time.Now().UTC().UnixMilli()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", nil, fmt.Errorf("put log events: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	first := st.FirstEventTimestamp
+	last := st.LastEventTimestamp
+	stored := st.StoredBytes
+	for i, ev := range events {
+		ts := ev.Timestamp
+		if ts == 0 {
+			ts = now
+		}
+		msg := ev.Message
+		id := ev.EventID
+		if id == "" {
+			id = fmt.Sprintf("%d-%d", ts, i)
+		}
+		_, err := tx.Exec(
+			`INSERT INTO logs_events (
+				account_id, log_group_name, log_stream_name, event_id, timestamp, ingestion_time, message
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			accountID, group, stream, id, ts, now, msg,
+		)
+		if err != nil {
+			return "", nil, fmt.Errorf("put log events: insert: %w", err)
+		}
+		stored += int64(len(msg))
+		if first == 0 || ts < first {
+			first = ts
+		}
+		if ts > last {
+			last = ts
+		}
+	}
+
+	next := strconv.FormatInt(now, 10) + "-" + strconv.Itoa(len(events))
+	_, err = tx.Exec(
+		`UPDATE logs_streams SET
+			first_event_timestamp = ?, last_event_timestamp = ?, last_ingestion_time = ?,
+			upload_sequence_token = ?, stored_bytes = ?
+		 WHERE account_id = ? AND log_group_name = ? AND log_stream_name = ?`,
+		first, last, now, next, stored, accountID, group, stream,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("put log events: update stream: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", nil, fmt.Errorf("put log events: commit: %w", err)
+	}
+	return next, nil, nil
+}
+
+// GetLogEvents returns events for a stream, optionally bounded by start/end millis.
+func (s *Store) GetLogEvents(
+	accountID, group, stream string, startTime, endTime int64, startFromHead bool, limit int,
+) ([]LogEvent, error) {
+	if _, err := s.getLogStream(accountID, group, stream); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 10000
+	}
+	order := "ASC"
+	if !startFromHead {
+		order = "DESC"
+	}
+	q := fmt.Sprintf(
+		`SELECT event_id, timestamp, ingestion_time, message FROM logs_events
+		 WHERE account_id = ? AND log_group_name = ? AND log_stream_name = ?`,
+	)
+	args := []any{accountID, group, stream}
+	if startTime > 0 {
+		q += ` AND timestamp >= ?`
+		args = append(args, startTime)
+	}
+	if endTime > 0 {
+		q += ` AND timestamp <= ?`
+		args = append(args, endTime)
+	}
+	q += ` ORDER BY timestamp ` + order + ` LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get log events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LogEvent
+	for rows.Next() {
+		var ev LogEvent
+		if err := rows.Scan(&ev.EventID, &ev.Timestamp, &ev.IngestionTime, &ev.Message); err != nil {
+			return nil, fmt.Errorf("get log events: scan: %w", err)
+		}
+		out = append(out, ev)
+	}
+	if !startFromHead {
+		// AWS returns chronological when startFromHead=false after reverse fetch; keep DESC as lab lite.
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) getLogGroup(accountID, name string) (LogGroup, error) {
+	var g LogGroup
+	err := s.db.QueryRow(
+		`SELECT log_group_name, arn, creation_time FROM logs_groups WHERE account_id = ? AND log_group_name = ?`,
+		accountID, name,
+	).Scan(&g.LogGroupName, &g.Arn, &g.CreationTime)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LogGroup{}, ErrLogGroupNotFound
+	}
+	if err != nil {
+		return LogGroup{}, fmt.Errorf("get log group: %w", err)
+	}
+	return g, nil
+}
+
+func (s *Store) getLogStream(accountID, group, stream string) (LogStream, error) {
+	var st LogStream
+	err := s.db.QueryRow(
+		`SELECT log_group_name, log_stream_name, arn, creation_time,
+			first_event_timestamp, last_event_timestamp, last_ingestion_time,
+			upload_sequence_token, stored_bytes
+		 FROM logs_streams WHERE account_id = ? AND log_group_name = ? AND log_stream_name = ?`,
+		accountID, group, stream,
+	).Scan(
+		&st.LogGroupName, &st.LogStreamName, &st.Arn, &st.CreationTime,
+		&st.FirstEventTimestamp, &st.LastEventTimestamp, &st.LastIngestionTime,
+		&st.UploadSequenceToken, &st.StoredBytes,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LogStream{}, ErrLogStreamNotFound
+	}
+	if err != nil {
+		return LogStream{}, fmt.Errorf("get log stream: %w", err)
+	}
+	return st, nil
+}
+
+func (s *Store) sumLogGroupBytes(accountID, group string) (int64, error) {
+	var n sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(stored_bytes), 0) FROM logs_streams WHERE account_id = ? AND log_group_name = ?`,
+		accountID, group,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("sum log group bytes: %w", err)
+	}
+	return n.Int64, nil
+}

@@ -43,6 +43,8 @@ func (s *Server) handleOrgsDepth(
 		s.handleOrgsDetachPolicy(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionOrgsDescribePolicy, "DescribePolicy":
 		s.handleOrgsDescribePolicy(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsMoveAccount, "MoveAccount":
+		s.handleOrgsMoveAccount(w, r, body, requestID, eventID, verified, readOnly)
 	default:
 		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "InvalidAction",
 			"Unsupported Organizations action.", readOnly, eventID,
@@ -635,6 +637,73 @@ func (s *Server) handleOrgsDescribePolicy(
 	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", "DescribePolicy", true)
 }
 
+func (s *Server) handleOrgsMoveAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	if !s.authorizeOrgs(verified, catalog.ActionOrgsMoveAccount, "*") {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform organizations:MoveAccount.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+
+	params := requestParams(r, body)
+	accountID := params["AccountId"]
+	sourceParentID := params["SourceParentId"]
+	destinationParentID := params["DestinationParentId"]
+	if accountID == "" || sourceParentID == "" || destinationParentID == "" {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"AccountId, SourceParentId, and DestinationParentId are required.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	if err := validate.AccountID(accountID); err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"AccountId must be a 12-digit account id.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+
+	if err := s.store.MoveAccount(accountID, sourceParentID, destinationParentID); err != nil {
+		msg := err.Error()
+		code := "InvalidInputException"
+		switch {
+		case strings.Contains(msg, "account not found"):
+			code = "AccountNotFoundException"
+		case strings.Contains(msg, "source parent mismatch"), strings.Contains(msg, "move account source:"):
+			code = "SourceParentNotFoundException"
+		case strings.Contains(msg, "move account destination:"),
+			strings.Contains(msg, "organizational unit") && strings.Contains(msg, "not found") && !strings.Contains(msg, "source:"):
+			code = "DestinationParentNotFoundException"
+		case strings.Contains(msg, "already under destination"):
+			code = "DuplicateAccountException"
+		}
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, code,
+			"Unable to move account.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+
+	if wantsJSON(r, body) {
+		s.writeJSONOK(w, requestID, []byte("{}"))
+	} else {
+		payload, err := organizations.MoveAccountXML(requestID)
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build MoveAccount response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeXMLOK(w, requestID, payload)
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", "MoveAccount", false)
+}
+
 func orgAPITypeToStore(apiType string) (string, bool) {
 	switch apiType {
 	case "SERVICE_CONTROL_POLICY", "SCP":
@@ -696,7 +765,8 @@ func isOrgsDepthAction(action, service string) bool {
 		catalog.ActionOrgsCreatePolicy,
 		catalog.ActionOrgsAttachPolicy, "AttachPolicy",
 		catalog.ActionOrgsDetachPolicy, "DetachPolicy",
-		catalog.ActionOrgsDescribePolicy, "DescribePolicy":
+		catalog.ActionOrgsDescribePolicy, "DescribePolicy",
+		catalog.ActionOrgsMoveAccount, "MoveAccount":
 		return true
 	case catalog.ActionIAMCreatePolicy, "CreatePolicy":
 		return strings.EqualFold(service, "organizations")

@@ -34,6 +34,7 @@ func (s *Server) handleSQS(
 
 	resource := "*"
 	queuePolicy := ""
+	resourceAccountID := ""
 	var (
 		queue store.Queue
 		err   error
@@ -52,6 +53,7 @@ func (s *Server) handleSQS(
 		attrs := stringMapParam(params["Attributes"])
 		resource = store.QueueARN(region, accountID, name)
 		queuePolicy = attrs["Policy"]
+		resourceAccountID = accountID
 	default:
 		q, resolveErr := s.resolveSQSQueue(accountID, params)
 		if resolveErr != nil {
@@ -71,12 +73,13 @@ func (s *Server) handleSQS(
 		}
 		queue = q
 		resource = q.QueueARN
+		resourceAccountID = q.AccountID
 		if q.Attributes != nil {
 			queuePolicy = q.Attributes["Policy"]
 		}
 	}
 
-	if !s.authorizeSQS(verified, normalizeAction(action), resource, queuePolicy) {
+	if !s.authorizeSQS(verified, normalizeAction(action), resource, queuePolicy, resourceAccountID) {
 		s.writeSQSError(w, r, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform "+normalizeAction(action)+".", readOnly, eventID, verified)
 		return
@@ -218,26 +221,20 @@ func (s *Server) handleSQS(
 	s.writeSuccessAudit(r, requestID, eventID, verified, "sqs.amazonaws.com", eventNameForRequest(r), readOnly)
 }
 
-func (s *Server) authorizeSQS(verified *authn.Verified, action, resource, queuePolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+func (s *Server) authorizeSQS(verified *authn.Verified, action, resource, queuePolicy, resourceAccountID string) bool {
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateSQS(authz.SQSRequest{
-			Caller:         caller,
-			IdentityDocs:   identityDocs,
-			QueuePolicyDoc: queuePolicy,
+			Caller:            caller,
+			IdentityDocs:      identityDocs,
+			QueuePolicyDoc:    queuePolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
 
 func (s *Server) resolveSQSQueue(accountID string, params map[string]any) (store.Queue, error) {
 	if url, _ := params["QueueUrl"].(string); strings.TrimSpace(url) != "" {
-		q, err := s.store.GetQueueByURL(strings.TrimSpace(url))
-		if err != nil {
-			return store.Queue{}, err
-		}
-		if q.AccountID != accountID {
-			return store.Queue{}, store.ErrNoSuchQueue
-		}
-		return q, nil
+		return s.store.GetQueueByURL(strings.TrimSpace(url))
 	}
 	if name, _ := params["QueueName"].(string); strings.TrimSpace(name) != "" {
 		return s.store.GetQueue(accountID, strings.TrimSpace(name))

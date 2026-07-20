@@ -123,11 +123,16 @@ func dynamoAction(action string) string {
 }
 
 func (s *Server) authorizeDynamoDB(verified *authn.Verified, action, resource, resourcePolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+	resourceAccountID := resourceAccountIDFromARN(resource)
+	if resourceAccountID == "" {
+		resourceAccountID = verified.AccountID
+	}
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 			Caller:            caller,
 			IdentityDocs:      identityDocs,
 			ResourcePolicyDoc: resourcePolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
@@ -146,7 +151,13 @@ func (s *Server) dynamoTableOrErr(
 			"TableName is required.", readOnly, eventID, verified)
 		return store.DynamoTable{}, false
 	}
-	table, err := s.store.GetTable(verified.AccountID, tableName)
+	accountID := verified.AccountID
+	name := tableName
+	if acct, parsed, ok := store.ParseTableARN(tableName); ok {
+		accountID = acct
+		name = parsed
+	}
+	table, err := s.store.GetTable(accountID, name)
 	if errors.Is(err, store.ErrNoSuchTable) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Requested resource not found.", readOnly, eventID, verified)
@@ -398,7 +409,7 @@ func (s *Server) dynamoDeleteTable(
 			"User is not authorized to perform dynamodb:DeleteTable.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.DeleteTable(verified.AccountID, tableName)
+	err := s.store.DeleteTable(table.AccountID, table.TableName)
 	if errors.Is(err, store.ErrTableNotEmpty) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
 			"Table is not empty.", readOnly, eventID, verified)
@@ -732,7 +743,7 @@ func (s *Server) dynamoDeleteItem(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.DeleteItem(verified.AccountID, table.TableName, itemPK, itemSK); err != nil {
+	if err := s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete item.", readOnly, eventID, verified)
 		return
@@ -845,7 +856,7 @@ func (s *Server) dynamoQuery(
 			return
 		}
 		if indexName != "" {
-			_, startSK, err = s.store.GetItemGSIKeys(verified.AccountID, table.TableName, itemPK, itemSK)
+			_, startSK, err = s.store.GetItemGSIKeys(table.AccountID, table.TableName, itemPK, itemSK)
 			if errors.Is(err, store.ErrNoSuchItem) {
 				startSK = ""
 			} else if err != nil {
@@ -859,9 +870,9 @@ func (s *Server) dynamoQuery(
 	}
 	var page store.ItemPage
 	if indexName != "" {
-		page, err = s.store.QueryGSIItems(verified.AccountID, table.TableName, queryPK, limit, startSK)
+		page, err = s.store.QueryGSIItems(table.AccountID, table.TableName, queryPK, limit, startSK)
 	} else {
-		page, err = s.store.QueryItems(verified.AccountID, table.TableName, queryPK, limit, startSK)
+		page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, limit, startSK)
 	}
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -918,7 +929,7 @@ func (s *Server) dynamoScan(
 			return
 		}
 	}
-	page, err := s.store.ScanItems(verified.AccountID, table.TableName, limit, startPK, startSK)
+	page, err := s.store.ScanItems(table.AccountID, table.TableName, limit, startPK, startSK)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to scan items.", readOnly, eventID, verified)
@@ -1075,7 +1086,7 @@ func (s *Server) dynamoBatchWriteItem(
 						err.Error(), readOnly, eventID, verified)
 					return
 				}
-				if err := s.store.DeleteItem(verified.AccountID, table.TableName, itemPK, itemSK); err != nil {
+				if err := s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK); err != nil {
 					s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 						"Unable to delete item.", readOnly, eventID, verified)
 					return
@@ -1124,7 +1135,7 @@ func (s *Server) dynamoPutResourcePolicy(
 			"Policy is required.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.PutResourcePolicy(verified.AccountID, table.TableName, policy); err != nil {
+	if err := s.store.PutResourcePolicy(table.AccountID, table.TableName, policy); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put resource policy.", readOnly, eventID, verified)
 		return
@@ -1159,7 +1170,7 @@ func (s *Server) dynamoGetResourcePolicy(
 			"User is not authorized to perform dynamodb:GetResourcePolicy.", readOnly, eventID, verified)
 		return
 	}
-	policy, err := s.store.GetResourcePolicy(verified.AccountID, table.TableName)
+	policy, err := s.store.GetResourcePolicy(table.AccountID, table.TableName)
 	if errors.Is(err, store.ErrNoSuchResourcePolicy) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "PolicyNotFoundException",
 			"Resource policy not found.", readOnly, eventID, verified)
@@ -1205,7 +1216,7 @@ func (s *Server) dynamoDeleteResourcePolicy(
 			"User is not authorized to perform dynamodb:DeleteResourcePolicy.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.DeleteResourcePolicy(verified.AccountID, table.TableName); err != nil {
+	if err := s.store.DeleteResourcePolicy(table.AccountID, table.TableName); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete resource policy.", readOnly, eventID, verified)
 		return
@@ -1257,7 +1268,7 @@ func (s *Server) dynamoStoreItem(
 			err.Error(), readOnly, eventID, verified)
 		return err
 	}
-	if err := s.store.PutItemBytes(verified.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, data, sealed, sealedDEK); err != nil {
+	if err := s.store.PutItemBytes(table.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, data, sealed, sealedDEK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put item.", readOnly, eventID, verified)
 		return err
@@ -1281,7 +1292,7 @@ func (s *Server) dynamoLoadItem(
 			err.Error(), readOnly, eventID, verified)
 		return nil, false, err
 	}
-	stored, err := s.store.GetItemBytes(verified.AccountID, table.TableName, itemPK, itemSK)
+	stored, err := s.store.GetItemBytes(table.AccountID, table.TableName, itemPK, itemSK)
 	if errors.Is(err, store.ErrNoSuchItem) {
 		return nil, false, nil
 	}

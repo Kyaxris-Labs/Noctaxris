@@ -208,14 +208,6 @@ func ecsContainerEnv(def map[string]any) map[string]string {
 	return out
 }
 
-func ecsImageForDinD(imageURI, listenAddr string) (ref string, isLabRegistry bool) {
-	prefix := store.LabRegistryHost + "/"
-	if strings.HasPrefix(imageURI, prefix) {
-		return registryDinDPullHost(listenAddr) + "/" + strings.TrimPrefix(imageURI, prefix), true
-	}
-	return imageURI, false
-}
-
 func (s *Server) ecsRegisterTaskDefinition(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -614,13 +606,14 @@ func (s *Server) executeECSTask(
 	env["AWS_ENDPOINT_URL_ECR"] = endpoint
 	env["AWS_ENDPOINT_URL_ECS"] = endpoint
 
-	pullRef, isLabRegistry := ecsImageForDinD(imageURI, s.cfg.ListenAddr)
-	if isLabRegistry {
-		token, _, err := s.store.IssueAuthorizationToken(accountID, "ecs-tasks.amazonaws.com", store.DefaultAuthTokenTTL)
-		if err != nil {
-			return fmt.Errorf("issue registry token: %w", err)
-		}
-		if err := cli.PullLabRegistryImage(ctx, pullRef, "AWS", token); err != nil {
+	pullRef, useAuth, username, password, err := compute.IssueLabRegistryPull(
+		s.store, s.cfg.ListenAddr, accountID, imageURI, "ecs-tasks.amazonaws.com",
+	)
+	if err != nil {
+		return err
+	}
+	if useAuth {
+		if err := cli.PullLabRegistryImage(ctx, pullRef, username, password); err != nil {
 			return fmt.Errorf("pull lab registry image: %w", err)
 		}
 	}

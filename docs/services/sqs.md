@@ -20,9 +20,7 @@ Queue and message metadata live in SQLite. Message bodies use SSE-SQS or SSE-KMS
 
 ### Authz notes
 
-SQS uses `EvaluateSQS`: allow if identity **or** queue policy Allows. Explicit Deny in either wins. A queue policy alone can grant access (unlike KMS). Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
-
-Cross-account queue policy depth beyond same-account lab paths is deferred.
+SQS uses `EvaluateSQS` with the queue owner account from store metadata (or queue ARN account). Same-account access: allow if identity **or** queue policy Allows. Cross-account access: allow only when identity **and** queue policy both Allow (empty queue policy denies cross-account callers). Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
 ## How to verify / CLI smoke
 
@@ -62,7 +60,17 @@ aws sqs send-message \
   --endpoint-url "$EP"
 ```
 
+Two-account cross-account send (member account B owns the queue, member account A user sends via dual eval):
+
+```bash
+QUEUE_URL=$(aws sqs create-queue --queue-name "$QUEUE" --endpoint-url "$EP" --profile account-b --query QueueUrl --output text)
+QUEUE_ARN=$(aws sqs get-queue-attributes --queue-url "$QUEUE_URL" --attribute-names QueueArn \
+  --endpoint-url "$EP" --profile account-b --query Attributes.QueueArn --output text)
+aws sqs set-queue-attributes --queue-url "$QUEUE_URL" --endpoint-url "$EP" --profile account-b \
+  --attributes Policy='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/sender"},"Action":"sqs:SendMessage","Resource":"'"$QUEUE_ARN"'"}]}'
+aws sqs send-message --queue-url "$QUEUE_URL" --message-body hello-xa --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full SQS SAR beyond the lab set (delay queue depth, DLQ redrive allow policies, high-throughput FIFO quotas, tags beyond basics)
-- Cross-account queue policy depth beyond same-account lab paths

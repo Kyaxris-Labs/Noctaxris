@@ -115,6 +115,29 @@ func TableARN(accountID, region, tableName string) string {
 	return fmt.Sprintf("arn:aws:dynamodb:%s:%s:table/%s", region, accountID, tableName)
 }
 
+// ParseTableARN extracts account id and table name from a DynamoDB table ARN.
+func ParseTableARN(arn string) (accountID, tableName string, ok bool) {
+	arn = strings.TrimSpace(arn)
+	const prefix = "arn:aws:dynamodb:"
+	if !strings.HasPrefix(arn, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(arn, prefix)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) < 3 || parts[1] == "" {
+		return "", "", false
+	}
+	resource := parts[2]
+	if !strings.HasPrefix(resource, "table/") {
+		return "", "", false
+	}
+	name := strings.TrimPrefix(resource, "table/")
+	if name == "" || strings.Contains(name, "/") {
+		return "", "", false
+	}
+	return parts[1], name, true
+}
+
 func validKeyType(t string) bool {
 	switch t {
 	case KeyTypeString, KeyTypeNumber, KeyTypeBinary:

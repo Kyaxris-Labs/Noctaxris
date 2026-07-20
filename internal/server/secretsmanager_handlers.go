@@ -92,11 +92,16 @@ func (s *Server) secretsRegion(verified *authn.Verified) string {
 }
 
 func (s *Server) authorizeSecretsManager(verified *authn.Verified, action, resource, resourcePolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+	resourceAccountID := resourceAccountIDFromARN(resource)
+	if resourceAccountID == "" {
+		resourceAccountID = verified.AccountID
+	}
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 			Caller:            caller,
 			IdentityDocs:      identityDocs,
 			ResourcePolicyDoc: resourcePolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
@@ -109,24 +114,31 @@ func (s *Server) secretMetaOrErr(
 	verified *authn.Verified,
 	readOnly bool,
 	secretID string,
-) (store.Secret, bool) {
+) (store.Secret, string, bool) {
 	if strings.TrimSpace(secretID) == "" {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"SecretId is required.", readOnly, eventID, verified)
-		return store.Secret{}, false
+		return store.Secret{}, "", false
 	}
-	sec, err := s.store.DescribeSecret(verified.AccountID, secretID)
+	accountID := verified.AccountID
+	if acct := resourceAccountIDFromARN(secretID); acct != "" {
+		accountID = acct
+	}
+	sec, err := s.store.DescribeSecret(accountID, secretID)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
-		return store.Secret{}, false
+		return store.Secret{}, "", false
 	}
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to load secret.", readOnly, eventID, verified)
-		return store.Secret{}, false
+		return store.Secret{}, "", false
 	}
-	return sec, true
+	if owner := resourceAccountIDFromARN(sec.ARN); owner != "" {
+		accountID = owner
+	}
+	return sec, accountID, true
 }
 
 func secretsSecretID(params map[string]any) string {
@@ -218,7 +230,7 @@ func (s *Server) secretsGetSecretValue(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -228,7 +240,7 @@ func (s *Server) secretsGetSecretValue(
 		return
 	}
 
-	sec, err := s.store.GetSecretValue(verified.AccountID, secretID)
+	sec, err := s.store.GetSecretValue(secretAccountID, secretID)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -260,7 +272,7 @@ func (s *Server) secretsPutSecretValue(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -283,7 +295,7 @@ func (s *Server) secretsPutSecretValue(
 		return
 	}
 
-	sec, err := s.store.PutSecretValue(verified.AccountID, secretID, secretString, secretBinary)
+	sec, err := s.store.PutSecretValue(secretAccountID, secretID, secretString, secretBinary)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -315,7 +327,7 @@ func (s *Server) secretsDeleteSecret(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -325,7 +337,7 @@ func (s *Server) secretsDeleteSecret(
 		return
 	}
 
-	if err := s.store.DeleteSecret(verified.AccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
+	if err := s.store.DeleteSecret(secretAccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
 		return
@@ -356,7 +368,7 @@ func (s *Server) secretsDescribeSecret(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, _, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -419,7 +431,7 @@ func (s *Server) secretsPutResourcePolicy(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -434,7 +446,7 @@ func (s *Server) secretsPutResourcePolicy(
 			"ResourcePolicy is required.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.PutSecretResourcePolicy(verified.AccountID, secretID, policy); err != nil {
+	if err := s.store.PutSecretResourcePolicy(secretAccountID, secretID, policy); err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 				"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -465,7 +477,7 @@ func (s *Server) secretsGetResourcePolicy(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -474,7 +486,7 @@ func (s *Server) secretsGetResourcePolicy(
 			"User is not authorized to perform secretsmanager:GetResourcePolicy.", readOnly, eventID, verified)
 		return
 	}
-	policy, err := s.store.GetSecretResourcePolicy(verified.AccountID, secretID)
+	policy, err := s.store.GetSecretResourcePolicy(secretAccountID, secretID)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -511,7 +523,7 @@ func (s *Server) secretsDeleteResourcePolicy(
 	params map[string]any,
 ) {
 	secretID := secretsSecretID(params)
-	meta, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
 	if !ok {
 		return
 	}
@@ -520,7 +532,7 @@ func (s *Server) secretsDeleteResourcePolicy(
 			"User is not authorized to perform secretsmanager:DeleteResourcePolicy.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.DeleteSecretResourcePolicy(verified.AccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
+	if err := s.store.DeleteSecretResourcePolicy(secretAccountID, secretID); errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
 		return

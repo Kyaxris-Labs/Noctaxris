@@ -20,9 +20,9 @@ Topic and subscription metadata live in SQLite.
 
 ### Authz notes
 
-SNS uses `EvaluateSNS` via `authorizeDataplaneOR`: allow if identity **or** topic policy Allows. Explicit Deny in either wins. A topic policy alone can grant `Publish` or `Subscribe` without identity Allow. Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
+SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account from the topic ARN. Same-account access: allow if identity **or** topic policy Allows. Cross-account access: allow only when identity **and** topic policy both Allow. Empty topic policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Cross-account topic policy depth beyond same-account lab paths is deferred.
+Cross-account `Publish` uses `TopicArn` of the owner account. Lab subscription delivery still requires same-account SQS or Lambda endpoints unless already supported.
 
 ## How to verify / CLI smoke
 
@@ -63,9 +63,19 @@ aws sns set-topic-attributes \
   --endpoint-url "$EP"
 ```
 
+Two-account cross-account publish (member account B owns the topic, member account A user publishes via dual eval):
+
+```bash
+TOPIC_ARN=$(aws sns create-topic --name "$TOPIC" --endpoint-url "$EP" --profile account-b --query TopicArn --output text)
+aws sns set-topic-attributes --topic-arn "$TOPIC_ARN" --endpoint-url "$EP" --profile account-b \
+  --attribute-name Policy \
+  --attribute-value '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/publisher"},"Action":"sns:Publish","Resource":"'"$TOPIC_ARN"'"}]}'
+aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full SNS SAR beyond the lab set (FIFO topics, SMS, email, HTTP and HTTPS subscriptions, filter policy depth, raw message delivery edge cases)
 - HTTP, email, and SMS subscription protocols and confirmation token flows
 - Exact AWS retry and jitter timing for delivery failures
-- Cross-account topic policy depth beyond same-account lab paths
+- Cross-account Subscribe and foreign-account subscription delivery depth

@@ -100,6 +100,15 @@ func TestOrganizationsDepthHandlers(t *testing.T) {
 		t.Fatalf("DetachPolicy status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
+	rec = post("Action=MoveAccount&Version=2016-11-28&AccountId=000000000002&SourceParentId=r-root&DestinationParentId=" + ouID)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<MoveAccountResponse") {
+		t.Fatalf("MoveAccount status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = post("Action=MoveAccount&Version=2016-11-28&AccountId=000000000002&SourceParentId=r-root&DestinationParentId=" + ouID)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("MoveAccount bad source want 400 status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
 	// IAM CreatePolicy must still work with iam signing (not stolen by orgs dispatcher).
 	iamBody := "Action=CreatePolicy&Version=2010-05-08&PolicyName=StillIAM&PolicyDocument=" + scpDoc
 	iamReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(iamBody))

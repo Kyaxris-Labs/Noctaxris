@@ -19,8 +19,9 @@ const (
 )
 
 type ecrRepositoryMeta struct {
-	repo   store.Repository
-	policy string
+	repo      store.Repository
+	policy    string
+	accountID string
 }
 
 func (s *Server) handleECR(
@@ -103,11 +104,16 @@ func (s *Server) ecrRegion(verified *authn.Verified) string {
 }
 
 func (s *Server) authorizeECR(verified *authn.Verified, action, resource, repositoryPolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+	resourceAccountID := resourceAccountIDFromARN(resource)
+	if resourceAccountID == "" {
+		resourceAccountID = verified.AccountID
+	}
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 			Caller:            caller,
 			IdentityDocs:      identityDocs,
 			ResourcePolicyDoc: repositoryPolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
@@ -128,6 +134,7 @@ func (s *Server) ecrRepositoryMetaOrErr(
 	verified *authn.Verified,
 	readOnly bool,
 	name string,
+	registryID string,
 ) (ecrRepositoryMeta, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -135,7 +142,11 @@ func (s *Server) ecrRepositoryMetaOrErr(
 			"repositoryName is required.", readOnly, eventID, verified)
 		return ecrRepositoryMeta{}, false
 	}
-	repos, err := s.store.DescribeRepositories(verified.AccountID, []string{name})
+	registryID = strings.TrimSpace(registryID)
+	if registryID == "" {
+		registryID = verified.AccountID
+	}
+	repos, err := s.store.DescribeRepositories(registryID, []string{name})
 	if err != nil {
 		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to load repository.", readOnly, eventID, verified)
@@ -143,16 +154,23 @@ func (s *Server) ecrRepositoryMetaOrErr(
 	}
 	if len(repos) == 0 {
 		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "RepositoryNotFoundException",
-			"The repository with name '"+name+"' does not exist in the registry with id '"+verified.AccountID+"'.", readOnly, eventID, verified)
+			"The repository with name '"+name+"' does not exist in the registry with id '"+registryID+"'.", readOnly, eventID, verified)
 		return ecrRepositoryMeta{}, false
 	}
-	policy, err := s.ecrRepositoryPolicy(verified.AccountID, name)
+	policy, err := s.ecrRepositoryPolicy(registryID, name)
 	if err != nil {
 		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to load repository policy.", readOnly, eventID, verified)
 		return ecrRepositoryMeta{}, false
 	}
-	return ecrRepositoryMeta{repo: repos[0], policy: policy}, true
+	return ecrRepositoryMeta{repo: repos[0], policy: policy, accountID: registryID}, true
+}
+
+func ecrRegistryID(params map[string]any, verified *authn.Verified) string {
+	if id, _ := params["registryId"].(string); strings.TrimSpace(id) != "" {
+		return strings.TrimSpace(id)
+	}
+	return verified.AccountID
 }
 
 func ecrRepositoryName(params map[string]any) string {
@@ -251,7 +269,7 @@ func (s *Server) ecrDescribeRepositories(
 ) {
 	names := ecrRepositoryNames(params)
 	if len(names) == 1 {
-		meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, names[0])
+		meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, names[0], ecrRegistryID(params, verified))
 		if !ok {
 			return
 		}
@@ -261,7 +279,7 @@ func (s *Server) ecrDescribeRepositories(
 			return
 		}
 		repos := []store.Repository{meta.repo}
-		payload, err := ecrsvc.DescribeRepositoriesJSON(repos, verified.AccountID)
+		payload, err := ecrsvc.DescribeRepositoriesJSON(repos, meta.accountID)
 		if err != nil {
 			s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to build response.", readOnly, eventID, verified)
@@ -303,7 +321,7 @@ func (s *Server) ecrDeleteRepository(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -372,7 +390,7 @@ func (s *Server) ecrGetRepositoryPolicy(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -417,7 +435,7 @@ func (s *Server) ecrSetRepositoryPolicy(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -462,7 +480,7 @@ func (s *Server) ecrDeleteRepositoryPolicy(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -500,7 +518,7 @@ func (s *Server) ecrPutImage(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -559,7 +577,7 @@ func (s *Server) ecrListImages(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -568,10 +586,10 @@ func (s *Server) ecrListImages(
 			"User is not authorized to perform ecr:ListImages.", readOnly, eventID, verified)
 		return
 	}
-	images, err := s.store.ListImages(verified.AccountID, name)
+	images, err := s.store.ListImages(meta.accountID, name)
 	if errors.Is(err, store.ErrRepositoryNotFound) {
 		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "RepositoryNotFoundException",
-			"The repository with name '"+name+"' does not exist in the registry with id '"+verified.AccountID+"'.", readOnly, eventID, verified)
+			"The repository with name '"+name+"' does not exist in the registry with id '"+meta.accountID+"'.", readOnly, eventID, verified)
 		return
 	}
 	if err != nil {
@@ -599,7 +617,7 @@ func (s *Server) ecrBatchGetImage(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}
@@ -609,10 +627,10 @@ func (s *Server) ecrBatchGetImage(
 		return
 	}
 	digests, tags := ecrImageIDs(params)
-	images, err := s.store.BatchGetImage(verified.AccountID, name, digests, tags)
+	images, err := s.store.BatchGetImage(meta.accountID, name, digests, tags)
 	if errors.Is(err, store.ErrRepositoryNotFound) {
 		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "RepositoryNotFoundException",
-			"The repository with name '"+name+"' does not exist in the registry with id '"+verified.AccountID+"'.", readOnly, eventID, verified)
+			"The repository with name '"+name+"' does not exist in the registry with id '"+meta.accountID+"'.", readOnly, eventID, verified)
 		return
 	}
 	if err != nil {
@@ -640,7 +658,7 @@ func (s *Server) ecrBatchDeleteImage(
 	params map[string]any,
 ) {
 	name := ecrRepositoryName(params)
-	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name)
+	meta, ok := s.ecrRepositoryMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, name, ecrRegistryID(params, verified))
 	if !ok {
 		return
 	}

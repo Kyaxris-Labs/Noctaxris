@@ -126,6 +126,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
 			return
 		}
+		verified.SourceIP = clientIP(r)
 	}
 
 	if action == "" && (strings.EqualFold(verified.Service, "lambda") || isLambdaRESTPath(r.URL.Path)) {
@@ -148,6 +149,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "sns" || strings.HasPrefix(action, "sns:") {
 		s.handleSNS(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "ses" || verified.Service == "email" || strings.HasPrefix(action, "ses:") {
+		s.handleSES(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -392,6 +398,43 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionECSDescribeClusters, "DescribeClusters",
 		catalog.ActionECSListClusters, "ListClusters":
 		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCloudTrailLookupEvents, "LookupEvents":
+		s.handleCloudTrail(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionLogsCreateLogGroup, "CreateLogGroup",
+		catalog.ActionLogsCreateLogStream, "CreateLogStream",
+		catalog.ActionLogsPutLogEvents, "PutLogEvents",
+		catalog.ActionLogsGetLogEvents, "GetLogEvents",
+		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups":
+		s.handleLogs(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionTaggingTagResources, "TagResources",
+		catalog.ActionTaggingUntagResources, "UntagResources",
+		catalog.ActionTaggingGetResources, "GetResources":
+		s.handleTagging(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionKinesisCreateStream, "CreateStream",
+		catalog.ActionKinesisDeleteStream, "DeleteStream",
+		catalog.ActionKinesisDescribeStream, "DescribeStream",
+		catalog.ActionKinesisListStreams, "ListStreams",
+		catalog.ActionKinesisPutRecord, "PutRecord",
+		catalog.ActionKinesisPutRecords, "PutRecords",
+		catalog.ActionKinesisGetShardIterator, "GetShardIterator",
+		catalog.ActionKinesisGetRecords, "GetRecords":
+		s.handleKinesis(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionAppConfigCreateApplication, "CreateApplication",
+		catalog.ActionAppConfigCreateEnvironment, "CreateEnvironment",
+		catalog.ActionAppConfigCreateConfigurationProfile, "CreateConfigurationProfile",
+		catalog.ActionAppConfigCreateHostedConfigurationVersion, "CreateHostedConfigurationVersion",
+		catalog.ActionAppConfigGetConfiguration, "GetConfiguration",
+		catalog.ActionAppConfigDataStartConfigurationSession, "StartConfigurationSession",
+		catalog.ActionAppConfigDataGetLatestConfiguration, "GetLatestConfiguration":
+		s.handleAppConfig(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSFNCreateStateMachine, "CreateStateMachine",
+		catalog.ActionSFNDeleteStateMachine, "DeleteStateMachine",
+		catalog.ActionSFNDescribeStateMachine, "DescribeStateMachine",
+		catalog.ActionSFNListStateMachines, "ListStateMachines",
+		catalog.ActionSFNStartExecution, "StartExecution",
+		catalog.ActionSFNDescribeExecution, "DescribeExecution",
+		catalog.ActionSFNGetExecutionHistory, "GetExecutionHistory":
+		s.handleSFN(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -650,6 +693,23 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.EqualFold(prefix, "AmazonECS"),
 			strings.HasPrefix(strings.ToLower(prefix), "amazonec2containerservice"):
 			return ecsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "cloudtrail"):
+			return cloudtrailAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "logs_"),
+			strings.EqualFold(prefix, "Logs"):
+			return logsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "resourcegroupstagging"),
+			strings.EqualFold(prefix, "tagging"):
+			return taggingAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "kinesis"):
+			return kinesisAction(short)
+		case strings.Contains(strings.ToLower(prefix), "appconfigdata"):
+			return appconfigAction(short)
+		case strings.Contains(strings.ToLower(prefix), "appconfig"):
+			return appconfigAction(short)
+		case strings.Contains(strings.ToLower(prefix), "stepfunctions"),
+			strings.EqualFold(prefix, "AWSStepFunctions"):
+			return sfnAction(short)
 		}
 		return short
 	}
@@ -712,6 +772,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionOrgsDetachPolicy
 	case "DescribePolicy":
 		return catalog.ActionOrgsDescribePolicy
+	case "MoveAccount":
+		return catalog.ActionOrgsMoveAccount
 	case "CreateUser":
 		return catalog.ActionIAMCreateUser
 	case "GetUser":
@@ -1054,6 +1116,78 @@ func normalizeAction(action string) string {
 		return catalog.ActionECSDescribeClusters
 	case "ListClusters":
 		return catalog.ActionECSListClusters
+	case "LookupEvents":
+		return catalog.ActionCloudTrailLookupEvents
+	case "CreateLogGroup":
+		return catalog.ActionLogsCreateLogGroup
+	case "CreateLogStream":
+		return catalog.ActionLogsCreateLogStream
+	case "PutLogEvents":
+		return catalog.ActionLogsPutLogEvents
+	case "GetLogEvents":
+		return catalog.ActionLogsGetLogEvents
+	case "DescribeLogGroups":
+		return catalog.ActionLogsDescribeLogGroups
+	case "TagResources":
+		return catalog.ActionTaggingTagResources
+	case "UntagResources":
+		return catalog.ActionTaggingUntagResources
+	case "GetResources":
+		return catalog.ActionTaggingGetResources
+	case "CreateStream":
+		return catalog.ActionKinesisCreateStream
+	case "DeleteStream":
+		return catalog.ActionKinesisDeleteStream
+	case "DescribeStream":
+		return catalog.ActionKinesisDescribeStream
+	case "ListStreams":
+		return catalog.ActionKinesisListStreams
+	case "PutRecord":
+		return catalog.ActionKinesisPutRecord
+	case "PutRecords":
+		return catalog.ActionKinesisPutRecords
+	case "GetShardIterator":
+		return catalog.ActionKinesisGetShardIterator
+	case "GetRecords":
+		return catalog.ActionKinesisGetRecords
+	case "VerifyEmailIdentity":
+		return catalog.ActionSESVerifyEmailIdentity
+	case "SendEmail":
+		return catalog.ActionSESSendEmail
+	case "SendRawEmail":
+		return catalog.ActionSESSendRawEmail
+	case "ListIdentities":
+		return catalog.ActionSESListIdentities
+	case "GetSendStatistics":
+		return catalog.ActionSESGetSendStatistics
+	case "CreateApplication":
+		return catalog.ActionAppConfigCreateApplication
+	case "CreateEnvironment":
+		return catalog.ActionAppConfigCreateEnvironment
+	case "CreateConfigurationProfile":
+		return catalog.ActionAppConfigCreateConfigurationProfile
+	case "CreateHostedConfigurationVersion":
+		return catalog.ActionAppConfigCreateHostedConfigurationVersion
+	case "GetConfiguration":
+		return catalog.ActionAppConfigGetConfiguration
+	case "StartConfigurationSession":
+		return catalog.ActionAppConfigDataStartConfigurationSession
+	case "GetLatestConfiguration":
+		return catalog.ActionAppConfigDataGetLatestConfiguration
+	case "CreateStateMachine":
+		return catalog.ActionSFNCreateStateMachine
+	case "DeleteStateMachine":
+		return catalog.ActionSFNDeleteStateMachine
+	case "DescribeStateMachine":
+		return catalog.ActionSFNDescribeStateMachine
+	case "ListStateMachines":
+		return catalog.ActionSFNListStateMachines
+	case "StartExecution":
+		return catalog.ActionSFNStartExecution
+	case "DescribeExecution":
+		return catalog.ActionSFNDescribeExecution
+	case "GetExecutionHistory":
+		return catalog.ActionSFNGetExecutionHistory
 	default:
 		return action
 	}

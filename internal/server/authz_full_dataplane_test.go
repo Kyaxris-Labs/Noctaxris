@@ -105,6 +105,72 @@ func TestAuthorizeS3SCPDenyDespiteIdentityAllow(t *testing.T) {
 	}
 }
 
+func TestAuthorizeS3InheritedOUSCPDeny(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, memberID, err := st.CreateMemberAccount(testAccountID, "ou-scp@example.com", "OUSCPMember")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const memberAKID = "AKIAMEEMBERROOT02"
+	const memberSecret = "secret-member-root-2"
+	if err := st.EnsureRoot(memberID, memberAKID, memberSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed objects before OU SCP applies (member root would otherwise be filtered).
+	mustS3WithCreds(t, handler, http.MethodPut, "http://127.0.0.1:4566/ou-scp-bucket", nil, memberAKID, memberSecret, "s3", now, nil)
+	mustS3WithCreds(t, handler, http.MethodPut, "http://127.0.0.1:4566/ou-scp-bucket/obj.txt", []byte("secret"), memberAKID, memberSecret, "s3", now, nil)
+
+	_, userARN, err := st.CreateUser(memberID, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userAKID, userSecret, err := st.CreateUserAccessKey(memberID, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3Allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(userARN, "s3all", s3Allow); err != nil {
+		t.Fatal(err)
+	}
+
+	ouID, err := st.CreateOrganizationalUnit("r-root", "Restricted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scpDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:*","Resource":"*"}]}`
+	scpID, err := st.CreateOrgPolicy("SCP", "NoS3OU", scpDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachOrgPolicy(scpID, "ou", ouID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MoveAccount(memberID, "r-root", ouID); err != nil {
+		t.Fatal(err)
+	}
+
+	getRec := mustS3WithCreds(t, handler, http.MethodGet, "http://127.0.0.1:4566/ou-scp-bucket/obj.txt", nil, userAKID, userSecret, "s3", now, nil)
+	if getRec.Code != http.StatusForbidden {
+		t.Fatalf("GetObject status=%d want 403 body=%q", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), "AccessDenied") {
+		t.Fatalf("expected AccessDenied in %q", getRec.Body.String())
+	}
+
+	// Management account remains SCP-exempt when placed under the same OU.
+	if err := st.SetAccountParent(testAccountID, ouID); err != nil {
+		t.Fatal(err)
+	}
+	mgmtPut := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/mgmt-ou-exempt", nil, "s3", now, nil)
+	if mgmtPut.Code != http.StatusOK {
+		t.Fatalf("management CreateBucket under OU SCP status=%d body=%q want 200 (SCP exempt)", mgmtPut.Code, mgmtPut.Body.String())
+	}
+}
+
 func TestAuthorizeS3BoundaryDenyDespiteIdentityAllow(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()

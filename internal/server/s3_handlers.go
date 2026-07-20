@@ -260,26 +260,55 @@ func parseS3Path(path string) (bucket, key string, ok bool) {
 	return bucket, key, true
 }
 
-func (s *Server) authorizeS3(verified *authn.Verified, action, resource, bucketPolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+func (s *Server) authorizeS3(verified *authn.Verified, action, resource, bucketPolicy, resourceAccountID string) bool {
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateS3(authz.S3Request{
-			Caller:          caller,
-			IdentityDocs:    identityDocs,
-			BucketPolicyDoc: bucketPolicy,
+			Caller:            caller,
+			IdentityDocs:      identityDocs,
+			BucketPolicyDoc:   bucketPolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
 
-func (s *Server) bucketPolicyOrEmpty(accountID, bucket string) string {
-	b, err := s.store.GetBucket(accountID, bucket)
+type s3BucketRef struct {
+	accountID string
+	name      string
+	policy    string
+}
+
+func (s *Server) s3ResolveBucket(name string) (s3BucketRef, error) {
+	b, err := s.store.GetBucketByName(name)
 	if err != nil {
-		return ""
+		return s3BucketRef{}, err
 	}
-	return b.BucketPolicy
+	return s3BucketRef{accountID: b.AccountID, name: b.Name, policy: b.BucketPolicy}, nil
+}
+
+func (s *Server) s3RequireBucket(
+	w http.ResponseWriter,
+	r *http.Request,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	bucket, opName string,
+) (s3BucketRef, bool) {
+	ref, err := s.s3ResolveBucket(bucket)
+	if errors.Is(err, store.ErrNoSuchBucket) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
+			"The specified bucket does not exist", opName)
+		return s3BucketRef{}, false
+	}
+	if err != nil {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
+			"Internal error", opName)
+		return s3BucketRef{}, false
+	}
+	return ref, true
 }
 
 func (s *Server) s3ListBuckets(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool) {
-	if !s.authorizeS3(verified, catalog.ActionS3ListAllMyBuckets, "*", "") {
+	if !s.authorizeS3(verified, catalog.ActionS3ListAllMyBuckets, "*", "", "") {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "ListBuckets")
 		return
@@ -302,7 +331,7 @@ func (s *Server) s3ListBuckets(w http.ResponseWriter, r *http.Request, requestID
 }
 
 func (s *Server) s3CreateBucket(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	if !s.authorizeS3(verified, catalog.ActionS3CreateBucket, store.BucketARN(bucket), "") {
+	if !s.authorizeS3(verified, catalog.ActionS3CreateBucket, store.BucketARN(bucket), "", verified.AccountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "CreateBucket")
 		return
@@ -330,13 +359,23 @@ func (s *Server) s3CreateBucket(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s *Server) s3DeleteBucket(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3DeleteBucket, store.BucketARN(bucket), policy) {
+	ref, err := s.s3ResolveBucket(bucket)
+	if errors.Is(err, store.ErrNoSuchBucket) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
+			"The specified bucket does not exist", "DeleteBucket")
+		return
+	}
+	if err != nil {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
+			"Internal error", "DeleteBucket")
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3DeleteBucket, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "DeleteBucket")
 		return
 	}
-	err := s.store.DeleteBucket(verified.AccountID, bucket)
+	err = s.store.DeleteBucket(ref.accountID, bucket)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "DeleteBucket")
@@ -358,13 +397,23 @@ func (s *Server) s3DeleteBucket(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s *Server) s3HeadBucket(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3ListBucket, store.BucketARN(bucket), policy) {
+	ref, err := s.s3ResolveBucket(bucket)
+	if errors.Is(err, store.ErrNoSuchBucket) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
+			"The specified bucket does not exist", "HeadBucket")
+		return
+	}
+	if err != nil {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
+			"Internal error", "HeadBucket")
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3ListBucket, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "HeadBucket")
 		return
 	}
-	if err := s.store.HeadBucket(verified.AccountID, bucket); err != nil {
+	if err := s.store.HeadBucket(ref.accountID, bucket); err != nil {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "HeadBucket")
 		return
@@ -375,13 +424,23 @@ func (s *Server) s3HeadBucket(w http.ResponseWriter, r *http.Request, requestID,
 }
 
 func (s *Server) s3PutBucketPolicy(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3PutBucketPolicy, store.BucketARN(bucket), policy) {
+	ref, err := s.s3ResolveBucket(bucket)
+	if errors.Is(err, store.ErrNoSuchBucket) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
+			"The specified bucket does not exist", "PutBucketPolicy")
+		return
+	}
+	if err != nil {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
+			"Internal error", "PutBucketPolicy")
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3PutBucketPolicy, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "PutBucketPolicy")
 		return
 	}
-	if err := s.store.PutBucketPolicy(verified.AccountID, bucket, string(body)); err != nil {
+	if err := s.store.PutBucketPolicy(ref.accountID, bucket, string(body)); err != nil {
 		if errors.Is(err, store.ErrNoSuchBucket) {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 				"The specified bucket does not exist", "PutBucketPolicy")
@@ -397,13 +456,16 @@ func (s *Server) s3PutBucketPolicy(w http.ResponseWriter, r *http.Request, body 
 }
 
 func (s *Server) s3GetBucketPolicy(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3GetBucketPolicy, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "GetBucketPolicy")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3GetBucketPolicy, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "GetBucketPolicy")
 		return
 	}
-	doc, err := s.store.GetBucketPolicy(verified.AccountID, bucket)
+	doc, err := s.store.GetBucketPolicy(ref.accountID, bucket)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "GetBucketPolicy")
@@ -427,13 +489,16 @@ func (s *Server) s3GetBucketPolicy(w http.ResponseWriter, r *http.Request, reque
 }
 
 func (s *Server) s3DeleteBucketPolicy(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3DeleteBucketPolicy, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "DeleteBucketPolicy")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3DeleteBucketPolicy, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "DeleteBucketPolicy")
 		return
 	}
-	if err := s.store.DeleteBucketPolicy(verified.AccountID, bucket); err != nil {
+	if err := s.store.DeleteBucketPolicy(ref.accountID, bucket); err != nil {
 		if errors.Is(err, store.ErrNoSuchBucket) {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 				"The specified bucket does not exist", "DeleteBucketPolicy")
@@ -449,8 +514,11 @@ func (s *Server) s3DeleteBucketPolicy(w http.ResponseWriter, r *http.Request, re
 }
 
 func (s *Server) s3PutBucketEncryption(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3PutEncryptionConfiguration, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "PutBucketEncryption")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3PutEncryptionConfiguration, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "PutBucketEncryption")
 		return
@@ -481,7 +549,7 @@ func (s *Server) s3PutBucketEncryption(w http.ResponseWriter, r *http.Request, b
 		}
 		enc.KMSKeyID = kmsKey.ARN
 	}
-	if err := s.store.PutBucketEncryption(verified.AccountID, bucket, enc); err != nil {
+	if err := s.store.PutBucketEncryption(ref.accountID, bucket, enc); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNoSuchBucket):
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
@@ -501,13 +569,16 @@ func (s *Server) s3PutBucketEncryption(w http.ResponseWriter, r *http.Request, b
 }
 
 func (s *Server) s3GetBucketEncryption(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3GetEncryptionConfiguration, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "GetBucketEncryption")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3GetEncryptionConfiguration, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "GetBucketEncryption")
 		return
 	}
-	enc, err := s.store.GetBucketEncryption(verified.AccountID, bucket)
+	enc, err := s.store.GetBucketEncryption(ref.accountID, bucket)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "GetBucketEncryption")
@@ -537,13 +608,16 @@ func (s *Server) s3GetBucketEncryption(w http.ResponseWriter, r *http.Request, r
 }
 
 func (s *Server) s3DeleteBucketEncryption(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3DeleteEncryptionConfiguration, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "DeleteBucketEncryption")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3DeleteEncryptionConfiguration, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "DeleteBucketEncryption")
 		return
 	}
-	if err := s.store.DeleteBucketEncryption(verified.AccountID, bucket); err != nil {
+	if err := s.store.DeleteBucketEncryption(ref.accountID, bucket); err != nil {
 		if errors.Is(err, store.ErrNoSuchBucket) {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 				"The specified bucket does not exist", "DeleteBucketEncryption")
@@ -559,15 +633,18 @@ func (s *Server) s3DeleteBucketEncryption(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) s3ListObjectsV2(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3ListBucket, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "ListObjectsV2")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3ListBucket, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "ListObjectsV2")
 		return
 	}
 	prefix := r.URL.Query().Get("prefix")
 	delimiter := r.URL.Query().Get("delimiter")
-	result, err := s.store.ListObjectsV2(verified.AccountID, bucket, prefix, delimiter)
+	result, err := s.store.ListObjectsV2(ref.accountID, bucket, prefix, delimiter)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "ListObjectsV2")
@@ -602,15 +679,18 @@ func (s *Server) s3ListObjectsV2(w http.ResponseWriter, r *http.Request, request
 }
 
 func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "PutObject")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3PutObject, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3PutObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "PutObject")
 		return
 	}
 
-	sse, kmsKeyParam := s.s3EffectiveSSE(r, verified.AccountID, bucket)
+	sse, kmsKeyParam := s.s3EffectiveSSE(r, ref.accountID, bucket)
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -628,7 +708,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	obj, err := s.store.PutObject(verified.AccountID, bucket, key, meta)
+	obj, err := s.store.PutObject(ref.accountID, bucket, key, meta)
 	if errors.Is(err, store.ErrNoSuchBucket) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchBucket",
 			"The specified bucket does not exist", "PutObject")
@@ -664,21 +744,27 @@ func (s *Server) s3CopyObject(w http.ResponseWriter, r *http.Request, requestID,
 			"Invalid copy source", "CopyObject")
 		return
 	}
-	destPolicy := s.bucketPolicyOrEmpty(verified.AccountID, destBucket)
-	srcPolicy := s.bucketPolicyOrEmpty(verified.AccountID, srcBucket)
+	destRef, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, destBucket, "CopyObject")
+	if !ok {
+		return
+	}
+	srcRef, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, srcBucket, "CopyObject")
+	if !ok {
+		return
+	}
 	srcResource := store.ObjectARN(srcBucket, srcKey)
 	destResource := store.ObjectARN(destBucket, strings.TrimPrefix(destKey, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3GetObject, srcResource, srcPolicy) {
+	if !s.authorizeS3(verified, catalog.ActionS3GetObject, srcResource, srcRef.policy, srcRef.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "CopyObject")
 		return
 	}
-	if !s.authorizeS3(verified, catalog.ActionS3PutObject, destResource, destPolicy) {
+	if !s.authorizeS3(verified, catalog.ActionS3PutObject, destResource, destRef.policy, destRef.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "CopyObject")
 		return
 	}
-	srcMeta, srcData, err := s.store.GetObject(verified.AccountID, srcBucket, srcKey)
+	srcMeta, srcData, err := s.store.GetObject(srcRef.accountID, srcBucket, srcKey)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
 			"The specified key does not exist.", "CopyObject")
@@ -718,11 +804,11 @@ func (s *Server) s3CopyObject(w http.ResponseWriter, r *http.Request, requestID,
 		PlainSize:   int64(len(plain)),
 		ETag:        hex.EncodeToString(plainSum[:]),
 	}
-	sse, kmsKeyParam := s.s3EffectiveSSE(r, verified.AccountID, destBucket)
+	sse, kmsKeyParam := s.s3EffectiveSSE(r, destRef.accountID, destBucket)
 	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &destMeta, sse, kmsKeyParam, "CopyObject"); !ok {
 		return
 	}
-	obj, err := s.store.CopyObject(verified.AccountID, srcBucket, srcKey, destBucket, destKey, destMeta)
+	obj, err := s.store.CopyObject(destRef.accountID, srcBucket, srcKey, destBucket, destKey, destMeta)
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "CopyObject"); mapErr {
 		return
 	}
@@ -760,14 +846,17 @@ func parseCopySource(header string) (bucket, key string, err error) {
 }
 
 func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "GetObject")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "GetObject")
 		return
 	}
-	meta, data, err := s.store.GetObject(verified.AccountID, bucket, key)
+	meta, data, err := s.store.GetObject(ref.accountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
 			"The specified key does not exist.", "GetObject")
@@ -805,14 +894,17 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 }
 
 func (s *Server) s3HeadObject(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "HeadObject")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "HeadObject")
 		return
 	}
-	meta, err := s.store.HeadObject(verified.AccountID, bucket, key)
+	meta, err := s.store.HeadObject(ref.accountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
 			"The specified key does not exist.", "HeadObject")
@@ -839,14 +931,17 @@ func (s *Server) s3HeadObject(w http.ResponseWriter, r *http.Request, requestID,
 }
 
 func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "DeleteObject")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3DeleteObject, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3DeleteObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "DeleteObject")
 		return
 	}
-	err := s.store.DeleteObject(verified.AccountID, bucket, key)
+	err := s.store.DeleteObject(ref.accountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		// AWS DeleteObject is idempotent for missing keys.
 		w.Header().Set(requestIDHeader, requestID)
@@ -865,9 +960,12 @@ func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "CreateMultipartUpload")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3CreateMultipartUpload, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3CreateMultipartUpload, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "CreateMultipartUpload")
 		return
@@ -881,7 +979,7 @@ func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	sseMeta.ContentType = contentType
-	upload, err := s.store.CreateMultipartUpload(verified.AccountID, bucket, key, store.CreateMultipartUploadMeta{
+	upload, err := s.store.CreateMultipartUpload(ref.accountID, bucket, key, store.CreateMultipartUploadMeta{
 		ContentType:  sseMeta.ContentType,
 		SSEAlgorithm: sseMeta.SSEAlgorithm,
 		KMSKeyID:     sseMeta.KMSKeyID,
@@ -907,9 +1005,12 @@ func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) s3UploadPart(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key, uploadID string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "UploadPart")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3UploadPart, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3UploadPart, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "UploadPart")
 		return
@@ -920,7 +1021,7 @@ func (s *Server) s3UploadPart(w http.ResponseWriter, r *http.Request, body []byt
 			"Invalid part number", "UploadPart")
 		return
 	}
-	if _, err := s.store.GetMultipartUpload(verified.AccountID, bucket, key, uploadID); errors.Is(err, store.ErrNoSuchUpload) {
+	if _, err := s.store.GetMultipartUpload(ref.accountID, bucket, key, uploadID); errors.Is(err, store.ErrNoSuchUpload) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchUpload",
 			"The specified multipart upload does not exist.", "UploadPart")
 		return
@@ -929,7 +1030,7 @@ func (s *Server) s3UploadPart(w http.ResponseWriter, r *http.Request, body []byt
 			"Internal error", "UploadPart")
 		return
 	}
-	part, err := s.store.UploadPart(verified.AccountID, bucket, key, uploadID, partNumber, store.UploadPartMeta{Data: body})
+	part, err := s.store.UploadPart(ref.accountID, bucket, key, uploadID, partNumber, store.UploadPartMeta{Data: body})
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "UploadPart"); mapErr {
 		return
 	}
@@ -940,9 +1041,12 @@ func (s *Server) s3UploadPart(w http.ResponseWriter, r *http.Request, body []byt
 }
 
 func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key, uploadID string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "CompleteMultipartUpload")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3CompleteMultipartUpload, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3CompleteMultipartUpload, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "CompleteMultipartUpload")
 		return
@@ -959,7 +1063,7 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 	for _, p := range req.Parts {
 		completed = append(completed, store.CompletedPartInput{PartNumber: p.PartNumber, ETag: p.ETag})
 	}
-	result, err := s.store.CompleteMultipartUpload(verified.AccountID, bucket, key, uploadID, completed)
+	result, err := s.store.CompleteMultipartUpload(ref.accountID, bucket, key, uploadID, completed)
 	if errors.Is(err, store.ErrNoSuchUpload) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchUpload",
 			"The specified multipart upload does not exist.", "CompleteMultipartUpload")
@@ -1000,7 +1104,7 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		}
 		putMeta.Data = encrypted
 	}
-	obj, err := s.store.PutObject(verified.AccountID, bucket, key, putMeta)
+	obj, err := s.store.PutObject(ref.accountID, bucket, key, putMeta)
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "CompleteMultipartUpload"); mapErr {
 		return
 	}
@@ -1021,14 +1125,17 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) s3AbortMultipartUpload(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key, uploadID string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "AbortMultipartUpload")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3AbortMultipartUpload, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3AbortMultipartUpload, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "AbortMultipartUpload")
 		return
 	}
-	err := s.store.AbortMultipartUpload(verified.AccountID, bucket, key, uploadID)
+	err := s.store.AbortMultipartUpload(ref.accountID, bucket, key, uploadID)
 	if errors.Is(err, store.ErrNoSuchUpload) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchUpload",
 			"The specified multipart upload does not exist.", "AbortMultipartUpload")
@@ -1043,14 +1150,17 @@ func (s *Server) s3AbortMultipartUpload(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) s3ListParts(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key, uploadID string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "ListParts")
+	if !ok {
+		return
+	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3ListParts, resource, policy) {
+	if !s.authorizeS3(verified, catalog.ActionS3ListParts, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "ListParts")
 		return
 	}
-	upload, err := s.store.GetMultipartUpload(verified.AccountID, bucket, key, uploadID)
+	upload, err := s.store.GetMultipartUpload(ref.accountID, bucket, key, uploadID)
 	if errors.Is(err, store.ErrNoSuchUpload) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchUpload",
 			"The specified multipart upload does not exist.", "ListParts")
@@ -1063,7 +1173,7 @@ func (s *Server) s3ListParts(w http.ResponseWriter, r *http.Request, requestID, 
 	}
 	marker, _ := strconv.Atoi(r.URL.Query().Get("part-number-marker"))
 	maxParts, _ := strconv.Atoi(r.URL.Query().Get("max-parts"))
-	parts, truncated, err := s.store.ListParts(verified.AccountID, bucket, key, uploadID, marker, maxParts)
+	parts, truncated, err := s.store.ListParts(ref.accountID, bucket, key, uploadID, marker, maxParts)
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "ListParts"); mapErr {
 		return
 	}
@@ -1095,14 +1205,17 @@ func (s *Server) s3ListParts(w http.ResponseWriter, r *http.Request, requestID, 
 }
 
 func (s *Server) s3ListMultipartUploads(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
-	policy := s.bucketPolicyOrEmpty(verified.AccountID, bucket)
-	if !s.authorizeS3(verified, catalog.ActionS3ListMultipartUploads, store.BucketARN(bucket), policy) {
+	ref, ok := s.s3RequireBucket(w, r, requestID, eventID, verified, readOnly, bucket, "ListMultipartUploads")
+	if !ok {
+		return
+	}
+	if !s.authorizeS3(verified, catalog.ActionS3ListMultipartUploads, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "ListMultipartUploads")
 		return
 	}
 	prefix := r.URL.Query().Get("prefix")
-	uploads, err := s.store.ListMultipartUploads(verified.AccountID, bucket, prefix)
+	uploads, err := s.store.ListMultipartUploads(ref.accountID, bucket, prefix)
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "ListMultipartUploads"); mapErr {
 		return
 	}

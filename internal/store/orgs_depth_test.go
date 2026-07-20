@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"testing"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func TestListAccountsAndManagement(t *testing.T) {
@@ -137,4 +139,107 @@ func TestOrgOUsPoliciesAndSCPRCPDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = mgmtSCPs
+}
+
+func TestAccountPlacementAndOUInheritedSCP(t *testing.T) {
+	st := openTestStore(t)
+	const mgmt = "000000000001"
+	if err := st.EnsureRoot(mgmt, "AKIAROOTEXAMPLE01", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, memberID, err := st.CreateMemberAccount(mgmt, "place@example.com", "Place")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parent, err := st.AccountParentID(memberID)
+	if err != nil || parent != store.OrgRootID {
+		t.Fatalf("default parent=%q err=%v want %s", parent, err, store.OrgRootID)
+	}
+	path, err := st.OUPathToRoot(memberID)
+	if err != nil || len(path) != 0 {
+		t.Fatalf("default OU path=%#v err=%v", path, err)
+	}
+
+	parentOU, err := st.CreateOrganizationalUnit(store.OrgRootID, "Workloads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childOU, err := st.CreateOrganizationalUnit(parentOU, "Prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restrictDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:*","Resource":"*"}]}`
+	parentDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["iam:*","s3:*"],"Resource":"*"}]}`
+	restrictID, err := st.CreateOrgPolicy("SCP", "NoS3OnChild", restrictDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID, err := st.CreateOrgPolicy("SCP", "ParentAllow", parentDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachOrgPolicy(restrictID, "ou", childOU); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachOrgPolicy(parentID, "ou", parentOU); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before move: OU-only attachments must not apply.
+	before, err := st.SCPDocsForAccount(memberID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range before {
+		if d == restrictDoc || d == parentDoc {
+			t.Fatalf("OU SCP leaked before MoveAccount: %#v", before)
+		}
+	}
+
+	if err := st.MoveAccount(memberID, store.OrgRootID, childOU); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.AccountParentID(memberID); err != nil || got != childOU {
+		t.Fatalf("after move parent=%q err=%v", got, err)
+	}
+	path, err = st.OUPathToRoot(memberID)
+	if err != nil || len(path) != 2 || path[0] != childOU || path[1] != parentOU {
+		t.Fatalf("OU path=%#v err=%v", path, err)
+	}
+
+	after, err := st.SCPDocsForAccount(memberID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRestrict, foundParent := false, false
+	for _, d := range after {
+		if d == restrictDoc {
+			foundRestrict = true
+		}
+		if d == parentDoc {
+			foundParent = true
+		}
+	}
+	if !foundRestrict || !foundParent {
+		t.Fatalf("inherited SCPs missing restrict=%v parent=%v docs=%#v", foundRestrict, foundParent, after)
+	}
+
+	if err := st.MoveAccount(memberID, store.OrgRootID, parentOU); err == nil {
+		t.Fatal("expected source parent mismatch")
+	}
+
+	// Management account placement under same OU must not change IsManagementAccount.
+	if err := st.SetAccountParent(mgmt, childOU); err != nil {
+		t.Fatal(err)
+	}
+	if !st.IsManagementAccount(mgmt) {
+		t.Fatal("management account must remain management")
+	}
+	mgmtDocs, err := st.SCPDocsForAccount(mgmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = mgmtDocs
 }

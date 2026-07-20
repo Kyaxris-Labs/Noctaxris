@@ -53,6 +53,7 @@ const (
 	ActionOrgsAttachPolicy                     = "organizations:AttachPolicy"
 	ActionOrgsDetachPolicy                     = "organizations:DetachPolicy"
 	ActionOrgsDescribePolicy                   = "organizations:DescribePolicy"
+	ActionOrgsMoveAccount                      = "organizations:MoveAccount"
 )
 
 // IAM lab actions (Phase 3).
@@ -205,22 +206,22 @@ const (
 
 // S3 lab actions (Phase 5).
 const (
-	ActionS3CreateBucket            = "s3:CreateBucket"
-	ActionS3DeleteBucket            = "s3:DeleteBucket"
-	ActionS3ListAllMyBuckets        = "s3:ListAllMyBuckets"
-	ActionS3ListBucket              = "s3:ListBucket"
-	ActionS3GetBucketPolicy         = "s3:GetBucketPolicy"
-	ActionS3PutBucketPolicy         = "s3:PutBucketPolicy"
-	ActionS3DeleteBucketPolicy      = "s3:DeleteBucketPolicy"
-	ActionS3GetObject               = "s3:GetObject"
-	ActionS3PutObject               = "s3:PutObject"
-	ActionS3DeleteObject            = "s3:DeleteObject"
-	ActionS3CreateMultipartUpload   = "s3:CreateMultipartUpload"
-	ActionS3UploadPart              = "s3:UploadPart"
-	ActionS3CompleteMultipartUpload = "s3:CompleteMultipartUpload"
-	ActionS3AbortMultipartUpload    = "s3:AbortMultipartUpload"
-	ActionS3ListParts               = "s3:ListParts"
-	ActionS3ListMultipartUploads    = "s3:ListMultipartUploads"
+	ActionS3CreateBucket                  = "s3:CreateBucket"
+	ActionS3DeleteBucket                  = "s3:DeleteBucket"
+	ActionS3ListAllMyBuckets              = "s3:ListAllMyBuckets"
+	ActionS3ListBucket                    = "s3:ListBucket"
+	ActionS3GetBucketPolicy               = "s3:GetBucketPolicy"
+	ActionS3PutBucketPolicy               = "s3:PutBucketPolicy"
+	ActionS3DeleteBucketPolicy            = "s3:DeleteBucketPolicy"
+	ActionS3GetObject                     = "s3:GetObject"
+	ActionS3PutObject                     = "s3:PutObject"
+	ActionS3DeleteObject                  = "s3:DeleteObject"
+	ActionS3CreateMultipartUpload         = "s3:CreateMultipartUpload"
+	ActionS3UploadPart                    = "s3:UploadPart"
+	ActionS3CompleteMultipartUpload       = "s3:CompleteMultipartUpload"
+	ActionS3AbortMultipartUpload          = "s3:AbortMultipartUpload"
+	ActionS3ListParts                     = "s3:ListParts"
+	ActionS3ListMultipartUploads          = "s3:ListMultipartUploads"
 	ActionS3PutEncryptionConfiguration    = "s3:PutEncryptionConfiguration"
 	ActionS3GetEncryptionConfiguration    = "s3:GetEncryptionConfiguration"
 	ActionS3DeleteEncryptionConfiguration = "s3:DeleteEncryptionConfiguration"
@@ -276,55 +277,55 @@ const (
 
 // SNS lab actions (Phase 9).
 const (
-	ActionSNSCreateTopic              = "sns:CreateTopic"
-	ActionSNSDeleteTopic              = "sns:DeleteTopic"
-	ActionSNSListTopics               = "sns:ListTopics"
-	ActionSNSGetTopicAttributes       = "sns:GetTopicAttributes"
-	ActionSNSSetTopicAttributes       = "sns:SetTopicAttributes"
-	ActionSNSPublish                  = "sns:Publish"
-	ActionSNSSubscribe                = "sns:Subscribe"
-	ActionSNSUnsubscribe              = "sns:Unsubscribe"
-	ActionSNSListSubscriptions        = "sns:ListSubscriptions"
-	ActionSNSListSubscriptionsByTopic = "sns:ListSubscriptionsByTopic"
+	ActionSNSCreateTopic               = "sns:CreateTopic"
+	ActionSNSDeleteTopic               = "sns:DeleteTopic"
+	ActionSNSListTopics                = "sns:ListTopics"
+	ActionSNSGetTopicAttributes        = "sns:GetTopicAttributes"
+	ActionSNSSetTopicAttributes        = "sns:SetTopicAttributes"
+	ActionSNSPublish                   = "sns:Publish"
+	ActionSNSSubscribe                 = "sns:Subscribe"
+	ActionSNSUnsubscribe               = "sns:Unsubscribe"
+	ActionSNSListSubscriptions         = "sns:ListSubscriptions"
+	ActionSNSListSubscriptionsByTopic  = "sns:ListSubscriptionsByTopic"
 	ActionSNSGetSubscriptionAttributes = "sns:GetSubscriptionAttributes"
-	ActionSNSAddPermission            = "sns:AddPermission"
-	ActionSNSRemovePermission         = "sns:RemovePermission"
+	ActionSNSAddPermission             = "sns:AddPermission"
+	ActionSNSRemovePermission          = "sns:RemovePermission"
 )
 
 // EventBridge lab actions (Phase 9).
 const (
-	ActionEventsPutEvents           = "events:PutEvents"
-	ActionEventsCreateEventBus      = "events:CreateEventBus"
-	ActionEventsDeleteEventBus      = "events:DeleteEventBus"
-	ActionEventsDescribeEventBus    = "events:DescribeEventBus"
-	ActionEventsListEventBuses      = "events:ListEventBuses"
-	ActionEventsPutRule             = "events:PutRule"
-	ActionEventsDescribeRule        = "events:DescribeRule"
-	ActionEventsListRules           = "events:ListRules"
-	ActionEventsDeleteRule          = "events:DeleteRule"
-	ActionEventsEnableRule          = "events:EnableRule"
-	ActionEventsDisableRule         = "events:DisableRule"
-	ActionEventsPutTargets          = "events:PutTargets"
-	ActionEventsRemoveTargets       = "events:RemoveTargets"
-	ActionEventsListTargetsByRule   = "events:ListTargetsByRule"
+	ActionEventsPutEvents         = "events:PutEvents"
+	ActionEventsCreateEventBus    = "events:CreateEventBus"
+	ActionEventsDeleteEventBus    = "events:DeleteEventBus"
+	ActionEventsDescribeEventBus  = "events:DescribeEventBus"
+	ActionEventsListEventBuses    = "events:ListEventBuses"
+	ActionEventsPutRule           = "events:PutRule"
+	ActionEventsDescribeRule      = "events:DescribeRule"
+	ActionEventsListRules         = "events:ListRules"
+	ActionEventsDeleteRule        = "events:DeleteRule"
+	ActionEventsEnableRule        = "events:EnableRule"
+	ActionEventsDisableRule       = "events:DisableRule"
+	ActionEventsPutTargets        = "events:PutTargets"
+	ActionEventsRemoveTargets     = "events:RemoveTargets"
+	ActionEventsListTargetsByRule = "events:ListTargetsByRule"
 )
 
 // ECR lab actions (Phase 9).
 const (
-	ActionECRCreateRepository           = "ecr:CreateRepository"
-	ActionECRDescribeRepositories       = "ecr:DescribeRepositories"
-	ActionECRDeleteRepository           = "ecr:DeleteRepository"
-	ActionECRGetAuthorizationToken      = "ecr:GetAuthorizationToken"
-	ActionECRGetRepositoryPolicy        = "ecr:GetRepositoryPolicy"
-	ActionECRSetRepositoryPolicy        = "ecr:SetRepositoryPolicy"
-	ActionECRDeleteRepositoryPolicy     = "ecr:DeleteRepositoryPolicy"
-	ActionECRPutImage                   = "ecr:PutImage"
-	ActionECRBatchGetImage              = "ecr:BatchGetImage"
-	ActionECRListImages                 = "ecr:ListImages"
-	ActionECRBatchDeleteImage           = "ecr:BatchDeleteImage"
-	ActionECRInitiateLayerUpload        = "ecr:InitiateLayerUpload"
-	ActionECRUploadLayerPart            = "ecr:UploadLayerPart"
-	ActionECRCompleteLayerUpload        = "ecr:CompleteLayerUpload"
+	ActionECRCreateRepository            = "ecr:CreateRepository"
+	ActionECRDescribeRepositories        = "ecr:DescribeRepositories"
+	ActionECRDeleteRepository            = "ecr:DeleteRepository"
+	ActionECRGetAuthorizationToken       = "ecr:GetAuthorizationToken"
+	ActionECRGetRepositoryPolicy         = "ecr:GetRepositoryPolicy"
+	ActionECRSetRepositoryPolicy         = "ecr:SetRepositoryPolicy"
+	ActionECRDeleteRepositoryPolicy      = "ecr:DeleteRepositoryPolicy"
+	ActionECRPutImage                    = "ecr:PutImage"
+	ActionECRBatchGetImage               = "ecr:BatchGetImage"
+	ActionECRListImages                  = "ecr:ListImages"
+	ActionECRBatchDeleteImage            = "ecr:BatchDeleteImage"
+	ActionECRInitiateLayerUpload         = "ecr:InitiateLayerUpload"
+	ActionECRUploadLayerPart             = "ecr:UploadLayerPart"
+	ActionECRCompleteLayerUpload         = "ecr:CompleteLayerUpload"
 	ActionECRBatchCheckLayerAvailability = "ecr:BatchCheckLayerAvailability"
 )
 
@@ -353,6 +354,70 @@ const (
 	ActionSecretsPutResourcePolicy    = "secretsmanager:PutResourcePolicy"
 	ActionSecretsGetResourcePolicy    = "secretsmanager:GetResourcePolicy"
 	ActionSecretsDeleteResourcePolicy = "secretsmanager:DeleteResourcePolicy"
+)
+
+// CloudTrail lab actions (v3 N-AUDIT).
+const (
+	ActionCloudTrailLookupEvents = "cloudtrail:LookupEvents"
+)
+
+// CloudWatch Logs lab actions (v3 N-AUDIT).
+const (
+	ActionLogsCreateLogGroup    = "logs:CreateLogGroup"
+	ActionLogsCreateLogStream   = "logs:CreateLogStream"
+	ActionLogsPutLogEvents      = "logs:PutLogEvents"
+	ActionLogsGetLogEvents      = "logs:GetLogEvents"
+	ActionLogsDescribeLogGroups = "logs:DescribeLogGroups"
+)
+
+// Resource Groups Tagging API lab actions (v3 N-AUDIT).
+const (
+	ActionTaggingTagResources   = "tag:TagResources"
+	ActionTaggingUntagResources = "tag:UntagResources"
+	ActionTaggingGetResources   = "tag:GetResources"
+)
+
+// Kinesis lab actions (v3 Track B).
+const (
+	ActionKinesisCreateStream     = "kinesis:CreateStream"
+	ActionKinesisDeleteStream     = "kinesis:DeleteStream"
+	ActionKinesisDescribeStream   = "kinesis:DescribeStream"
+	ActionKinesisListStreams      = "kinesis:ListStreams"
+	ActionKinesisPutRecord        = "kinesis:PutRecord"
+	ActionKinesisPutRecords       = "kinesis:PutRecords"
+	ActionKinesisGetShardIterator = "kinesis:GetShardIterator"
+	ActionKinesisGetRecords       = "kinesis:GetRecords"
+)
+
+// AppConfig lab actions (v3 Track B).
+const (
+	ActionAppConfigCreateApplication               = "appconfig:CreateApplication"
+	ActionAppConfigCreateEnvironment               = "appconfig:CreateEnvironment"
+	ActionAppConfigCreateConfigurationProfile      = "appconfig:CreateConfigurationProfile"
+	ActionAppConfigCreateHostedConfigurationVersion = "appconfig:CreateHostedConfigurationVersion"
+	ActionAppConfigGetConfiguration                = "appconfig:GetConfiguration"
+	ActionAppConfigDataStartConfigurationSession   = "appconfigdata:StartConfigurationSession"
+	ActionAppConfigDataGetLatestConfiguration      = "appconfigdata:GetLatestConfiguration"
+)
+
+// SES lab actions (v3 Track B).
+const (
+	ActionSESVerifyEmailIdentity = "ses:VerifyEmailIdentity"
+	ActionSESListIdentities      = "ses:ListIdentities"
+	ActionSESSendEmail           = "ses:SendEmail"
+	ActionSESSendRawEmail        = "ses:SendRawEmail"
+	ActionSESGetSendStatistics   = "ses:GetSendStatistics"
+)
+
+// Step Functions lab actions (v3 Track B).
+const (
+	ActionSFNCreateStateMachine   = "states:CreateStateMachine"
+	ActionSFNDeleteStateMachine   = "states:DeleteStateMachine"
+	ActionSFNDescribeStateMachine = "states:DescribeStateMachine"
+	ActionSFNListStateMachines    = "states:ListStateMachines"
+	ActionSFNStartExecution       = "states:StartExecution"
+	ActionSFNDescribeExecution    = "states:DescribeExecution"
+	ActionSFNGetExecutionHistory  = "states:GetExecutionHistory"
 )
 
 // Lambda lab actions (Phase 7).
@@ -404,6 +469,7 @@ func KnownAction(action string) bool {
 		ActionOrgsAttachPolicy,
 		ActionOrgsDetachPolicy,
 		ActionOrgsDescribePolicy,
+		ActionOrgsMoveAccount,
 		ActionIAMCreateUser,
 		ActionIAMGetUser,
 		ActionIAMListUsers,
@@ -634,7 +700,43 @@ func KnownAction(action string) bool {
 		ActionECSListTasks,
 		ActionECSStopTask,
 		ActionECSDescribeClusters,
-		ActionECSListClusters:
+		ActionECSListClusters,
+		ActionCloudTrailLookupEvents,
+		ActionLogsCreateLogGroup,
+		ActionLogsCreateLogStream,
+		ActionLogsPutLogEvents,
+		ActionLogsGetLogEvents,
+		ActionLogsDescribeLogGroups,
+		ActionTaggingTagResources,
+		ActionTaggingUntagResources,
+		ActionTaggingGetResources,
+		ActionKinesisCreateStream,
+		ActionKinesisDeleteStream,
+		ActionKinesisDescribeStream,
+		ActionKinesisListStreams,
+		ActionKinesisPutRecord,
+		ActionKinesisPutRecords,
+		ActionKinesisGetShardIterator,
+		ActionKinesisGetRecords,
+		ActionAppConfigCreateApplication,
+		ActionAppConfigCreateEnvironment,
+		ActionAppConfigCreateConfigurationProfile,
+		ActionAppConfigCreateHostedConfigurationVersion,
+		ActionAppConfigGetConfiguration,
+		ActionAppConfigDataStartConfigurationSession,
+		ActionAppConfigDataGetLatestConfiguration,
+		ActionSESVerifyEmailIdentity,
+		ActionSESListIdentities,
+		ActionSESSendEmail,
+		ActionSESSendRawEmail,
+		ActionSESGetSendStatistics,
+		ActionSFNCreateStateMachine,
+		ActionSFNDeleteStateMachine,
+		ActionSFNDescribeStateMachine,
+		ActionSFNListStateMachines,
+		ActionSFNStartExecution,
+		ActionSFNDescribeExecution,
+		ActionSFNGetExecutionHistory:
 		return true
 	default:
 		return false

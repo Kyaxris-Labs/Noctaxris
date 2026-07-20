@@ -55,15 +55,14 @@ Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_
 
 ## Authz
 
-- Same-account identity: `Evaluate`
-- S3: `EvaluateS3`. Allow if identity **or** bucket policy Allows (Deny-overrides)
-- DynamoDB: `EvaluateDynamoDB`. Allow if identity **or** table resource policy Allows (Deny-overrides)
-- SQS: `EvaluateSQS`. Allow if identity **or** queue policy Allows (Deny-overrides)
-- KMS: `EvaluateKMS`. Key-policy explicit Allow (or grant) plus identity
+- Same-account identity: `Evaluate` / `EvaluateFull` (identity, boundary, SCP, RCP)
+- Resource-policy dataplane (S3, SQS, Lambda, ECR, SNS, Secrets, DynamoDB): same-account Allow if identity **or** resource policy Allows (Deny-overrides). Cross-account Allow only when identity **and** resource policy both Allow. Empty resource policy denies cross-account callers.
+- KMS: `EvaluateKMS`. Key-policy explicit Allow (or grant) is always required. Cross-account also needs caller identity Allow.
+- Organizations SCP/RCP: collected from account attachments, OU path to root, and root. Management account exempt.
 - Lambda configure: `CheckPassRole` (caller `iam:PassRole` plus `lambda.amazonaws.com` trust)
-- Lambda dataplane: `EvaluateDynamoDB`-style union (identity **or** function resource policy Allow, Deny-overrides)
 - Session policies: `EvaluateWithSession` intersection
-- Cross-account AssumeRole: `EvaluateCrossAccount`
+- Cross-account AssumeRole: `EvaluateCrossAccount` (trust dual-eval, separate from resource dual-eval)
+- Condition request context: populates cataloged keys such as `aws:SourceIp`, `aws:PrincipalArn`, and ResourceTag keys when present
 
 ## Identity and data
 

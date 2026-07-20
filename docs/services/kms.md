@@ -21,9 +21,9 @@ CreateKey seeds a default key policy that allows the account root (and the IAM u
 
 ### Authz notes
 
-KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet).
+KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Key policy statements must name the caller principal (account root, IAM user, or IAM role). Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet).
 
-Cross-account key policy and grant depth beyond same-account lab paths is deferred.
+Cross-account Encrypt and similar crypto APIs use a full key ARN. Both the caller identity policy and the trusting account key policy must Allow.
 
 ## How to verify / CLI smoke
 
@@ -50,9 +50,19 @@ aws kms enable-key-rotation --key-id "$KEY_ID" --endpoint-url "$EP"
 aws kms get-key-rotation-status --key-id "$KEY_ID" --endpoint-url "$EP"
 ```
 
+Two-account cross-account Encrypt (member account B owns the key, member account A user encrypts via dual eval):
+
+```bash
+KEY_ARN=$(aws kms create-key --endpoint-url "$EP" --profile account-b --query KeyMetadata.Arn --output text)
+aws kms put-key-policy --key-id "$KEY_ARN" --policy-name default --endpoint-url "$EP" --profile account-b \
+  --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/crypto"},"Action":"kms:Encrypt","Resource":"*"}]}'
+aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
+  --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity)
 - Background deletion after `DeletionDate` and on-demand or automatic key-material rotation (lab stores rotation enabled flags only)
-- Cross-account key policy and grant flows beyond same-account lab paths
+- Cross-account grant flows beyond key policy dual eval
 - True AWS-owned managed key types beyond the lab convenience aliases above

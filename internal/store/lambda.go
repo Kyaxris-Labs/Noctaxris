@@ -179,6 +179,22 @@ func ParseLayerVersionARN(arn string) (accountID, region, name string, version i
 	return accountID, region, name, version, true
 }
 
+// ParseFunctionAccountID extracts the account id from a Lambda function ARN.
+// Bare names return ok=false.
+func ParseFunctionAccountID(raw string) (accountID string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	const prefix = "arn:aws:lambda:"
+	if !strings.HasPrefix(raw, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(raw, prefix)
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) < 3 || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
 // ParseFunctionQualifier splits a function name or ARN into base name and qualifier.
 // Qualifier is "$LATEST" when omitted.
 func ParseFunctionQualifier(raw string) (name, qualifier string) {

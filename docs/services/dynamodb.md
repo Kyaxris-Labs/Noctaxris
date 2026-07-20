@@ -21,9 +21,9 @@ Table and item metadata live in SQLite. Item ciphertext uses table SSE. Expired 
 
 ### Authz notes
 
-DynamoDB uses `EvaluateDynamoDB`: allow if identity **or** table resource policy Allows. Explicit Deny in either wins. A resource policy alone can grant access (unlike KMS). Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
+DynamoDB uses `EvaluateDynamoDB` via `authorizeDataplaneOR` with the table owner account from the table ARN. Same-account access: allow if identity **or** table resource policy Allows. Cross-account access: allow only when identity **and** table resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. A resource policy alone can grant access in the same account (unlike KMS). Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Cross-account table resource policy depth beyond same-account lab paths is deferred.
+Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs.
 
 ## How to verify / CLI smoke
 
@@ -66,7 +66,22 @@ aws dynamodb update-time-to-live \
   --endpoint-url "$EP"
 ```
 
+Two-account cross-account GetItem (member account B owns the table, member account A user reads via dual eval):
+
+```bash
+TABLE_ARN=$(aws dynamodb create-table --table-name "$TABLE" \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url "$EP" --profile account-b --query TableDescription.TableArn --output text)
+aws dynamodb put-item --table-name "$TABLE" --item '{"pk":{"S":"1"},"data":{"S":"xa"}}' \
+  --endpoint-url "$EP" --profile account-b
+aws dynamodb put-resource-policy --resource-arn "$TABLE_ARN" --endpoint-url "$EP" --profile account-b \
+  --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/reader"},"Action":"dynamodb:GetItem","Resource":"*"}]}'
+aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
+  --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full DynamoDB SAR beyond the lab set (additional GSIs, LSI, Streams, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
-- Cross-account table resource policy depth beyond same-account lab paths

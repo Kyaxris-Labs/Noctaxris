@@ -384,3 +384,22 @@ func DetachPolicyXML(requestID string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// MoveAccountXML builds MoveAccount response XML.
+func MoveAccountXML(requestID string) ([]byte, error) {
+	type resp struct {
+		XMLName           xml.Name `xml:"MoveAccountResponse"`
+		XMLNS             string   `xml:"xmlns,attr"`
+		MoveAccountResult struct{} `xml:"MoveAccountResult"`
+		ResponseMetadata  struct {
+			RequestId string `xml:"RequestId"`
+		} `xml:"ResponseMetadata"`
+	}
+	out, err := xml.Marshal(resp{XMLNS: orgsXMLNS, ResponseMetadata: struct {
+		RequestId string `xml:"RequestId"`
+	}{RequestId: requestID}})
+	if err != nil {
+		return nil, fmt.Errorf("marshal MoveAccount: %w", err)
+	}
+	return out, nil
+}

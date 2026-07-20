@@ -17,9 +17,9 @@ Secret metadata and sealed values live in SQLite. ARNs include a random six-char
 
 ### Authz notes
 
-Secrets Manager uses `EvaluateDynamoDB` OR semantics via `authorizeDataplaneOR`: allow if identity **or** secret resource policy Allows. Explicit Deny in either wins. A resource policy alone can grant `GetSecretValue` (and other data-plane actions) without identity Allow. `CreateSecret` and `ListSecrets` use identity-only `EvaluateFull`. Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
+Secrets Manager uses `authorizeDataplaneOR` with the shared resource dual-eval helper (same OR/AND rules as DynamoDB table policies) and the secret owner account from the secret ARN. Same-account access: allow if identity **or** secret resource policy Allows. Cross-account access: allow only when identity **and** secret resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. `CreateSecret` and `ListSecrets` use identity-only `EvaluateFull`. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Cross-account secret resource policy depth beyond same-account lab paths is deferred.
+Pass a full secret ARN as `SecretId` for cross-account `GetSecretValue`.
 
 ## How to verify / CLI smoke
 
@@ -76,9 +76,18 @@ aws secretsmanager delete-secret \
   --endpoint-url "$EP"
 ```
 
+Two-account cross-account GetSecretValue (member account B owns the secret, member account A user reads via dual eval):
+
+```bash
+SECRET_ARN=$(aws secretsmanager create-secret --name "$SECRET" --secret-string hello-xa \
+  --endpoint-url "$EP" --profile account-b --query ARN --output text)
+aws secretsmanager put-resource-policy --secret-id "$SECRET" --endpoint-url "$EP" --profile account-b \
+  --resource-policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/reader"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}'
+aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Full Secrets Manager SAR beyond the lab set (`RotateSecret`, random password generation, version stages, tags, replication, filtering on `ListSecrets`, full pagination parity)
 - Delete recovery window and scheduled deletion (lab deletes immediately)
-- Cross-account secret resource policy depth beyond same-account lab paths
 - True AWS-owned `alias/aws/secretsmanager` key (lab convenience alias is a per-account CMK approximation)

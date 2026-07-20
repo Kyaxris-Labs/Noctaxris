@@ -291,14 +291,11 @@ func (s *Server) handleAssumeRole(
 	callerDocs := s.identityDocs(verified.Principal)
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
-			Principal: verified.Principal,
-			Action:    catalog.ActionSTSAssumeRole,
-			Resource:  roleARN,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": verified.AccountID,
-				"aws:RequestedRegion":  verified.Region,
-			},
+			Principal:     verified.Principal,
+			Action:        catalog.ActionSTSAssumeRole,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
 		},
 		CallerIdentityDocs: callerDocs,
 		TrustPolicyDoc:     trust,
@@ -363,6 +360,12 @@ func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
 		"aws:PrincipalAccount": verified.AccountID,
 		"aws:RequestedRegion":  verified.Region,
 	}
+	if arn := principalArnForCondition(verified.Principal); arn != "" {
+		keys["aws:PrincipalArn"] = arn
+	}
+	if ip := strings.TrimSpace(verified.SourceIP); ip != "" {
+		keys["aws:SourceIp"] = ip
+	}
 	if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.MFAAuthenticated {
 		keys["aws:MultiFactorAuthPresent"] = "true"
 		if !ak.MFAAuthenticatedAt.IsZero() {
@@ -374,6 +377,61 @@ func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
 		}
 	}
 	return keys
+}
+
+// principalArnForCondition returns aws:PrincipalArn. For IAM roles AWS documents
+// the role ARN (not the assumed-role session ARN).
+func principalArnForCondition(p identity.Principal) string {
+	if p.Kind == identity.KindRole && p.RoleName != "" {
+		return fmt.Sprintf("arn:aws:iam::%s:role/%s", p.AccountID, p.RoleName)
+	}
+	return p.ARN()
+}
+
+func (s *Server) mergeResourceTagConditionKeys(keys map[string]string, accountID, resource string) {
+	resource = strings.TrimSpace(resource)
+	if keys == nil || resource == "" || resource == "*" {
+		return
+	}
+	tagAccount := resourceAccountIDFromARN(resource)
+	if tagAccount == "" {
+		tagAccount = accountID
+	}
+	if tagAccount == "" {
+		return
+	}
+	tags, err := s.store.ListResourceTags(tagAccount, resource)
+	if err != nil || len(tags) == 0 {
+		return
+	}
+	svcPrefix := serviceResourceTagKeyPrefix(resource)
+	for _, tag := range tags {
+		k := strings.TrimSpace(tag.Key)
+		if k == "" {
+			continue
+		}
+		keys["aws:ResourceTag/"+k] = tag.Value
+		if svcPrefix != "" {
+			keys[svcPrefix+k] = tag.Value
+		}
+	}
+}
+
+// serviceResourceTagKeyPrefix returns a service-specific ResourceTag key prefix
+// for cataloged templates (ecr:ResourceTag/, ssm:resourceTag/). Empty when none.
+func serviceResourceTagKeyPrefix(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+	switch strings.ToLower(parts[2]) {
+	case "ecr":
+		return "ecr:ResourceTag/"
+	case "ssm":
+		return "ssm:resourceTag/"
+	default:
+		return ""
+	}
 }
 
 func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
@@ -424,12 +482,14 @@ func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 }
 
 func (s *Server) requestContext(verified *authn.Verified, action, resource string) authz.RequestContext {
+	keys := s.conditionKeys(verified)
+	s.mergeResourceTagConditionKeys(keys, verified.AccountID, resource)
 	return authz.RequestContext{
 		Principal:     verified.Principal,
 		Action:        action,
 		Resource:      resource,
 		Region:        verified.Region,
-		ConditionKeys: s.conditionKeys(verified),
+		ConditionKeys: keys,
 	}
 }
 
@@ -441,13 +501,15 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 	return authz.EvaluateFull(s.requestContext(verified, action, resource), in) == authz.Allow
 }
 
-// authorizeDataplaneOR applies SCP/RCP, then a resource-OR identity evaluator
-// (S3/SQS/DynamoDB). Boundary and session intersect only when identity Allows
-// (ADR-0005 §8 resource-policy-only path skips boundary/session).
+// authorizeDataplaneOR applies SCP/RCP, then a resource evaluator (S3/SQS/SNS/DynamoDB).
+// Same-account: identity Allow OR resource policy Allow. Cross-account (resourceAccountID
+// differs from caller): identity Allow AND resource policy Allow via EvaluateResourceAccess.
+// Boundary and session intersect only when identity Allows (ADR-0005 §8 resource-policy-only
+// path skips boundary/session).
 func (s *Server) authorizeDataplaneOR(
 	verified *authn.Verified,
-	action, resource string,
-	eval func(caller authz.RequestContext, identityDocs []string) authz.Decision,
+	action, resource, resourceAccountID string,
+	eval func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision,
 ) bool {
 	in, ok := s.evalInputs(verified)
 	if !ok {
@@ -457,7 +519,7 @@ func (s *Server) authorizeDataplaneOR(
 	if authz.OrgFiltersDeny(ctx, in) {
 		return false
 	}
-	if eval(ctx, in.IdentityDocs) != authz.Allow {
+	if eval(ctx, in.IdentityDocs, resourceAccountID) != authz.Allow {
 		return false
 	}
 	if authz.Evaluate(ctx, in.IdentityDocs) != authz.Allow {

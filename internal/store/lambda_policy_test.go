@@ -79,7 +79,7 @@ func TestLambdaAddFunctionPermissionDuplicateSid(t *testing.T) {
 	}
 }
 
-func TestLambdaAddFunctionPermissionRejectsCrossAccountPrincipal(t *testing.T) {
+func TestLambdaAddFunctionPermissionAllowsLabCrossAccountPrincipal(t *testing.T) {
 	st := openLambdaStore(t)
 	account := "000000000001"
 	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
@@ -95,8 +95,68 @@ func TestLambdaAddFunctionPermissionRejectsCrossAccountPrincipal(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	_, otherAccount, err := st.CreateMemberAccount(account, "xa@example.com", "XA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := "arn:aws:iam::" + otherAccount + ":user/outsider"
+	stmt, err := st.AddFunctionPermission(account, "cross-acct", "x", "lambda:InvokeFunction", other, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stmt, other) {
+		t.Fatalf("statement=%q missing principal %s", stmt, other)
+	}
+}
+
+func TestLambdaAddFunctionPermissionRejectsUnknownAccountPrincipal(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	if _, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		FunctionName: "unknown-acct",
+		RoleARN:      "arn:aws:iam::" + account + ":role/exec",
+		Runtime:      "python3.12",
+		Handler:      "app.handler",
+		Timeout:      3,
+		Memory:       128,
+		Zip:          zip,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	other := "arn:aws:iam::000000000099:user/outsider"
-	if _, err := st.AddFunctionPermission(account, "cross-acct", "x", "lambda:InvokeFunction", other, ""); err == nil {
-		t.Fatal("expected cross-account principal error")
+	if _, err := st.AddFunctionPermission(account, "unknown-acct", "x", "lambda:InvokeFunction", other, ""); err == nil {
+		t.Fatal("expected unknown principal account error")
+	}
+}
+
+func TestLambdaAddFunctionPermissionNormalizesAccountIDPrincipal(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	if _, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		FunctionName: "acct-id-prin",
+		RoleARN:      "arn:aws:iam::" + account + ":role/exec",
+		Runtime:      "python3.12",
+		Handler:      "app.handler",
+		Timeout:      3,
+		Memory:       128,
+		Zip:          zip,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, otherAccount, err := st.CreateMemberAccount(account, "acctid@example.com", "AcctID")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := st.AddFunctionPermission(account, "acct-id-prin", "y", "lambda:InvokeFunction", otherAccount, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "arn:aws:iam::" + otherAccount + ":root"
+	if !strings.Contains(stmt, want) {
+		t.Fatalf("statement=%q want root principal %s", stmt, want)
 	}
 }

@@ -47,7 +47,8 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	if principal == "" {
 		return "", fmt.Errorf("validation: Principal is required")
 	}
-	if err := validateLambdaSameAccountPrincipal(accountID, principal); err != nil {
+	normalized, err := normalizeLambdaPrincipal(s, accountID, principal)
+	if err != nil {
 		return "", err
 	}
 	if src := strings.TrimSpace(sourceAccount); src != "" && src != accountID {
@@ -65,7 +66,7 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	stmt := map[string]any{
 		"Sid":       statementID,
 		"Effect":    "Allow",
-		"Principal": map[string]any{"AWS": principal},
+		"Principal": map[string]any{"AWS": normalized},
 		"Action":    action,
 		"Resource":  fn.FunctionARN,
 	}
@@ -186,23 +187,49 @@ func resolveFunctionName(accountID, nameOrARN string) (string, error) {
 	return name, nil
 }
 
-func validateLambdaSameAccountPrincipal(accountID, principal string) error {
+// normalizeLambdaPrincipal accepts a lab IAM ARN or 12-digit account id.
+// Account ids become arn:aws:iam::ACCOUNT:root. Wildcard and unknown foreign accounts are rejected.
+// Principals in the function owner account are always accepted (owner account need not be pre-seeded).
+func normalizeLambdaPrincipal(s *Store, functionAccountID, principal string) (string, error) {
 	if principal == "*" {
-		return fmt.Errorf("validation: wildcard principal is not supported in the lab")
+		return "", fmt.Errorf("validation: wildcard principal is not supported in the lab")
+	}
+	if isLabAccountID(principal) {
+		if principal != functionAccountID && !s.AccountExists(principal) {
+			return "", fmt.Errorf("validation: principal account is not a lab account")
+		}
+		return "arn:aws:iam::" + principal + ":root", nil
 	}
 	const prefix = "arn:aws:iam::"
 	if !strings.HasPrefix(principal, prefix) {
-		return fmt.Errorf("validation: principal must be a same-account IAM ARN")
+		return "", fmt.Errorf("validation: principal must be a lab IAM ARN or account id")
 	}
 	rest := strings.TrimPrefix(principal, prefix)
 	colon := strings.Index(rest, ":")
 	if colon < 0 {
-		return fmt.Errorf("validation: principal must be a same-account IAM ARN")
+		return "", fmt.Errorf("validation: principal must be a lab IAM ARN or account id")
 	}
-	if rest[:colon] != accountID {
-		return fmt.Errorf("validation: principal must be in the same account")
+	acct := rest[:colon]
+	if acct != functionAccountID && !s.AccountExists(acct) {
+		return "", fmt.Errorf("validation: principal account is not a lab account")
 	}
-	return nil
+	suffix := rest[colon+1:]
+	if suffix != "root" && !strings.HasPrefix(suffix, "user/") && !strings.HasPrefix(suffix, "role/") {
+		return "", fmt.Errorf("validation: principal must be a lab IAM ARN or account id")
+	}
+	return principal, nil
+}
+
+func isLabAccountID(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseLambdaPolicyDoc(raw string) (map[string]any, error) {

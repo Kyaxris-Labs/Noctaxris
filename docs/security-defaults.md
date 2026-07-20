@@ -15,7 +15,7 @@ These defaults are intentional product posture for a local emulator that people 
 
 - CreateFunction and role-changing UpdateFunctionConfiguration require `iam:PassRole` on the target role plus a trust policy that Allows `sts:AssumeRole` for `lambda.amazonaws.com`.
 - Missing PassRole or a trust policy that only names an AWS principal (and not the Lambda service) is Deny.
-- Sync Invoke mints temporary credentials for the function role and injects them into the nested container. Callers need identity Allow for `lambda:InvokeFunction` on the function ARN, or a same-account function resource policy that Allows invoke.
+- Sync Invoke mints temporary credentials for the function role and injects them into the nested container. Same-account callers need identity Allow for `lambda:InvokeFunction` on the function ARN, or a function resource policy that Allows invoke. Cross-account Invoke requires both identity and function policy Allow.
 
 ## Platform egress deny vs AWS default internet
 
@@ -39,11 +39,10 @@ These defaults are intentional product posture for a local emulator that people 
 - Temporary credentials require a matching `X-Amz-Security-Token`.
 - Presigned S3 GET/PUT use query SigV4 (`X-Amz-Expires` max 604800).
 - `GetCallerIdentity` succeeds after SigV4 without an IAM permission check.
-- Lab S3 APIs use `EvaluateS3` (identity or bucket policy union).
-- Lab DynamoDB APIs use `EvaluateDynamoDB` (identity or table resource policy union).
-- Lab SQS APIs use `EvaluateSQS` (identity or queue policy union).
-- Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant).
-- Lab Lambda configure APIs use identity Evaluate plus PassRole/trust. Lab Lambda dataplane APIs use identity or function resource policy union (same pattern as DynamoDB and Secrets Manager).
+- Lab S3, SQS, Lambda, ECR, SNS, Secrets Manager, and DynamoDB dataplane paths use same-account identity **or** resource policy Allow, and cross-account identity **and** resource policy Allow.
+- Lab KMS APIs use `EvaluateKMS` (key policy explicit allow or grant, always required, plus identity for cross-account).
+- Lab Lambda configure APIs use identity Evaluate plus PassRole/trust.
+- Organizations SCP/RCP filters apply on member authorize paths, including OU-path inheritance.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS

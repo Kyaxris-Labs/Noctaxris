@@ -68,6 +68,13 @@ func (s *Store) CreateMemberAccount(mgmtAccountID, email, accountName string) (r
 	); err != nil {
 		return "", "", fmt.Errorf("insert OrganizationAccountAccessRole: %w", err)
 	}
+	// Members default under the organization root until MoveAccount.
+	if _, err := tx.Exec(
+		`INSERT INTO org_account_parents (account_id, parent_id) VALUES (?, ?)`,
+		accountID, OrgRootID,
+	); err != nil {
+		return "", "", fmt.Errorf("insert account parent under root: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return "", "", err
 	}

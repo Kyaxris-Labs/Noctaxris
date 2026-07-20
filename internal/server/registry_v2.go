@@ -10,13 +10,13 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/google/uuid"
 )
@@ -496,7 +496,7 @@ func (s *Server) registrySyncToEngine(ctx context.Context, accountID, repoName, 
 	if cli == nil {
 		return
 	}
-	ref := fmt.Sprintf("%s/%s/%s:%s", registryDinDPullHost(s.cfg.ListenAddr), accountID, repoName, reference)
+	ref := fmt.Sprintf("%s/%s/%s:%s", compute.DinDPullHost(s.cfg.ListenAddr), accountID, repoName, reference)
 	if err := cli.PullLabRegistryImage(ctx, ref, "AWS", authToken); err != nil {
 		log.Printf("registry: DinD image sync failed for %s: %v", ref, err)
 	}
@@ -572,15 +572,7 @@ func registryWWWAuthenticateHeader() string {
 }
 
 func registryDinDPullHost(listenAddr string) string {
-	_, port, err := net.SplitHostPort(listenAddr)
-	if err != nil || port == "" {
-		if host, fallbackPort, splitErr := net.SplitHostPort(store.LabRegistryHost); splitErr == nil && host != "" && fallbackPort != "" {
-			port = fallbackPort
-		} else {
-			port = "4566"
-		}
-	}
-	return "host.docker.internal:" + port
+	return compute.DinDPullHost(listenAddr)
 }
 
 func (s *Server) writeRegistryUnauthorized(w http.ResponseWriter) {

@@ -130,11 +130,6 @@ func (s *Server) handleKMS(
 				"Key not found.", readOnly, eventID, verified)
 			return
 		}
-		if key.AccountID != accountID {
-			s.writeKMSError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
-				"Key not found.", readOnly, eventID, verified)
-			return
-		}
 		keyPolicy = key.KeyPolicy
 		resource = key.ARN
 	}

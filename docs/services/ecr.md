@@ -19,13 +19,13 @@ Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (a
 
 ### Authz notes
 
-Repository-scoped APIs use `authorizeDataplaneOR`: allow if identity **or** repository policy Allows. Explicit Deny in either wins. A repository policy alone can grant describe or push without identity Allow. Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
+Repository-scoped APIs use `authorizeDataplaneOR` with the repository owner account from the repository ARN (or `registryId` when resolving). Same-account access: allow if identity **or** repository policy Allows. Cross-account access: allow only when identity **and** repository policy both Allow. Empty repository policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
 `GetAuthorizationToken` uses identity eval on `Resource: *`.
 
 `CreateRepository` uses identity `EvaluateFull` on the repository ARN (no policy yet).
 
-Cross-account repository policy depth beyond same-account lab paths is deferred.
+Pass `registryId` with `DescribeRepositories` or `BatchGetImage` to address another lab account registry.
 
 ## How to verify / CLI smoke
 
@@ -60,10 +60,18 @@ aws ecr set-repository-policy \
 
 Expect `create-repository` to return a repository URI under `127.0.0.1:4566`. Expect `docker login` to succeed after `get-login-password` (Docker exchanges Basic credentials at `/v2/token` for a Bearer token matching that password). Expect `docker push` to succeed. Expect `list-images` to show the `lab` tag after push.
 
+Two-account cross-account describe (member account B owns the repository, member account A user describes via dual eval):
+
+```bash
+aws ecr set-repository-policy --repository-name "$REPO" --endpoint-url "$EP" --profile account-b \
+  --policy-text '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCOUNT_A:user/reader"},"Action":"ecr:DescribeRepositories","Resource":"*"}]}'
+aws ecr describe-repositories --registry-id ACCOUNT_B --repository-names "$REPO" \
+  --endpoint-url "$EP" --profile account-a
+```
+
 ## Not yet / deferred
 
 - Image scanning, replication, lifecycle policies, public galleries
 - OCI referrers and multi-arch index depth beyond single manifest
 - Chunked blob PATCH uploads (monolithic PUT only today)
-- Cross-account repository policy depth beyond same-account lab paths
 - Rootless DinD and microVM isolation (Firecracker-class, post-v2)

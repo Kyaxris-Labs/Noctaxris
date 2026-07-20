@@ -144,13 +144,30 @@ func lambdaAction(action string) string {
 }
 
 func (s *Server) authorizeLambda(verified *authn.Verified, action, resource, resourcePolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+	resourceAccountID := resourceAccountIDFromARN(resource)
+	if resourceAccountID == "" {
+		resourceAccountID = verified.AccountID
+	}
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 			Caller:            caller,
 			IdentityDocs:      identityDocs,
 			ResourcePolicyDoc: resourcePolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
+}
+
+// resourceAccountIDFromARN extracts the account segment from standard AWS ARNs
+// (arn:aws:service:region:account:...). Returns empty for non-ARNs or S3-style
+// ARNs without an account id.
+func resourceAccountIDFromARN(arn string) string {
+	arn = strings.TrimSpace(arn)
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 || parts[0] != "arn" {
+		return ""
+	}
+	return parts[4]
 }
 
 func functionNameParam(params map[string]any) string {
@@ -1563,7 +1580,12 @@ func (s *Server) lambdaInvoke(
 			"FunctionName is required.", readOnly, eventID, verified)
 		return
 	}
-	base, err := s.store.GetFunction(verified.AccountID, name)
+	rawName, _ := params["FunctionName"].(string)
+	accountID := verified.AccountID
+	if acct, ok := store.ParseFunctionAccountID(rawName); ok {
+		accountID = acct
+	}
+	base, err := s.store.GetFunction(accountID, name)
 	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 			"Function not found.", readOnly, eventID, verified)
@@ -1579,7 +1601,7 @@ func (s *Server) lambdaInvoke(
 			"User is not authorized to perform lambda:InvokeFunction.", readOnly, eventID, verified)
 		return
 	}
-	fn, executedVersion, err := s.store.ResolveFunction(verified.AccountID, name, qualifier)
+	fn, executedVersion, err := s.store.ResolveFunction(accountID, name, qualifier)
 	if errors.Is(err, store.ErrNoSuchVersion) || errors.Is(err, store.ErrNoSuchAlias) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 			"Function not found.", readOnly, eventID, verified)
@@ -1603,13 +1625,13 @@ func (s *Server) lambdaInvoke(
 		invocationType = "RequestResponse"
 	}
 	if invocationType == "Event" {
-		job, err := s.store.EnqueueAsyncInvoke(verified.AccountID, name, qualifier, eventJSON)
+		job, err := s.store.EnqueueAsyncInvoke(accountID, name, qualifier, eventJSON)
 		if err != nil {
 			s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
 				"Unable to enqueue async invoke.", readOnly, eventID, verified)
 			return
 		}
-		s.startAsyncInvoke(job, verified.AccountID, name, executedVersion)
+		s.startAsyncInvoke(job, accountID, name, executedVersion)
 		if strings.Contains(r.URL.Path, "/invocations") {
 			s.writeLambdaInvokeRESTAccepted(w, requestID, executedVersion)
 			s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)
@@ -1631,7 +1653,7 @@ func (s *Server) lambdaInvoke(
 		return
 	}
 
-	result, err := s.executeLambdaInvoke(r.Context(), verified.AccountID, name, fn, executedVersion, eventJSON)
+	result, err := s.executeLambdaInvoke(r.Context(), accountID, name, fn, executedVersion, eventJSON)
 	if err != nil {
 		if strings.Contains(err.Error(), "compute unavailable") {
 			s.writeLambdaError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
@@ -1749,15 +1771,11 @@ func (s *Server) executeLambdaInvoke(
 		if err := os.MkdirAll(filepath.Join(s.cfg.DataRoot, eventRel), 0o700); err != nil {
 			return nil, fmt.Errorf("prepare image invoke event dir: %w", err)
 		}
-		result, err := cli.RunImageInvoke(ctx, compute.ImageRunOpts{
-			ImageURI:      fn.ImageURI,
-			Handler:       fn.Handler,
-			TimeoutSec:    fn.Timeout,
-			Env:           env,
-			EventJSON:     eventJSON,
-			EndpointURL:   endpoint,
-			EventHostPath: eventHostPath,
-		})
+		imageOpts, err := s.prepareLambdaImageRunOpts(accountID, fn, env, eventJSON, endpoint, eventHostPath)
+		if err != nil {
+			return nil, err
+		}
+		result, err := cli.RunImageInvoke(ctx, imageOpts)
 		if err != nil {
 			return nil, err
 		}

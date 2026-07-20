@@ -170,6 +170,10 @@ func statementMatches(st statement, ctx RequestContext) (matches bool, catalogUn
 	if !effect {
 		return false, false
 	}
+	// Resource-based statements include Principal. Identity statements omit it.
+	if st.Principal != nil && !principalMatches(*st.Principal, ctx.Principal) {
+		return false, false
+	}
 	if !actionsMatch(st.Action, ctx.Action) {
 		return false, false
 	}

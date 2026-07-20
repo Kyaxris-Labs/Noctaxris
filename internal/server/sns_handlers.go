@@ -133,15 +133,15 @@ func (s *Server) handleSNS(
 	case catalog.ActionSNSCreateTopic, "CreateTopic":
 		payload, err = s.snsCreateTopic(region, accountID, params, requestID)
 	case catalog.ActionSNSDeleteTopic, "DeleteTopic":
-		payload, err = s.snsDeleteTopic(accountID, topic, requestID)
+		payload, err = s.snsDeleteTopic(topic.AccountID, topic, requestID)
 	case catalog.ActionSNSListTopics, "ListTopics":
 		payload, err = s.snsListTopics(accountID, requestID)
 	case catalog.ActionSNSGetTopicAttributes, "GetTopicAttributes":
 		payload, err = s.snsGetTopicAttributes(topic, requestID)
 	case catalog.ActionSNSSetTopicAttributes, "SetTopicAttributes":
-		payload, err = s.snsSetTopicAttributes(accountID, topic, params, requestID)
+		payload, err = s.snsSetTopicAttributes(topic.AccountID, topic, params, requestID)
 	case catalog.ActionSNSPublish, "Publish":
-		payload, err = s.snsPublish(w, r, requestID, eventID, verified, readOnly, accountID, topic, params)
+		payload, err = s.snsPublish(w, r, requestID, eventID, verified, readOnly, topic.AccountID, topic, params)
 		if err != nil || payload == nil {
 			return
 		}
@@ -152,13 +152,13 @@ func (s *Server) handleSNS(
 	case catalog.ActionSNSListSubscriptions, "ListSubscriptions":
 		payload, err = s.snsListSubscriptions(accountID, requestID)
 	case catalog.ActionSNSListSubscriptionsByTopic, "ListSubscriptionsByTopic":
-		payload, err = s.snsListSubscriptionsByTopic(accountID, topic, requestID)
+		payload, err = s.snsListSubscriptionsByTopic(topic.AccountID, topic, requestID)
 	case catalog.ActionSNSGetSubscriptionAttributes, "GetSubscriptionAttributes":
 		payload, err = s.snsGetSubscriptionAttributes(params, requestID)
 	case catalog.ActionSNSAddPermission, "AddPermission":
-		payload, err = s.snsAddPermission(accountID, topic, params, requestID)
+		payload, err = s.snsAddPermission(topic.AccountID, topic, params, requestID)
 	case catalog.ActionSNSRemovePermission, "RemovePermission":
-		payload, err = s.snsRemovePermission(accountID, topic, params, requestID)
+		payload, err = s.snsRemovePermission(topic.AccountID, topic, params, requestID)
 	default:
 		s.writeSNSError(w, r, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This SNS action is not implemented.", readOnly, eventID, verified)
@@ -230,25 +230,23 @@ func snsEventName(action string) string {
 }
 
 func (s *Server) authorizeSNS(verified *authn.Verified, action, resource, topicPolicy string) bool {
-	return s.authorizeDataplaneOR(verified, action, resource, func(caller authz.RequestContext, identityDocs []string) authz.Decision {
+	resourceAccountID := resourceAccountIDFromARN(resource)
+	if resourceAccountID == "" {
+		resourceAccountID = verified.AccountID
+	}
+	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
 		return authz.EvaluateSNS(authz.SNSRequest{
-			Caller:         caller,
-			IdentityDocs:   identityDocs,
-			TopicPolicyDoc: topicPolicy,
+			Caller:            caller,
+			IdentityDocs:      identityDocs,
+			TopicPolicyDoc:    topicPolicy,
+			ResourceAccountID: resourceAccountID,
 		})
 	})
 }
 
 func (s *Server) resolveSNSTopic(accountID string, params url.Values) (store.Topic, error) {
 	if arn := strings.TrimSpace(params.Get("TopicArn")); arn != "" {
-		topic, err := s.store.GetTopicByARN(arn)
-		if err != nil {
-			return store.Topic{}, err
-		}
-		if topic.AccountID != accountID {
-			return store.Topic{}, store.ErrNoSuchTopic
-		}
-		return topic, nil
+		return s.store.GetTopicByARN(arn)
 	}
 	if name := strings.TrimSpace(params.Get("Name")); name != "" {
 		return s.store.GetTopic(accountID, name)

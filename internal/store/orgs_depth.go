@@ -2,11 +2,37 @@ package store
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
+
+const orgAccountParentsSchema = `
+CREATE TABLE IF NOT EXISTS org_account_parents (
+  account_id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL
+);
+`
+
+// EnsureOrgAccountPlacementSchema creates the account→parent OU/root table.
+func EnsureOrgAccountPlacementSchema(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("ensure org account placement schema: db is nil")
+	}
+	if _, err := db.Exec(orgAccountParentsSchema); err != nil {
+		return fmt.Errorf("ensure org account placement schema: %w", err)
+	}
+	return nil
+}
+
+// EnsureOrgAccountPlacementSchema ensures placement tables on an open store.
+func (s *Store) EnsureOrgAccountPlacementSchema() error {
+	return EnsureOrgAccountPlacementSchema(s.db)
+}
 
 // ManagementAccountID is the lab bootstrap account treated as the Organizations
 // management account. No separate store flag is used; account 000000000001 is
@@ -301,10 +327,139 @@ func (s *Store) ListPoliciesForTarget(targetType, targetID string) ([]OrgPolicy,
 	return out, nil
 }
 
+// AccountParentID returns the Organizations parent (root or OU) for accountID.
+// Missing placement rows default to OrgRootID (CreateAccount members start under root).
+func (s *Store) AccountParentID(accountID string) (string, error) {
+	if accountID == "" {
+		return "", fmt.Errorf("account parent: account_id required")
+	}
+	var parentID string
+	err := s.db.QueryRow(
+		`SELECT parent_id FROM org_account_parents WHERE account_id = ?`,
+		accountID,
+	).Scan(&parentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OrgRootID, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("account parent for %s: %w", accountID, err)
+	}
+	if parentID == "" {
+		return OrgRootID, nil
+	}
+	return parentID, nil
+}
+
+// SetAccountParent places accountID directly under parentID (root or OU).
+// Used by CreateMemberAccount and MoveAccount.
+func (s *Store) SetAccountParent(accountID, parentID string) error {
+	if accountID == "" {
+		return fmt.Errorf("set account parent: account_id required")
+	}
+	if parentID == "" {
+		return fmt.Errorf("set account parent: parent_id required")
+	}
+	if err := s.validateOrgParentID(parentID); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO org_account_parents (account_id, parent_id) VALUES (?, ?)
+		 ON CONFLICT(account_id) DO UPDATE SET parent_id = excluded.parent_id`,
+		accountID, parentID,
+	)
+	if err != nil {
+		return fmt.Errorf("set account parent %s under %s: %w", accountID, parentID, err)
+	}
+	return nil
+}
+
+// MoveAccount moves accountID from sourceParentID to destinationParentID.
+// SourceParentID must match the account's current parent (default OrgRootID).
+func (s *Store) MoveAccount(accountID, sourceParentID, destinationParentID string) error {
+	if accountID == "" || sourceParentID == "" || destinationParentID == "" {
+		return fmt.Errorf("move account: AccountId, SourceParentId, and DestinationParentId are required")
+	}
+	if !s.AccountExists(accountID) {
+		return fmt.Errorf("move account: account not found")
+	}
+	if err := s.validateOrgParentID(sourceParentID); err != nil {
+		return fmt.Errorf("move account source: %w", err)
+	}
+	if err := s.validateOrgParentID(destinationParentID); err != nil {
+		return fmt.Errorf("move account destination: %w", err)
+	}
+	current, err := s.AccountParentID(accountID)
+	if err != nil {
+		return err
+	}
+	if current != sourceParentID {
+		return fmt.Errorf("move account: source parent mismatch (current %s)", current)
+	}
+	if current == destinationParentID {
+		return fmt.Errorf("move account: account already under destination")
+	}
+	return s.SetAccountParent(accountID, destinationParentID)
+}
+
+// OUPathToRoot returns OU ids from the account's parent up to (but not including) root.
+// Order is nearest parent first. Empty when the account sits directly under root.
+func (s *Store) OUPathToRoot(accountID string) ([]string, error) {
+	parent, err := s.AccountParentID(accountID)
+	if err != nil {
+		return nil, err
+	}
+	var path []string
+	seen := map[string]bool{}
+	for parent != "" && parent != OrgRootID && !strings.HasPrefix(parent, "r-") {
+		if seen[parent] {
+			return nil, fmt.Errorf("ou path for %s: cycle at %s", accountID, parent)
+		}
+		seen[parent] = true
+		path = append(path, parent)
+		next, err := s.ouParentID(parent)
+		if err != nil {
+			return nil, err
+		}
+		parent = next
+	}
+	if path == nil {
+		path = []string{}
+	}
+	return path, nil
+}
+
+func (s *Store) ouParentID(ouID string) (string, error) {
+	var parentID string
+	err := s.db.QueryRow(`SELECT parent_id FROM org_ous WHERE id = ?`, ouID).Scan(&parentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("ou parent: organizational unit %s not found", ouID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("ou parent for %s: %w", ouID, err)
+	}
+	return parentID, nil
+}
+
+func (s *Store) validateOrgParentID(parentID string) error {
+	if parentID == OrgRootID || strings.HasPrefix(parentID, "r-") {
+		return nil
+	}
+	if !strings.HasPrefix(parentID, "ou-") {
+		return fmt.Errorf("parent id must be a root or OU id")
+	}
+	var id string
+	err := s.db.QueryRow(`SELECT id FROM org_ous WHERE id = ?`, parentID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("organizational unit %s not found", parentID)
+	}
+	if err != nil {
+		return fmt.Errorf("validate parent %s: %w", parentID, err)
+	}
+	return nil
+}
+
 // SCPDocsForAccount returns SCP documents that apply to accountID.
-// Includes policies attached directly to the account and to the organization root.
-// OU-path inheritance requires account placement (not stored in this tranche);
-// OU-attached policies are not included unless also attached to account or root.
+// Includes policies attached to the account, each OU on the path to root, and the organization root.
 func (s *Store) SCPDocsForAccount(accountID string) ([]string, error) {
 	return s.orgPolicyDocsForAccount(accountID, "SCP")
 }
@@ -315,18 +470,32 @@ func (s *Store) RCPDocsForAccount(accountID string) ([]string, error) {
 }
 
 func (s *Store) orgPolicyDocsForAccount(accountID, policyType string) ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT DISTINCT p.id, p.document
+	ouPath, err := s.OUPathToRoot(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("%s docs for account %s: %w", policyType, accountID, err)
+	}
+
+	args := []any{policyType, accountID, OrgRootID}
+	ouClause := ""
+	if len(ouPath) > 0 {
+		ph := make([]string, len(ouPath))
+		for i, ouID := range ouPath {
+			ph[i] = "?"
+			args = append(args, ouID)
+		}
+		ouClause = " OR (a.target_type = 'ou' AND a.target_id IN (" + strings.Join(ph, ",") + "))"
+	}
+
+	q := `SELECT DISTINCT p.id, p.document
 		 FROM org_policies p
 		 JOIN org_policy_attachments a ON a.policy_id = p.id
 		 WHERE p.type = ?
 		   AND (
 		     (a.target_type = 'account' AND a.target_id = ?)
-		     OR (a.target_type = 'root' AND a.target_id = ?)
+		     OR (a.target_type = 'root' AND a.target_id = ?)` + ouClause + `
 		   )
-		 ORDER BY p.id`,
-		policyType, accountID, OrgRootID,
-	)
+		 ORDER BY p.id`
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%s docs for account %s: %w", policyType, accountID, err)
 	}

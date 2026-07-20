@@ -29,6 +29,12 @@ type ImageRunOpts struct {
 	EndpointURL string
 	// EventHostPath is a DinD-visible writable directory for the event file.
 	EventHostPath string
+	// LabRegistryPull requests an authenticated pull via PullLabRegistryImage (lab ECR).
+	LabRegistryPull bool
+	// RegistryUsername is the Docker registry username (lab: "AWS").
+	RegistryUsername string
+	// RegistryPassword is the lab ECR authorization token password.
+	RegistryPassword string
 }
 
 // ValidateImageRunOpts checks required fields without talking to Docker.
@@ -48,6 +54,12 @@ func ValidateImageRunOpts(opts ImageRunOpts) error {
 	}
 	if opts.TimeoutSec < 0 {
 		return fmt.Errorf("compute: TimeoutSec must be >= 0")
+	}
+	if err := RequireLabRegistryCreds(opts.LabRegistryPull, LabRegistryPullCreds{
+		Username: opts.RegistryUsername,
+		Password: opts.RegistryPassword,
+	}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -69,7 +81,11 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	if _, err := c.EnsureNetwork(ctx); err != nil {
 		return InvokeResult{}, err
 	}
-	if err := c.pullImage(ctx, opts.ImageURI); err != nil {
+	if opts.LabRegistryPull {
+		if err := c.PullLabRegistryImage(ctx, opts.ImageURI, opts.RegistryUsername, opts.RegistryPassword); err != nil {
+			return InvokeResult{}, fmt.Errorf("compute: pull lab registry image %s: %w", opts.ImageURI, err)
+		}
+	} else if err := c.pullImage(ctx, opts.ImageURI); err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: pull image %s: %w", opts.ImageURI, err)
 	}
 
