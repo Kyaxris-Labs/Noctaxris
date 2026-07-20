@@ -1,15 +1,74 @@
 # ECS
 
-**Status:** planned
+**Status:** shipped
 
-## Intended lab-complete bar
+Lab-complete ECS core: task definitions (with required task and execution roles), RunTask on nested DinD, task list/describe/stop, and default cluster metadata. JSON protocol via `X-Amz-Target: AmazonECS*` or service `ecs` with JSON body. Platform is nested Docker inside `noctaxris-engine`, not Fargate or EC2 capacity providers.
 
-Planned as a lab-complete ECS core (not full SAR), after deferred clearance for existing lab services. Tracked under new lab cores in [index.md](index.md#cross-cutting) and the root [README](../../README.md) Services table.
+## Implemented
 
-Post-v2 Firecracker-class microVM isolation is tracked for Lambda first, and later ECS if needed. That is not a current delivery requirement. See [lambda.md](lambda.md#post-v2) and [index.md](index.md#cross-cutting).
+| Area | Actions |
+|------|---------|
+| Task definitions | `RegisterTaskDefinition`, `DescribeTaskDefinition`, `ListTaskDefinitions`, `DeregisterTaskDefinition` |
+| Tasks | `RunTask`, `DescribeTasks`, `ListTasks`, `StopTask` |
+| Clusters | `DescribeClusters`, `ListClusters` (default cluster `default` seeded per account) |
+| Roles | `RegisterTaskDefinition` and `RunTask` require `taskRoleArn` **and** `executionRoleArn`. Caller needs `iam:PassRole` on each role. Role trust must Allow `sts:AssumeRole` for `ecs-tasks.amazonaws.com` |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Tasks run on Internal network `noctaxris-ecs`. No host `docker.sock` on the API container |
+| Task role session | Temporary AWS_* credentials for the task role injected into the container (same mint pattern as Lambda Invoke) |
+| Lab registry images | Task definitions may reference `127.0.0.1:4566/ACCOUNT/REPO:tag`. RunTask pulls inside DinD using a registry token when the image uses the lab ECR host |
 
-## Availability
+Task definitions, tasks, and cluster metadata live in SQLite.
 
-ECS is **not available** in the current Noctaxris build. Calls return not-implemented after successful authn. Do not invent client workflows against this service yet.
+### Authz notes
 
-Condition-key catalogs will extend when this lab core lands.
+ECS control-plane APIs use identity `EvaluateFull` on cluster, task-definition, or task ARNs.
+
+`RegisterTaskDefinition` and `RunTask` call `CheckPassRole` for both role ARNs with service principal `ecs-tasks.amazonaws.com`.
+
+Without `NOCTAXRIS_DOCKER_HOST`, `RunTask` returns compute unavailable.
+
+## How to verify / CLI smoke
+
+Shared Compose and env setup: [index.md](index.md#shared-verification). Compose must include `noctaxris-engine`. Push a lab image first (see [ecr.md](ecr.md#how-to-verify--cli-smoke)).
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --endpoint-url "$EP" --query Account --output text)
+REPO="noctaxris-lab-$RANDOM"
+
+aws ecr create-repository --repository-name "$REPO" --endpoint-url "$EP"
+PASS=$(aws ecr get-login-password --endpoint-url "$EP")
+echo "$PASS" | docker login --username AWS --password-stdin 127.0.0.1:4566
+docker pull alpine:3.20
+docker tag alpine:3.20 "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+docker push "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+
+ECS_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+
+aws iam create-role --role-name LabECSTaskRole --assume-role-policy-document "$ECS_TRUST" --endpoint-url "$EP"
+aws iam create-role --role-name LabECSExecRole --assume-role-policy-document "$ECS_TRUST" --endpoint-url "$EP"
+
+TASK_ROLE=$(aws iam get-role --role-name LabECSTaskRole --endpoint-url "$EP" --query Role.Arn --output text)
+EXEC_ROLE=$(aws iam get-role --role-name LabECSExecRole --endpoint-url "$EP" --query Role.Arn --output text)
+
+IMAGE="127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+CONTAINERS="[{\"name\":\"app\",\"image\":\"${IMAGE}\",\"essential\":true,\"command\":[\"echo\",\"ecs-ok\"]}]"
+
+aws ecs register-task-definition \
+  --family noctaxris-lab \
+  --task-role-arn "$TASK_ROLE" \
+  --execution-role-arn "$EXEC_ROLE" \
+  --container-definitions "$CONTAINERS" \
+  --endpoint-url "$EP"
+
+aws ecs run-task --cluster default --task-definition noctaxris-lab --endpoint-url "$EP"
+aws ecs list-tasks --cluster default --endpoint-url "$EP"
+```
+
+Expect `register-task-definition` to fail without both role ARNs. Expect `run-task` to return a task ARN when DinD is up. Expect `list-tasks` to include the task.
+
+## Not yet / deferred
+
+- `CreateService`, `UpdateService`, `DeleteService`, `DescribeServices` (service scheduler skipped for lab scope)
+- `awsvpc` networking, capacity providers, ECS Exec, Service Connect, load balancers
+- Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix
+- Cross-account or multi-cluster depth beyond same-account `default`
+- Rootless DinD and microVM isolation (Firecracker-class, post-v2). See [lambda.md](lambda.md#post-v2) and [index.md](index.md#cross-cutting)

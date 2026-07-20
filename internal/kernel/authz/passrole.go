@@ -5,6 +5,12 @@ import "strings"
 // ServicePrincipalLambda is the AWS Lambda service principal used in role trust.
 const ServicePrincipalLambda = "lambda.amazonaws.com"
 
+// ServicePrincipalEvents is the Amazon EventBridge service principal used in role trust.
+const ServicePrincipalEvents = "events.amazonaws.com"
+
+// ServicePrincipalECSTasks is the Amazon ECS tasks service principal used in role trust.
+const ServicePrincipalECSTasks = "ecs-tasks.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

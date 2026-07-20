@@ -1,10 +1,10 @@
 # Changelog
 
-## v2 (in progress)
+## v2 (lab cores shipped)
 
-Clear remaining deferred depth for the lab core (except microVMs), then add lab-complete SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS.
+Cleared in-scope deferred depth for the lab core (except microVMs), then shipped lab-complete SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
 
-### Shipped so far
+### Included
 
 - Condition-key catalogs for lab-core services from servicereference JSON plus global seed
 - Authz Condition rules per ADR-0005 §7 (catalog-unknown deny, unpopulated known fail-closed on positive operators, AWS-faithful Null / StringNotEquals / IfExists)
@@ -25,8 +25,12 @@ Clear remaining deferred depth for the lab core (except microVMs), then add lab-
 - Lambda zip runtimes `python3.11`, `python3.12`, `nodejs20.x`
 - Nested DinD engine TLS on port 2376 (`NOCTAXRIS_DOCKER_CERT_PATH`)
 - Same-account Lambda function resource policies (`AddPermission`, `RemovePermission`, `GetPolicy`) with identity-or-policy Invoke authz
+- SNS topic CRUD, publish, subscribe, topic policies (`EvaluateSNS` identity-or-policy authz), confirmed sqs and lambda delivery with best-effort retry
+- EventBridge buses, rules, targets, and PutEvents routing to SQS, Lambda, and SNS. PassRole on PutTargets RoleArn with `events.amazonaws.com` trust. Without RoleArn, target resource policy must Allow `events.amazonaws.com` or account root
+- ECR repository CRUD, GetAuthorizationToken, repository policies, image metadata APIs, and Docker Registry V2 on loopback with token auth. DinD sync on manifest put for ECS and Lambda Image pulls
+- ECS task definitions (taskRoleArn and executionRoleArn required), RunTask/Describe/List/Stop, default cluster, PassRole with `ecs-tasks.amazonaws.com` trust, nested DinD on Internal `noctaxris-ecs` network, task-role credential injection
 
-Deferred depth and planned cores: [docs/services/index.md](docs/services/index.md).
+Deferred depth: [docs/services/index.md](docs/services/index.md).
 
 ## Lab core
 

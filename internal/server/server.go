@@ -88,6 +88,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isRegistryV2Path(r.URL.Path) {
+		s.handleRegistryV2(w, r)
+		return
+	}
+
 	requestID := newRequestID()
 	eventID := newRequestID()
 	readOnly := r.Method == http.MethodGet || r.Method == http.MethodHead
@@ -138,6 +143,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if isOrgsDepthAction(action, verified.Service) {
 		s.handleOrgsDepth(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "sns" || strings.HasPrefix(action, "sns:") {
+		s.handleSNS(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "events" || strings.HasPrefix(action, "events:") {
+		s.handleEventBridge(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "ecs" || strings.HasPrefix(action, "ecs:") {
+		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -312,6 +332,33 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSecretsGetResourcePolicy,
 		catalog.ActionSecretsDeleteResourcePolicy:
 		s.handleSecretsManager(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionECRCreateRepository, "CreateRepository",
+		catalog.ActionECRDescribeRepositories, "DescribeRepositories",
+		catalog.ActionECRDeleteRepository, "DeleteRepository",
+		catalog.ActionECRGetAuthorizationToken, "GetAuthorizationToken",
+		catalog.ActionECRGetRepositoryPolicy, "GetRepositoryPolicy",
+		catalog.ActionECRSetRepositoryPolicy, "SetRepositoryPolicy",
+		catalog.ActionECRDeleteRepositoryPolicy, "DeleteRepositoryPolicy",
+		catalog.ActionECRPutImage, "PutImage",
+		catalog.ActionECRBatchGetImage, "BatchGetImage",
+		catalog.ActionECRListImages, "ListImages",
+		catalog.ActionECRBatchDeleteImage, "BatchDeleteImage":
+		s.handleECR(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionEventsPutEvents, "PutEvents",
+		catalog.ActionEventsCreateEventBus, "CreateEventBus",
+		catalog.ActionEventsDeleteEventBus, "DeleteEventBus",
+		catalog.ActionEventsDescribeEventBus, "DescribeEventBus",
+		catalog.ActionEventsListEventBuses, "ListEventBuses",
+		catalog.ActionEventsPutRule, "PutRule",
+		catalog.ActionEventsDescribeRule, "DescribeRule",
+		catalog.ActionEventsListRules, "ListRules",
+		catalog.ActionEventsDeleteRule, "DeleteRule",
+		catalog.ActionEventsEnableRule, "EnableRule",
+		catalog.ActionEventsDisableRule, "DisableRule",
+		catalog.ActionEventsPutTargets, "PutTargets",
+		catalog.ActionEventsRemoveTargets, "RemoveTargets",
+		catalog.ActionEventsListTargetsByRule, "ListTargetsByRule":
+		s.handleEventBridge(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLambdaCreateFunction, "CreateFunction",
 		catalog.ActionLambdaGetFunction, "GetFunction",
 		catalog.ActionLambdaDeleteFunction, "DeleteFunction",
@@ -334,6 +381,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLambdaRemovePermission, "RemovePermission",
 		catalog.ActionLambdaGetPolicy:
 		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionECSRegisterTaskDefinition, "RegisterTaskDefinition",
+		catalog.ActionECSDescribeTaskDefinition, "DescribeTaskDefinition",
+		catalog.ActionECSListTaskDefinitions, "ListTaskDefinitions",
+		catalog.ActionECSDeregisterTaskDefinition, "DeregisterTaskDefinition",
+		catalog.ActionECSRunTask, "RunTask",
+		catalog.ActionECSDescribeTasks, "DescribeTasks",
+		catalog.ActionECSListTasks, "ListTasks",
+		catalog.ActionECSStopTask, "StopTask",
+		catalog.ActionECSDescribeClusters, "DescribeClusters",
+		catalog.ActionECSListClusters, "ListClusters":
+		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -581,8 +639,17 @@ func resolveAction(r *http.Request, body []byte) string {
 			return normalizeAction(short)
 		case strings.EqualFold(prefix, "AmazonSSM"):
 			return normalizeAction(short)
+		case strings.EqualFold(prefix, "AWSEvents"):
+			return eventsAction(short)
 		case strings.EqualFold(prefix, "secretsmanager"):
 			return secretsAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "amazonec2containerregistry_v"):
+			return ecrAction(short)
+		case strings.EqualFold(prefix, "ecr"):
+			return ecrAction(short)
+		case strings.EqualFold(prefix, "AmazonECS"),
+			strings.HasPrefix(strings.ToLower(prefix), "amazonec2containerservice"):
+			return ecsAction(short)
 		}
 		return short
 	}
@@ -887,6 +954,28 @@ func normalizeAction(action string) string {
 		return catalog.ActionSQSDeleteMessageBatch
 	case "ChangeMessageVisibility":
 		return catalog.ActionSQSChangeMessageVisibility
+	case "CreateTopic":
+		return catalog.ActionSNSCreateTopic
+	case "DeleteTopic":
+		return catalog.ActionSNSDeleteTopic
+	case "ListTopics":
+		return catalog.ActionSNSListTopics
+	case "GetTopicAttributes":
+		return catalog.ActionSNSGetTopicAttributes
+	case "SetTopicAttributes":
+		return catalog.ActionSNSSetTopicAttributes
+	case "Publish":
+		return catalog.ActionSNSPublish
+	case "Subscribe":
+		return catalog.ActionSNSSubscribe
+	case "Unsubscribe":
+		return catalog.ActionSNSUnsubscribe
+	case "ListSubscriptions":
+		return catalog.ActionSNSListSubscriptions
+	case "ListSubscriptionsByTopic":
+		return catalog.ActionSNSListSubscriptionsByTopic
+	case "GetSubscriptionAttributes":
+		return catalog.ActionSNSGetSubscriptionAttributes
 	case "PutParameter":
 		return catalog.ActionSSMPutParameter
 	case "GetParameter":
@@ -897,6 +986,34 @@ func normalizeAction(action string) string {
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "PutEvents":
+		return catalog.ActionEventsPutEvents
+	case "CreateEventBus":
+		return catalog.ActionEventsCreateEventBus
+	case "DeleteEventBus":
+		return catalog.ActionEventsDeleteEventBus
+	case "DescribeEventBus":
+		return catalog.ActionEventsDescribeEventBus
+	case "ListEventBuses":
+		return catalog.ActionEventsListEventBuses
+	case "PutRule":
+		return catalog.ActionEventsPutRule
+	case "DescribeRule":
+		return catalog.ActionEventsDescribeRule
+	case "ListRules":
+		return catalog.ActionEventsListRules
+	case "DeleteRule":
+		return catalog.ActionEventsDeleteRule
+	case "EnableRule":
+		return catalog.ActionEventsEnableRule
+	case "DisableRule":
+		return catalog.ActionEventsDisableRule
+	case "PutTargets":
+		return catalog.ActionEventsPutTargets
+	case "RemoveTargets":
+		return catalog.ActionEventsRemoveTargets
+	case "ListTargetsByRule":
+		return catalog.ActionEventsListTargetsByRule
 	case "CreateFunction":
 		return catalog.ActionLambdaCreateFunction
 	case "GetFunction":
@@ -917,6 +1034,26 @@ func normalizeAction(action string) string {
 		return catalog.ActionLambdaListVersionsByFunction
 	case "GetAlias":
 		return catalog.ActionLambdaGetAlias
+	case "RegisterTaskDefinition":
+		return catalog.ActionECSRegisterTaskDefinition
+	case "DescribeTaskDefinition":
+		return catalog.ActionECSDescribeTaskDefinition
+	case "ListTaskDefinitions":
+		return catalog.ActionECSListTaskDefinitions
+	case "DeregisterTaskDefinition":
+		return catalog.ActionECSDeregisterTaskDefinition
+	case "RunTask":
+		return catalog.ActionECSRunTask
+	case "DescribeTasks":
+		return catalog.ActionECSDescribeTasks
+	case "ListTasks":
+		return catalog.ActionECSListTasks
+	case "StopTask":
+		return catalog.ActionECSStopTask
+	case "DescribeClusters":
+		return catalog.ActionECSDescribeClusters
+	case "ListClusters":
+		return catalog.ActionECSListClusters
 	default:
 		return action
 	}

@@ -2,7 +2,7 @@
 
 Per-service reference for the Noctaxris lab emulator. Status matches the root [README](../../README.md) Services table.
 
-Each shipped page covers what is implemented, how to verify with AWS CLI smoke, and what remains deferred. Planned pages state the intended lab-complete bar and that the service is not shipped.
+Each page covers what is implemented, how to verify with AWS CLI smoke, and what remains deferred.
 
 | Service | Status | Doc |
 |---------|--------|-----|
@@ -16,10 +16,10 @@ Each shipped page covers what is implemented, how to verify with AWS CLI smoke, 
 | [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers, sync+async Invoke, resource policies, TLS DinD |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, resource policies, KMS via alias/aws/secretsmanager |
-| [SNS](sns.md) | Planned | Not available yet |
-| [EventBridge](eventbridge.md) | Planned | Not available yet |
-| [ECR](ecr.md) | Planned | Not available yet |
-| [ECS](ecs.md) | Planned | Not available yet |
+| [SNS](sns.md) | Shipped | Topic CRUD, publish, subscribe, topic policies, SQS and Lambda delivery |
+| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents routing to SQS, Lambda, and SNS |
+| [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, Registry V2 on loopback, DinD sync |
+| [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, default cluster, PassRole, nested DinD |
 
 ## Shared verification
 
@@ -60,8 +60,6 @@ Per-service CLI smoke lives on each shipped service page above.
 
 ## Cross-cutting
 
-**Condition keys (v2 depth):** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Extend catalogs when new lab cores land (SNS, EventBridge, ECR, ECS). Broader operator matrix and request-context population for every global key remains open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
+**Condition keys (v2 depth):** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Broader operator matrix and request-context population for every global key remains open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
 
 **Post-v2:** MicroVM isolation (Firecracker-class) for Lambda, and later ECS if needed. v2 keeps nested DinD. See [lambda.md](lambda.md).
-
-**New lab cores (v2):** SNS, EventBridge, ECR, and ECS are planned as lab-complete (not full SAR). See the planned pages in the table above.

@@ -24,7 +24,7 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 
 Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Without the engine, sync Invoke returns compute unavailable.
 
-Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. Private registry auth is not implemented.
+Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`.
 
 ### Authz notes
 
@@ -171,7 +171,7 @@ Expect CreateFunction to succeed only when the role trusts `lambda.amazonaws.com
 - Full Lambda SAR (event source mappings, provisioned concurrency, weighted alias routing, Function URLs, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing)
 - EventBridge or Lambda-to-Lambda failure destinations (SQS DLQ and OnFailure to SQS only)
 - Cross-account function resource policy depth
-- Private container registry auth for Image functions
+- Non-lab private registries (use ECR lab registry for account-local images)
 - Layers mounted on Image Invoke (layers can be attached in the API but are not mounted during image Invoke)
 - Rootless DinD and microVM isolation (Firecracker-class, post-v2)
 

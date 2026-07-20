@@ -383,6 +383,22 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureSNSSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureEventsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureECRSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureECSSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

@@ -1,13 +1,69 @@
 # ECR
 
-**Status:** planned
+**Status:** shipped
 
-## Intended lab-complete bar
+Lab-complete ECR core: repository CRUD, authorization tokens, repository policies, image metadata APIs, and a Docker Registry HTTP API V2 path on the same loopback listener (`127.0.0.1:4566`). JSON control plane via `X-Amz-Target: AmazonEC2ContainerRegistry_V*` or service `ecr` with JSON body.
 
-Planned as a lab-complete ECR core (not full SAR), after deferred clearance for existing lab services. Tracked under new lab cores in [index.md](index.md#cross-cutting) and the root [README](../../README.md) Services table.
+## Implemented
 
-## Availability
+| Area | Actions |
+|------|---------|
+| Repositories | `CreateRepository`, `DescribeRepositories`, `DeleteRepository` |
+| Auth | `GetAuthorizationToken` (base64 `AWS:password`, lab proxy endpoint on loopback) |
+| Repository policy | `GetRepositoryPolicy`, `SetRepositoryPolicy`, `DeleteRepositoryPolicy` |
+| Images | `PutImage`, `BatchGetImage`, `ListImages`, `BatchDeleteImage` |
+| Registry V2 | `GET /v2/`, blob upload (monolithic PUT), manifest GET/PUT/HEAD, tags list. Bearer token from `GetAuthorizationToken` |
+| DinD sync | On manifest PUT with a tag, pull the image into `noctaxris-engine` so ECS and Lambda Image paths can use lab registry refs |
 
-ECR is **not available** in the current Noctaxris build. Calls return not-implemented after successful authn. Do not invent client workflows against this service yet.
+Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (account from `sts get-caller-identity`). Blobs and manifests persist under the data volume.
 
-Condition-key catalogs will extend when this lab core lands.
+### Authz notes
+
+Repository-scoped APIs use `authorizeDataplaneOR`: allow if identity **or** repository policy Allows. Explicit Deny in either wins. A repository policy alone can grant describe or push without identity Allow. Org SCP/RCP filters apply before the union. When identity Allows, permissions boundary and session intersect.
+
+`GetAuthorizationToken` uses identity eval on `Resource: *`.
+
+`CreateRepository` uses identity `EvaluateFull` on the repository ARN (no policy yet).
+
+Cross-account repository policy depth beyond same-account lab paths is deferred.
+
+## How to verify / CLI smoke
+
+Shared Compose and env setup: [index.md](index.md#shared-verification). Compose must include `noctaxris-engine` so manifest PUT can sync images into DinD.
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --endpoint-url "$EP" --query Account --output text)
+REPO="noctaxris-lab-$RANDOM"
+
+aws ecr create-repository --repository-name "$REPO" --endpoint-url "$EP"
+
+PASS=$(aws ecr get-login-password --endpoint-url "$EP")
+echo "$PASS" | docker login --username AWS --password-stdin 127.0.0.1:4566
+
+docker pull alpine:3.20
+docker tag alpine:3.20 "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+docker push "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+
+aws ecr list-images --repository-name "$REPO" --endpoint-url "$EP"
+```
+
+Repository policy via `SetRepositoryPolicy`:
+
+```bash
+POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ecr:BatchGetImage","Resource":"*","Principal":{"AWS":"*"}}]}'
+
+aws ecr set-repository-policy \
+  --repository-name "$REPO" \
+  --policy-text "$POLICY" \
+  --endpoint-url "$EP"
+```
+
+Expect `create-repository` to return a repository URI under `127.0.0.1:4566`. Expect `docker push` to succeed after `get-login-password`. Expect `list-images` to show the `lab` tag after push.
+
+## Not yet / deferred
+
+- Image scanning, replication, lifecycle policies, public galleries
+- OCI referrers and multi-arch index depth beyond single manifest
+- Chunked blob PATCH uploads (monolithic PUT only today)
+- Cross-account repository policy depth beyond same-account lab paths
+- Rootless DinD and microVM isolation (Firecracker-class, post-v2)

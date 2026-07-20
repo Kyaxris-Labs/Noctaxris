@@ -1,13 +1,77 @@
 # EventBridge
 
-**Status:** planned
+**Status:** shipped
 
-## Intended lab-complete bar
+Lab-complete EventBridge core: default and custom event buses, rules, targets, and `PutEvents` routing into SQS, Lambda, and SNS. JSON protocol via `X-Amz-Target: AWSEvents.*` or service `events` with JSON body.
 
-Planned as a lab-complete EventBridge core (not full SAR), after deferred clearance for existing lab services. Tracked under new lab cores in [index.md](index.md#cross-cutting) and the root [README](../../README.md) Services table.
+## Implemented
 
-## Availability
+| Area | Actions |
+|------|---------|
+| Buses | Default bus per account (`default`), `CreateEventBus`, `DeleteEventBus`, `ListEventBuses`, `DescribeEventBus` |
+| Rules | `PutRule`, `DescribeRule`, `ListRules`, `DeleteRule`, `EnableRule`, `DisableRule` |
+| Targets | `PutTargets`, `RemoveTargets`, `ListTargetsByRule` |
+| Events | `PutEvents` matches enabled rules and fans out to targets |
+| Pattern | Lab match on `source`, `detail-type`, and simple `detail` key equality |
+| Targets | SQS (`sqs:SendMessage`), Lambda (async invoke), SNS (`sns:Publish`) |
+| Input | Constant `Input` JSON on a target overrides the generated EventBridge envelope when set |
 
-EventBridge is **not available** in the current Noctaxris build. Calls return not-implemented after successful authn. Do not invent client workflows against this service yet.
+Bus, rule, and target metadata live in SQLite.
 
-Condition-key catalogs will extend when this lab core lands.
+### Authz notes
+
+EventBridge control-plane APIs use identity `EvaluateFull` on bus and rule ARNs.
+
+`PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). Delivery under a passed role uses internal store paths. Role session minting at delivery time remains deferred.
+
+`PutTargets` without `RoleArn` delivers only when the target resource policy Allows `events.amazonaws.com` or the account root for the required action (`sqs:SendMessage`, `lambda:InvokeFunction`, or `sns:Publish`). Missing or insufficient policy skips that target (best-effort).
+
+Bus resource policy dual evaluation beyond same-account lab paths is deferred.
+
+## How to verify / CLI smoke
+
+Shared Compose and env setup: [index.md](index.md#shared-verification).
+
+```bash
+QUEUE_URL=$(aws sqs create-queue --queue-name "noctaxris-eb-$RANDOM" --endpoint-url "$EP" --query QueueUrl --output text)
+QUEUE_ARN=$(aws sqs get-queue-attributes \
+  --queue-url "$QUEUE_URL" \
+  --attribute-names QueueArn \
+  --endpoint-url "$EP" \
+  --query Attributes.QueueArn --output text)
+
+# Without RoleArn, the queue policy must Allow events.amazonaws.com (or account root) for sqs:SendMessage.
+EB_POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}'
+aws sqs set-queue-attributes \
+  --queue-url "$QUEUE_URL" \
+  --attributes Policy="$EB_POLICY" \
+  --endpoint-url "$EP"
+
+RULE="noctaxris-lab-$RANDOM"
+aws events put-rule \
+  --name "$RULE" \
+  --event-pattern '{"source":["noctaxris.lab"]}' \
+  --endpoint-url "$EP"
+
+aws events put-targets \
+  --rule "$RULE" \
+  --targets "Id=1,Arn=$QUEUE_ARN" \
+  --endpoint-url "$EP"
+
+aws events put-events \
+  --entries "Source=noctaxris.lab,DetailType=demo,Detail={\"ok\":true}" \
+  --endpoint-url "$EP"
+
+aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
+```
+
+## Not yet / deferred
+
+- Full EventBridge SAR (Pipes, Scheduler, partner buses, archive and replay, API Destinations)
+- Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
+- CloudWatch Logs and Kinesis targets
+- `InputPath` and `InputTransformer`
+- Role session minting for delivery under `RoleArn` (PassRole is enforced at PutTargets only)
+- Bus resource policy dual-eval depth beyond same-account lab paths
+- Exact AWS retry and jitter timing for delivery failures
+- Cross-account bus policies beyond same-account lab paths

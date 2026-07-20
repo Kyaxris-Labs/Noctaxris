@@ -34,6 +34,14 @@ func TestKnownServiceKeys(t *testing.T) {
 		"ssm:Recursive",
 		"secretsmanager:KmsKeyArn",
 		"secretsmanager:SecretId",
+		"sns:Endpoint",
+		"sns:Protocol",
+		"events:source",
+		"events:detail-type",
+		"events:TargetArn",
+		"ecr:AccountSetting",
+		"ecs:cluster",
+		"ecs:task-definition",
 	} {
 		if !Known(key) {
 			t.Fatalf("expected %q known", key)
@@ -47,5 +55,8 @@ func TestKnownSSMAndSecretsTagTemplates(t *testing.T) {
 	}
 	if !Known("secretsmanager:ResourceTag/tag-key") {
 		t.Fatal("expected secretsmanager:ResourceTag/tag-key known from SAR catalog")
+	}
+	if !Known("ecr:ResourceTag/env") {
+		t.Fatal("expected ecr:ResourceTag/env known via template")
 	}
 }

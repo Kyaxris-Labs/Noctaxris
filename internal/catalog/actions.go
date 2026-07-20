@@ -274,6 +274,74 @@ const (
 	ActionSSMDescribeParameters = "ssm:DescribeParameters"
 )
 
+// SNS lab actions (Phase 9).
+const (
+	ActionSNSCreateTopic              = "sns:CreateTopic"
+	ActionSNSDeleteTopic              = "sns:DeleteTopic"
+	ActionSNSListTopics               = "sns:ListTopics"
+	ActionSNSGetTopicAttributes       = "sns:GetTopicAttributes"
+	ActionSNSSetTopicAttributes       = "sns:SetTopicAttributes"
+	ActionSNSPublish                  = "sns:Publish"
+	ActionSNSSubscribe                = "sns:Subscribe"
+	ActionSNSUnsubscribe              = "sns:Unsubscribe"
+	ActionSNSListSubscriptions        = "sns:ListSubscriptions"
+	ActionSNSListSubscriptionsByTopic = "sns:ListSubscriptionsByTopic"
+	ActionSNSGetSubscriptionAttributes = "sns:GetSubscriptionAttributes"
+	ActionSNSAddPermission            = "sns:AddPermission"
+	ActionSNSRemovePermission         = "sns:RemovePermission"
+)
+
+// EventBridge lab actions (Phase 9).
+const (
+	ActionEventsPutEvents           = "events:PutEvents"
+	ActionEventsCreateEventBus      = "events:CreateEventBus"
+	ActionEventsDeleteEventBus      = "events:DeleteEventBus"
+	ActionEventsDescribeEventBus    = "events:DescribeEventBus"
+	ActionEventsListEventBuses      = "events:ListEventBuses"
+	ActionEventsPutRule             = "events:PutRule"
+	ActionEventsDescribeRule        = "events:DescribeRule"
+	ActionEventsListRules           = "events:ListRules"
+	ActionEventsDeleteRule          = "events:DeleteRule"
+	ActionEventsEnableRule          = "events:EnableRule"
+	ActionEventsDisableRule         = "events:DisableRule"
+	ActionEventsPutTargets          = "events:PutTargets"
+	ActionEventsRemoveTargets       = "events:RemoveTargets"
+	ActionEventsListTargetsByRule   = "events:ListTargetsByRule"
+)
+
+// ECR lab actions (Phase 9).
+const (
+	ActionECRCreateRepository           = "ecr:CreateRepository"
+	ActionECRDescribeRepositories       = "ecr:DescribeRepositories"
+	ActionECRDeleteRepository           = "ecr:DeleteRepository"
+	ActionECRGetAuthorizationToken      = "ecr:GetAuthorizationToken"
+	ActionECRGetRepositoryPolicy        = "ecr:GetRepositoryPolicy"
+	ActionECRSetRepositoryPolicy        = "ecr:SetRepositoryPolicy"
+	ActionECRDeleteRepositoryPolicy     = "ecr:DeleteRepositoryPolicy"
+	ActionECRPutImage                   = "ecr:PutImage"
+	ActionECRBatchGetImage              = "ecr:BatchGetImage"
+	ActionECRListImages                 = "ecr:ListImages"
+	ActionECRBatchDeleteImage           = "ecr:BatchDeleteImage"
+	ActionECRInitiateLayerUpload        = "ecr:InitiateLayerUpload"
+	ActionECRUploadLayerPart            = "ecr:UploadLayerPart"
+	ActionECRCompleteLayerUpload        = "ecr:CompleteLayerUpload"
+	ActionECRBatchCheckLayerAvailability = "ecr:BatchCheckLayerAvailability"
+)
+
+// ECS lab actions (Phase 9).
+const (
+	ActionECSRegisterTaskDefinition   = "ecs:RegisterTaskDefinition"
+	ActionECSDescribeTaskDefinition   = "ecs:DescribeTaskDefinition"
+	ActionECSListTaskDefinitions      = "ecs:ListTaskDefinitions"
+	ActionECSDeregisterTaskDefinition = "ecs:DeregisterTaskDefinition"
+	ActionECSRunTask                  = "ecs:RunTask"
+	ActionECSDescribeTasks            = "ecs:DescribeTasks"
+	ActionECSListTasks                = "ecs:ListTasks"
+	ActionECSStopTask                 = "ecs:StopTask"
+	ActionECSDescribeClusters         = "ecs:DescribeClusters"
+	ActionECSListClusters             = "ecs:ListClusters"
+)
+
 // Secrets Manager lab actions (Phase 8).
 const (
 	ActionSecretsCreateSecret         = "secretsmanager:CreateSecret"
@@ -514,7 +582,59 @@ func KnownAction(action string) bool {
 		ActionSecretsListSecrets,
 		ActionSecretsPutResourcePolicy,
 		ActionSecretsGetResourcePolicy,
-		ActionSecretsDeleteResourcePolicy:
+		ActionSecretsDeleteResourcePolicy,
+		ActionSNSCreateTopic,
+		ActionSNSDeleteTopic,
+		ActionSNSListTopics,
+		ActionSNSGetTopicAttributes,
+		ActionSNSSetTopicAttributes,
+		ActionSNSPublish,
+		ActionSNSSubscribe,
+		ActionSNSUnsubscribe,
+		ActionSNSListSubscriptions,
+		ActionSNSListSubscriptionsByTopic,
+		ActionSNSGetSubscriptionAttributes,
+		ActionSNSAddPermission,
+		ActionSNSRemovePermission,
+		ActionEventsPutEvents,
+		ActionEventsCreateEventBus,
+		ActionEventsDeleteEventBus,
+		ActionEventsDescribeEventBus,
+		ActionEventsListEventBuses,
+		ActionEventsPutRule,
+		ActionEventsDescribeRule,
+		ActionEventsListRules,
+		ActionEventsDeleteRule,
+		ActionEventsEnableRule,
+		ActionEventsDisableRule,
+		ActionEventsPutTargets,
+		ActionEventsRemoveTargets,
+		ActionEventsListTargetsByRule,
+		ActionECRCreateRepository,
+		ActionECRDescribeRepositories,
+		ActionECRDeleteRepository,
+		ActionECRGetAuthorizationToken,
+		ActionECRGetRepositoryPolicy,
+		ActionECRSetRepositoryPolicy,
+		ActionECRDeleteRepositoryPolicy,
+		ActionECRPutImage,
+		ActionECRBatchGetImage,
+		ActionECRListImages,
+		ActionECRBatchDeleteImage,
+		ActionECRInitiateLayerUpload,
+		ActionECRUploadLayerPart,
+		ActionECRCompleteLayerUpload,
+		ActionECRBatchCheckLayerAvailability,
+		ActionECSRegisterTaskDefinition,
+		ActionECSDescribeTaskDefinition,
+		ActionECSListTaskDefinitions,
+		ActionECSDeregisterTaskDefinition,
+		ActionECSRunTask,
+		ActionECSDescribeTasks,
+		ActionECSListTasks,
+		ActionECSStopTask,
+		ActionECSDescribeClusters,
+		ActionECSListClusters:
 		return true
 	default:
 		return false

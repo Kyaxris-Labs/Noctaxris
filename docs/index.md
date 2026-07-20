@@ -2,7 +2,7 @@
 
 Public reference for **Noctaxris** (module `github.com/Kyaxris-Labs/Noctaxris`). Product name is PascalCase `Noctaxris`.
 
-Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. The lab core is shipped: loopback by default, no host `docker.sock`, sealed secrets and CMK material, SigV4, lab IAM, full STS with fail-closed federation, Organizations MVP, lab-complete KMS/S3/DynamoDB/SQS/Lambda. Remaining depth and new lab cores are tracked on the per-service pages.
+Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. The v1 lab core and v2 lab cores are shipped: loopback by default, no host `docker.sock`, sealed secrets and CMK material, SigV4, identity (IAM/STS/Organizations), crypto and data plane, SSM and Secrets Manager, Lambda, SNS, EventBridge, ECR, and ECS. Remaining deferred depth and post-v2 work are tracked on the per-service pages.
 
 ## Reference
 
@@ -19,6 +19,6 @@ Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. The lab
 | Doc | Topic |
 |-----|--------|
 | [phases/index.md](phases/index.md) | Lab-core delivery history |
-| [services/index.md](services/index.md#cross-cutting) | Cross-cutting deferred (condition keys, post-v2 microVMs, planned cores) |
+| [services/index.md](services/index.md#cross-cutting) | Cross-cutting deferred (condition-key operator depth, post-v2 microVMs) |
 
 Quick start stays in the root [README](../README.md).

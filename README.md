@@ -8,7 +8,7 @@ curl http://127.0.0.1:4566/_noctaxris/health
 # ok
 ```
 
-SigV4 endpoint on `127.0.0.1:4566`. Point the AWS CLI at it and exercise IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, and Lambda the way you would against real AWS.
+SigV4 endpoint on `127.0.0.1:4566`. Point the AWS CLI at it and exercise the lab services in the table below the way you would against real AWS.
 
 Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs/Noctaxris). Images ship under [Kyaxris-Labs](https://github.com/Kyaxris-Labs).
 
@@ -108,29 +108,29 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>SNS</td>
-      <td>not shipped</td>
-      <td>Planned lab-complete SNS (not full SAR).</td>
+      <td>Topic CRUD, Publish, Subscribe and Unsubscribe, List*, Get/SetTopicAttributes, Add/RemovePermission, topic policies with identity-or-policy authz, confirmed sqs and lambda delivery (SNS envelope to SQS, Records event to Lambda async queue). Lab auto-confirm for sqs and lambda.</td>
+      <td>FIFO topics, SMS, email, HTTP subscriptions, filter policy depth, full SAR, exact AWS retry timing.</td>
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>not shipped</td>
-      <td>Planned lab-complete EventBridge (not full SAR).</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutEvents with lab pattern match (source, detail-type, simple detail keys). Targets SQS, Lambda, SNS. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Without RoleArn, target resource policy must Allow events.amazonaws.com or account root.</td>
+      <td>Pipes, Scheduler, archive and replay, CloudWatch Logs and Kinesis targets, InputPath and InputTransformer, role session mint at delivery, full pattern language, bus policy dual-eval depth.</td>
     </tr>
     <tr>
       <td rowspan="3" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
       <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, same-account AddPermission/GetPolicy/RemovePermission, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny.</td>
-      <td>Event source mappings, provisioned concurrency, weighted aliases, Function URLs, cross-account policies, private registry auth, EventBridge failure destinations, rootless engine, full SAR depth. Post-v2: Firecracker microVMs.</td>
+      <td>Event source mappings, provisioned concurrency, weighted aliases, Function URLs, cross-account policies, EventBridge failure destinations, rootless engine, full SAR depth. Post-v2: Firecracker microVMs.</td>
     </tr>
     <tr>
       <td>ECR</td>
-      <td>not shipped</td>
-      <td>Planned lab-complete ECR (not full SAR).</td>
+      <td>Create/Describe/DeleteRepository, GetAuthorizationToken, repository policies, PutImage/BatchGetImage/ListImages/BatchDeleteImage, Registry V2 on <code>127.0.0.1:4566</code> with token auth, DinD sync on manifest put.</td>
+      <td>Scanning, replication, lifecycle, OCI referrers depth, chunked PATCH uploads, public galleries, cross-account policy depth.</td>
     </tr>
     <tr>
       <td>ECS</td>
-      <td>not shipped</td>
-      <td>Planned lab-complete ECS (not full SAR).</td>
+      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection.</td>
+      <td>CreateService/UpdateService, awsvpc, capacity providers, ECS Exec, Service Connect, full SAR depth. Post-v2: Firecracker microVMs.</td>
     </tr>
   </tbody>
 </table>
