@@ -178,6 +178,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if action == "" && (strings.EqualFold(verified.Service, "bedrock") ||
+		strings.EqualFold(verified.Service, "bedrock-runtime") ||
+		isBedrockRuntimePath(r.URL.Path)) {
+		if restAction, modelID := resolveBedrockRuntimeREST(r); restAction != "" {
+			s.handleBedrockRuntime(w, r, body, requestID, eventID, restAction, verified, readOnly, modelID)
+			return
+		}
+	}
+
 	if action == "" && (verified.Service == "s3" || isS3PathStyleRequest(r, body, action)) {
 		s.handleS3(w, r, body, requestID, eventID, verified, readOnly)
 		return
@@ -220,6 +229,39 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.EqualFold(verified.Service, "mq") || strings.HasPrefix(action, "mq:") {
 		s.handleMQ(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "athena") || strings.HasPrefix(action, "athena:") {
+		s.handleAthena(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "es") || strings.EqualFold(verified.Service, "opensearch") ||
+		strings.HasPrefix(action, "es:") {
+		s.handleOpenSearch(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "elasticache") || strings.HasPrefix(action, "elasticache:") {
+		s.handleElastiCache(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "docdb") ||
+		strings.HasPrefix(action, "docdb:") ||
+		(strings.EqualFold(verified.Service, "rds") && isDocDBControlPlaneAction(action)) {
+		s.handleDocDB(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "rds-data") || strings.HasPrefix(action, "rds-data:") {
+		s.handleRDSData(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "rds") || strings.HasPrefix(action, "rds:") {
+		s.handleRDS(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -313,6 +355,28 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "s3vectors" || strings.HasPrefix(action, "s3vectors:") {
 		s.handleS3Vectors(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "bedrock" ||
+		verified.Service == "bedrock-runtime" ||
+		strings.HasPrefix(action, "bedrock:") {
+		s.handleBedrockRuntime(w, r, body, requestID, eventID, action, verified, readOnly, "")
+		return
+	}
+
+	if verified.Service == "textract" || strings.HasPrefix(action, "textract:") {
+		s.handleTextract(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "transcribe" || strings.HasPrefix(action, "transcribe:") {
+		s.handleTranscribe(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "elasticmapreduce" || strings.HasPrefix(action, "elasticmapreduce:") {
+		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -678,6 +742,33 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionMQListBrokers, "ListBrokers",
 		catalog.ActionMQDeleteBroker, "DeleteBroker":
 		s.handleMQ(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionElastiCacheCreateCacheCluster, "CreateCacheCluster",
+		catalog.ActionElastiCacheDescribeCacheClusters, "DescribeCacheClusters",
+		catalog.ActionElastiCacheDeleteCacheCluster, "DeleteCacheCluster":
+		s.handleElastiCache(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionDocDBCreateDBCluster,
+		catalog.ActionDocDBDescribeDBClusters,
+		catalog.ActionDocDBDeleteDBCluster:
+		s.handleDocDB(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionRDSCreateDBInstance, "CreateDBInstance",
+		catalog.ActionRDSDescribeDBInstances, "DescribeDBInstances",
+		catalog.ActionRDSDeleteDBInstance, "DeleteDBInstance":
+		s.handleRDS(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionRDSDataExecuteStatement,
+		catalog.ActionRDSDataBeginTransaction,
+		catalog.ActionRDSDataCommitTransaction,
+		catalog.ActionRDSDataRollbackTransaction:
+		s.handleRDSData(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionAthenaStartQueryExecution,
+		catalog.ActionAthenaGetQueryExecution,
+		catalog.ActionAthenaGetQueryResults,
+		catalog.ActionAthenaStopQueryExecution:
+		s.handleAthena(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionOpenSearchCreateDomain,
+		catalog.ActionOpenSearchDescribeDomain,
+		catalog.ActionOpenSearchListDomainNames,
+		catalog.ActionOpenSearchDeleteDomain:
+		s.handleOpenSearch(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionTransferCreateServer, "CreateServer",
 		catalog.ActionTransferDescribeServer, "DescribeServer",
 		catalog.ActionTransferListServers, "ListServers",
@@ -780,6 +871,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionS3VectorsPutVectors,
 		catalog.ActionS3VectorsQueryVectors:
 		s.handleS3Vectors(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBedrockInvokeModel, "InvokeModel":
+		s.handleBedrockRuntime(w, r, body, requestID, eventID, action, verified, readOnly, "")
+	case catalog.ActionTextractDetectDocumentText, "DetectDocumentText",
+		catalog.ActionTextractAnalyzeDocument, "AnalyzeDocument":
+		s.handleTextract(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionTranscribeStartTranscriptionJob, "StartTranscriptionJob",
+		catalog.ActionTranscribeGetTranscriptionJob, "GetTranscriptionJob",
+		catalog.ActionTranscribeListTranscriptionJobs, "ListTranscriptionJobs":
+		s.handleTranscribe(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionEMRRunJobFlow, "RunJobFlow",
+		catalog.ActionEMRDescribeCluster, "DescribeCluster",
+		catalog.ActionEMRListClusters,
+		catalog.ActionEMRTerminateJobFlows, "TerminateJobFlows":
+		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -836,6 +941,9 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 		return false
 	}
 	if isLambdaRESTPath(r.URL.Path) {
+		return false
+	}
+	if isBedrockRuntimePath(r.URL.Path) {
 		return false
 	}
 	return true
@@ -1081,6 +1189,20 @@ func resolveAction(r *http.Request, body []byte) string {
 			strings.EqualFold(prefix, "AmazonMQ"),
 			strings.EqualFold(prefix, "mq"):
 			return mqAction(short)
+		case strings.Contains(strings.ToLower(prefix), "athena"),
+			strings.EqualFold(prefix, "AmazonAthena"):
+			return athenaAction(short)
+		case strings.Contains(strings.ToLower(prefix), "opensearch"),
+			strings.EqualFold(prefix, "AmazonOpenSearchService"),
+			strings.EqualFold(prefix, "es"):
+			return opensearchAction(short)
+		case strings.Contains(strings.ToLower(prefix), "rdsdata"),
+			strings.EqualFold(prefix, "AmazonRDSDataService"),
+			strings.EqualFold(prefix, "RDSDataService"):
+			return rdsDataAction(short)
+		case strings.Contains(strings.ToLower(prefix), "rds") &&
+			!strings.Contains(strings.ToLower(prefix), "rdsdata"):
+			return rdsAction(short)
 		case strings.Contains(strings.ToLower(prefix), "transfer"):
 			return transferAction(short)
 		case strings.Contains(strings.ToLower(prefix), "certificatemanager"),
@@ -1115,6 +1237,15 @@ func resolveAction(r *http.Request, body []byte) string {
 			return budgetsAction(short)
 		case strings.Contains(strings.ToLower(prefix), "codedeploy"):
 			return codeDeployAction(short)
+		case strings.Contains(strings.ToLower(prefix), "bedrock"):
+			return bedrockAction(short)
+		case strings.Contains(strings.ToLower(prefix), "textract"):
+			return textractAction(short)
+		case strings.Contains(strings.ToLower(prefix), "transcribe"):
+			return transcribeAction(short)
+		case strings.Contains(strings.ToLower(prefix), "elasticmapreduce"),
+			strings.EqualFold(prefix, "ElasticMapReduce"):
+			return emrAction(short)
 		}
 		return short
 	}

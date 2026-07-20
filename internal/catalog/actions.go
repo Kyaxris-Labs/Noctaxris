@@ -276,6 +276,35 @@ const (
 	ActionMQDeleteBroker   = "mq:DeleteBroker"
 )
 
+// RDS lab actions (v7).
+const (
+	ActionRDSCreateDBInstance    = "rds:CreateDBInstance"
+	ActionRDSDescribeDBInstances = "rds:DescribeDBInstances"
+	ActionRDSDeleteDBInstance    = "rds:DeleteDBInstance"
+)
+
+// RDS Data API lab actions (v7).
+const (
+	ActionRDSDataExecuteStatement    = "rds-data:ExecuteStatement"
+	ActionRDSDataBeginTransaction    = "rds-data:BeginTransaction"
+	ActionRDSDataCommitTransaction   = "rds-data:CommitTransaction"
+	ActionRDSDataRollbackTransaction = "rds-data:RollbackTransaction"
+)
+
+// ElastiCache lab actions (v7).
+const (
+	ActionElastiCacheCreateCacheCluster    = "elasticache:CreateCacheCluster"
+	ActionElastiCacheDescribeCacheClusters = "elasticache:DescribeCacheClusters"
+	ActionElastiCacheDeleteCacheCluster    = "elasticache:DeleteCacheCluster"
+)
+
+// DocumentDB lab actions (v7). IAM action names use the rds: prefix (AWS DocumentDB shares RDS control-plane IAM).
+const (
+	ActionDocDBCreateDBCluster    = "rds:CreateDBCluster"
+	ActionDocDBDescribeDBClusters = "rds:DescribeDBClusters"
+	ActionDocDBDeleteDBCluster    = "rds:DeleteDBCluster"
+)
+
 // Transfer Family lab actions (v5).
 const (
 	ActionTransferCreateServer   = "transfer:CreateServer"
@@ -508,6 +537,22 @@ const (
 	ActionGlueDeleteTable    = "glue:DeleteTable"
 )
 
+// Athena lab actions (v7 Track B).
+const (
+	ActionAthenaStartQueryExecution = "athena:StartQueryExecution"
+	ActionAthenaGetQueryExecution   = "athena:GetQueryExecution"
+	ActionAthenaGetQueryResults     = "athena:GetQueryResults"
+	ActionAthenaStopQueryExecution  = "athena:StopQueryExecution"
+)
+
+// OpenSearch Service lab actions (v7 Track B). IAM uses es: prefix.
+const (
+	ActionOpenSearchCreateDomain    = "es:CreateDomain"
+	ActionOpenSearchDescribeDomain  = "es:DescribeDomain"
+	ActionOpenSearchListDomainNames = "es:ListDomainNames"
+	ActionOpenSearchDeleteDomain    = "es:DeleteDomain"
+)
+
 // WAFv2 lab actions (v4 Track B).
 const (
 	ActionWAFCreateWebACL    = "wafv2:CreateWebACL"
@@ -687,6 +732,32 @@ const (
 	ActionS3VectorsDeleteIndex        = "s3vectors:DeleteIndex"
 	ActionS3VectorsPutVectors         = "s3vectors:PutVectors"
 	ActionS3VectorsQueryVectors       = "s3vectors:QueryVectors"
+)
+
+// Bedrock Runtime lab actions (v7 Stream D). IAM action prefix is bedrock:.
+const (
+	ActionBedrockInvokeModel = "bedrock:InvokeModel"
+)
+
+// Textract lab actions (v7 Stream D).
+const (
+	ActionTextractDetectDocumentText = "textract:DetectDocumentText"
+	ActionTextractAnalyzeDocument    = "textract:AnalyzeDocument"
+)
+
+// Transcribe lab actions (v7 Stream D).
+const (
+	ActionTranscribeStartTranscriptionJob = "transcribe:StartTranscriptionJob"
+	ActionTranscribeGetTranscriptionJob   = "transcribe:GetTranscriptionJob"
+	ActionTranscribeListTranscriptionJobs = "transcribe:ListTranscriptionJobs"
+)
+
+// EMR (Elastic MapReduce) lab actions (v7 Stream D).
+const (
+	ActionEMRRunJobFlow         = "elasticmapreduce:RunJobFlow"
+	ActionEMRDescribeCluster    = "elasticmapreduce:DescribeCluster"
+	ActionEMRListClusters       = "elasticmapreduce:ListClusters"
+	ActionEMRTerminateJobFlows  = "elasticmapreduce:TerminateJobFlows"
 )
 
 // CodeBuild lab actions (v4 Track B).
@@ -915,6 +986,19 @@ func KnownAction(action string) bool {
 		ActionMQDescribeBroker,
 		ActionMQListBrokers,
 		ActionMQDeleteBroker,
+		ActionRDSCreateDBInstance,
+		ActionRDSDescribeDBInstances,
+		ActionRDSDeleteDBInstance,
+		ActionRDSDataExecuteStatement,
+		ActionRDSDataBeginTransaction,
+		ActionRDSDataCommitTransaction,
+		ActionRDSDataRollbackTransaction,
+		ActionElastiCacheCreateCacheCluster,
+		ActionElastiCacheDescribeCacheClusters,
+		ActionElastiCacheDeleteCacheCluster,
+		ActionDocDBCreateDBCluster,
+		ActionDocDBDescribeDBClusters,
+		ActionDocDBDeleteDBCluster,
 		ActionTransferCreateServer,
 		ActionTransferDescribeServer,
 		ActionTransferListServers,
@@ -1114,6 +1198,14 @@ func KnownAction(action string) bool {
 		ActionGlueGetTable,
 		ActionGlueGetTables,
 		ActionGlueDeleteTable,
+		ActionAthenaStartQueryExecution,
+		ActionAthenaGetQueryExecution,
+		ActionAthenaGetQueryResults,
+		ActionAthenaStopQueryExecution,
+		ActionOpenSearchCreateDomain,
+		ActionOpenSearchDescribeDomain,
+		ActionOpenSearchListDomainNames,
+		ActionOpenSearchDeleteDomain,
 		ActionWAFCreateWebACL,
 		ActionWAFUpdateWebACL,
 		ActionWAFGetWebACL,
@@ -1220,7 +1312,17 @@ func KnownAction(action string) bool {
 		ActionS3VectorsListIndexes,
 		ActionS3VectorsDeleteIndex,
 		ActionS3VectorsPutVectors,
-		ActionS3VectorsQueryVectors:
+		ActionS3VectorsQueryVectors,
+		ActionBedrockInvokeModel,
+		ActionTextractDetectDocumentText,
+		ActionTextractAnalyzeDocument,
+		ActionTranscribeStartTranscriptionJob,
+		ActionTranscribeGetTranscriptionJob,
+		ActionTranscribeListTranscriptionJobs,
+		ActionEMRRunJobFlow,
+		ActionEMRDescribeCluster,
+		ActionEMRListClusters,
+		ActionEMRTerminateJobFlows:
 		return true
 	default:
 		return false

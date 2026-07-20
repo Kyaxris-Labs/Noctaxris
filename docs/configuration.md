@@ -18,9 +18,9 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_SAML_IDP_NAME` | `default` | SAML provider name used when seeding metadata |
 | `NOCTAXRIS_OIDC_ISSUER_URL` | empty | OIDC issuer URL. When set with client id, seeded for `AssumeRoleWithWebIdentity`. |
 | `NOCTAXRIS_OIDC_CLIENT_ID` | empty | OIDC audience / client id (required if issuer URL is set) |
-| `NOCTAXRIS_DOCKER_HOST` | empty | Nested DinD engine URL (Compose sets `tcp://noctaxris-engine:2376`). Empty disables DinD Lambda compute for unit tests. |
+| `NOCTAXRIS_DOCKER_HOST` | empty | Nested DinD engine URL (Compose sets `tcp://noctaxris-engine:2376`). Empty disables DinD compute for unit tests (Lambda and nested data engines). |
 | `NOCTAXRIS_DOCKER_CERT_PATH` | empty | Directory with `ca.pem`, `cert.pem`, and `key.pem` for TLS to the engine (Compose sets `/certs/client`). |
-| `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Lambda and ECS compute runtime: `dind` (default) or `microvm` (opt-in). Unknown values fail process start. |
+| `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Lambda and ECS compute runtime: `dind` (default) or `microvm` (opt-in). Unknown values fail process start. Nested data engines use the DinD path. |
 | `NOCTAXRIS_FIRECRACKER_BIN` | empty | Optional path to the Firecracker binary when `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. If empty, `firecracker` must be on `PATH`. |
 | `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
 
@@ -44,7 +44,7 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 Files live under `docker/`:
 
 - `Dockerfile`: multi-stage build (`golang:1.26-bookworm` → distroless nonroot), `CGO_ENABLED=0`
-- `compose.yaml`: publish `127.0.0.1:4566:4566`, named volume for data, `read_only: true`, tmpfs `/tmp`, no `docker.sock`
+- `compose.yaml`: publish `127.0.0.1:4566:4566` only, named volume for data, `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports
 - `.env.example`: sample root keys for local Compose
 
 Copy `.env.example` to `.env`, set real lab keys, then:

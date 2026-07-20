@@ -2,6 +2,36 @@
 
 One Go binary runs in the API container. There is no sidecar API gateway and no host Docker socket mount. Compose also starts `noctaxris-engine` (Docker-in-Docker) on the Compose network so Lambda Invoke can run nested function containers.
 
+## Overview
+
+Host publish is loopback only. Nested compute and data engines talk to `noctaxris-engine` over TLS on the Compose network. The API never mounts host `docker.sock`.
+
+```mermaid
+flowchart TB
+  Client["AWS CLI / SDK"]
+  HostPort["127.0.0.1:4566"]
+
+  subgraph Compose["Compose project"]
+    API["noctaxris API container<br/>no host docker.sock"]
+    Engine["noctaxris-engine<br/>DinD TLS :2376<br/>not published to host"]
+  end
+
+  subgraph Nested["Inside noctaxris-engine"]
+    FnNet["Lambda on noctaxris-fn<br/>Internal network"]
+    EcsNet["ECS / CodeBuild / Batch<br/>on noctaxris-ecs Internal"]
+    DataNet["RDS / ElastiCache / DocDB<br/>nested-network endpoints only"]
+  end
+
+  MicroVM["Opt-in microVM<br/>NOCTAXRIS_COMPUTE_RUNTIME=microvm<br/>Linux + KVM + Firecracker<br/>fail-closed otherwise"]
+
+  Client --> HostPort --> API
+  API -->|"TCP TLS NOCTAXRIS_DOCKER_HOST"| Engine
+  Engine --> FnNet
+  Engine --> EcsNet
+  Engine --> DataNet
+  API -.->|"runtime selection"| MicroVM
+```
+
 ## Tree
 
 ```text
@@ -54,6 +84,27 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD.
 
 Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` selects a Firecracker-class path on Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. Live guest zip/Image Invoke and ECS RunTask still require kernel/rootfs assets on a Linux+KVM host. CodeBuild and Batch stay on the DinD path.
+
+## Nested data planes
+
+RDS, ElastiCache, and DocumentDB engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|docdb` identify them. Host Compose still publishes only `127.0.0.1:4566`.
+
+```mermaid
+flowchart TD
+  Create["CreateDBInstance / CreateCacheCluster / CreateDBCluster"]
+  Store["store row<br/>nested-network endpoint, secret ARN, status"]
+  Helper["data-plane helper<br/>compute.Client DinD TLS"]
+  Start["start labeled nested container<br/>no host port publish"]
+  Describe["Describe* returns nested-network hostname:port"]
+  DataAPI["RDS Data API ExecuteStatement on :4566<br/>stub executor by default"]
+
+  Create --> Store --> Helper --> Start --> Describe
+  Helper -.-> DataAPI
+```
+
+Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). OpenSearch domain CRUD returns a loopback stub endpoint (MQ-style). Live nested OpenSearch is optional and must not publish search ports on the host.
+
+When DinD is unset, create paths keep control-plane rows and nested start is a no-op. Live engine start requires `noctaxris-engine`. Do not mount the operator host filesystem into nested data containers.
 
 ## In-process delivery workers
 

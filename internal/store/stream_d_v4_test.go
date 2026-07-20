@@ -139,13 +139,28 @@ func TestGlueCatalogRoundTrip(t *testing.T) {
 	if _, err := st.CreateGlueDatabase(account, "labdb", "d"); err != nil {
 		t.Fatal(err)
 	}
-	tbl, err := st.CreateGlueTable(account, "labdb", "t1", "", "s3://b/p", []store.GlueColumn{{Name: "id", Type: "string"}})
+	tbl, err := st.CreateGlueTable(account, store.GlueTableCreate{
+		DatabaseName:    "labdb",
+		Name:            "t1",
+		StorageLocation: "s3://b/p",
+		Columns:         []store.GlueColumn{{Name: "id", Type: "string"}},
+		PartitionKeys:   []store.GlueColumn{{Name: "dt", Type: "string"}},
+		InputFormat:     "org.apache.hadoop.mapred.TextInputFormat",
+		OutputFormat:    "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+		SerDeInfo: store.GlueSerDeInfo{
+			SerializationLibrary: "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+			Parameters:           map[string]string{"field.delim": ","},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetGlueTable(account, "labdb", tbl.Name)
-	if err != nil || len(got.Columns) != 1 {
+	if err != nil || len(got.Columns) != 1 || len(got.PartitionKeys) != 1 {
 		t.Fatalf("get: %v %#v", err, got)
+	}
+	if got.InputFormat == "" || got.SerDeInfo.SerializationLibrary == "" {
+		t.Fatalf("missing storage descriptor fields: %#v", got)
 	}
 }
 

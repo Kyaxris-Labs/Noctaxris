@@ -190,17 +190,44 @@ func (s *Server) glueCreateTable(
 	tblIn, _ := params["TableInput"].(map[string]any)
 	name, _ := tblIn["Name"].(string)
 	desc, _ := tblIn["Description"].(string)
-	location := ""
-	var columns []store.GlueColumn
+	in := store.GlueTableCreate{
+		DatabaseName:  dbName,
+		Name:          name,
+		Description:   desc,
+		Columns:       []store.GlueColumn{},
+		PartitionKeys: []store.GlueColumn{},
+		SerDeInfo:     store.GlueSerDeInfo{Parameters: map[string]string{}},
+	}
 	if sd, ok := tblIn["StorageDescriptor"].(map[string]any); ok {
-		location, _ = sd["Location"].(string)
+		in.StorageLocation, _ = sd["Location"].(string)
+		in.InputFormat, _ = sd["InputFormat"].(string)
+		in.OutputFormat, _ = sd["OutputFormat"].(string)
 		if cols, ok := sd["Columns"].([]any); ok {
 			for _, c := range cols {
 				cm, _ := c.(map[string]any)
 				cn, _ := cm["Name"].(string)
 				ct, _ := cm["Type"].(string)
-				columns = append(columns, store.GlueColumn{Name: cn, Type: ct})
+				in.Columns = append(in.Columns, store.GlueColumn{Name: cn, Type: ct})
 			}
+		}
+		if serde, ok := sd["SerdeInfo"].(map[string]any); ok {
+			in.SerDeInfo.Name, _ = serde["Name"].(string)
+			in.SerDeInfo.SerializationLibrary, _ = serde["SerializationLibrary"].(string)
+			if paramsMap, ok := serde["Parameters"].(map[string]any); ok {
+				for k, v := range paramsMap {
+					if vs, ok := v.(string); ok {
+						in.SerDeInfo.Parameters[k] = vs
+					}
+				}
+			}
+		}
+	}
+	if pks, ok := tblIn["PartitionKeys"].([]any); ok {
+		for _, c := range pks {
+			cm, _ := c.(map[string]any)
+			cn, _ := cm["Name"].(string)
+			ct, _ := cm["Type"].(string)
+			in.PartitionKeys = append(in.PartitionKeys, store.GlueColumn{Name: cn, Type: ct})
 		}
 	}
 	if !s.authorize(verified, catalog.ActionGlueCreateTable, "*") {
@@ -208,7 +235,7 @@ func (s *Server) glueCreateTable(
 			"User is not authorized to perform glue:CreateTable.", readOnly, eventID, verified)
 		return
 	}
-	_, err := s.store.CreateGlueTable(verified.AccountID, dbName, name, desc, location, columns)
+	_, err := s.store.CreateGlueTable(verified.AccountID, in)
 	if errors.Is(err, store.ErrGlueNotFound) {
 		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
 			"Database not found.", readOnly, eventID, verified)

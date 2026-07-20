@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS glue_tables (
   description TEXT NOT NULL DEFAULT '',
   storage_location TEXT NOT NULL DEFAULT '',
   columns_json TEXT NOT NULL DEFAULT '[]',
+  partition_keys_json TEXT NOT NULL DEFAULT '[]',
+  input_format TEXT NOT NULL DEFAULT '',
+  output_format TEXT NOT NULL DEFAULT '',
+  serde_name TEXT NOT NULL DEFAULT '',
+  serde_library TEXT NOT NULL DEFAULT '',
+  serde_params_json TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, database_name, name)
@@ -45,10 +51,17 @@ type GlueDatabase struct {
 	CreatedAt   int64
 }
 
-// GlueColumn is a table column.
+// GlueColumn is a table column or partition key.
 type GlueColumn struct {
 	Name string `json:"Name"`
 	Type string `json:"Type"`
+}
+
+// GlueSerDeInfo is a StorageDescriptor SerDeInfo subset for Athena.
+type GlueSerDeInfo struct {
+	Name                 string            `json:"Name"`
+	SerializationLibrary string            `json:"SerializationLibrary"`
+	Parameters           map[string]string `json:"Parameters"`
 }
 
 // GlueTable is a Data Catalog table.
@@ -58,8 +71,25 @@ type GlueTable struct {
 	Description     string
 	StorageLocation string
 	Columns         []GlueColumn
+	PartitionKeys   []GlueColumn
+	InputFormat     string
+	OutputFormat    string
+	SerDeInfo       GlueSerDeInfo
 	CreatedAt       int64
 	UpdatedAt       int64
+}
+
+// GlueTableCreate is CreateTable input fields.
+type GlueTableCreate struct {
+	DatabaseName    string
+	Name            string
+	Description     string
+	StorageLocation string
+	Columns         []GlueColumn
+	PartitionKeys   []GlueColumn
+	InputFormat     string
+	OutputFormat    string
+	SerDeInfo       GlueSerDeInfo
 }
 
 // EnsureGlueSchema creates Glue catalog tables if missing.
@@ -69,6 +99,22 @@ func EnsureGlueSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(glueSchema); err != nil {
 		return fmt.Errorf("ensure glue schema: %w", err)
+	}
+	alters := []string{
+		`ALTER TABLE glue_tables ADD COLUMN partition_keys_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE glue_tables ADD COLUMN input_format TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE glue_tables ADD COLUMN output_format TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE glue_tables ADD COLUMN serde_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE glue_tables ADD COLUMN serde_library TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE glue_tables ADD COLUMN serde_params_json TEXT NOT NULL DEFAULT '{}'`,
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return fmt.Errorf("ensure glue schema alter: %w", err)
+		}
 	}
 	return nil
 }
@@ -149,27 +195,49 @@ func (s *Store) DeleteGlueDatabase(accountID, name string) error {
 }
 
 // CreateGlueTable creates a table under a database.
-func (s *Store) CreateGlueTable(accountID, databaseName, name, description, location string, columns []GlueColumn) (GlueTable, error) {
-	databaseName = strings.TrimSpace(databaseName)
-	name = strings.TrimSpace(name)
+func (s *Store) CreateGlueTable(accountID string, in GlueTableCreate) (GlueTable, error) {
+	databaseName := strings.TrimSpace(in.DatabaseName)
+	name := strings.TrimSpace(in.Name)
 	if databaseName == "" || name == "" {
 		return GlueTable{}, fmt.Errorf("%w: DatabaseName and Name required", ErrGlueBadRequest)
 	}
 	if _, err := s.GetGlueDatabase(accountID, databaseName); err != nil {
 		return GlueTable{}, err
 	}
+	columns := in.Columns
 	if columns == nil {
 		columns = []GlueColumn{}
+	}
+	partitionKeys := in.PartitionKeys
+	if partitionKeys == nil {
+		partitionKeys = []GlueColumn{}
+	}
+	serde := in.SerDeInfo
+	if serde.Parameters == nil {
+		serde.Parameters = map[string]string{}
 	}
 	colJSON, err := json.Marshal(columns)
 	if err != nil {
 		return GlueTable{}, fmt.Errorf("marshal columns: %w", err)
 	}
+	pkJSON, err := json.Marshal(partitionKeys)
+	if err != nil {
+		return GlueTable{}, fmt.Errorf("marshal partition keys: %w", err)
+	}
+	serdeParamsJSON, err := json.Marshal(serde.Parameters)
+	if err != nil {
+		return GlueTable{}, fmt.Errorf("marshal serde params: %w", err)
+	}
 	now := time.Now().UTC().UnixMilli()
 	_, err = s.db.Exec(
-		`INSERT INTO glue_tables (account_id, database_name, name, description, storage_location, columns_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, databaseName, name, description, location, string(colJSON), now, now,
+		`INSERT INTO glue_tables (
+		   account_id, database_name, name, description, storage_location, columns_json,
+		   partition_keys_json, input_format, output_format, serde_name, serde_library, serde_params_json,
+		   created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, databaseName, name, in.Description, in.StorageLocation, string(colJSON),
+		string(pkJSON), in.InputFormat, in.OutputFormat, serde.Name, serde.SerializationLibrary, string(serdeParamsJSON),
+		now, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -178,28 +246,59 @@ func (s *Store) CreateGlueTable(accountID, databaseName, name, description, loca
 		return GlueTable{}, fmt.Errorf("create table: %w", err)
 	}
 	return GlueTable{
-		DatabaseName: databaseName, Name: name, Description: description,
-		StorageLocation: location, Columns: columns, CreatedAt: now, UpdatedAt: now,
+		DatabaseName: databaseName, Name: name, Description: in.Description,
+		StorageLocation: in.StorageLocation, Columns: columns, PartitionKeys: partitionKeys,
+		InputFormat: in.InputFormat, OutputFormat: in.OutputFormat, SerDeInfo: serde,
+		CreatedAt: now, UpdatedAt: now,
 	}, nil
+}
+
+func scanGlueTable(
+	databaseName, name, description, location, colJSON, pkJSON, inputFmt, outputFmt, serdeName, serdeLib, serdeParamsJSON string,
+	createdAt, updatedAt int64,
+) GlueTable {
+	t := GlueTable{
+		DatabaseName: databaseName, Name: name, Description: description,
+		StorageLocation: location, InputFormat: inputFmt, OutputFormat: outputFmt,
+		SerDeInfo: GlueSerDeInfo{Name: serdeName, SerializationLibrary: serdeLib, Parameters: map[string]string{}},
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	_ = json.Unmarshal([]byte(colJSON), &t.Columns)
+	_ = json.Unmarshal([]byte(pkJSON), &t.PartitionKeys)
+	_ = json.Unmarshal([]byte(serdeParamsJSON), &t.SerDeInfo.Parameters)
+	if t.Columns == nil {
+		t.Columns = []GlueColumn{}
+	}
+	if t.PartitionKeys == nil {
+		t.PartitionKeys = []GlueColumn{}
+	}
+	if t.SerDeInfo.Parameters == nil {
+		t.SerDeInfo.Parameters = map[string]string{}
+	}
+	return t
 }
 
 // GetGlueTable returns a table.
 func (s *Store) GetGlueTable(accountID, databaseName, name string) (GlueTable, error) {
-	var t GlueTable
-	var colJSON string
+	var (
+		dbName, tblName, desc, location, colJSON, pkJSON string
+		inputFmt, outputFmt, serdeName, serdeLib, serdeParamsJSON string
+		createdAt, updatedAt int64
+	)
 	err := s.db.QueryRow(
-		`SELECT database_name, name, description, storage_location, columns_json, created_at, updated_at
+		`SELECT database_name, name, description, storage_location, columns_json,
+		        partition_keys_json, input_format, output_format, serde_name, serde_library, serde_params_json,
+		        created_at, updated_at
 		 FROM glue_tables WHERE account_id = ? AND database_name = ? AND name = ?`,
 		accountID, databaseName, name,
-	).Scan(&t.DatabaseName, &t.Name, &t.Description, &t.StorageLocation, &colJSON, &t.CreatedAt, &t.UpdatedAt)
+	).Scan(&dbName, &tblName, &desc, &location, &colJSON, &pkJSON, &inputFmt, &outputFmt, &serdeName, &serdeLib, &serdeParamsJSON, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GlueTable{}, ErrGlueNotFound
 	}
 	if err != nil {
 		return GlueTable{}, fmt.Errorf("get table: %w", err)
 	}
-	_ = json.Unmarshal([]byte(colJSON), &t.Columns)
-	return t, nil
+	return scanGlueTable(dbName, tblName, desc, location, colJSON, pkJSON, inputFmt, outputFmt, serdeName, serdeLib, serdeParamsJSON, createdAt, updatedAt), nil
 }
 
 // GetGlueTables lists tables in a database.
@@ -208,7 +307,9 @@ func (s *Store) GetGlueTables(accountID, databaseName string) ([]GlueTable, erro
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT database_name, name, description, storage_location, columns_json, created_at, updated_at
+		`SELECT database_name, name, description, storage_location, columns_json,
+		        partition_keys_json, input_format, output_format, serde_name, serde_library, serde_params_json,
+		        created_at, updated_at
 		 FROM glue_tables WHERE account_id = ? AND database_name = ? ORDER BY name`,
 		accountID, databaseName,
 	)
@@ -218,13 +319,15 @@ func (s *Store) GetGlueTables(accountID, databaseName string) ([]GlueTable, erro
 	defer rows.Close()
 	var out []GlueTable
 	for rows.Next() {
-		var t GlueTable
-		var colJSON string
-		if err := rows.Scan(&t.DatabaseName, &t.Name, &t.Description, &t.StorageLocation, &colJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var (
+			dbName, tblName, desc, location, colJSON, pkJSON string
+			inputFmt, outputFmt, serdeName, serdeLib, serdeParamsJSON string
+			createdAt, updatedAt int64
+		)
+		if err := rows.Scan(&dbName, &tblName, &desc, &location, &colJSON, &pkJSON, &inputFmt, &outputFmt, &serdeName, &serdeLib, &serdeParamsJSON, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("get tables scan: %w", err)
 		}
-		_ = json.Unmarshal([]byte(colJSON), &t.Columns)
-		out = append(out, t)
+		out = append(out, scanGlueTable(dbName, tblName, desc, location, colJSON, pkJSON, inputFmt, outputFmt, serdeName, serdeLib, serdeParamsJSON, createdAt, updatedAt))
 	}
 	return out, rows.Err()
 }

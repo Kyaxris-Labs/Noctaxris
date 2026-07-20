@@ -19,16 +19,32 @@ func tableInput(t store.GlueTable) map[string]any {
 	for _, c := range t.Columns {
 		cols = append(cols, map[string]any{"Name": c.Name, "Type": c.Type})
 	}
+	pks := make([]map[string]any, 0, len(t.PartitionKeys))
+	for _, c := range t.PartitionKeys {
+		pks = append(pks, map[string]any{"Name": c.Name, "Type": c.Type})
+	}
+	serdeParams := map[string]string{}
+	if t.SerDeInfo.Parameters != nil {
+		serdeParams = t.SerDeInfo.Parameters
+	}
 	return map[string]any{
 		"Name":         t.Name,
 		"DatabaseName": t.DatabaseName,
 		"Description":  t.Description,
 		"StorageDescriptor": map[string]any{
-			"Location": t.StorageLocation,
-			"Columns":  cols,
+			"Location":     t.StorageLocation,
+			"Columns":      cols,
+			"InputFormat":  t.InputFormat,
+			"OutputFormat": t.OutputFormat,
+			"SerdeInfo": map[string]any{
+				"Name":                 t.SerDeInfo.Name,
+				"SerializationLibrary": t.SerDeInfo.SerializationLibrary,
+				"Parameters":           serdeParams,
+			},
 		},
-		"CreateTime": float64(t.CreatedAt) / 1000.0,
-		"UpdateTime": float64(t.UpdatedAt) / 1000.0,
+		"PartitionKeys": pks,
+		"CreateTime":    float64(t.CreatedAt) / 1000.0,
+		"UpdateTime":    float64(t.UpdatedAt) / 1000.0,
 	}
 }
 

@@ -52,6 +52,10 @@ const ServicePrincipalAPIGateway = "apigateway.amazonaws.com"
 // role trust when Cognito configure APIs take RoleArn.
 const ServicePrincipalCognitoIDP = "cognito-idp.amazonaws.com"
 
+// ServicePrincipalRDS is reserved for future RDS configure APIs that accept RoleArn
+// (for example MonitoringRoleArn). v7 lab create paths do not expose RoleArn yet.
+const ServicePrincipalRDS = "rds.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

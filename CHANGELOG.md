@@ -1,5 +1,26 @@
 # Changelog
 
+## v7 (lab cores shipped)
+
+Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host DB ports, RDS Data API stub on `:4566`, Athena closing the v4 deferral, OpenSearch/EMR control-plane stubs, and Bedrock/Textract/Transcribe shape stubs (~+10 toward ~60). Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
+
+### Included
+
+- Nested data-plane helper on the existing DinD TLS client (labeled containers, no host port publish)
+- RDS lite: CreateDBInstance / DescribeDBInstances / DeleteDBInstance for Postgres, Secrets Manager master secret, nested start when engine is up
+- RDS Data API lite: ExecuteStatement plus Begin/Commit/Rollback with resourceArn and secretArn validation (recorded-statement stub executor, no pgx)
+- ElastiCache lite: Create/Describe/Delete cache cluster (redis or valkey), nested Valkey/Redis when DinD is up
+- DocumentDB lite: Create/Describe/Delete DB cluster (`Engine=docdb`), nested Mongo-compatible when DinD is up (not Neptune)
+- Athena lite: Start/Get/Stop/GetQueryResults over Glue catalog plus lab S3 CSV/JSON SELECT subset
+- Glue Track A polish: PartitionKeys and StorageDescriptor SerDe/InputFormat fields for Athena
+- OpenSearch lite: domain CRUD with loopback stub endpoint
+- EMR lite: RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows control-plane stub
+- Bedrock Runtime stub: InvokeModel allowlisted modelIds to canned JSON
+- Textract stub: DetectDocumentText / AnalyzeDocument canned Blocks
+- Transcribe stub: Start/Get/List transcription jobs with canned transcript under the data root
+
+Deferred depth: [docs/services/index.md](docs/services/index.md). Live `pgx` Data API executor, MemoryDB, Neptune, real ML model runtimes, and live Firecracker guest boot remain deferred.
+
 ## v6 (lab cores shipped)
 
 Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the existing loopback listener, AppSync Cognito auth, edge/governance stubs toward ~50 services, and go-jose v4 for the single JWT stack. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
@@ -70,7 +91,7 @@ Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/Dyna
 - WAF v2 lite: WebACL / rule group shape, AssociateWebACL, labeled Evaluate helper
 - Config lite: recorder / delivery channel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Athena remains deferred. Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets. Athena shipped in a later version.
 
 ## v3 (lab cores shipped)
 

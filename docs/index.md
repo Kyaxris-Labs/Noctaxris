@@ -9,7 +9,7 @@ Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. Lab cor
 | Doc | Topic |
 |-----|--------|
 | [services/index.md](services/index.md) | Per-service APIs, authz, CLI smoke, deferred depth |
-| [architecture.md](architecture.md) | Packages and request path |
+| [architecture.md](architecture.md) | Deploy graph, packages, and request path |
 | [configuration.md](configuration.md) | Env vars, data layout, Compose, IdP bootstrap |
 | [security-defaults.md](security-defaults.md) | Host, crypto, and auth posture |
 | [../CHANGELOG.md](../CHANGELOG.md) | Lab-core through v4 notes |

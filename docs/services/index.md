@@ -37,7 +37,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [CodeBuild](codebuild.md) | Shipped | Project CRUD lite, StartBuild on nested DinD, BatchGetBuilds/ListBuilds |
 | [CodePipeline](codepipeline.md) | Shipped | Pipeline CRUD, StartPipelineExecution with nested CodeBuild StartBuild, GetPipelineState |
 | [Batch](batch.md) | Shipped | Compute environment / queue / definition lite, SubmitJob on nested DinD |
-| [Glue](glue.md) | Shipped | Data Catalog database and table CRUD |
+| [Glue](glue.md) | Shipped | Data Catalog database and table CRUD (PartitionKeys + SerDe fields for Athena) |
 | [WAF v2](wafv2.md) | Shipped | WebACL / rule group lite, AssociateWebACL, labeled Evaluate helper |
 | [Config](config.md) | Shipped | Recorder / delivery channel lite, compliance stub over tagged resources |
 | [ACM](acm.md) | Shipped | Request/Describe/List/DeleteCertificate, lab self-signed PEM |
@@ -55,6 +55,16 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Cost Explorer](ce.md) | Shipped | GetCostAndUsage / GetCostForecast over seeded amounts |
 | [Budgets](budgets.md) | Shipped | Budget CRUD, notification stubs stored only |
 | [CodeDeploy](codedeploy.md) | Shipped | Application / deployment group / deployment lite, optional ECS DesiredCount hook |
+| [RDS](rds.md) | Shipped | Postgres Create/Describe/Delete, nested DinD when engine up, nested-network endpoint |
+| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement + txn lite, stub executor (no pgx), secretArn fail-closed |
+| [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
+| [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete cluster, nested Mongo-compatible when engine up |
+| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset |
+| [OpenSearch](opensearch.md) | Shipped | Domain CRUD control-plane stub endpoint |
+| [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate control-plane stub |
+| [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist canned JSON stub |
+| [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument canned Blocks |
+| [Transcribe](transcribe.md) | Shipped | Start/Get/List transcription jobs, canned transcript under data root |
 
 ## Shared verification
 
@@ -78,7 +88,7 @@ docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
 curl http://127.0.0.1:4566/_noctaxris/health
 ```
 
-Expect body `ok`. Lambda Invoke, ECS RunTask/CreateService scale-up, CodeBuild StartBuild, and Batch SubmitJob need the nested `noctaxris-engine` service from the same compose file. Skip live nested-compute smoke when Docker is unavailable (unit tests still cover PassRole and compute-unavailable).
+Expect body `ok`. Lambda Invoke, ECS RunTask/CreateService scale-up, CodeBuild StartBuild, Batch SubmitJob, and nested RDS/ElastiCache/DocumentDB engines need the nested `noctaxris-engine` service from the same compose file. Skip live nested-compute or nested-data smoke when Docker is unavailable (unit tests still cover PassRole, control-plane CRUD, and compute-unavailable).
 
 Export root keys from `docker/.env`, then set a common CLI environment before any per-service smoke:
 
@@ -103,7 +113,9 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context now populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, MFA keys, and `aws:ResourceTag/*` (plus matching service ResourceTag keys) when tags exist via the Tagging API. Broader operator matrix and every global key population remain open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
 
-**Compute runtime:** Nested DinD is the default for Lambda, ECS, CodeBuild, and Batch. Opt-in microVM selection for Lambda and ECS RunTask is documented on [lambda.md](lambda.md) and [ecs.md](ecs.md). WSL2 is DinD-only. Athena and live Firecracker guest boot remain deferred.
+**Compute runtime:** Nested DinD is the default for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB). Opt-in microVM selection for Lambda and ECS RunTask is documented on [lambda.md](lambda.md) and [ecs.md](ecs.md). WSL2 is DinD-only. Live Firecracker guest boot remains deferred. Athena runs in-process (no nested query engine).
+
+**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Postgres, Redis/Valkey, Mongo, and OpenSearch ports are not published on the host. Prefer RDS Data API on `:4566` for SQL labs.
 
 **In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS event source mappings and EventBridge Pipes reuse in-process poll patterns. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
 

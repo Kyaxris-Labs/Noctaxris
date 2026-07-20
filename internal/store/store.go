@@ -495,6 +495,14 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureElastiCacheSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureDocDBSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureTransferSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -548,6 +556,38 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureS3VectorsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureBedrockSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureTextractSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureTranscribeSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureEMRSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureAthenaSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureOpenSearchSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureRDSSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureRDSDataSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}

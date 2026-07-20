@@ -7,6 +7,9 @@ These defaults are intentional product posture for a local emulator that people 
 - Compose publishes only `127.0.0.1:4566` on the host. That is not `0.0.0.0` on the host.
 - Inside the container the process listens on `0.0.0.0:4566` so the published mapping works.
 - No host `docker.sock` mount on the API service. Nested compute uses Compose service `noctaxris-engine` over TLS on the Compose network (`NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376`, `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`). The engine API is not published to the host.
+- Nested data engines (RDS Postgres, ElastiCache Valkey/Redis, DocumentDB Mongo-compatible) run as labeled containers on the same DinD path. Compose does **not** publish Postgres, Redis/Valkey, Mongo, or OpenSearch ports on the host.
+- Lab SQL uses the **RDS Data API** HTTP facade on `:4566`. The default executor is a recorded-statement stub (validates ARNs and authz without Docker). Live Postgres wire protocol from the API process is not enabled. Nested-network endpoint strings on Describe* responses are for DinD-side smoke only, not WAN-reachable listeners.
+- When DinD is unset, Create* still records control-plane state and nested start is a no-op (status may stay `creating`). Paths never fall through to host Docker or invent host-published DB ports.
 - Default Lambda and ECS runtime is DinD. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` is supported only on Linux with usable KVM and a Firecracker binary. WSL2 is DinD-only. Opt-in never mounts host Docker or silently weakens the path.
 - `noctaxris-engine` runs privileged DinD so function containers can start. Privilege stays inside that nested engine. The API container remains distroless `nonroot` without a host socket.
 - Image runs as distroless `nonroot`. Data dir is seeded owned by UID `65532` so the volume is writable.

@@ -86,7 +86,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, tags, cross-account grant flows, true AWS-owned managed keys.</td>
     </tr>
     <tr>
-      <td rowspan="11" align="center" valign="middle">Data</td>
+      <td rowspan="15" align="center" valign="middle">Data</td>
       <td>S3</td>
       <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite).</td>
       <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign.</td>
@@ -140,6 +140,26 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>S3 Vectors</td>
       <td>Vector bucket and index CRUD, PutVectors / QueryVectors with in-process cosine or euclidean ranking. Identity authz.</td>
       <td>Full condition-key matrix, huge dimensional indexes, metadata filter depth.</td>
+    </tr>
+    <tr>
+      <td>RDS</td>
+      <td>CreateDBInstance / DescribeDBInstances / DeleteDBInstance for engine <code>postgres</code>. Nested Postgres via DinD data-plane helper when engine is up. Nested-network endpoint only. Master credentials in Secrets Manager.</td>
+      <td>MySQL, Multi-AZ, read replicas, Aurora full cluster matrix, host-published Postgres ports.</td>
+    </tr>
+    <tr>
+      <td>RDS Data API</td>
+      <td>ExecuteStatement plus Begin/Commit/Rollback lite on <code>:4566</code>. Requires resourceArn and secretArn. Default recorded-statement stub executor (no <code>pgx</code>).</td>
+      <td>Live nested Postgres wire executor, BatchExecuteStatement, full result type matrix.</td>
+    </tr>
+    <tr>
+      <td>ElastiCache</td>
+      <td>CreateCacheCluster / DescribeCacheClusters / DeleteCacheCluster for redis or valkey. Nested Valkey/Redis when DinD is up. Nested-network endpoint only.</td>
+      <td>Cluster mode / replication group matrix, Redis AUTH depth, MemoryDB, host-published cache ports.</td>
+    </tr>
+    <tr>
+      <td>DocumentDB</td>
+      <td>CreateDBCluster / DescribeDBClusters / DeleteDBCluster (<code>Engine=docdb</code>). Nested Mongo-compatible image when DinD is up. Nested-network endpoint only. Not Neptune.</td>
+      <td>Neptune, change streams, full TLS client auth matrix, host-published document ports.</td>
     </tr>
     <tr>
       <td rowspan="3" align="center" valign="middle">Audit and tags</td>
@@ -206,8 +226,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Glue</td>
-      <td>Data Catalog database and table CRUD over sqlite (Create/Get/GetDatabases/GetTables/Delete*). Identity authz.</td>
-      <td>Crawlers, ETL jobs, Lake Formation, Athena query engine.</td>
+      <td>Data Catalog database and table CRUD over sqlite (Create/Get/GetDatabases/GetTables/Delete*). Tables store PartitionKeys plus StorageDescriptor SerDe/InputFormat fields for Athena. Identity authz.</td>
+      <td>Crawlers, ETL jobs, Lake Formation, partition value registration.</td>
     </tr>
     <tr>
       <td>WAF v2</td>
@@ -292,6 +312,37 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>REST API v1, WebSocket, HTTP_PROXY, Lambda authorizers, HTTP API resource policies.</td>
     </tr>
     <tr>
+      <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
+      <td>Athena</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON. Optional ResultConfiguration OutputLocation.</td>
+      <td>Full SQL, CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
+    </tr>
+    <tr>
+      <td>OpenSearch</td>
+      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. Loopback stub endpoint (MQ-style). No nested OpenSearch required.</td>
+      <td>Nested DinD OpenSearch cluster, full query DSL proxy, fine-grained access control.</td>
+    </tr>
+    <tr>
+      <td>EMR</td>
+      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows control-plane stub. No host Spark/Hadoop.</td>
+      <td>Full step matrix, nested Spark engines, EMR Serverless and Studio.</td>
+    </tr>
+    <tr>
+      <td>Bedrock Runtime</td>
+      <td>InvokeModel over allowlisted modelIds with canned JSON. Unknown modelId fails closed. No real foundation models.</td>
+      <td>Converse, streaming, Agents, Guardrails, real model runtimes.</td>
+    </tr>
+    <tr>
+      <td>Textract</td>
+      <td>DetectDocumentText and AnalyzeDocument over Bytes or lab S3Object. Canned PAGE/LINE/WORD Blocks. No real OCR.</td>
+      <td>Async analysis APIs, Queries/Forms/Tables depth, real OCR.</td>
+    </tr>
+    <tr>
+      <td>Transcribe</td>
+      <td>StartTranscriptionJob / GetTranscriptionJob / ListTranscriptionJobs. Canned transcript under the data root. No real ASR.</td>
+      <td>Streaming transcription, Call Analytics, writing transcripts into lab S3.</td>
+    </tr>
+    <tr>
       <td rowspan="4" align="center" valign="middle">Billing</td>
       <td>Pricing</td>
       <td>DescribeServices/GetAttributeValues/GetProducts over a tiny static embedded price list. Identity authz.</td>
@@ -322,12 +373,26 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Setting | Value |
 |---------|--------|
 | Listen | `127.0.0.1:4566` only |
-| Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch) |
-| Compute runtime | Default `dind`. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed |
+| Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch, and nested data engines) |
+| Compute runtime | Default `dind`. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed. Nested data engines stay on DinD |
+| Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of Postgres, Redis/Valkey, Mongo, or OpenSearch |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |
 | Authn | SigV4 on non-health paths (SAML/OIDC federation STS excepted) |
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
+
+## Architecture
+
+Loopback API only. Nested DinD over TLS. No host `docker.sock`. Full graph and request path: [docs/architecture.md](docs/architecture.md).
+
+```mermaid
+flowchart LR
+  Client["AWS CLI / SDK"] --> Port["127.0.0.1:4566"]
+  Port --> API["noctaxris API"]
+  API -->|"TLS"| Engine["noctaxris-engine DinD"]
+  Engine --> Nested["Lambda / ECS / nested data"]
+  API -.->|"opt-in fail-closed"| MicroVM["microVM"]
+```
 
 ## Docs
 
