@@ -8,17 +8,24 @@ import (
 
 // CreateGraphqlApiJSON builds CreateGraphqlApi response.
 func CreateGraphqlApiJSON(a store.AppSyncAPI) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"graphqlApi": map[string]any{
-			"name":               a.Name,
-			"apiId":              a.APIID,
-			"arn":                a.ARN,
-			"authenticationType": a.AuthenticationType,
-			"uris": map[string]string{
-				"GRAPHQL": "http://127.0.0.1:4566/appsync/" + a.APIID + "/graphql",
-			},
+	api := map[string]any{
+		"name":               a.Name,
+		"apiId":              a.APIID,
+		"arn":                a.ARN,
+		"authenticationType": a.AuthenticationType,
+		"uris": map[string]string{
+			"GRAPHQL": "http://127.0.0.1:4566/appsync/" + a.APIID + "/graphql",
 		},
-	})
+	}
+	if a.AuthenticationType == store.AppSyncAuthCognito {
+		api["userPoolConfig"] = map[string]any{
+			"userPoolId": a.UserPoolID,
+			"awsRegion":  a.UserPoolRegion,
+			"clientId":   a.UserPoolClientID,
+			"issuer":     a.UserPoolIssuer,
+		}
+	}
+	return json.Marshal(map[string]any{"graphqlApi": api})
 }
 
 // GetGraphqlApiJSON builds GetGraphqlApi response.

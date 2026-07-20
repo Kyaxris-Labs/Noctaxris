@@ -45,6 +45,9 @@ These defaults are intentional product posture for a local emulator that people 
 - Lab Lambda configure APIs use identity Evaluate plus PassRole/trust.
 - Organizations SCP/RCP filters apply on member authorize paths, including OU-path inheritance.
 - SNS HTTP(S) subscription endpoints must be loopback or an explicit lab catcher. Arbitrary operator URLs are rejected.
+- Cognito JWKS is public on the loopback listener path only. Cognito management APIs require SigV4 and identity Allow.
+- API Gateway JWT routes reject missing or invalid Bearer tokens. IAM routes reject unsigned requests. HTTP API resource policies are not invented.
+- Gateway CredentialsArn and CodeDeploy serviceRoleArn require PassRole plus matching service trust when set.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Optional TLS

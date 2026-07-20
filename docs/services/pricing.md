@@ -29,4 +29,4 @@ Live Compose smoke skipped when Docker is unavailable.
 ## Not yet / deferred
 
 - Live AWS Price List sync
-- Cost Explorer, CUR, Budgets
+- Broader SKU catalog beyond the embedded sample

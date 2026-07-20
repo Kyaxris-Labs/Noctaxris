@@ -10,24 +10,19 @@ Noctaxris/
   docker/                         # API image + compose (noctaxris + noctaxris-engine)
   internal/config/
   internal/compute/               # nested DinD client, Internal network, one-shot Invoke
-  internal/store/                 # users, IAM, KMS, S3, DynamoDB, SQS, Lambda, orgs, IdP
+  internal/store/                 # IAM, KMS, S3, DynamoDB, SQS, Lambda, Cognito, Gateway, orgs, IdP, ...
   internal/catalog/
   internal/kernel/audit/
   internal/kernel/authn/          # SigV4 header + query (presign)
   internal/kernel/authz/          # Evaluate*, CheckPassRole
+  internal/kernel/federation/     # OIDC/SAML federation verify (go-jose v4)
+  internal/kernel/jwtutil/        # shared RS256 JWKS issue/verify helper
   internal/kernel/identity/
-  internal/kernel/federation/
   internal/kernel/sts/
-  internal/services/iam/
-  internal/services/kms/
-  internal/services/s3/           # object AES-GCM helpers
-  internal/services/dynamodb/     # item JSON + table crypto helpers
-  internal/services/sqs/          # queue JSON + message SSE helpers
-  internal/services/lambda/       # CreateFunction / Invoke JSON helpers
-  internal/services/organizations/
+  internal/services/
   internal/server/
   docs/                           # public docs
-    docs/services/                  # per-service APIs, smoke, deferred depth
+    docs/services/                # per-service APIs, smoke, deferred depth
 ```
 
 ## Request path
@@ -35,6 +30,10 @@ Noctaxris/
 ```text
 HTTP request
   ├─ GET /_noctaxris/health → 200 ok
+  ├─ GET /cognito-idp/{region}/{pool}/.well-known/jwks.json → JWKS (no SigV4)
+  ├─ /http-api/{apiId}/{stage}/{path} → Gateway invoke (NONE / JWT / IAM)
+  ├─ /lambda-url/{account}/{function} → Function URL invoke
+  ├─ /appsync/{apiId}/graphql → AppSync GraphQL (API_KEY / IAM / Cognito)
   └─ else
        ├─ AssumeRoleWithSAML / AssumeRoleWithWebIdentity → IdP crypto (no SigV4)
        ├─ else authn.Verify (SigV4 header or query)
@@ -43,11 +42,12 @@ HTTP request
        ├─ DynamoDB / SQS → EvaluateDynamoDB / EvaluateSQS then handler
        ├─ Lambda → identity or resource policy (dataplane), PassRole on role configure, then handler
        │    └─ Invoke → mint execution-role session, compute.RunInvoke via noctaxris-engine (TLS)
+       ├─ Cognito / API Gateway / AppSync / edge and governance services → identity EvaluateFull then handler
        ├─ other STS / IAM / KMS / Organizations → existing Evaluate paths
        └─ unknown → 501 NotImplemented
 ```
 
-Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite.
+Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose data volume. Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
 
 ## Compute path
 
@@ -61,6 +61,14 @@ Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unse
 - Lambda SQS event source mappings poll with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
 - EventBridge Pipes reuse the same poll and invoke/send helpers for SQS and DynamoDB Streams sources.
 - SNS HTTP(S) subscriptions deliver only to allowlisted loopback endpoints (lab catcher). Non-allowlisted URLs fail closed.
+
+## Edge identity
+
+- Cognito issues RS256 ID and access tokens and serves JWKS on the same `:4566` listener. Issuer shape: `http://127.0.0.1:4566/cognito-idp/<region>/<userPoolId>`.
+- API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS. IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
+- AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM.
+- Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust.
+- CloudFront and ELBv2 are config-shaped stubs (no real PoP, no EC2 targets). Gateway must not open HTTP_PROXY to arbitrary URLs.
 
 ## Authz
 

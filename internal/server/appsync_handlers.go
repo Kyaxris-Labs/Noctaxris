@@ -104,6 +104,28 @@ func (s *Server) appsyncCreateAPI(
 	if authType == "" {
 		authType, _ = params["AuthenticationType"].(string)
 	}
+	pool := store.AppSyncUserPoolConfig{}
+	if cfg, ok := params["userPoolConfig"].(map[string]any); ok {
+		pool.UserPoolID, _ = cfg["userPoolId"].(string)
+		if pool.UserPoolID == "" {
+			pool.UserPoolID, _ = cfg["UserPoolId"].(string)
+		}
+		pool.AwsRegion, _ = cfg["awsRegion"].(string)
+		if pool.AwsRegion == "" {
+			pool.AwsRegion, _ = cfg["AwsRegion"].(string)
+		}
+		pool.ClientID, _ = cfg["clientId"].(string)
+		if pool.ClientID == "" {
+			pool.ClientID, _ = cfg["appClientId"].(string)
+		}
+		if pool.ClientID == "" {
+			pool.ClientID, _ = cfg["ClientId"].(string)
+		}
+		pool.Issuer, _ = cfg["issuer"].(string)
+		if pool.Issuer == "" {
+			pool.Issuer, _ = cfg["Issuer"].(string)
+		}
+	}
 	if !s.authorize(verified, catalog.ActionAppSyncCreateGraphqlApi, "*") {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appsync:CreateGraphqlApi.", readOnly, eventID, verified)
@@ -113,7 +135,7 @@ func (s *Server) appsyncCreateAPI(
 	if region == "" {
 		region = store.DefaultAppSyncRegion
 	}
-	api, err := s.store.CreateAppSyncGraphqlAPI(verified.AccountID, region, name, authType)
+	api, err := s.store.CreateAppSyncGraphqlAPIWithConfig(verified.AccountID, region, name, authType, pool)
 	if errors.Is(err, store.ErrAppSyncBadRequest) {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
 			err.Error(), readOnly, eventID, verified)
@@ -335,7 +357,7 @@ func (s *Server) appsyncCreateResolver(
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateResolver", readOnly)
 }
 
-// handleAppSyncGraphQLRuntime serves POST /appsync/{apiId}/graphql with API_KEY or AWS_IAM auth.
+// handleAppSyncGraphQLRuntime serves POST /appsync/{apiId}/graphql with API_KEY, AWS_IAM, or Cognito auth.
 func (s *Server) handleAppSyncGraphQLRuntime(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, readOnly bool,
 ) {
@@ -400,6 +422,27 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 			return
 		}
 		verified = v
+	case store.AppSyncAuthCognito:
+		token := bearerTokenFromAuthorization(r.Header.Get("Authorization"))
+		if token == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
+			_, _ = w.Write(payload)
+			return
+		}
+		issuer := api.UserPoolIssuer
+		if issuer == "" {
+			issuer = store.AppSyncCognitoIssuer(api.UserPoolRegion, api.UserPoolID)
+		}
+		if err := s.verifyAPIGatewayJWT(token, issuer, []string{api.UserPoolClientID}, s.now()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
+			_, _ = w.Write(payload)
+			return
+		}
+		verified = &authn.Verified{AccountID: accountID, Region: store.DefaultAppSyncRegion, Service: "appsync"}
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)

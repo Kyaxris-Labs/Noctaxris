@@ -44,7 +44,17 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets |
 | [Cloud Map](servicediscovery.md) | Shipped | Namespace/service/instance register and DiscoverInstances |
 | [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
-| [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth |
+| [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY, IAM, or Cognito User Pools auth |
+| [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, NONE/JWT/IAM authorizers, optional CredentialsArn PassRole |
+| [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD, USER_PASSWORD_AUTH, RS256 tokens, JWKS on loopback |
+| [CloudFront](cloudfront.md) | Shipped | Distribution CRUD stub (S3 or Gateway origin strings) |
+| [ELB v2](elbv2.md) | Shipped | Load balancer / target group / listener lite (lambda or ip targets) |
+| [S3 Vectors](s3vectors.md) | Shipped | Vector bucket/index CRUD, PutVectors/QueryVectors cosine or euclidean |
+| [Cloud Control](cloudcontrol.md) | Shipped | Create/Get/List/DeleteResource for S3 bucket and IAM role |
+| [BCM Data Exports](bcm-data-exports.md) | Shipped | Export definition CRUD plus sample file under data root |
+| [Cost Explorer](ce.md) | Shipped | GetCostAndUsage / GetCostForecast over seeded amounts |
+| [Budgets](budgets.md) | Shipped | Budget CRUD, notification stubs stored only |
+| [CodeDeploy](codedeploy.md) | Shipped | Application / deployment group / deployment lite, optional ECS DesiredCount hook |
 
 ## Shared verification
 
@@ -96,3 +106,5 @@ Per-service CLI smoke lives on each shipped service page above.
 **Compute runtime:** Nested DinD is the default for Lambda, ECS, CodeBuild, and Batch. Opt-in microVM selection for Lambda and ECS RunTask is documented on [lambda.md](lambda.md) and [ecs.md](ecs.md). WSL2 is DinD-only. Athena and live Firecracker guest boot remain deferred.
 
 **In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS event source mappings and EventBridge Pipes reuse in-process poll patterns. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
+
+**Edge identity:** Cognito JWKS and API Gateway / AppSync Cognito JWT verify share the go-jose v4 helper. Gateway invoke stays on the single published listener. No second host port for Cognito Hosted UI.

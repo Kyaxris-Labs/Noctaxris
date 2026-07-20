@@ -1,0 +1,443 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+var (
+	ErrELBv2NotFound   = errors.New("LoadBalancerNotFound")
+	ErrELBv2TGNotFound = errors.New("TargetGroupNotFound")
+	ErrELBv2BadRequest = errors.New("ValidationError")
+)
+
+const DefaultELBv2Region = "us-east-1"
+
+const elbv2Schema = `
+CREATE TABLE IF NOT EXISTS elbv2_load_balancers (
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  dns_name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  scheme TEXT NOT NULL DEFAULT 'internet-facing',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, name)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_elbv2_lb_arn ON elbv2_load_balancers(account_id, arn);
+CREATE TABLE IF NOT EXISTS elbv2_target_groups (
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  protocol TEXT NOT NULL DEFAULT 'HTTP',
+  port INTEGER NOT NULL DEFAULT 80,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, name)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_elbv2_tg_arn ON elbv2_target_groups(account_id, arn);
+CREATE TABLE IF NOT EXISTS elbv2_listeners (
+  account_id TEXT NOT NULL,
+  listener_arn TEXT NOT NULL,
+  load_balancer_arn TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  protocol TEXT NOT NULL,
+  target_group_arn TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, listener_arn)
+);
+CREATE TABLE IF NOT EXISTS elbv2_targets (
+  account_id TEXT NOT NULL,
+  target_group_arn TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  port INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, target_group_arn, target_id)
+);
+`
+
+// ELBv2LoadBalancer is a lite load balancer row.
+type ELBv2LoadBalancer struct {
+	Name      string
+	ARN       string
+	DNSName   string
+	Type      string
+	Scheme    string
+	CreatedAt int64
+}
+
+// ELBv2TargetGroup is a lite target group row.
+type ELBv2TargetGroup struct {
+	Name       string
+	ARN        string
+	TargetType string // lambda | ip
+	Protocol   string
+	Port       int
+	CreatedAt  int64
+}
+
+// ELBv2Listener is a lite listener row.
+type ELBv2Listener struct {
+	ListenerARN     string
+	LoadBalancerARN string
+	Port            int
+	Protocol        string
+	TargetGroupARN  string
+	CreatedAt       int64
+}
+
+// ELBv2Target is a registered target (Lambda ARN or lab IP).
+type ELBv2Target struct {
+	ID   string
+	Port int
+}
+
+// EnsureELBv2Schema creates ELBv2 tables if missing.
+func EnsureELBv2Schema(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("ensure elbv2 schema: db is nil")
+	}
+	if _, err := db.Exec(elbv2Schema); err != nil {
+		return fmt.Errorf("ensure elbv2 schema: %w", err)
+	}
+	return nil
+}
+
+// EnsureELBv2Schema ensures ELBv2 tables on an open store.
+func (s *Store) EnsureELBv2Schema() error {
+	return EnsureELBv2Schema(s.db)
+}
+
+func elbv2LBARN(region, accountID, name, id string) string {
+	if region == "" {
+		region = DefaultELBv2Region
+	}
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%s", region, accountID, name, id)
+}
+
+func elbv2TGARN(region, accountID, name, id string) string {
+	if region == "" {
+		region = DefaultELBv2Region
+	}
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:targetgroup/%s/%s", region, accountID, name, id)
+}
+
+// CreateELBv2LoadBalancer creates an application load balancer lite.
+func (s *Store) CreateELBv2LoadBalancer(accountID, region, name, scheme string) (ELBv2LoadBalancer, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ELBv2LoadBalancer{}, fmt.Errorf("%w: Name required", ErrELBv2BadRequest)
+	}
+	if scheme == "" {
+		scheme = "internet-facing"
+	}
+	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+	arn := elbv2LBARN(region, accountID, name, id)
+	dns := fmt.Sprintf("%s-%s.%s.elb.lab.local", name, id[:8], regionOrELB(region))
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.db.Exec(
+		`INSERT INTO elbv2_load_balancers (account_id, name, arn, dns_name, type, scheme, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, name, arn, dns, "application", scheme, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			return ELBv2LoadBalancer{}, fmt.Errorf("%w: load balancer name already exists", ErrELBv2BadRequest)
+		}
+		return ELBv2LoadBalancer{}, fmt.Errorf("create load balancer: %w", err)
+	}
+	return ELBv2LoadBalancer{Name: name, ARN: arn, DNSName: dns, Type: "application", Scheme: scheme, CreatedAt: now}, nil
+}
+
+func regionOrELB(region string) string {
+	if region == "" {
+		return DefaultELBv2Region
+	}
+	return region
+}
+
+// DescribeELBv2LoadBalancers lists load balancers, optionally filtered by ARN.
+func (s *Store) DescribeELBv2LoadBalancers(accountID string, arns []string) ([]ELBv2LoadBalancer, error) {
+	rows, err := s.db.Query(
+		`SELECT name, arn, dns_name, type, scheme, created_at FROM elbv2_load_balancers
+		 WHERE account_id = ? ORDER BY name`, accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describe load balancers: %w", err)
+	}
+	defer rows.Close()
+	want := map[string]struct{}{}
+	for _, a := range arns {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			want[a] = struct{}{}
+		}
+	}
+	var out []ELBv2LoadBalancer
+	for rows.Next() {
+		var lb ELBv2LoadBalancer
+		if err := rows.Scan(&lb.Name, &lb.ARN, &lb.DNSName, &lb.Type, &lb.Scheme, &lb.CreatedAt); err != nil {
+			return nil, fmt.Errorf("describe load balancers scan: %w", err)
+		}
+		if len(want) > 0 {
+			if _, ok := want[lb.ARN]; !ok {
+				continue
+			}
+		}
+		out = append(out, lb)
+	}
+	return out, rows.Err()
+}
+
+// DeleteELBv2LoadBalancer deletes a load balancer by ARN.
+func (s *Store) DeleteELBv2LoadBalancer(accountID, arn string) error {
+	arn = strings.TrimSpace(arn)
+	res, err := s.db.Exec(`DELETE FROM elbv2_load_balancers WHERE account_id = ? AND arn = ?`, accountID, arn)
+	if err != nil {
+		return fmt.Errorf("delete load balancer: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrELBv2NotFound
+	}
+	_, _ = s.db.Exec(`DELETE FROM elbv2_listeners WHERE account_id = ? AND load_balancer_arn = ?`, accountID, arn)
+	return nil
+}
+
+// CreateELBv2TargetGroup creates a target group. TargetType must be lambda or ip.
+func (s *Store) CreateELBv2TargetGroup(accountID, region, name, targetType, protocol string, port int) (ELBv2TargetGroup, error) {
+	name = strings.TrimSpace(name)
+	targetType = strings.ToLower(strings.TrimSpace(targetType))
+	if name == "" {
+		return ELBv2TargetGroup{}, fmt.Errorf("%w: Name required", ErrELBv2BadRequest)
+	}
+	switch targetType {
+	case "lambda", "ip":
+	default:
+		return ELBv2TargetGroup{}, fmt.Errorf("%w: TargetType must be lambda or ip (no instance/EC2)", ErrELBv2BadRequest)
+	}
+	if protocol == "" {
+		protocol = "HTTP"
+	}
+	if port <= 0 {
+		port = 80
+	}
+	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+	arn := elbv2TGARN(region, accountID, name, id)
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.db.Exec(
+		`INSERT INTO elbv2_target_groups (account_id, name, arn, target_type, protocol, port, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, name, arn, targetType, protocol, port, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			return ELBv2TargetGroup{}, fmt.Errorf("%w: target group name already exists", ErrELBv2BadRequest)
+		}
+		return ELBv2TargetGroup{}, fmt.Errorf("create target group: %w", err)
+	}
+	return ELBv2TargetGroup{Name: name, ARN: arn, TargetType: targetType, Protocol: protocol, Port: port, CreatedAt: now}, nil
+}
+
+// DescribeELBv2TargetGroups lists target groups.
+func (s *Store) DescribeELBv2TargetGroups(accountID string, arns []string) ([]ELBv2TargetGroup, error) {
+	rows, err := s.db.Query(
+		`SELECT name, arn, target_type, protocol, port, created_at FROM elbv2_target_groups
+		 WHERE account_id = ? ORDER BY name`, accountID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describe target groups: %w", err)
+	}
+	defer rows.Close()
+	want := map[string]struct{}{}
+	for _, a := range arns {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			want[a] = struct{}{}
+		}
+	}
+	var out []ELBv2TargetGroup
+	for rows.Next() {
+		var tg ELBv2TargetGroup
+		if err := rows.Scan(&tg.Name, &tg.ARN, &tg.TargetType, &tg.Protocol, &tg.Port, &tg.CreatedAt); err != nil {
+			return nil, fmt.Errorf("describe target groups scan: %w", err)
+		}
+		if len(want) > 0 {
+			if _, ok := want[tg.ARN]; !ok {
+				continue
+			}
+		}
+		out = append(out, tg)
+	}
+	return out, rows.Err()
+}
+
+// DeleteELBv2TargetGroup deletes a target group by ARN.
+func (s *Store) DeleteELBv2TargetGroup(accountID, arn string) error {
+	arn = strings.TrimSpace(arn)
+	res, err := s.db.Exec(`DELETE FROM elbv2_target_groups WHERE account_id = ? AND arn = ?`, accountID, arn)
+	if err != nil {
+		return fmt.Errorf("delete target group: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrELBv2TGNotFound
+	}
+	_, _ = s.db.Exec(`DELETE FROM elbv2_targets WHERE account_id = ? AND target_group_arn = ?`, accountID, arn)
+	return nil
+}
+
+// CreateELBv2Listener creates a listener forwarding to a target group.
+func (s *Store) CreateELBv2Listener(accountID, region, loadBalancerARN, targetGroupARN, protocol string, port int) (ELBv2Listener, error) {
+	loadBalancerARN = strings.TrimSpace(loadBalancerARN)
+	targetGroupARN = strings.TrimSpace(targetGroupARN)
+	if loadBalancerARN == "" || targetGroupARN == "" {
+		return ELBv2Listener{}, fmt.Errorf("%w: LoadBalancerArn and TargetGroupArn required", ErrELBv2BadRequest)
+	}
+	lbs, err := s.DescribeELBv2LoadBalancers(accountID, []string{loadBalancerARN})
+	if err != nil {
+		return ELBv2Listener{}, err
+	}
+	if len(lbs) == 0 {
+		return ELBv2Listener{}, ErrELBv2NotFound
+	}
+	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
+	if err != nil {
+		return ELBv2Listener{}, err
+	}
+	if len(tgs) == 0 {
+		return ELBv2Listener{}, ErrELBv2TGNotFound
+	}
+	if protocol == "" {
+		protocol = "HTTP"
+	}
+	if port <= 0 {
+		port = 80
+	}
+	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+	if region == "" {
+		region = DefaultELBv2Region
+	}
+	listenerARN := fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/app/%s/%s",
+		region, accountID, lbs[0].Name, id)
+	now := time.Now().UTC().UnixMilli()
+	_, err = s.db.Exec(
+		`INSERT INTO elbv2_listeners (account_id, listener_arn, load_balancer_arn, port, protocol, target_group_arn, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, listenerARN, loadBalancerARN, port, protocol, targetGroupARN, now,
+	)
+	if err != nil {
+		return ELBv2Listener{}, fmt.Errorf("create listener: %w", err)
+	}
+	return ELBv2Listener{
+		ListenerARN: listenerARN, LoadBalancerARN: loadBalancerARN,
+		Port: port, Protocol: protocol, TargetGroupARN: targetGroupARN, CreatedAt: now,
+	}, nil
+}
+
+// DescribeELBv2Listeners lists listeners for a load balancer.
+func (s *Store) DescribeELBv2Listeners(accountID, loadBalancerARN string) ([]ELBv2Listener, error) {
+	rows, err := s.db.Query(
+		`SELECT listener_arn, load_balancer_arn, port, protocol, target_group_arn, created_at
+		 FROM elbv2_listeners WHERE account_id = ? AND load_balancer_arn = ? ORDER BY port`,
+		accountID, strings.TrimSpace(loadBalancerARN),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describe listeners: %w", err)
+	}
+	defer rows.Close()
+	var out []ELBv2Listener
+	for rows.Next() {
+		var l ELBv2Listener
+		if err := rows.Scan(&l.ListenerARN, &l.LoadBalancerARN, &l.Port, &l.Protocol, &l.TargetGroupARN, &l.CreatedAt); err != nil {
+			return nil, fmt.Errorf("describe listeners scan: %w", err)
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// DeleteELBv2Listener deletes a listener by ARN.
+func (s *Store) DeleteELBv2Listener(accountID, listenerARN string) error {
+	res, err := s.db.Exec(`DELETE FROM elbv2_listeners WHERE account_id = ? AND listener_arn = ?`,
+		accountID, strings.TrimSpace(listenerARN))
+	if err != nil {
+		return fmt.Errorf("delete listener: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrELBv2NotFound
+	}
+	return nil
+}
+
+// RegisterELBv2Targets registers Lambda ARN or lab IP targets.
+func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets []ELBv2Target) error {
+	targetGroupARN = strings.TrimSpace(targetGroupARN)
+	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
+	if err != nil {
+		return err
+	}
+	if len(tgs) == 0 {
+		return ErrELBv2TGNotFound
+	}
+	tg := tgs[0]
+	for _, t := range targets {
+		id := strings.TrimSpace(t.ID)
+		if id == "" {
+			return fmt.Errorf("%w: Target Id required", ErrELBv2BadRequest)
+		}
+		switch tg.TargetType {
+		case "lambda":
+			if !strings.HasPrefix(id, "arn:aws:lambda:") {
+				return fmt.Errorf("%w: lambda target Id must be a Lambda function ARN", ErrELBv2BadRequest)
+			}
+		case "ip":
+			ip := id
+			if host, _, err := net.SplitHostPort(id); err == nil {
+				ip = host
+			}
+			parsed := net.ParseIP(ip)
+			if parsed == nil {
+				return fmt.Errorf("%w: ip target Id must be a lab IP address", ErrELBv2BadRequest)
+			}
+		default:
+			return fmt.Errorf("%w: unsupported target type", ErrELBv2BadRequest)
+		}
+		_, err := s.db.Exec(
+			`INSERT INTO elbv2_targets (account_id, target_group_arn, target_id, port) VALUES (?, ?, ?, ?)
+			 ON CONFLICT(account_id, target_group_arn, target_id) DO UPDATE SET port = excluded.port`,
+			accountID, targetGroupARN, id, t.Port,
+		)
+		if err != nil {
+			return fmt.Errorf("register targets: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListELBv2Targets lists registered targets for a target group.
+func (s *Store) ListELBv2Targets(accountID, targetGroupARN string) ([]ELBv2Target, error) {
+	rows, err := s.db.Query(
+		`SELECT target_id, port FROM elbv2_targets WHERE account_id = ? AND target_group_arn = ? ORDER BY target_id`,
+		accountID, strings.TrimSpace(targetGroupARN),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list targets: %w", err)
+	}
+	defer rows.Close()
+	var out []ELBv2Target
+	for rows.Next() {
+		var t ELBv2Target
+		if err := rows.Scan(&t.ID, &t.Port); err != nil {
+			return nil, fmt.Errorf("list targets scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

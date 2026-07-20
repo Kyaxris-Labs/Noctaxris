@@ -515,6 +515,42 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureAPIGatewayV2Schema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCognitoSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCloudControlSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureBCMExportSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureBudgetsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCodeDeploySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureCloudFrontSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureELBv2Schema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureS3VectorsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

@@ -273,12 +273,70 @@ func regionOrDefault(region string) string {
 	return region
 }
 
+// IsWAFAssociableResourceARN reports whether ResourceArn is a lab-accepted
+// association target. Unknown shapes fail closed.
+//
+// Accepted (AWS WAFv2 AssociateWebACL shapes plus lab HTTP API):
+//   - arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE] (HTTP API lab)
+//   - arn:aws:apigateway:REGION::/restapis/APIID/stages/STAGE
+//   - arn:aws:execute-api:REGION:ACCOUNT:APIID[/STAGE[/route]]
+//   - arn:aws:elasticloadbalancing:REGION:ACCOUNT:loadbalancer/...
+//   - arn:aws:appsync:REGION:ACCOUNT:apis/APIID
+//   - arn:aws:cognito-idp:REGION:ACCOUNT:userpool/POOLID
+func IsWAFAssociableResourceARN(resourceARN string) bool {
+	resourceARN = strings.TrimSpace(resourceARN)
+	if resourceARN == "" || !strings.HasPrefix(resourceARN, "arn:aws:") {
+		return false
+	}
+	parts := strings.SplitN(resourceARN, ":", 6)
+	if len(parts) < 6 {
+		return false
+	}
+	service := parts[2]
+	resource := parts[5]
+	switch service {
+	case "apigateway":
+		// parts[5] is like "/apis/xxx" or "/restapis/xxx/stages/yyy" (leading slash in resource).
+		r := resource
+		if strings.HasPrefix(r, "/") {
+			r = r[1:]
+		}
+		if strings.HasPrefix(r, "apis/") {
+			rest := strings.TrimPrefix(r, "apis/")
+			if rest == "" || strings.HasPrefix(rest, "/") {
+				return false
+			}
+			return true
+		}
+		if strings.HasPrefix(r, "restapis/") {
+			segs := strings.Split(strings.TrimPrefix(r, "restapis/"), "/")
+			return len(segs) >= 3 && segs[0] != "" && segs[1] == "stages" && segs[2] != ""
+		}
+		return false
+	case "execute-api":
+		segs := strings.Split(resource, "/")
+		return len(segs) >= 1 && segs[0] != ""
+	case "elasticloadbalancing":
+		return strings.HasPrefix(resource, "loadbalancer/")
+	case "appsync":
+		return strings.HasPrefix(resource, "apis/") && len(strings.TrimPrefix(resource, "apis/")) > 0
+	case "cognito-idp":
+		return strings.HasPrefix(resource, "userpool/") && len(strings.TrimPrefix(resource, "userpool/")) > 0
+	default:
+		return false
+	}
+}
+
 // AssociateWAFWebACL associates a Web ACL ARN with a lab resource ARN string.
+// ResourceArn must match IsWAFAssociableResourceARN (fail closed on unknown).
 func (s *Store) AssociateWAFWebACL(accountID, webACLARN, resourceARN string) error {
 	webACLARN = strings.TrimSpace(webACLARN)
 	resourceARN = strings.TrimSpace(resourceARN)
 	if webACLARN == "" || resourceARN == "" {
 		return fmt.Errorf("%w: WebACLArn and ResourceArn required", ErrWAFBadRequest)
+	}
+	if !IsWAFAssociableResourceARN(resourceARN) {
+		return fmt.Errorf("%w: ResourceArn is not a supported association target", ErrWAFBadRequest)
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO wafv2_associations (account_id, web_acl_arn, resource_arn) VALUES (?, ?, ?)

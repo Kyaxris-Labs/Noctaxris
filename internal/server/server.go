@@ -112,6 +112,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isCognitoJWKSPath(r.URL.Path) {
+		s.handleCognitoJWKS(w, r)
+		return
+	}
+
 	requestID := newRequestID()
 	eventID := newRequestID()
 	readOnly := r.Method == http.MethodGet || r.Method == http.MethodHead
@@ -126,6 +131,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if isAppSyncGraphQLPath(r.URL.Path) {
 		s.handleAppSyncGraphQLRuntime(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
+	if isHTTPAPIInvokePath(r.URL.Path) {
+		s.handleHTTPAPIInvoke(w, r, body, requestID, eventID, readOnly)
 		return
 	}
 
@@ -251,6 +261,58 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "appsync" || strings.HasPrefix(action, "appsync:") {
 		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "apigateway" ||
+		strings.EqualFold(verified.Service, "apigatewayv2") ||
+		strings.HasPrefix(action, "apigatewayv2:") {
+		s.handleAPIGatewayV2(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "cognito-idp" || strings.HasPrefix(action, "cognito-idp:") {
+		s.handleCognito(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "cloudcontrol" || strings.HasPrefix(action, "cloudcontrol:") {
+		s.handleCloudControl(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "bcm-data-exports" || strings.HasPrefix(action, "bcm-data-exports:") {
+		s.handleBCMExports(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "ce" || strings.HasPrefix(action, "ce:") {
+		s.handleCostExplorer(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "budgets" || strings.HasPrefix(action, "budgets:") {
+		s.handleBudgets(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "codedeploy" || strings.HasPrefix(action, "codedeploy:") {
+		s.handleCodeDeploy(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "cloudfront" || strings.HasPrefix(action, "cloudfront:") {
+		s.handleCloudFront(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "elasticloadbalancing" || strings.HasPrefix(action, "elasticloadbalancing:") {
+		s.handleELBv2(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "s3vectors" || strings.HasPrefix(action, "s3vectors:") {
+		s.handleS3Vectors(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -654,6 +716,70 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionAppSyncCreateDataSource, "CreateDataSource",
 		catalog.ActionAppSyncCreateResolver, "CreateResolver":
 		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCognitoCreateUserPool, "CreateUserPool",
+		catalog.ActionCognitoDescribeUserPool, "DescribeUserPool",
+		catalog.ActionCognitoListUserPools, "ListUserPools",
+		catalog.ActionCognitoDeleteUserPool, "DeleteUserPool",
+		catalog.ActionCognitoCreateUserPoolClient, "CreateUserPoolClient",
+		catalog.ActionCognitoDescribeUserPoolClient, "DescribeUserPoolClient",
+		catalog.ActionCognitoListUserPoolClients, "ListUserPoolClients",
+		catalog.ActionCognitoDeleteUserPoolClient, "DeleteUserPoolClient",
+		catalog.ActionCognitoAdminCreateUser, "AdminCreateUser",
+		catalog.ActionCognitoSignUp, "SignUp",
+		catalog.ActionCognitoConfirmSignUp, "ConfirmSignUp",
+		catalog.ActionCognitoInitiateAuth, "InitiateAuth",
+		catalog.ActionCognitoAdminInitiateAuth, "AdminInitiateAuth":
+		s.handleCognito(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCloudControlCreateResource,
+		catalog.ActionCloudControlGetResource,
+		catalog.ActionCloudControlListResources,
+		catalog.ActionCloudControlDeleteResource:
+		s.handleCloudControl(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBCMCreateExport,
+		catalog.ActionBCMGetExport,
+		catalog.ActionBCMListExports,
+		catalog.ActionBCMDeleteExport:
+		s.handleBCMExports(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCEGetCostAndUsage,
+		catalog.ActionCEGetCostForecast:
+		s.handleCostExplorer(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBudgetsCreateBudget,
+		catalog.ActionBudgetsDescribeBudget,
+		catalog.ActionBudgetsDescribeBudgets,
+		catalog.ActionBudgetsDeleteBudget:
+		s.handleBudgets(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCodeDeployCreateApplication,
+		catalog.ActionCodeDeployCreateDeploymentGroup,
+		catalog.ActionCodeDeployCreateDeployment,
+		catalog.ActionCodeDeployGetDeployment,
+		catalog.ActionCodeDeployListDeployments:
+		s.handleCodeDeploy(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCloudFrontCreateDistribution,
+		catalog.ActionCloudFrontGetDistribution,
+		catalog.ActionCloudFrontListDistributions,
+		catalog.ActionCloudFrontDeleteDistribution:
+		s.handleCloudFront(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionELBv2CreateLoadBalancer,
+		catalog.ActionELBv2DescribeLoadBalancers,
+		catalog.ActionELBv2DeleteLoadBalancer,
+		catalog.ActionELBv2CreateTargetGroup,
+		catalog.ActionELBv2DescribeTargetGroups,
+		catalog.ActionELBv2DeleteTargetGroup,
+		catalog.ActionELBv2CreateListener,
+		catalog.ActionELBv2DescribeListeners,
+		catalog.ActionELBv2DeleteListener,
+		catalog.ActionELBv2RegisterTargets,
+		catalog.ActionELBv2DescribeTargetHealth:
+		s.handleELBv2(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionS3VectorsCreateVectorBucket,
+		catalog.ActionS3VectorsListVectorBuckets,
+		catalog.ActionS3VectorsDeleteVectorBucket,
+		catalog.ActionS3VectorsCreateIndex,
+		catalog.ActionS3VectorsListIndexes,
+		catalog.ActionS3VectorsDeleteIndex,
+		catalog.ActionS3VectorsPutVectors,
+		catalog.ActionS3VectorsQueryVectors:
+		s.handleS3Vectors(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris Phase 7.", readOnly, r, eventID,
@@ -972,6 +1098,23 @@ func resolveAction(r *http.Request, body []byte) string {
 			return pricingAction(short)
 		case strings.Contains(strings.ToLower(prefix), "appsync"):
 			return appsyncAction(short)
+		case strings.Contains(strings.ToLower(prefix), "apigateway"):
+			return apiGatewayV2Action(short)
+		case strings.Contains(strings.ToLower(prefix), "cognito"):
+			return cognitoAction(short)
+		case strings.Contains(strings.ToLower(prefix), "cloudcontrol"):
+			return cloudControlAction(short)
+		case strings.Contains(strings.ToLower(prefix), "bcm"),
+			strings.Contains(strings.ToLower(prefix), "dataexports"):
+			return bcmExportAction(short)
+		case strings.Contains(strings.ToLower(prefix), "insightsindex"),
+			strings.EqualFold(prefix, "AWSInsightsIndexService"),
+			strings.EqualFold(prefix, "ce"):
+			return costExplorerAction(short)
+		case strings.Contains(strings.ToLower(prefix), "budget"):
+			return budgetsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "codedeploy"):
+			return codeDeployAction(short)
 		}
 		return short
 	}

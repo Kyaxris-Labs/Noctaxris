@@ -170,11 +170,11 @@ func TestAppSyncCreateAPIKeyAuthAndGraphQLComputeUnavailable(t *testing.T) {
 	apiID, _ := gql["apiId"].(string)
 
 	reject := mustJSONTarget(t, handler, "AWSAppSync.CreateGraphqlApi", "appsync", map[string]any{
-		"name":               "cognito-nope",
-		"authenticationType": "AMAZON_COGNITO_USER_POOLS",
+		"name":               "oidc-nope",
+		"authenticationType": "OPENID_CONNECT",
 	}, now)
 	if reject.Code == http.StatusOK {
-		t.Fatalf("expected Cognito reject, got %s", reject.Body.String())
+		t.Fatalf("expected OIDC reject, got %s", reject.Body.String())
 	}
 
 	schema := mustJSONTarget(t, handler, "AWSAppSync.StartSchemaCreation", "appsync", map[string]any{

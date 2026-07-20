@@ -22,8 +22,9 @@ var (
 const DefaultAppSyncRegion = "us-east-1"
 
 const (
-	AppSyncAuthAPIKey = "API_KEY"
-	AppSyncAuthIAM    = "AWS_IAM"
+	AppSyncAuthAPIKey   = "API_KEY"
+	AppSyncAuthIAM      = "AWS_IAM"
+	AppSyncAuthCognito  = "AMAZON_COGNITO_USER_POOLS"
 )
 
 const appSyncSchema = `
@@ -35,6 +36,10 @@ CREATE TABLE IF NOT EXISTS appsync_apis (
   authentication_type TEXT NOT NULL,
   schema_sdl TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
+  user_pool_id TEXT NOT NULL DEFAULT '',
+  user_pool_region TEXT NOT NULL DEFAULT '',
+  user_pool_client_id TEXT NOT NULL DEFAULT '',
+  user_pool_issuer TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, api_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_appsync_name ON appsync_apis(account_id, name);
@@ -73,6 +78,18 @@ type AppSyncAPI struct {
 	AuthenticationType string
 	SchemaSDL          string
 	CreatedAt          int64
+	UserPoolID         string
+	UserPoolRegion     string
+	UserPoolClientID   string
+	UserPoolIssuer     string
+}
+
+// AppSyncUserPoolConfig is Cognito User Pools auth config for AMAZON_COGNITO_USER_POOLS.
+type AppSyncUserPoolConfig struct {
+	UserPoolID string
+	AwsRegion  string
+	ClientID   string // lab audience / app client id for JWT verify
+	Issuer     string // optional override; default lab issuer on :4566
 }
 
 // AppSyncAPIKey is an API key for API_KEY auth.
@@ -107,6 +124,20 @@ func EnsureAppSyncSchema(db *sql.DB) error {
 	if _, err := db.Exec(appSyncSchema); err != nil {
 		return fmt.Errorf("ensure appsync schema: %w", err)
 	}
+	alters := []string{
+		`ALTER TABLE appsync_apis ADD COLUMN user_pool_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE appsync_apis ADD COLUMN user_pool_region TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE appsync_apis ADD COLUMN user_pool_client_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE appsync_apis ADD COLUMN user_pool_issuer TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return fmt.Errorf("ensure appsync schema alter: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -115,8 +146,13 @@ func (s *Store) EnsureAppSyncSchema() error {
 	return EnsureAppSyncSchema(s.db)
 }
 
-// CreateAppSyncGraphqlAPI creates a GraphQL API. AuthType must be API_KEY or AWS_IAM.
+// CreateAppSyncGraphqlAPI creates a GraphQL API. AuthType: API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS.
 func (s *Store) CreateAppSyncGraphqlAPI(accountID, region, name, authType string) (AppSyncAPI, error) {
+	return s.CreateAppSyncGraphqlAPIWithConfig(accountID, region, name, authType, AppSyncUserPoolConfig{})
+}
+
+// CreateAppSyncGraphqlAPIWithConfig creates a GraphQL API with optional Cognito User Pool config.
+func (s *Store) CreateAppSyncGraphqlAPIWithConfig(accountID, region, name, authType string, pool AppSyncUserPoolConfig) (AppSyncAPI, error) {
 	name = strings.TrimSpace(name)
 	authType = strings.ToUpper(strings.TrimSpace(authType))
 	if name == "" {
@@ -125,8 +161,28 @@ func (s *Store) CreateAppSyncGraphqlAPI(accountID, region, name, authType string
 	if authType == "" {
 		authType = AppSyncAuthAPIKey
 	}
-	if authType != AppSyncAuthAPIKey && authType != AppSyncAuthIAM {
-		return AppSyncAPI{}, fmt.Errorf("%w: authenticationType must be API_KEY or AWS_IAM (Cognito deferred)", ErrAppSyncBadRequest)
+	switch authType {
+	case AppSyncAuthAPIKey, AppSyncAuthIAM:
+		pool = AppSyncUserPoolConfig{}
+	case AppSyncAuthCognito:
+		pool.UserPoolID = strings.TrimSpace(pool.UserPoolID)
+		pool.AwsRegion = strings.TrimSpace(pool.AwsRegion)
+		pool.ClientID = strings.TrimSpace(pool.ClientID)
+		pool.Issuer = strings.TrimSpace(pool.Issuer)
+		if pool.UserPoolID == "" {
+			return AppSyncAPI{}, fmt.Errorf("%w: userPoolConfig.userPoolId required", ErrAppSyncBadRequest)
+		}
+		if pool.ClientID == "" {
+			return AppSyncAPI{}, fmt.Errorf("%w: userPoolConfig clientId (audience) required", ErrAppSyncBadRequest)
+		}
+		if pool.AwsRegion == "" {
+			pool.AwsRegion = DefaultAppSyncRegion
+		}
+		if pool.Issuer == "" {
+			pool.Issuer = AppSyncCognitoIssuer(pool.AwsRegion, pool.UserPoolID)
+		}
+	default:
+		return AppSyncAPI{}, fmt.Errorf("%w: authenticationType must be API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS", ErrAppSyncBadRequest)
 	}
 	if region == "" {
 		region = DefaultAppSyncRegion
@@ -135,9 +191,11 @@ func (s *Store) CreateAppSyncGraphqlAPI(accountID, region, name, authType string
 	arn := fmt.Sprintf("arn:aws:appsync:%s:%s:apis/%s", region, accountID, apiID)
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
-		`INSERT INTO appsync_apis (account_id, api_id, name, arn, authentication_type, schema_sdl, created_at)
-		 VALUES (?, ?, ?, ?, ?, '', ?)`,
+		`INSERT INTO appsync_apis (account_id, api_id, name, arn, authentication_type, schema_sdl, created_at,
+		 user_pool_id, user_pool_region, user_pool_client_id, user_pool_issuer)
+		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
 		accountID, apiID, name, arn, authType, now,
+		pool.UserPoolID, pool.AwsRegion, pool.ClientID, pool.Issuer,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -145,7 +203,16 @@ func (s *Store) CreateAppSyncGraphqlAPI(accountID, region, name, authType string
 		}
 		return AppSyncAPI{}, fmt.Errorf("create graphql api: %w", err)
 	}
-	return AppSyncAPI{APIID: apiID, Name: name, ARN: arn, AuthenticationType: authType, CreatedAt: now}, nil
+	return AppSyncAPI{
+		APIID: apiID, Name: name, ARN: arn, AuthenticationType: authType, CreatedAt: now,
+		UserPoolID: pool.UserPoolID, UserPoolRegion: pool.AwsRegion,
+		UserPoolClientID: pool.ClientID, UserPoolIssuer: pool.Issuer,
+	}, nil
+}
+
+// AppSyncCognitoIssuer builds the lab Cognito issuer URL (ADR-0009 / same as CognitoIssuerURL).
+func AppSyncCognitoIssuer(region, userPoolID string) string {
+	return CognitoIssuerURL(region, userPoolID)
 }
 
 // DeleteAppSyncGraphqlAPI deletes an API and related rows.
@@ -174,10 +241,12 @@ func (s *Store) DeleteAppSyncGraphqlAPI(accountID, apiID string) error {
 func (s *Store) GetAppSyncGraphqlAPI(accountID, apiID string) (AppSyncAPI, error) {
 	var a AppSyncAPI
 	err := s.db.QueryRow(
-		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at FROM appsync_apis
-		 WHERE account_id = ? AND api_id = ?`,
+		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at,
+		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
+		 FROM appsync_apis WHERE account_id = ? AND api_id = ?`,
 		accountID, apiID,
-	).Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt)
+	).Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt,
+		&a.UserPoolID, &a.UserPoolRegion, &a.UserPoolClientID, &a.UserPoolIssuer)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AppSyncAPI{}, ErrAppSyncNotFound
 	}
@@ -190,10 +259,12 @@ func (s *Store) GetAppSyncGraphqlAPI(accountID, apiID string) (AppSyncAPI, error
 // GetAppSyncGraphqlAPIByID returns an API and owning account by api_id (lab: api_id is globally unique).
 func (s *Store) GetAppSyncGraphqlAPIByID(apiID string) (accountID string, api AppSyncAPI, err error) {
 	err = s.db.QueryRow(
-		`SELECT account_id, api_id, name, arn, authentication_type, schema_sdl, created_at FROM appsync_apis
-		 WHERE api_id = ?`,
+		`SELECT account_id, api_id, name, arn, authentication_type, schema_sdl, created_at,
+		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
+		 FROM appsync_apis WHERE api_id = ?`,
 		apiID,
-	).Scan(&accountID, &api.APIID, &api.Name, &api.ARN, &api.AuthenticationType, &api.SchemaSDL, &api.CreatedAt)
+	).Scan(&accountID, &api.APIID, &api.Name, &api.ARN, &api.AuthenticationType, &api.SchemaSDL, &api.CreatedAt,
+		&api.UserPoolID, &api.UserPoolRegion, &api.UserPoolClientID, &api.UserPoolIssuer)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", AppSyncAPI{}, ErrAppSyncNotFound
 	}
@@ -206,8 +277,9 @@ func (s *Store) GetAppSyncGraphqlAPIByID(apiID string) (accountID string, api Ap
 // ListAppSyncGraphqlAPIs lists APIs for an account.
 func (s *Store) ListAppSyncGraphqlAPIs(accountID string) ([]AppSyncAPI, error) {
 	rows, err := s.db.Query(
-		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at FROM appsync_apis
-		 WHERE account_id = ? ORDER BY name`,
+		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at,
+		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
+		 FROM appsync_apis WHERE account_id = ? ORDER BY name`,
 		accountID,
 	)
 	if err != nil {
@@ -217,7 +289,8 @@ func (s *Store) ListAppSyncGraphqlAPIs(accountID string) ([]AppSyncAPI, error) {
 	var out []AppSyncAPI
 	for rows.Next() {
 		var a AppSyncAPI
-		if err := rows.Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt,
+			&a.UserPoolID, &a.UserPoolRegion, &a.UserPoolClientID, &a.UserPoolIssuer); err != nil {
 			return nil, fmt.Errorf("list graphql apis scan: %w", err)
 		}
 		out = append(out, a)

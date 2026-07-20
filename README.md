@@ -59,7 +59,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
   </thead>
   <tbody>
     <tr>
-      <td rowspan="3" align="center" valign="middle">Identity</td>
+      <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
       <td>Users, roles, managed and inline policies, access keys, groups, permissions boundaries, instance profiles, OIDC and SAML IdP CRUD, virtual MFA.</td>
       <td>Service-linked roles, full pagination and tagging parity.</td>
@@ -75,13 +75,18 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Account invites and handshake control-plane beyond MoveAccount.</td>
     </tr>
     <tr>
+      <td>Cognito User Pools</td>
+      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Identity Pools, Hosted UI, full SRP, MFA depth, refresh revoke APIs.</td>
+    </tr>
+    <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
       <td>KMS</td>
       <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
       <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, tags, cross-account grant flows, true AWS-owned managed keys.</td>
     </tr>
     <tr>
-      <td rowspan="10" align="center" valign="middle">Data</td>
+      <td rowspan="11" align="center" valign="middle">Data</td>
       <td>S3</td>
       <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite).</td>
       <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign.</td>
@@ -130,6 +135,11 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>EventBridge Pipes</td>
       <td>Create/Describe/Delete/ListPipes. Source SQS or DynamoDB Streams to target Lambda or SQS. PassRole for pipes.amazonaws.com.</td>
       <td>Enrichment, filter partner matrix, EventBridge bus source.</td>
+    </tr>
+    <tr>
+      <td>S3 Vectors</td>
+      <td>Vector bucket and index CRUD, PutVectors / QueryVectors with in-process cosine or euclidean ranking. Identity authz.</td>
+      <td>Full condition-key matrix, huge dimensional indexes, metadata filter depth.</td>
     </tr>
     <tr>
       <td rowspan="3" align="center" valign="middle">Audit and tags</td>
@@ -184,10 +194,15 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Choice/Wait/Parallel/Map, Express workflows, InputPath/ResultPath depth.</td>
     </tr>
     <tr>
-      <td rowspan="7" align="center" valign="middle">IaC, edge, and governance</td>
+      <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
       <td>CreateStack/DescribeStacks/DeleteStack/ListStacks. JSON templates with AWS::S3::Bucket and AWS::IAM::Role. Unknown types fail closed. Optional PassRole for cloudformation.amazonaws.com.</td>
       <td>YAML templates, intrinsic matrix, ChangeSets, nested stacks, broader resource catalog.</td>
+    </tr>
+    <tr>
+      <td>Cloud Control</td>
+      <td>CreateResource/GetResource/ListResources/DeleteResource for AWS::S3::Bucket and AWS::IAM::Role. Unknown types fail closed. Sync ProgressEvent SUCCESS.</td>
+      <td>Broader type catalog, async operation polling depth.</td>
     </tr>
     <tr>
       <td>Glue</td>
@@ -196,8 +211,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>WAF v2</td>
-      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to a lab resource ARN, labeled allow/block Evaluate helper. No real edge PoP.</td>
-      <td>CloudFront/ALB association, Bot Control, CAPTCHA, full statement catalog.</td>
+      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / ALB / AppSync / Cognito ARNs (fail closed on unknown), labeled allow/block Evaluate helper. No real edge PoP.</td>
+      <td>Real PoP enforcement, Bot Control, CAPTCHA, full statement catalog.</td>
     </tr>
     <tr>
       <td>Config</td>
@@ -220,10 +235,20 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Full DNS integration with Route 53, health checks depth.</td>
     </tr>
     <tr>
-      <td rowspan="7" align="center" valign="middle">Compute</td>
+      <td>CloudFront</td>
+      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins as S3 bucket or API Gateway API id strings. No real PoP.</td>
+      <td>Real CDN edge, signed cookies depth, multi-behavior matrices.</td>
+    </tr>
+    <tr>
+      <td>ELB v2</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/Describe*/Delete*. Target types lambda or ip only. RegisterTargets for Lambda ARN. No EC2.</td>
+      <td>ALB Cognito auth action, path routing depth, listener invoke data path.</td>
+    </tr>
+    <tr>
+      <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS event source mapping with in-process poller, Function URLs lite (NONE or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
-      <td>Non-SQS ESM sources, FilterCriteria depth, provisioned concurrency, weighted aliases, Function URL CORS/CloudFront, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS event source mapping with in-process poller, Function URLs lite (NONE with simple CORS or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
+      <td>Non-SQS ESM sources, FilterCriteria depth, provisioned concurrency, weighted aliases, Function URL CORS config object depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -246,20 +271,46 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
       <td>Full action catalog, approvals, cross-region.</td>
     </tr>
     <tr>
+      <td>CodeDeploy</td>
+      <td>CreateApplication/CreateDeploymentGroup/CreateDeployment/GetDeployment/ListDeployments. Sync Succeeded. Optional PassRole for codedeploy.amazonaws.com. Optional ECS DesiredCount refresh when a group stores an ECS service name.</td>
+      <td>Blue/green traffic shifting, EC2 agent, on-premises instances.</td>
+    </tr>
+    <tr>
       <td>Batch</td>
       <td>CreateComputeEnvironment, CreateJobQueue, RegisterJobDefinition, SubmitJob, Describe*. PassRole for batch.amazonaws.com service role and ecs-tasks.amazonaws.com job role. Nested DinD SubmitJob.</td>
       <td>Array/multi-node jobs, fair-share, Fargate/EC2 capacity fidelity.</td>
     </tr>
     <tr>
       <td>AppSync</td>
-      <td>Create/Get/List/DeleteGraphqlApi, schema store, CreateApiKey, Lambda data source plus one Query resolver, GraphQL POST that Invokes Lambda. Auth API_KEY or AWS_IAM only.</td>
-      <td>Cognito authorizer, Amplify, subscriptions/MQTT, full GraphQL spec, AppSync JS runtimes.</td>
+      <td>Create/Get/List/DeleteGraphqlApi, schema store, CreateApiKey, Lambda data source plus one Query resolver, GraphQL POST that Invokes Lambda. Auth API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS (Bearer JWT via lab Cognito JWKS).</td>
+      <td>Amplify, subscriptions/MQTT, full GraphQL spec, AppSync JS/VTL runtimes, OIDC beyond Cognito.</td>
     </tr>
     <tr>
-      <td rowspan="1" align="center" valign="middle">Billing</td>
+      <td rowspan="1" align="center" valign="middle">API edge</td>
+      <td>API Gateway HTTP API</td>
+      <td>CreateApi/CreateIntegration/CreateAuthorizer/CreateRoute/CreateStage. Lambda AWS_PROXY only. Route auth NONE, JWT (Cognito JWKS), or AWS_IAM (<code>execute-api:Invoke</code>). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
+      <td>REST API v1, WebSocket, HTTP_PROXY, Lambda authorizers, HTTP API resource policies.</td>
+    </tr>
+    <tr>
+      <td rowspan="4" align="center" valign="middle">Billing</td>
       <td>Pricing</td>
       <td>DescribeServices/GetAttributeValues/GetProducts over a tiny static embedded price list. Identity authz.</td>
-      <td>Live AWS price list sync, Cost Explorer, CUR, Budgets.</td>
+      <td>Live AWS price list sync.</td>
+    </tr>
+    <tr>
+      <td>BCM Data Exports</td>
+      <td>CreateExport/GetExport/ListExports/DeleteExport. Sample CSV/JSON under the data root. Identity authz.</td>
+      <td>Scheduled CUR delivery to S3, Parquet variants.</td>
+    </tr>
+    <tr>
+      <td>Cost Explorer</td>
+      <td>GetCostAndUsage and GetCostForecast over seeded lab amounts. Identity authz.</td>
+      <td>Live AWS CE sync, anomaly detection, rightsizing recommendations.</td>
+    </tr>
+    <tr>
+      <td>Budgets</td>
+      <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. Notification stubs stored only (no SNS fan-out).</td>
+      <td>Budget actions that mutate accounts, RI/SP coverage, SNS publish.</td>
     </tr>
   </tbody>
 </table>

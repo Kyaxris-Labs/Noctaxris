@@ -17,7 +17,7 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 | Invoke (sync) | `InvocationType=RequestResponse` (default). One-shot nested container |
 | Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
 | SQS ESM | `CreateEventSourceMapping` for SQS ARNs only. In-process poller ReceiveMessage → sync Invoke → DeleteMessage on success. Lab `BatchSize` max 10. Disable stops polling |
-| Function URLs | `CreateFunctionUrlConfig` with `AuthType` `NONE` or `AWS_IAM`. Lab invoke path `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION` |
+| Function URLs | `CreateFunctionUrlConfig` with `AuthType` `NONE` or `AWS_IAM`. Lab invoke path `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION`. AuthType `NONE` returns simple CORS headers (`Access-Control-Allow-Origin: *`) including OPTIONS preflight |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
 | Resource policy | `AddPermission`, `RemovePermission`, `GetPolicy`. Same-account Invoke allows identity **or** function policy Allow. Cross-account Invoke requires identity **and** function policy Allow |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Default runtime. No host `docker.sock` on the API container. Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed without host Docker |
@@ -188,7 +188,7 @@ aws lambda create-event-source-mapping \
   --endpoint-url "$EP"
 ```
 
-Function URL lite. AuthType `NONE` skips SigV4 on `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION`. AuthType `AWS_IAM` requires SigV4 plus `lambda:InvokeFunctionUrl`.
+Function URL lite. AuthType `NONE` skips SigV4 on `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION` and sets CORS allow-origin `*` (OPTIONS returns 204). AuthType `AWS_IAM` requires SigV4 plus `lambda:InvokeFunctionUrl`. For JWT-protected HTTP fronts, use API Gateway HTTP API rather than Function URLs.
 
 ```bash
 aws lambda create-function-url-config \
@@ -227,7 +227,7 @@ aws lambda invoke \
 - Service-principal cross-account grants on function policies
 - Non-lab private registries (Docker Hub private, third-party hosts). Lab ECR on `127.0.0.1:4566` is supported for Image Invoke
 - FilterCriteria / ReportBatchItemFailures / provisioned pollers / non-SQS ESM sources (Kinesis, DynamoDB Streams, MQ)
-- Function URL CORS depth and CloudFront integration
+- Function URL CORS configuration object depth (simple ACAO headers on NONE are shipped). Prefer API Gateway HTTP API for JWT labs. CloudFront is a config stub only (see [cloudfront.md](cloudfront.md))
 - Rootless DinD
 - Live Firecracker guest zip/Image Invoke on Linux+KVM (opt-in selection and fail-closed probe ship. Real guest boot awaits a Linux+KVM host with kernel/rootfs assets)
 

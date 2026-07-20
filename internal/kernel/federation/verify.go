@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	jose "gopkg.in/go-jose/go-jose.v2"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwtutil"
 )
 
 // Error codes matching STS federation failures.
@@ -213,44 +213,20 @@ func VerifyWebIdentityJWT(token, issuerURL, clientID string, httpClient *http.Cl
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWKS read failed")
 	}
 
-	var jwks jose.JSONWebKeySet
-	if err := json.Unmarshal(body, &jwks); err != nil {
-		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWKS parse failed")
-	}
-
-	jws, err := jose.ParseSigned(token)
+	claimsMap, err := jwtutil.VerifyCompactRS256(token, body)
 	if err != nil {
-		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT parse failed")
-	}
-	var payload []byte
-	var lastErr error
-	for _, key := range jwks.Keys {
-		payload, lastErr = jws.Verify(&key)
-		if lastErr == nil {
-			break
-		}
-	}
-	if payload == nil {
-		// also try RSA from n/e style if needed — Verify above covers JSONWebKey
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT signature verification failed")
 	}
-
-	var claims struct {
-		Iss string `json:"iss"`
-		Sub string `json:"sub"`
-		Aud any    `json:"aud"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT claims parse failed")
-	}
-	if !issuerMatches(claims.Iss, issuerURL) {
+	iss := jwtutil.ClaimString(claimsMap, "iss")
+	sub := jwtutil.ClaimString(claimsMap, "sub")
+	if !issuerMatches(iss, issuerURL) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT iss mismatch")
 	}
-	auds := normalizeAud(claims.Aud)
+	auds := normalizeAud(claimsMap["aud"])
 	if !containsString(auds, clientID) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT aud mismatch")
 	}
-	return OIDCClaims{Issuer: claims.Iss, Subject: claims.Sub, Audience: auds}, nil
+	return OIDCClaims{Issuer: iss, Subject: sub, Audience: auds}, nil
 }
 
 func issuerMatches(iss, configured string) bool {

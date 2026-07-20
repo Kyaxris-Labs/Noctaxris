@@ -570,7 +570,7 @@ const (
 	ActionPricingGetProducts        = "pricing:GetProducts"
 )
 
-// AppSync lab actions (v5 Stream D). Auth: API_KEY or AWS_IAM only (no Cognito until v6).
+// AppSync lab actions (v5 Stream D). Cognito User Pools auth added in v6.
 const (
 	ActionAppSyncCreateGraphqlApi    = "appsync:CreateGraphqlApi"
 	ActionAppSyncDeleteGraphqlApi    = "appsync:DeleteGraphqlApi"
@@ -581,6 +581,112 @@ const (
 	ActionAppSyncCreateDataSource    = "appsync:CreateDataSource"
 	ActionAppSyncCreateResolver      = "appsync:CreateResolver"
 	ActionAppSyncGraphQL             = "appsync:GraphQL"
+)
+
+// API Gateway HTTP API (v2) lab actions (v6 Stream B).
+const (
+	ActionAPIGatewayV2CreateApi         = "apigatewayv2:CreateApi"
+	ActionAPIGatewayV2GetApi            = "apigatewayv2:GetApi"
+	ActionAPIGatewayV2DeleteApi         = "apigatewayv2:DeleteApi"
+	ActionAPIGatewayV2GetApis           = "apigatewayv2:GetApis"
+	ActionAPIGatewayV2CreateIntegration = "apigatewayv2:CreateIntegration"
+	ActionAPIGatewayV2CreateAuthorizer  = "apigatewayv2:CreateAuthorizer"
+	ActionAPIGatewayV2CreateRoute       = "apigatewayv2:CreateRoute"
+	ActionAPIGatewayV2CreateStage       = "apigatewayv2:CreateStage"
+)
+
+// execute-api invoke (HTTP API IAM authorizer). Not an HTTP API resource policy.
+const ActionExecuteAPIInvoke = "execute-api:Invoke"
+
+// Cognito User Pools lab actions (v6 Stream A).
+const (
+	ActionCognitoCreateUserPool         = "cognito-idp:CreateUserPool"
+	ActionCognitoDescribeUserPool       = "cognito-idp:DescribeUserPool"
+	ActionCognitoListUserPools          = "cognito-idp:ListUserPools"
+	ActionCognitoDeleteUserPool         = "cognito-idp:DeleteUserPool"
+	ActionCognitoCreateUserPoolClient   = "cognito-idp:CreateUserPoolClient"
+	ActionCognitoDescribeUserPoolClient = "cognito-idp:DescribeUserPoolClient"
+	ActionCognitoListUserPoolClients    = "cognito-idp:ListUserPoolClients"
+	ActionCognitoDeleteUserPoolClient   = "cognito-idp:DeleteUserPoolClient"
+	ActionCognitoAdminCreateUser        = "cognito-idp:AdminCreateUser"
+	ActionCognitoSignUp                 = "cognito-idp:SignUp"
+	ActionCognitoConfirmSignUp          = "cognito-idp:ConfirmSignUp"
+	ActionCognitoInitiateAuth           = "cognito-idp:InitiateAuth"
+	ActionCognitoAdminInitiateAuth      = "cognito-idp:AdminInitiateAuth"
+)
+
+// Cloud Control API lab actions (v6 Stream D).
+const (
+	ActionCloudControlCreateResource = "cloudcontrol:CreateResource"
+	ActionCloudControlGetResource    = "cloudcontrol:GetResource"
+	ActionCloudControlListResources  = "cloudcontrol:ListResources"
+	ActionCloudControlDeleteResource = "cloudcontrol:DeleteResource"
+)
+
+// BCM Data Exports lab actions (v6 Stream D).
+const (
+	ActionBCMCreateExport = "bcm-data-exports:CreateExport"
+	ActionBCMGetExport    = "bcm-data-exports:GetExport"
+	ActionBCMListExports  = "bcm-data-exports:ListExports"
+	ActionBCMDeleteExport = "bcm-data-exports:DeleteExport"
+)
+
+// Cost Explorer lab actions (v6 Stream D).
+const (
+	ActionCEGetCostAndUsage = "ce:GetCostAndUsage"
+	ActionCEGetCostForecast = "ce:GetCostForecast"
+)
+
+// Budgets lab actions (v6 Stream D).
+const (
+	ActionBudgetsCreateBudget    = "budgets:CreateBudget"
+	ActionBudgetsDescribeBudget  = "budgets:DescribeBudget"
+	ActionBudgetsDescribeBudgets = "budgets:DescribeBudgets"
+	ActionBudgetsDeleteBudget    = "budgets:DeleteBudget"
+)
+
+// CodeDeploy lab actions (v6 Stream D).
+const (
+	ActionCodeDeployCreateApplication     = "codedeploy:CreateApplication"
+	ActionCodeDeployCreateDeploymentGroup = "codedeploy:CreateDeploymentGroup"
+	ActionCodeDeployCreateDeployment      = "codedeploy:CreateDeployment"
+	ActionCodeDeployGetDeployment         = "codedeploy:GetDeployment"
+	ActionCodeDeployListDeployments       = "codedeploy:ListDeployments"
+)
+
+// CloudFront lab actions (v6 Stream C).
+const (
+	ActionCloudFrontCreateDistribution = "cloudfront:CreateDistribution"
+	ActionCloudFrontGetDistribution    = "cloudfront:GetDistribution"
+	ActionCloudFrontListDistributions  = "cloudfront:ListDistributions"
+	ActionCloudFrontDeleteDistribution = "cloudfront:DeleteDistribution"
+)
+
+// Elastic Load Balancing v2 lab actions (v6 Stream C).
+const (
+	ActionELBv2CreateLoadBalancer    = "elasticloadbalancing:CreateLoadBalancer"
+	ActionELBv2DescribeLoadBalancers = "elasticloadbalancing:DescribeLoadBalancers"
+	ActionELBv2DeleteLoadBalancer    = "elasticloadbalancing:DeleteLoadBalancer"
+	ActionELBv2CreateTargetGroup     = "elasticloadbalancing:CreateTargetGroup"
+	ActionELBv2DescribeTargetGroups  = "elasticloadbalancing:DescribeTargetGroups"
+	ActionELBv2DeleteTargetGroup     = "elasticloadbalancing:DeleteTargetGroup"
+	ActionELBv2CreateListener        = "elasticloadbalancing:CreateListener"
+	ActionELBv2DescribeListeners     = "elasticloadbalancing:DescribeListeners"
+	ActionELBv2DeleteListener        = "elasticloadbalancing:DeleteListener"
+	ActionELBv2RegisterTargets       = "elasticloadbalancing:RegisterTargets"
+	ActionELBv2DescribeTargetHealth  = "elasticloadbalancing:DescribeTargetHealth"
+)
+
+// S3 Vectors lab actions (v6 Stream C).
+const (
+	ActionS3VectorsCreateVectorBucket = "s3vectors:CreateVectorBucket"
+	ActionS3VectorsListVectorBuckets  = "s3vectors:ListVectorBuckets"
+	ActionS3VectorsDeleteVectorBucket = "s3vectors:DeleteVectorBucket"
+	ActionS3VectorsCreateIndex        = "s3vectors:CreateIndex"
+	ActionS3VectorsListIndexes        = "s3vectors:ListIndexes"
+	ActionS3VectorsDeleteIndex        = "s3vectors:DeleteIndex"
+	ActionS3VectorsPutVectors         = "s3vectors:PutVectors"
+	ActionS3VectorsQueryVectors       = "s3vectors:QueryVectors"
 )
 
 // CodeBuild lab actions (v4 Track B).
@@ -1050,7 +1156,71 @@ func KnownAction(action string) bool {
 		ActionAppSyncCreateApiKey,
 		ActionAppSyncCreateDataSource,
 		ActionAppSyncCreateResolver,
-		ActionAppSyncGraphQL:
+		ActionAppSyncGraphQL,
+		ActionAPIGatewayV2CreateApi,
+		ActionAPIGatewayV2GetApi,
+		ActionAPIGatewayV2DeleteApi,
+		ActionAPIGatewayV2GetApis,
+		ActionAPIGatewayV2CreateIntegration,
+		ActionAPIGatewayV2CreateAuthorizer,
+		ActionAPIGatewayV2CreateRoute,
+		ActionAPIGatewayV2CreateStage,
+		ActionExecuteAPIInvoke,
+		ActionCognitoCreateUserPool,
+		ActionCognitoDescribeUserPool,
+		ActionCognitoListUserPools,
+		ActionCognitoDeleteUserPool,
+		ActionCognitoCreateUserPoolClient,
+		ActionCognitoDescribeUserPoolClient,
+		ActionCognitoListUserPoolClients,
+		ActionCognitoDeleteUserPoolClient,
+		ActionCognitoAdminCreateUser,
+		ActionCognitoSignUp,
+		ActionCognitoConfirmSignUp,
+		ActionCognitoInitiateAuth,
+		ActionCognitoAdminInitiateAuth,
+		ActionCloudControlCreateResource,
+		ActionCloudControlGetResource,
+		ActionCloudControlListResources,
+		ActionCloudControlDeleteResource,
+		ActionBCMCreateExport,
+		ActionBCMGetExport,
+		ActionBCMListExports,
+		ActionBCMDeleteExport,
+		ActionCEGetCostAndUsage,
+		ActionCEGetCostForecast,
+		ActionBudgetsCreateBudget,
+		ActionBudgetsDescribeBudget,
+		ActionBudgetsDescribeBudgets,
+		ActionBudgetsDeleteBudget,
+		ActionCodeDeployCreateApplication,
+		ActionCodeDeployCreateDeploymentGroup,
+		ActionCodeDeployCreateDeployment,
+		ActionCodeDeployGetDeployment,
+		ActionCodeDeployListDeployments,
+		ActionCloudFrontCreateDistribution,
+		ActionCloudFrontGetDistribution,
+		ActionCloudFrontListDistributions,
+		ActionCloudFrontDeleteDistribution,
+		ActionELBv2CreateLoadBalancer,
+		ActionELBv2DescribeLoadBalancers,
+		ActionELBv2DeleteLoadBalancer,
+		ActionELBv2CreateTargetGroup,
+		ActionELBv2DescribeTargetGroups,
+		ActionELBv2DeleteTargetGroup,
+		ActionELBv2CreateListener,
+		ActionELBv2DescribeListeners,
+		ActionELBv2DeleteListener,
+		ActionELBv2RegisterTargets,
+		ActionELBv2DescribeTargetHealth,
+		ActionS3VectorsCreateVectorBucket,
+		ActionS3VectorsListVectorBuckets,
+		ActionS3VectorsDeleteVectorBucket,
+		ActionS3VectorsCreateIndex,
+		ActionS3VectorsListIndexes,
+		ActionS3VectorsDeleteIndex,
+		ActionS3VectorsPutVectors,
+		ActionS3VectorsQueryVectors:
 		return true
 	default:
 		return false

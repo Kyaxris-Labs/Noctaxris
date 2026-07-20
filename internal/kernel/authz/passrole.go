@@ -38,6 +38,20 @@ const ServicePrincipalCodeBuild = "codebuild.amazonaws.com"
 // ServicePrincipalBatch is the AWS Batch service principal used in role trust.
 const ServicePrincipalBatch = "batch.amazonaws.com"
 
+// ServicePrincipalCodeDeploy is the AWS CodeDeploy service principal used in role trust.
+const ServicePrincipalCodeDeploy = "codedeploy.amazonaws.com"
+
+// ServicePrincipalCloudControl is the Cloud Control API service principal used in role trust.
+const ServicePrincipalCloudControl = "cloudformation.amazonaws.com"
+
+// ServicePrincipalAPIGateway is the API Gateway service principal used in role trust
+// for HTTP API integrations and related RoleArn configure paths.
+const ServicePrincipalAPIGateway = "apigateway.amazonaws.com"
+
+// ServicePrincipalCognitoIDP is the Cognito User Pools service principal used in
+// role trust when Cognito configure APIs take RoleArn.
+const ServicePrincipalCognitoIDP = "cognito-idp.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

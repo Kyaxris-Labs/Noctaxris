@@ -223,7 +223,7 @@ func parseFunctionURLPath(path string) (accountID, functionName string, ok bool)
 	return parts[1], parts[2], true
 }
 
-// handleFunctionURLInvoke serves POST/GET on /lambda-url/{account}/{function}.
+// handleFunctionURLInvoke serves POST/GET/OPTIONS on /lambda-url/{account}/{function}.
 func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request) {
 	requestID := newRequestID()
 	eventID := newRequestID()
@@ -240,6 +240,15 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// CORS lite for AuthType NONE (lab browser invoke). IAM URLs stay SigV4-only.
+	if u.AuthType == store.FunctionURLAuthNone {
+		setFunctionURLCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 	}
 
 	var verified *authn.Verified
@@ -290,6 +299,16 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invoke failed", http.StatusInternalServerError)
 		return
 	}
+	if u.AuthType == store.FunctionURLAuthNone {
+		setFunctionURLCORSHeaders(w)
+	}
 	s.writeLambdaInvokeREST(w, requestID, result, executedVersion)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "InvokeFunctionUrl", false)
+}
+
+func setFunctionURLCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Max-Age", "86400")
 }

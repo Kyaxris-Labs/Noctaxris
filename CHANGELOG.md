@@ -1,8 +1,30 @@
 # Changelog
 
+## v6 (lab cores shipped)
+
+Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the existing loopback listener, AppSync Cognito auth, edge/governance stubs toward ~50 services, and go-jose v4 for the single JWT stack. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI).
+
+### Included
+
+- go-jose upgrade to `github.com/go-jose/go-jose/v4` with shared RS256 JWKS verify helper (federation + Cognito/Gateway/AppSync)
+- Cognito User Pools lite: pool/client CRUD, AdminCreateUser / SignUp, InitiateAuth USER_PASSWORD_AUTH, RS256 ID and access tokens, JWKS on `:4566`
+- API Gateway HTTP API lite: Api/Integration/Authorizer/Route/Stage, Lambda AWS_PROXY, NONE/JWT/IAM authorizers, optional CredentialsArn PassRole, invoke on `/http-api/...`
+- AppSync `AMAZON_COGNITO_USER_POOLS` Bearer JWT auth beside API_KEY and AWS_IAM
+- WAF AssociateWebACL accepts lab HTTP API ARNs (fail closed on unknown). Function URL NONE CORS lite
+- CloudFront distribution stub (S3 or Gateway origin strings)
+- ELBv2 lite (lambda/ip targets only)
+- S3 Vectors lite (put/query cosine or euclidean)
+- Cloud Control lite for AWS::S3::Bucket and AWS::IAM::Role
+- BCM Data Exports lite (sample file under data root)
+- Cost Explorer lite (seeded GetCostAndUsage / GetCostForecast)
+- Budgets lite (CRUD, notification stubs stored only)
+- CodeDeploy lite (sync Succeeded, optional ECS DesiredCount hook, PassRole)
+
+Deferred depth: [docs/services/index.md](docs/services/index.md). REST API v1, Cognito Identity Pools / Hosted UI, real CloudFront PoPs, and live Firecracker guest boot remain deferred.
+
 ## v5 (lab cores shipped)
 
-EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP depth, ECS CreateService, DynamoDB Streams, EventBridge Pipes, and nine more lab services toward ~40 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Nested Amazon MQ broker and Cognito remain deferred.
+EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP depth, ECS CreateService, DynamoDB Streams, EventBridge Pipes, and nine more lab services toward ~40 total. Verification bar is `go test ./...`. Per-service Compose CLI smoke lives on each `docs/services/` page (operator-run, not claimed as CI). Nested Amazon MQ broker remains deferred.
 
 ### Included
 
@@ -20,10 +42,10 @@ EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP dept
 - Route 53 lite: hosted zones plus A/CNAME record changes
 - Cloud Map lite: namespace/service/instance register and DiscoverInstances
 - Pricing lite: GetProducts over a static embedded catalog
-- AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (no Cognito)
+- AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (Cognito auth added in v6)
 - CloudWatch Logs delete and DescribeLogStreams polish
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, Cognito User Pools, API Gateway HTTP API, IoT Core, MSK, and live Firecracker guest boot remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, IoT Core, MSK, and live Firecracker guest boot remain deferred.
 
 ## v4 (lab cores shipped)
 

@@ -4,10 +4,10 @@ go 1.26.4
 
 require (
 	github.com/docker/docker v28.3.3+incompatible
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.54.0
-	gopkg.in/go-jose/go-jose.v2 v2.6.3
 	modernc.org/sqlite v1.54.0
 )
 
