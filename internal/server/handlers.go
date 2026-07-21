@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -308,13 +309,21 @@ func (s *Server) handleAssumeRole(
 	}
 
 	callerDocs := s.identityDocs(verified.Principal)
+	trustKeys := s.conditionKeys(verified)
+	if ext := strings.TrimSpace(params.Get("ExternalId")); ext != "" {
+		trustKeys["sts:ExternalId"] = ext
+	}
+	if src := strings.TrimSpace(params.Get("SourceIdentity")); src != "" {
+		trustKeys["sts:SourceIdentity"] = src
+		trustKeys["aws:SourceIdentity"] = src
+	}
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
 			Principal:     verified.Principal,
 			Action:        catalog.ActionSTSAssumeRole,
 			Resource:      roleARN,
 			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
+			ConditionKeys: trustKeys,
 		},
 		CallerIdentityDocs: callerDocs,
 		TrustPolicyDoc:     trust,
@@ -496,17 +505,10 @@ func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 	sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID)
 
 	boundaryDoc := ""
+	boundaryUser := ""
 	switch verified.Principal.Kind {
 	case identity.KindUser:
-		if verified.Principal.UserName != "" {
-			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "user", verified.Principal.UserName)
-			if err != nil {
-				return authz.EvalInputs{}, false
-			}
-			if ok {
-				boundaryDoc = doc
-			}
-		}
+		boundaryUser = verified.Principal.UserName
 	case identity.KindRole:
 		if verified.Principal.RoleName != "" {
 			doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "role", verified.Principal.RoleName)
@@ -516,6 +518,30 @@ func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 			if ok {
 				boundaryDoc = doc
 			}
+		}
+	case identity.KindFederated:
+		// GetFederationToken: identity ∩ session from calling IAM user; empty session Denies.
+		if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.FederatedUser != "" {
+			if ak.UserName != "" {
+				docs = s.identityDocs(identity.UserPrincipal(ak.AccountID, ak.UserName, verified.AccessKeyID))
+				boundaryUser = ak.UserName
+			} else if ak.IsRoot {
+				docs = []string{`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`}
+			} else {
+				docs = nil
+			}
+			if ak.SessionPolicy == "" {
+				sessionDocs = []string{`{"Version":"2012-10-17","Statement":[]}`}
+			}
+		}
+	}
+	if boundaryUser != "" {
+		doc, ok, err := s.store.PermissionsBoundaryDoc(verified.AccountID, "user", boundaryUser)
+		if err != nil {
+			return authz.EvalInputs{}, false
+		}
+		if ok {
+			boundaryDoc = doc
 		}
 	}
 
@@ -595,18 +621,34 @@ func (s *Server) authorizeDataplaneOR(
 	return true
 }
 
+func mergeEncryptionContextKeys(keys map[string]string, encCtx map[string]string) {
+	if keys == nil || len(encCtx) == 0 {
+		return
+	}
+	sorted := make([]string, 0, len(encCtx))
+	for k, v := range encCtx {
+		keys["kms:EncryptionContext:"+k] = v
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	keys["kms:EncryptionContextKeys"] = strings.Join(sorted, ",")
+}
+
 // authorizeDataplaneKMS applies SCP/RCP, EvaluateKMS, then always intersects
 // boundary (when set, non-root) and session (when present).
+// encCtx populates kms:EncryptionContext:* and kms:EncryptionContextKeys.
 func (s *Server) authorizeDataplaneKMS(
 	verified *authn.Verified,
 	action, resource, keyPolicy string,
 	grantSatisfied bool,
+	encCtx map[string]string,
 ) bool {
 	in, ok := s.evalInputs(verified)
 	if !ok {
 		return false
 	}
 	ctx := s.requestContext(verified, action, resource)
+	mergeEncryptionContextKeys(ctx.ConditionKeys, encCtx)
 	if authz.OrgFiltersDeny(ctx, in) {
 		return false
 	}

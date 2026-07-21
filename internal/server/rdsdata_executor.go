@@ -13,8 +13,9 @@ import (
 const nestedRDSDataExecutorMarker = `{"noctaxrisExecutor":"nested-psql"}`
 
 // preferNestedRDSDataExecute runs SQL via psql in the nested Postgres container
-// when DinD is configured and the instance has a ContainerID. Otherwise it uses
-// the recorded-statement stub (unit tests / no engine). No pgx dependency.
+// when DinD is configured and the instance has a ContainerID. Without an injected
+// test executor override, missing engine or compute client fails closed
+// (DatabaseUnavailableException). No pgx dependency.
 func (s *Server) preferNestedRDSDataExecute(
 	ctx context.Context,
 	accountID string,
@@ -24,12 +25,12 @@ func (s *Server) preferNestedRDSDataExecute(
 	if override := getRDSDataExecutorOverride(); override != nil {
 		return override.Execute(req)
 	}
-	if strings.TrimSpace(inst.ContainerID) == "" {
-		return (&store.StubRDSDataExecutor{}).Execute(req)
+	if strings.TrimSpace(inst.ContainerID) == "" || inst.DBInstanceStatus != "available" {
+		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
-		return (&store.StubRDSDataExecutor{}).Execute(req)
+		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
 	user, password, err := s.rdsDataMasterCreds(accountID, inst, req.SecretARN)
 	if err != nil {

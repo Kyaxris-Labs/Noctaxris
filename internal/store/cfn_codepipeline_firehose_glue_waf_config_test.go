@@ -117,7 +117,7 @@ func TestFirehosePutToLambdaEnqueuesInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddFunctionPermission(account, "fh-handler", "fh-allow", "lambda:InvokeFunction", "firehose.amazonaws.com", ""); err != nil {
+	if _, err := st.AddFunctionPermission(account, "fh-handler", "fh-allow", "lambda:InvokeFunction", "firehose.amazonaws.com", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	_, err = st.CreateFirehoseStream(account, "us-east-1", "lab-lam", "", "Lambda", "", "", fn.FunctionARN)
@@ -207,7 +207,13 @@ func TestWAFEvaluateBlock(t *testing.T) {
 func TestConfigRecorderAndCompliance(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
+	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutConfigDeliveryChannel(account, "default", "config-bucket", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.StartConfigRecorder(account, "default"); err != nil {
@@ -218,7 +224,10 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 		t.Fatalf("recorder: %v %#v", err, rec)
 	}
 	results, err := st.DescribeConfigComplianceByRule(account, "lab")
-	if err != nil || len(results) == 0 {
+	if err != nil || len(results) != 1 || results[0].ComplianceType != "NOT_APPLICABLE" {
 		t.Fatalf("compliance: %v %#v", err, results)
+	}
+	if _, err := st.PutConfigDeliveryChannel(account, "missing", "no-such-bucket", "", ""); err == nil {
+		t.Fatal("expected missing bucket rejection")
 	}
 }

@@ -79,6 +79,36 @@ func TestComposeEngineHasNoHostPortPublish(t *testing.T) {
 	}
 }
 
+func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noctaxris := serviceBlock(string(b), "noctaxris")
+	for _, line := range strings.Split(noctaxris, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if idx := strings.Index(trimmed, " #"); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if strings.Contains(trimmed, "NOCTAXRIS_ALLOW_OPEN_DATA_PLANE") {
+			t.Fatal("default Compose must not set NOCTAXRIS_ALLOW_OPEN_DATA_PLANE (opt-in for NONE labs only)")
+		}
+	}
+	if !strings.Contains(noctaxris, "NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN") {
+		t.Fatal("noctaxris must set NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN for 0.0.0.0 container bind")
+	}
+	overlay, err := os.ReadFile("compose.lab-open.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(overlay), `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"`) {
+		t.Fatal("compose.lab-open.yaml must opt in NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1")
+	}
+}
+
 func TestComposeSetsDockerHost(t *testing.T) {
 	b, err := os.ReadFile("compose.yaml")
 	if err != nil {

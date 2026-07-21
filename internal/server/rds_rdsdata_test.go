@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func mustRDSForm(t *testing.T, handler http.Handler, values url.Values, now time.Time) *httptest.ResponseRecorder {
@@ -93,7 +95,7 @@ func TestRDSRejectsMySQL(t *testing.T) {
 	}
 }
 
-func TestRDSDataExecuteStatementStub(t *testing.T) {
+func TestRDSDataExecuteStatementUnavailableAndStubOverride(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -115,6 +117,19 @@ func TestRDSDataExecuteStatementStub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	unavailable := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "postgres",
+		"sql":         "SELECT 1",
+	}, now)
+	if unavailable.Code != http.StatusGatewayTimeout || !strings.Contains(unavailable.Body.String(), "DatabaseUnavailableException") {
+		t.Fatalf("want DatabaseUnavailableException, got status=%d body=%q", unavailable.Code, unavailable.Body.String())
+	}
+
+	srv.SetRDSDataExecutor(&store.StubRDSDataExecutor{})
+	t.Cleanup(func() { srv.SetRDSDataExecutor(nil) })
 
 	exec := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
 		"resourceArn": inst.DBInstanceARN,
@@ -147,21 +162,22 @@ func TestRDSDataExecuteStatementStub(t *testing.T) {
 		"secretArn":   inst.MasterUserSecretARN,
 		"database":    "postgres",
 	}, now)
-	if begin.Code != http.StatusOK {
-		t.Fatalf("BeginTransaction status=%d body=%q", begin.Code, begin.Body.String())
-	}
-	var beginOut map[string]any
-	_ = json.Unmarshal(begin.Body.Bytes(), &beginOut)
-	txnID, _ := beginOut["transactionId"].(string)
-	if txnID == "" {
-		t.Fatalf("missing transactionId: %s", begin.Body.String())
+	if begin.Code != http.StatusNotImplemented {
+		t.Fatalf("BeginTransaction status=%d want 501 body=%q", begin.Code, begin.Body.String())
 	}
 	commit := mustJSONTarget(t, handler, "AmazonRDSDataService.CommitTransaction", "rds-data", map[string]any{
+		"transactionId": "txn-does-not-exist",
+	}, now)
+	if commit.Code != http.StatusNotImplemented {
+		t.Fatalf("CommitTransaction status=%d want 501 body=%q", commit.Code, commit.Body.String())
+	}
+	withTxn := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
 		"resourceArn":   inst.DBInstanceARN,
 		"secretArn":     inst.MasterUserSecretARN,
-		"transactionId": txnID,
+		"sql":           "SELECT 1",
+		"transactionId": "txn-ignored",
 	}, now)
-	if commit.Code != http.StatusOK {
-		t.Fatalf("CommitTransaction status=%d body=%q", commit.Code, commit.Body.String())
+	if withTxn.Code != http.StatusNotImplemented {
+		t.Fatalf("Execute with transactionId status=%d want 501 body=%q", withTxn.Code, withTxn.Body.String())
 	}
 }

@@ -24,10 +24,11 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` | empty | Comma-separated image reference prefixes allowed beyond the built-in lab pin list. Registry hosts require `@sha256:` digests. |
 | `NOCTAXRIS_ALLOW_REMOTE_JWKS` | empty | Set to `1` to allow non-lab JWT issuer JWKS fetch (API Gateway / AppSync / STS web identity). Fail-closed when unset. |
 | `NOCTAXRIS_JWKS_HOST_ALLOWLIST` | empty | Comma-separated `host` or `host:port` entries required when remote JWKS is enabled. Private, loopback, link-local, and metadata targets are rejected. |
-| `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN` | empty | Set to `1` to allow non-loopback bind without TLS (Compose container bind with host publish on `127.0.0.1`). Prefer TLS instead for real non-loopback exposure. |
-| `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE` | empty | Set to `1` to allow Function URL / HTTP API `NONE` when listen is non-loopback. Loopback listen allows `NONE` without this env. |
-| `NOCTAXRIS_SNS_HTTP_ALLOWLIST` | empty | Comma-separated exact HTTP(S) URLs allowed for SNS subscriptions beyond the lab catcher on `127.0.0.1:4566/_noctaxris/sns-http-catcher`. |
-| `NOCTAXRIS_INJECT_HOST_GATEWAY` | enabled | Set to `0` to omit `host.docker.internal:host-gateway` ExtraHosts on nested Lambda/ECS containers. |
+| `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN` | empty | Set to `1` to allow non-loopback bind without TLS. Compose sets this for the container `0.0.0.0` bind while host publish stays `127.0.0.1:4566`. Prefer TLS for any intentional non-loopback exposure. |
+| `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE` | empty | Set to `1` to allow Function URL / HTTP API `NONE` when listen is non-loopback (Compose leaves this unset; use `docker/compose.lab-open.yaml` overlay). Loopback listen allows `NONE` without this env. |
+| `NOCTAXRIS_SNS_HTTP_ALLOWLIST` | empty | Comma-separated exact HTTP(S) URLs allowed for SNS subscriptions beyond the lab catcher on `127.0.0.1:4566/_noctaxris/sns-http-catcher`. Listed URLs still reject private, loopback, link-local, and metadata hosts; delivery does not follow redirects. |
+| `NOCTAXRIS_INJECT_HOST_GATEWAY` | enabled | Set to `0` to omit `host.docker.internal:host-gateway` ExtraHosts on nested Lambda function containers. |
+| `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY` | disabled | Set to `1` to inject `host.docker.internal:host-gateway` ExtraHosts on nested ECS / CodeBuild / Batch containers (Internal `noctaxris-ecs`). Default off. |
 | `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Lambda and ECS compute runtime: `dind` (default) or `microvm` (opt-in). Unknown values fail process start. Nested data engines use the DinD path. |
 | `NOCTAXRIS_FIRECRACKER_BIN` | empty | Optional path to the Firecracker binary when `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. If empty, `firecracker` must be on `PATH`. |
 | `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
@@ -54,7 +55,7 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 
 ## Schema, backup, and upgrades
 
-Schema evolution is additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` row is maintained for operators and tests. There is no down-migration.
+Schema evolution is additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` marker row exists (currently `1`) for operators and tests; migrations remain independent `Ensure*` helpers and do not use that integer as a migration ledger. There is no down-migration.
 
 Operator runbook (stop → tar volumes → restore verify → start, plus image-upgrade notes and the single-replica rule): [ops.md](ops.md).
 

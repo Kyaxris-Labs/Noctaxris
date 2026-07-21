@@ -1,0 +1,11 @@
+# Opt-in overlay for CTF labs that need Function URL / HTTP API AuthType NONE
+# on the Compose container bind (0.0.0.0). Default compose.yaml leaves this unset.
+#
+# Usage (from docker/):
+#   docker compose -f compose.yaml -f compose.lab-open.yaml up --build
+#
+# Keep host publish on 127.0.0.1:4566. Do not remap to 0.0.0.0 without TLS.
+services:
+  noctaxris:
+    environment:
+      NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"

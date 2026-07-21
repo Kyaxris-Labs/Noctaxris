@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	actionSQSSendMessage      = "sqs:SendMessage"
+	actionSQSSendMessage       = "sqs:SendMessage"
 	actionLambdaInvokeFunction = "lambda:InvokeFunction"
-	actionSNSPublish          = "sns:Publish"
-	actionLogsPutLogEvents    = "logs:PutLogEvents"
-	actionKinesisPutRecord    = "kinesis:PutRecord"
-	actionSFNStartExecution   = "states:StartExecution"
+	actionSNSPublish           = "sns:Publish"
+	actionLogsPutLogEvents     = "logs:PutLogEvents"
+	actionKinesisPutRecord     = "kinesis:PutRecord"
+	actionSFNStartExecution    = "states:StartExecution"
+	actionEventsPutEvents      = "events:PutEvents"
 )
 
 // LabEventBridgeLogStream is the auto-created stream name for CloudWatch Logs targets.
@@ -741,7 +742,7 @@ func (s *Store) matchAndRecordEventTargets(accountID, busName, entryID, source, 
 			return err
 		}
 		for _, tgt := range targets {
-			if !s.eventTargetDeliveryAuthorized(accountID, tgt) {
+			if !s.eventTargetDeliveryAuthorized(accountID, rule.ARN, tgt) {
 				log.Printf("events delivery skipped entry=%s rule=%s target=%s reason=unauthorized",
 					entryID, rule.ARN, tgt.ARN)
 				continue
@@ -804,19 +805,23 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 	var deliverErr error
 	switch {
 	case strings.HasPrefix(arn, "arn:aws:sqs:"):
-		queueName, err := queueNameFromARN(arn)
+		queueAccount, queueName, err := s.resolveSQSEndpoint(accountID, arn)
 		if err != nil {
 			deliverErr = err
 			break
 		}
-		_, deliverErr = s.SendMessage(accountID, queueName, []byte(body), false, nil, "", nil)
+		_, deliverErr = s.SendMessage(queueAccount, queueName, []byte(body), false, nil, "", nil)
 	case strings.HasPrefix(arn, "arn:aws:lambda:"):
-		functionName, qualifier := ParseFunctionQualifier(arn)
-		if functionName == "" {
+		fnAccount, functionName, ok := ParseLambdaARNFromSFNResource(arn)
+		if !ok || functionName == "" {
 			deliverErr = fmt.Errorf("empty function name")
 			break
 		}
-		_, deliverErr = s.EnqueueAsyncInvoke(accountID, functionName, qualifier, body)
+		if fnAccount == "" {
+			fnAccount = accountID
+		}
+		_, qualifier := ParseFunctionQualifier(arn)
+		_, deliverErr = s.EnqueueAsyncInvoke(fnAccount, functionName, qualifier, body)
 	case strings.HasPrefix(arn, "arn:aws:sns:"):
 		topic, err := s.GetTopicByARN(arn)
 		if err != nil {
@@ -926,7 +931,7 @@ func parseKinesisStreamNameFromARN(arn string) (string, error) {
 	return name, nil
 }
 
-func (s *Store) eventTargetDeliveryAuthorized(accountID string, tgt EventTarget) bool {
+func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt EventTarget) bool {
 	arn := strings.TrimSpace(tgt.ARN)
 	action, ok := eventTargetDeliveryAction(arn)
 	if !ok {
@@ -941,7 +946,7 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID string, tgt EventTarget)
 			strings.Contains(arn, ":stateMachine:") {
 			return false
 		}
-		return s.eventTargetResourcePolicyAllows(accountID, arn, action)
+		return s.eventTargetResourcePolicyAllows(accountID, arn, action, ruleARN)
 	}
 	return s.eventTargetRoleSessionAllows(accountID, roleARN, action, arn)
 }
@@ -1058,8 +1063,12 @@ func eventTargetDeliveryAction(targetARN string) (string, bool) {
 	}
 }
 
-func (s *Store) eventTargetResourcePolicyAllows(accountID, targetARN, action string) bool {
-	policyDoc, err := s.eventTargetResourcePolicyDoc(accountID, targetARN)
+func (s *Store) eventTargetResourcePolicyAllows(accountID, targetARN, action, sourceARN string) bool {
+	policyAccount := accountID
+	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
+		policyAccount = owner
+	}
+	policyDoc, err := s.eventTargetResourcePolicyDoc(policyAccount, targetARN)
 	if err != nil {
 		return false
 	}
@@ -1068,7 +1077,8 @@ func (s *Store) eventTargetResourcePolicyAllows(accountID, targetARN, action str
 		action,
 		targetARN,
 		authz.ServicePrincipalEvents,
-		accountID,
+		policyAccount,
+		authz.DeliverySourceConditionKeys(sourceARN, ""),
 	)
 }
 

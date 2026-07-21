@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	codebuildJSONContentType = "application/x-amz-json-1.1"
-	codebuildEventSource     = "codebuild.amazonaws.com"
-	defaultCodeBuildEndpoint = "http://host.docker.internal:4566"
+	codebuildJSONContentType   = "application/x-amz-json-1.1"
+	codebuildEventSource       = "codebuild.amazonaws.com"
+	defaultCodeBuildEndpoint   = "http://host.docker.internal:4566"
+	codebuildSession           = "noctaxris-codebuild"
+	codebuildRegistryPrincipal = "codebuild.amazonaws.com"
 )
 
 func (s *Server) handleCodeBuild(
@@ -255,15 +257,33 @@ func (s *Server) executeCodeBuild(ctx context.Context, accountID string, b store
 	if endpoint == "" {
 		endpoint = defaultCodeBuildEndpoint
 	}
+	env := map[string]string{
+		"CODEBUILD_BUILD_ID":         b.ID,
+		"CODEBUILD_PROJECT_NAME":     b.ProjectName,
+		"AWS_ENDPOINT_URL_CODEBUILD": endpoint,
+	}
+	proj, err := s.store.GetCodeBuildProject(accountID, b.ProjectName)
+	if err != nil {
+		return err
+	}
+	if roleARN := strings.TrimSpace(proj.ServiceRole); roleARN != "" {
+		minted, mintErr := s.mintRoleSessionEnv(roleARN, codebuildSession, endpoint, store.DefaultCodeBuildRegion)
+		if mintErr != nil {
+			return mintErr
+		}
+		for k, v := range minted {
+			env[k] = v
+		}
+	}
+	pullRef, err := s.prepareLabRegistryImage(ctx, cli, accountID, b.Image, codebuildRegistryPrincipal)
+	if err != nil {
+		return err
+	}
 	cid, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
-		ImageURI:    b.Image,
+		ImageURI:    pullRef,
 		Command:     []string{"/bin/sh", "-c", script},
 		EndpointURL: endpoint,
-		Env: map[string]string{
-			"CODEBUILD_BUILD_ID":      b.ID,
-			"CODEBUILD_PROJECT_NAME":  b.ProjectName,
-			"AWS_ENDPOINT_URL_CODEBUILD": endpoint,
-		},
+		Env:         env,
 	})
 	if err != nil {
 		return err

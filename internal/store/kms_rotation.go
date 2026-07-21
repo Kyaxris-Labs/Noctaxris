@@ -229,14 +229,20 @@ func (s *Store) UnsealAllKeyMaterials(keyID string) ([][]byte, error) {
 }
 
 // DecryptBlobWithKey tries current then prior CMK materials until one opens the blob.
+// Uses an empty encryption context (nil AAD).
 func (s *Store) DecryptBlobWithKey(keyID string, blob []byte) ([]byte, error) {
+	return s.DecryptBlobWithKeyContext(keyID, blob, nil)
+}
+
+// DecryptBlobWithKeyContext is DecryptBlobWithKey with EncryptionContext as GCM AAD.
+func (s *Store) DecryptBlobWithKeyContext(keyID string, blob []byte, encryptionContext map[string]string) ([]byte, error) {
 	materials, err := s.UnsealAllKeyMaterials(keyID)
 	if err != nil {
 		return nil, err
 	}
 	var lastErr error
 	for _, cmk := range materials {
-		plain, openErr := DecryptUnderCMK(cmk, blob)
+		plain, openErr := DecryptUnderCMK(cmk, blob, encryptionContext)
 		if openErr == nil {
 			return plain, nil
 		}

@@ -116,10 +116,12 @@ func (s *Store) CreateElastiCacheCluster(accountID, region, cacheClusterID, engi
 	}
 	addr := fmt.Sprintf("%s.cache.noctaxris.internal", id)
 	now := time.Now().UTC().UnixMilli()
+	// Match RDS: stay creating until SetElastiCacheContainerID after nested start.
+	// AWS "available" means ready to accept connections; empty container_id must not claim that.
 	_, err = s.db.Exec(
 		`INSERT INTO elasticache_clusters
 		 (account_id, cache_cluster_id, engine, engine_version, cache_node_type, num_cache_nodes, status, endpoint_address, endpoint_port, container_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?, '', ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?, '', ?)`,
 		accountID, id, engine, engineVersion, nodeType, numNodes, addr, ElastiCacheNestedPort, now,
 	)
 	if err != nil {
@@ -131,7 +133,7 @@ func (s *Store) CreateElastiCacheCluster(accountID, region, cacheClusterID, engi
 		EngineVersion:   engineVersion,
 		CacheNodeType:   nodeType,
 		NumCacheNodes:   numNodes,
-		Status:          "available",
+		Status:          "creating",
 		EndpointAddress: addr,
 		EndpointPort:    ElastiCacheNestedPort,
 		CreatedAt:       now,

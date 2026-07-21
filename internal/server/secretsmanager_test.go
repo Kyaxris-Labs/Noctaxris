@@ -238,6 +238,11 @@ func TestSecretsResourcePolicyAloneGrantsGetSecretValue(t *testing.T) {
 	if putPolRec.Code != http.StatusOK {
 		t.Fatalf("PutResourcePolicy status=%d body=%q", putPolRec.Code, putPolRec.Body.String())
 	}
+	// Caller EvaluateKMS still requires identity kms:Decrypt (default key policy allows account).
+	if err := st.PutInlinePolicy(guestARN, "kms-decrypt",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:Decrypt","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 
 	getRec := mustSecretsJSONWithCreds(t, handler, "GetSecretValue", map[string]any{
 		"SecretId": "shared-secret",

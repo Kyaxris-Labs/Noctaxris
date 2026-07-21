@@ -22,6 +22,8 @@ const (
 	batchJSONContentType = "application/json"
 	batchEventSource     = "batch.amazonaws.com"
 	defaultBatchEndpoint = "http://host.docker.internal:4566"
+	batchJobSession      = "noctaxris-batch"
+	batchRegistryPrincipal = "ecs-tasks.amazonaws.com"
 )
 
 func (s *Server) handleBatch(
@@ -475,8 +477,21 @@ func (s *Server) executeBatchJob(ctx context.Context, accountID string, job stor
 	env["AWS_BATCH_JOB_ID"] = job.JobID
 	env["AWS_BATCH_JQ_NAME"] = job.JobQueue
 	env["AWS_ENDPOINT_URL_BATCH"] = endpoint
+	if roleARN := strings.TrimSpace(jd.JobRoleARN); roleARN != "" {
+		minted, mintErr := s.mintRoleSessionEnv(roleARN, batchJobSession, endpoint, store.DefaultBatchRegion)
+		if mintErr != nil {
+			return mintErr
+		}
+		for k, v := range minted {
+			env[k] = v
+		}
+	}
+	pullRef, err := s.prepareLabRegistryImage(ctx, cli, accountID, jd.Image, batchRegistryPrincipal)
+	if err != nil {
+		return err
+	}
 	cid, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
-		ImageURI:    jd.Image,
+		ImageURI:    pullRef,
 		Command:     cmd,
 		Env:         env,
 		EndpointURL: endpoint,

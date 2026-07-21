@@ -24,12 +24,22 @@ func Known(key string) bool {
 }
 
 func templateMatch(pattern, key string) bool {
-	const tag = "${TagKey}"
 	const angle = "<key>"
 	switch {
-	case strings.Contains(pattern, tag):
-		prefix := strings.Split(pattern, tag)[0]
-		return strings.HasPrefix(key, prefix) && len(key) > len(prefix)
+	case strings.Contains(pattern, "${"):
+		// Match catalog templates such as ${TagKey} or ${EncryptionContextKey}.
+		start := strings.Index(pattern, "${")
+		end := strings.Index(pattern[start:], "}")
+		if end < 0 {
+			return false
+		}
+		prefix := pattern[:start]
+		suffix := pattern[start+end+1:]
+		if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, suffix) {
+			return false
+		}
+		mid := key[len(prefix) : len(key)-len(suffix)]
+		return mid != ""
 	case strings.Contains(pattern, angle):
 		prefix := strings.Split(pattern, angle)[0]
 		return strings.HasPrefix(key, prefix) && len(key) > len(prefix)

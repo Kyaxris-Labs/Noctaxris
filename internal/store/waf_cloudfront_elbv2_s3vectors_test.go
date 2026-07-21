@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,10 @@ func TestAssociateWAFWebACLHTTPAPI(t *testing.T) {
 	}
 	if err := st.AssociateWAFWebACL("000000000001", acl.ARN, "arn:aws:s3:::nope"); err == nil {
 		t.Fatal("expected fail closed on unknown ResourceArn")
+	}
+	phantom := "arn:aws:wafv2:us-east-1:000000000001:regional/webacl/missing/00000000-0000-0000-0000-000000000000"
+	if err := st.AssociateWAFWebACL("000000000001", phantom, httpAPI); !errors.Is(err, store.ErrWAFNotFound) {
+		t.Fatalf("want ErrWAFNotFound for phantom ACL, got %v", err)
 	}
 }
 

@@ -28,7 +28,8 @@ func (s *Server) prepareLambdaImageRunOpts(
 	return compute.ImageRunOpts{
 		ImageURI:         pullRef,
 		Handler:          fn.Handler,
-		TimeoutSec:       fn.Timeout,
+		TimeoutSec:       clampLambdaTimeout(fn.Timeout),
+		MemoryMB:         clampLambdaMemory(fn.Memory),
 		Env:              env,
 		EventJSON:        eventJSON,
 		EndpointURL:      endpoint,

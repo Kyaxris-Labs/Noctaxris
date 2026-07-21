@@ -118,4 +118,4 @@ aws iam enable-mfa-device \
 
 - Service-linked roles
 - Full IAM pagination, tagging, and API parity beyond the lab subset
-- PassRole on non-Lambda service configure APIs when those services gain role ARNs later
+- PassRole trust Conditions beyond StringEquals on common keys (`aws:SourceAccount` / `aws:SourceArn` when populated); full operator matrix (ArnLike, Bool, …)

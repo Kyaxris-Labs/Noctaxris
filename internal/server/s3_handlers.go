@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -25,13 +27,14 @@ import (
 )
 
 const (
-	s3XMLNS           = "http://s3.amazonaws.com/doc/2006-03-01/"
-	sseAES256         = "AES256"
-	sseAWSKMS         = "aws:kms"
-	headerSSESSE      = "x-amz-server-side-encryption"
-	headerSSEKMSKeyID = "x-amz-server-side-encryption-aws-kms-key-id"
-	headerCopySource  = "x-amz-copy-source"
-	headerMetadataDir = "x-amz-metadata-directive"
+	s3XMLNS                = "http://s3.amazonaws.com/doc/2006-03-01/"
+	sseAES256              = "AES256"
+	sseAWSKMS              = "aws:kms"
+	headerSSESSE           = "x-amz-server-side-encryption"
+	headerSSEKMSKeyID      = "x-amz-server-side-encryption-aws-kms-key-id"
+	headerSSEKMSContext    = "x-amz-server-side-encryption-context"
+	headerCopySource       = "x-amz-copy-source"
+	headerMetadataDir      = "x-amz-metadata-directive"
 )
 
 type s3ErrorXML struct {
@@ -710,7 +713,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		PlainSize:   int64(len(body)),
 		ETag:        etag,
 	}
-	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &meta, sse, kmsKeyParam, "PutObject"); !ok {
+	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &meta, sse, kmsKeyParam, resource, "PutObject"); !ok {
 		return
 	}
 
@@ -819,7 +822,7 @@ func (s *Server) s3CopyObject(w http.ResponseWriter, r *http.Request, requestID,
 		ETag:        hex.EncodeToString(plainSum[:]),
 	}
 	sse, kmsKeyParam := s.s3EffectiveSSE(r, destRef.accountID, destBucket)
-	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &destMeta, sse, kmsKeyParam, "CopyObject"); !ok {
+	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &destMeta, sse, kmsKeyParam, destResource, "CopyObject"); !ok {
 		return
 	}
 	obj, err := s.store.CopyObject(destRef.accountID, srcBucket, srcKey, destBucket, destKey, destMeta)
@@ -992,7 +995,7 @@ func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request,
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	sseMeta, ok := s.s3BuildSSECreateMeta(w, r, requestID, eventID, verified, readOnly, bucket, "CreateMultipartUpload")
+	sseMeta, ok := s.s3BuildSSECreateMeta(w, r, requestID, eventID, verified, readOnly, bucket, resource, "CreateMultipartUpload")
 	if !ok {
 		return
 	}
@@ -1110,7 +1113,7 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		SealedDEK:    result.Upload.SealedDEK,
 	}
 	if putMeta.SSEAlgorithm != "" {
-		encrypted, encErr := s.s3EncryptObjectPayload(verified, putMeta.SSEAlgorithm, putMeta.KMSKeyID, putMeta.SealedDEK, result.Data)
+		encrypted, encErr := s.s3EncryptObjectPayload(verified, putMeta.SSEAlgorithm, putMeta.KMSKeyID, resource, putMeta.SealedDEK, result.Data)
 		if encErr != nil {
 			code, msg := "InternalError", "Internal error"
 			status := http.StatusInternalServerError
@@ -1263,10 +1266,10 @@ func (s *Server) s3BuildSSECreateMeta(
 	requestID, eventID string,
 	verified *authn.Verified,
 	readOnly bool,
-	bucket, eventName string,
+	bucket, objectARN, eventName string,
 ) (s3SSECreateMeta, bool) {
 	sse, kmsKeyParam := s.s3EffectiveSSE(r, verified.AccountID, bucket)
-	prepared, ok := s.s3PrepareSSE(w, r, requestID, eventID, verified, readOnly, sse, kmsKeyParam, eventName)
+	prepared, ok := s.s3PrepareSSE(w, r, requestID, eventID, verified, readOnly, sse, kmsKeyParam, objectARN, eventName)
 	if !ok {
 		return s3SSECreateMeta{}, false
 	}
@@ -1303,7 +1306,7 @@ func (s *Server) s3PrepareSSE(
 	requestID, eventID string,
 	verified *authn.Verified,
 	readOnly bool,
-	sse, kmsKeyParam, eventName string,
+	sse, kmsKeyParam, objectARN, eventName string,
 ) (s3SSEPrepared, bool) {
 	switch strings.ToUpper(sse) {
 	case "":
@@ -1328,6 +1331,13 @@ func (s *Server) s3PrepareSSE(
 				"x-amz-server-side-encryption-aws-kms-key-id is required for aws:kms", eventName)
 			return s3SSEPrepared{}, false
 		}
+		customerCtx, ctxErr := parseS3EncryptionContextHeader(r.Header.Get(headerSSEKMSContext))
+		if ctxErr != nil {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
+				"x-amz-server-side-encryption-context is invalid", eventName)
+			return s3SSEPrepared{}, false
+		}
+		encCtx := s3SSEKMSEncryptionContext(objectARN, customerCtx)
 		keyID, err := s.store.ResolveKeyID(verified.AccountID, kmsKeyParam)
 		if err != nil {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
@@ -1340,7 +1350,7 @@ func (s *Server) s3PrepareSSE(
 				"KMS key not found", eventName)
 			return s3SSEPrepared{}, false
 		}
-		if !s.authorizeKMSOp(verified, catalog.ActionKMSGenerateDataKey, kmsKey) {
+		if !s.authorizeKMSOp(verified, catalog.ActionKMSGenerateDataKey, kmsKey, encCtx) {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 				"Access Denied", eventName)
 			return s3SSEPrepared{}, false
@@ -1362,7 +1372,7 @@ func (s *Server) s3PrepareSSE(
 				"Internal error", eventName)
 			return s3SSEPrepared{}, false
 		}
-		sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek)
+		sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek, encCtx)
 		if err != nil {
 			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
 				"Internal error", eventName)
@@ -1376,6 +1386,22 @@ func (s *Server) s3PrepareSSE(
 	}
 }
 
+func parseS3EncryptionContextHeader(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]string
+	if err := json.Unmarshal(decoded, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (s *Server) s3EncryptPutMeta(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1383,9 +1409,9 @@ func (s *Server) s3EncryptPutMeta(
 	verified *authn.Verified,
 	readOnly bool,
 	meta *store.PutObjectMeta,
-	sse, kmsKeyParam, eventName string,
+	sse, kmsKeyParam, objectARN, eventName string,
 ) bool {
-	prepared, ok := s.s3PrepareSSE(w, r, requestID, eventID, verified, readOnly, sse, kmsKeyParam, eventName)
+	prepared, ok := s.s3PrepareSSE(w, r, requestID, eventID, verified, readOnly, sse, kmsKeyParam, objectARN, eventName)
 	if !ok {
 		return false
 	}
@@ -1405,7 +1431,7 @@ func (s *Server) s3EncryptPutMeta(
 	return true
 }
 
-func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, kmsKeyID string, sealedDEK, plain []byte) ([]byte, error) {
+func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, kmsKeyID, objectARN string, sealedDEK, plain []byte) ([]byte, error) {
 	switch sseAlgorithm {
 	case sseAES256:
 		dek, err := s.store.UnsealWithMaster(sealedDEK)
@@ -1422,10 +1448,11 @@ func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, 
 		if err != nil {
 			return nil, err
 		}
-		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
+		encCtx := s3SSEKMSEncryptionContext(objectARN, nil)
+		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey, encCtx) {
 			return nil, errS3AccessDenied
 		}
-		dek, err := s.store.DecryptBlobWithKey(keyID, sealedDEK)
+		dek, err := s.store.DecryptBlobWithKeyContext(keyID, sealedDEK, encCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -1482,10 +1509,12 @@ func (s *Server) decryptObjectPayload(verified *authn.Verified, meta store.Objec
 		if err != nil {
 			return nil, err
 		}
-		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
+		objectARN := store.ObjectARN(meta.Bucket, meta.Key)
+		encCtx := s3SSEKMSEncryptionContext(objectARN, nil)
+		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey, encCtx) {
 			return nil, errS3AccessDenied
 		}
-		dek, err := s.store.DecryptBlobWithKey(keyID, meta.SealedDEK)
+		dek, err := s.store.DecryptBlobWithKeyContext(keyID, meta.SealedDEK, encCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -1495,12 +1524,22 @@ func (s *Server) decryptObjectPayload(verified *authn.Verified, meta store.Objec
 	}
 }
 
-func (s *Server) authorizeKMSOp(verified *authn.Verified, action string, key store.Key) bool {
+func (s *Server) authorizeKMSOp(verified *authn.Verified, action string, key store.Key, encCtx map[string]string) bool {
 	grantSatisfied := false
 	if ok, gerr := s.store.FindMatchingGrant(key.KeyID, verified.Principal.ARN(), action); gerr == nil {
 		grantSatisfied = ok
 	}
-	return s.authorizeDataplaneKMS(verified, action, key.ARN, key.KeyPolicy, grantSatisfied)
+	return s.authorizeDataplaneKMS(verified, action, key.ARN, key.KeyPolicy, grantSatisfied, encCtx)
+}
+
+func s3SSEKMSEncryptionContext(objectARN string, customerCtx map[string]string) map[string]string {
+	out := make(map[string]string, 1+len(customerCtx))
+	for k, v := range customerCtx {
+		out[k] = v
+	}
+	// AWS S3 SSE-KMS default context (object ARN when Bucket Keys are off).
+	out["aws:s3:arn"] = objectARN
+	return out
 }
 
 func (s *Server) writeS3XML(w http.ResponseWriter, requestID string, status int, payload any) {

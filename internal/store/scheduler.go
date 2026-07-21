@@ -433,13 +433,17 @@ func (s *Store) schedulerDeliveryAuthorized(sch Schedule) bool {
 	}
 	roleARN := strings.TrimSpace(sch.RoleARN)
 	if roleARN == "" {
-		return s.schedulerTargetResourcePolicyAllows(sch.AccountID, arn, action)
+		return s.schedulerTargetResourcePolicyAllows(sch.AccountID, arn, action, sch.ScheduleARN)
 	}
 	return s.schedulerRoleSessionAllows(sch.AccountID, roleARN, action, arn)
 }
 
-func (s *Store) schedulerTargetResourcePolicyAllows(accountID, targetARN, action string) bool {
-	policyDoc, err := s.eventTargetResourcePolicyDoc(accountID, targetARN)
+func (s *Store) schedulerTargetResourcePolicyAllows(accountID, targetARN, action, sourceARN string) bool {
+	policyAccount := accountID
+	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
+		policyAccount = owner
+	}
+	policyDoc, err := s.eventTargetResourcePolicyDoc(policyAccount, targetARN)
 	if err != nil {
 		return false
 	}
@@ -448,7 +452,8 @@ func (s *Store) schedulerTargetResourcePolicyAllows(accountID, targetARN, action
 		action,
 		targetARN,
 		authz.ServicePrincipalScheduler,
-		accountID,
+		policyAccount,
+		authz.DeliverySourceConditionKeys(sourceARN, ""),
 	)
 }
 

@@ -11,7 +11,7 @@ All 11 STS actions are routed. Federation is fail-closed without configured IdP.
 | `GetCallerIdentity` | After SigV4 only (no IAM permission check) |
 | `AssumeRole` | Temp credentials, trust evaluation, cross-account dual eval when needed |
 | `GetSessionToken` | Lab MFA token (not RFC 6238 TOTP). Requires long-term IAM user or root credentials (not temporary/role). Does not require `sts:GetSessionToken` after SigV4 |
-| `GetFederationToken` | Session with optional session policy intersection |
+| `GetFederationToken` | Calling IAM user identity ∩ session policy (empty session → no identity permissions) |
 | `AssumeRoleWithSAML` | Crypto against configured SAML IdP (no SigV4) |
 | `AssumeRoleWithWebIdentity` | Crypto against configured OIDC issuer (no SigV4) |
 | `AssumeRoot` | Member account only when org relationship exists |
@@ -28,7 +28,9 @@ Most STS control-plane actions use `EvaluateFull` (identity, boundary, session, 
 
 `GetSessionToken` must be called with long-term credentials. Sessions it mints cannot call IAM unless MFA was used to mint them, and cannot call STS except `AssumeRole` and `GetCallerIdentity`.
 
-Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus role trust). Assumed-role sessions load identity policies from the IAM role ARN (not the STS session ARN), so role attachments apply to SigV4 calls that use temporary credentials.
+Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus role trust). `ExternalId` / `SourceIdentity` request params populate `sts:ExternalId` and `sts:SourceIdentity` / `aws:SourceIdentity` for trust Conditions. Assumed-role sessions load identity policies from the IAM role ARN (not the STS session ARN), so role attachments apply to SigV4 calls that use temporary credentials.
+
+`AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` match trust `Principal.Federated` against the IdP ARN (account-root `AWS` principals do not over-allow federation callers). SAML verify is a lab subset: SignedInfo RSA, Reference DigestValue over the Assertion with Signature removed, Conditions time window, and Audience matching metadata `entityID` (not exclusive C14N).
 
 ## How to verify / CLI smoke
 

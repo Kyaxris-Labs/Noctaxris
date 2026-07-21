@@ -60,3 +60,12 @@ func TestKnownSSMAndSecretsTagTemplates(t *testing.T) {
 		t.Fatal("expected ecr:ResourceTag/env known via template")
 	}
 }
+
+func TestKnownKMSEncryptionContextTemplate(t *testing.T) {
+	if !Known("kms:EncryptionContext:aws:s3:arn") {
+		t.Fatal("expected kms:EncryptionContext:aws:s3:arn known via template")
+	}
+	if !Known("kms:EncryptionContextKeys") {
+		t.Fatal("expected kms:EncryptionContextKeys known")
+	}
+}

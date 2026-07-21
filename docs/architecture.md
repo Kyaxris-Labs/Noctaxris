@@ -99,7 +99,7 @@ flowchart TD
   Helper["data-plane helper<br/>compute.Client DinD TLS"]
   Start["start labeled nested container<br/>no host port publish"]
   Describe["Describe* returns nested-network hostname:port"]
-  DataAPI["RDS Data API ExecuteStatement on :4566<br/>nested psql when DinD up; stub otherwise"]
+  DataAPI["RDS Data API ExecuteStatement on :4566<br/>nested psql when available; else unavailable"]
 
   Create --> Store --> Helper --> Start --> Describe
   Helper -.-> DataAPI
@@ -121,7 +121,7 @@ When DinD is unset, create paths keep control-plane rows and nested start is a n
 - Cognito issues RS256 ID and access tokens and serves JWKS on the same `:4566` listener. Issuer shape: `http://127.0.0.1:4566/cognito-idp/<region>/<userPoolId>`.
 - API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS (in-process; no remote JWKS by default). IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
 - AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM. Custom issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` and a public host allowlist.
-- Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust.
+- Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust. Without CredentialsArn, HTTP API Lambda invoke requires a function resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require the same for `appsync.amazonaws.com`.
 - CloudFront and ELBv2 are config-shaped stubs (no real PoP, no EC2 targets). Gateway must not open HTTP_PROXY to arbitrary URLs.
 
 ## Authz

@@ -90,20 +90,54 @@ func (s *Store) deliveryRoleSessionAllows(accountID, roleARN, action, targetARN,
 	return authz.EvaluateFull(ctx, in) == authz.Allow
 }
 
+// DeliveryTargetResourcePolicyAllows reports whether the target resource policy
+// Allows action for the given service principal (or account root).
+// sourceARN populates aws:SourceArn / aws:SourceAccount for Condition evaluation.
+func (s *Store) DeliveryTargetResourcePolicyAllows(accountID, targetARN, action, servicePrincipal, sourceARN string) bool {
+	return s.deliveryTargetResourcePolicyAllows(accountID, targetARN, action, servicePrincipal, sourceARN)
+}
+
 // deliveryTargetResourcePolicyAllows reports whether the target resource policy
 // Allows action for the given service principal (or account root).
-func (s *Store) deliveryTargetResourcePolicyAllows(accountID, targetARN, action, servicePrincipal string) bool {
-	policyDoc, err := s.deliveryTargetResourcePolicyDoc(accountID, targetARN)
+// sourceARN populates aws:SourceArn / aws:SourceAccount for Condition evaluation.
+// For SQS/Lambda/SNS ARNs, policy is loaded under the resource owner account.
+func (s *Store) deliveryTargetResourcePolicyAllows(accountID, targetARN, action, servicePrincipal, sourceARN string) bool {
+	policyAccount := accountID
+	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
+		policyAccount = owner
+	}
+	policyDoc, err := s.deliveryTargetResourcePolicyDoc(policyAccount, targetARN)
 	if err != nil {
 		return false
 	}
+	keys := authz.DeliverySourceConditionKeys(sourceARN, "")
 	return authz.EventTargetResourcePolicyAllows(
 		policyDoc,
 		action,
 		targetARN,
 		servicePrincipal,
-		accountID,
+		policyAccount,
+		keys,
 	)
+}
+
+// resourceOwnerAccountFromARN returns the account id segment for common ARNs.
+func resourceOwnerAccountFromARN(arn string) string {
+	arn = strings.TrimSpace(arn)
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 {
+		return ""
+	}
+	acct := strings.TrimSpace(parts[4])
+	if len(acct) != 12 {
+		return ""
+	}
+	for _, r := range acct {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return acct
 }
 
 func (s *Store) deliveryTargetResourcePolicyDoc(accountID, targetARN string) (string, error) {

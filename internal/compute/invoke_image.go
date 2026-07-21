@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/google/uuid"
@@ -21,6 +22,8 @@ type ImageRunOpts struct {
 	Handler string
 	// TimeoutSec is the container wall-clock limit (default 30).
 	TimeoutSec int
+	// MemoryMB is the optional Docker memory limit in megabytes (0 = engine default).
+	MemoryMB int
 	// Env is merged into the container environment (execution-role AWS_* keys, etc.).
 	Env map[string]string
 	// EventJSON is the Invoke payload written under EventHostPath.
@@ -94,12 +97,18 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 		return InvokeResult{}, fmt.Errorf("compute: pull image %s: %w", opts.ImageURI, err)
 	}
 
-	if err := os.MkdirAll(opts.EventHostPath, 0o700); err != nil {
+	if err := os.MkdirAll(opts.EventHostPath, store.LabSharedDirMode); err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: mkdir event dir: %w", err)
 	}
+	if err := os.Chmod(opts.EventHostPath, store.LabSharedDirMode); err != nil {
+		return InvokeResult{}, fmt.Errorf("compute: chmod event dir: %w", err)
+	}
 	eventPath := filepath.Join(opts.EventHostPath, ".noctaxris-event.json")
-	if err := os.WriteFile(eventPath, []byte(opts.EventJSON), 0o600); err != nil {
+	if err := os.WriteFile(eventPath, []byte(opts.EventJSON), store.LabSharedFileMode); err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: write event: %w", err)
+	}
+	if err := os.Chmod(eventPath, store.LabSharedFileMode); err != nil {
+		return InvokeResult{}, fmt.Errorf("compute: chmod event: %w", err)
 	}
 	defer os.RemoveAll(opts.EventHostPath)
 
@@ -143,12 +152,15 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	if mergedOptDir != "" {
 		binds = append(binds, mergedOptDir+":/opt:ro")
 	}
+	sec := nestedTaskSecurity(opts.MemoryMB)
 	hostConfig := &container.HostConfig{
 		Binds:          binds,
 		AutoRemove:     false,
 		NetworkMode:    container.NetworkMode(FunctionNetworkName),
 		ExtraHosts:     hostGatewayExtraHosts(),
 		ReadonlyRootfs: false,
+		CapDrop:        sec.CapDrop,
+		Resources:      container.Resources{Memory: sec.Memory},
 	}
 
 	cfg := &container.Config{

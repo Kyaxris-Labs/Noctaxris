@@ -37,11 +37,20 @@ func TestElastiCacheHandlers(t *testing.T) {
 	if !strings.Contains(create.Body.String(), "lab-cache-1") || !strings.Contains(create.Body.String(), "cache.noctaxris.internal") {
 		t.Fatalf("create body=%q", create.Body.String())
 	}
+	if !strings.Contains(create.Body.String(), "creating") {
+		t.Fatalf("without DinD expect creating, body=%q", create.Body.String())
+	}
+	if strings.Contains(create.Body.String(), "available") {
+		t.Fatalf("must not claim available without nested engine: %q", create.Body.String())
+	}
 
 	desc := mustElastiCacheQuery(t, handler,
 		"Action=DescribeCacheClusters&Version=2015-02-02&CacheClusterId=lab-cache-1", now)
 	if desc.Code != http.StatusOK || !strings.Contains(desc.Body.String(), "6379") {
 		t.Fatalf("DescribeCacheClusters status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	if !strings.Contains(desc.Body.String(), "creating") {
+		t.Fatalf("describe without DinD expect creating, body=%q", desc.Body.String())
 	}
 
 	del := mustElastiCacheQuery(t, handler,

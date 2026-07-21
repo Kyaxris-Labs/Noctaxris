@@ -6,7 +6,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 
 | Service | Status | Doc |
 |---------|--------|-----|
-| [IAM](iam.md) | Shipped | Users, roles, policies, keys, groups, boundaries, IdPs, MFA |
+| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, IdPs, MFA |
 | [STS](sts.md) | Shipped | All 11 actions (lab MFA on GetSessionToken) |
 | [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance |
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, deletion sweeper, key-material rotation |
@@ -102,7 +102,9 @@ EP=http://127.0.0.1:4566
 
 Prefer WSL or Linux for AWS CLI smoke against `http://127.0.0.1:4566`. On Windows, run the same commands inside WSL when Docker Desktop publishes that port on the Windows host.
 
-Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) needs a Linux host with usable `/dev/kvm` and a Firecracker binary for selection. On WSL2 or without KVM/binary the path fails closed. Even when the probe succeeds, live guest zip/Image Invoke and ECS RunTask are not packaged (fail closed; no fake boot). Leave the runtime unset (or `dind`) for normal labs. Nested DinD operator/CI smoke: [docker/smoke-nested.sh](../../docker/smoke-nested.sh) (also `workflow_dispatch` input `nested_smoke` on CI).
+Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) needs a Linux host with usable `/dev/kvm` and a Firecracker binary for selection. On WSL2 or without KVM/binary the path fails closed. Even when the probe succeeds, live guest zip/Image Invoke and ECS RunTask are not packaged (fail closed; no fake boot). Leave the runtime unset (or `dind`) for normal labs.
+
+**CI vs nested smoke:** Push/PR CI runs `smoke-core` (ready + STS/S3/KMS/DynamoDB). Nested DinD is **manual only**: Actions `workflow_dispatch` with `nested_smoke=true`, or [docker/smoke-nested.sh](../../docker/smoke-nested.sh). A green PR does not prove Lambda Invoke, nested RDS/Data API, or other DinD paths. Full matrix: [ops.md](../ops.md).
 
 Per-service CLI smoke lives on each shipped service page above.
 

@@ -83,7 +83,8 @@ type RDSDataExecutor interface {
 }
 
 // StubRDSDataExecutor records statements and returns canned SELECT-shaped results.
-// Used when DinD is unset or the RDS instance has no nested container.
+// Only used when tests inject SetRDSDataExecutor. Production ExecuteStatement fails
+// closed with DatabaseUnavailableException when no nested Postgres container exists.
 // Live SQL against nested Postgres uses DinD exec + psql (no pgx / go.mod driver).
 type StubRDSDataExecutor struct {
 	mu         sync.Mutex
@@ -154,10 +155,6 @@ func (s *Store) ResolveRDSDataResource(accountID, resourceARN, secretARN string)
 	}
 	if inst.MasterUserSecretARN != "" && !secretARNsMatch(inst.MasterUserSecretARN, secretARN) {
 		return RDSDBInstance{}, ErrRDSDataInvalidSecret
-	}
-	if inst.DBInstanceStatus != "available" && inst.ContainerID == "" {
-		// Control-plane-only (no nested engine): still allow stub executor path.
-		// Callers that require live SQL should fail closed separately.
 	}
 	return inst, nil
 }

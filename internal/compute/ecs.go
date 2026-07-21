@@ -22,6 +22,8 @@ type ECSRunOpts struct {
 	Command     []string
 	Env         map[string]string
 	EndpointURL string
+	// MemoryMB is the optional Docker memory limit in megabytes (0 = engine default).
+	MemoryMB int
 }
 
 // ValidateECSRunOpts checks required fields without talking to Docker.
@@ -76,10 +78,13 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	}
 
 	name := "noctaxris-ecs-" + uuid.NewString()
+	sec := nestedTaskSecurity(opts.MemoryMB)
 	hostConfig := &container.HostConfig{
 		AutoRemove:  false,
 		NetworkMode: container.NetworkMode(ECSNetworkName),
-		ExtraHosts:  hostGatewayExtraHosts(),
+		ExtraHosts:  ecsHostGatewayExtraHosts(),
+		CapDrop:     sec.CapDrop,
+		Resources:   container.Resources{Memory: sec.Memory},
 	}
 	cfg := &container.Config{
 		Image: opts.ImageURI,

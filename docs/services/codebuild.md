@@ -10,8 +10,8 @@ Lab CodeBuild core: project create, StartBuild on nested DinD, BatchGetBuilds, a
 |------|---------|
 | Projects | `CreateProject` (source `NO_SOURCE` or `S3`, inline buildspec, environment image, `NO_ARTIFACTS`) |
 | Builds | `StartBuild`, `BatchGetBuilds`, `ListBuilds` |
-| Roles | `CreateProject` requires `serviceRole`. Caller needs `iam:PassRole`. Role trust must Allow `sts:AssumeRole` for `codebuild.amazonaws.com` |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). StartBuild reuses the nested ECS run helper on Internal network `noctaxris-ecs` |
+| Roles | `CreateProject` requires `serviceRole`. Caller needs `iam:PassRole`. Role trust must Allow `sts:AssumeRole` for `codebuild.amazonaws.com`. StartBuild mints temporary AWS_* credentials for the project `serviceRole` into the nested container |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). StartBuild reuses the nested ECS run helper on Internal network `noctaxris-ecs` (host-gateway ExtraHosts off by default). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled with a registry token before start |
 
 ### Authz notes
 

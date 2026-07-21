@@ -63,7 +63,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
-      <td>Users, roles, managed and inline policies, access keys, groups, permissions boundaries, instance profiles, OIDC and SAML IdP CRUD, virtual MFA.</td>
+      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles, OIDC and SAML IdP CRUD, virtual MFA.</td>
       <td>Service-linked roles, full pagination and tagging parity.</td>
     </tr>
     <tr>
@@ -150,12 +150,12 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement plus Begin/Commit/Rollback lite on <code>:4566</code>. Requires resourceArn and secretArn. Real SQL via nested <code>psql</code> when DinD started Postgres; recorded-statement <strong>stub</strong> otherwise (explicit marker; no <code>pgx</code>).</td>
+      <td>ExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Real SQL via nested <code>psql</code> when instance is available; otherwise DatabaseUnavailableException (no canned SELECT). Begin/Commit/Rollback return 501.</td>
       <td>Wire-protocol <code>pgx</code> executor (buy-in), BatchExecuteStatement, full result type matrix, real SQL transactions.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
-      <td>CreateCacheCluster / DescribeCacheClusters / DeleteCacheCluster for redis or valkey. Nested Valkey/Redis when DinD is up. Nested-network endpoint only.</td>
+      <td>CreateCacheCluster / DescribeCacheClusters / DeleteCacheCluster for redis or valkey. Status creating until nested Valkey/Redis starts; available only with engine. Nested-network endpoint only.</td>
       <td>Cluster mode / replication group matrix, Redis AUTH depth, MemoryDB, host-published cache ports.</td>
     </tr>
     <tr>
@@ -238,8 +238,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Config</td>
-      <td>PutConfigurationRecorder, PutDeliveryChannel, StartConfigurationRecorder (SNS Publish when delivery channel has snsTopicARN), DescribeComplianceByConfigRule stub over tagged resources. Optional PassRole for config.amazonaws.com.</td>
-      <td>Managed rule catalog, remediations, aggregator, organization rules.</td>
+      <td>PutConfigurationRecorder, PutDeliveryChannel (existing S3 bucket), StartConfigurationRecorder (recording flag + ConfigurationRecorderStarted SNS; no history PutObject), DescribeComplianceByConfigRule returns NOT_APPLICABLE. Optional PassRole for config.amazonaws.com.</td>
+      <td>Configuration history to S3, managed rule catalog, remediations, aggregator, organization rules.</td>
     </tr>
     <tr>
       <td>ACM</td>
@@ -362,8 +362,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Budgets</td>
-      <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. SNS subscriber ARNs under NotificationsWithSubscribers receive one lab ACTUAL threshold Publish on CreateBudget.</td>
-      <td>Budget actions that mutate accounts, RI/SP coverage, live CE-driven threshold evaluation.</td>
+      <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. SNS subscriber ARNs under NotificationsWithSubscribers receive one lab LAB_CREATE Publish on CreateBudget (not ACTUAL).</td>
+      <td>Budget actions that mutate accounts, RI/SP coverage, live CE-driven ACTUAL/FORECASTED threshold evaluation.</td>
     </tr>
   </tbody>
 </table>
@@ -384,7 +384,7 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Authn | SigV4 on AWS API paths except documented open/alternate-auth routes (health, ready, JWKS, federation STS, Function URL NONE, HTTP API NONE, AppSync auth types) |
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
-Backup, restore, and upgrade steps: [docs/ops.md](docs/ops.md).
+Backup, restore, upgrade, graceful shutdown, and CI matrix (PR `smoke-core` vs manual nested smoke): [docs/ops.md](docs/ops.md).
 
 ## Architecture
 

@@ -159,6 +159,11 @@ func (s *Server) cfgPutDelivery(
 		return
 	}
 	_, err := s.store.PutConfigDeliveryChannel(verified.AccountID, name, bucket, prefix, sns)
+	if errors.Is(err, store.ErrConfigBadRequest) {
+		s.writeConfigError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		s.writeConfigError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put delivery channel.", readOnly, eventID, verified)
@@ -188,6 +193,11 @@ func (s *Server) cfgStartRecorder(
 	if errors.Is(err, store.ErrConfigNotFound) {
 		s.writeConfigError(w, r, requestID, http.StatusBadRequest, "NoSuchConfigurationRecorderException",
 			"Configuration recorder not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrConfigBadRequest) {
+		s.writeConfigError(w, r, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if err != nil {

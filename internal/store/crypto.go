@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -70,9 +72,32 @@ func Unseal(key MasterKey, ciphertext []byte) ([]byte, error) {
 	return aead.Open(nil, nonce, sealed, nil)
 }
 
+// EncryptionContextAAD builds deterministic GCM additional authenticated data
+// from an encryption context map. Nil/empty context yields nil AAD (v2 blobs
+// encrypted without context remain decryptable with a nil/empty context).
+func EncryptionContextAAD(encryptionContext map[string]string) []byte {
+	if len(encryptionContext) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(encryptionContext))
+	for k := range encryptionContext {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte(0)
+		b.WriteString(encryptionContext[k])
+		b.WriteByte(0)
+	}
+	return []byte(b.String())
+}
+
 // EncryptUnderCMK seals plaintext with AES-256-GCM under cmk material.
+// encryptionContext is bound as GCM AAD (AWS EncryptionContext semantics).
 // Output format v2: version(1)=2 || keyID_len(1) || keyID || nonce || ciphertext+tag.
-func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte) ([]byte, error) {
+func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte, encryptionContext map[string]string) ([]byte, error) {
 	if len(cmk) != 32 {
 		return nil, fmt.Errorf("cmk must be 32 bytes")
 	}
@@ -91,7 +116,8 @@ func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte) ([]byte, error)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
 	}
-	sealed := gcm.Seal(nil, nonce, plaintext, nil)
+	aad := EncryptionContextAAD(encryptionContext)
+	sealed := gcm.Seal(nil, nonce, plaintext, aad)
 	kid := []byte(keyID)
 	out := make([]byte, 2+len(kid)+len(nonce)+len(sealed))
 	out[0] = ciphertextVersionV2
@@ -104,7 +130,8 @@ func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte) ([]byte, error)
 }
 
 // DecryptUnderCMK opens a blob produced by EncryptUnderCMK (v1 or v2).
-func DecryptUnderCMK(cmk, blob []byte) ([]byte, error) {
+// encryptionContext must match the map supplied at encrypt time (AAD).
+func DecryptUnderCMK(cmk, blob []byte, encryptionContext map[string]string) ([]byte, error) {
 	if len(cmk) != 32 {
 		return nil, fmt.Errorf("cmk must be 32 bytes")
 	}
@@ -141,5 +168,6 @@ func DecryptUnderCMK(cmk, blob []byte) ([]byte, error) {
 	}
 	nonce := rest[:nonceSize]
 	sealed := rest[nonceSize:]
-	return gcm.Open(nil, nonce, sealed, nil)
+	aad := EncryptionContextAAD(encryptionContext)
+	return gcm.Open(nil, nonce, sealed, aad)
 }

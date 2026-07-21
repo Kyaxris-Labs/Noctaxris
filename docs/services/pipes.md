@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or SQS targets. Optional Lambda `Enrichment` ARN runs sync before target delivery (ticker uses nested Invoke). An in-process ticker polls RUNNING pipes via `PollPipeOnce`. Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Delivery uses a RoleArn session or requires the target resource policy to Allow `pipes.amazonaws.com`.
+Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or SQS targets. Optional Lambda `Enrichment` ARN runs sync before target delivery (ticker uses nested Invoke). An in-process ticker polls RUNNING pipes via `PollPipeOnce`. Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Source poll requires a RoleArn session Allow on source actions, or (SQS) a source queue policy Allow for `pipes.amazonaws.com`. Enrichment requires RoleArn session `lambda:InvokeFunction`. Target delivery uses a RoleArn session or the target resource policy Allow for `pipes.amazonaws.com`. SQS source/target ARNs may be cross-account (queue owner account).
 
 ## Implemented
 
@@ -12,11 +12,11 @@ Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or S
 | Sources | SQS queue ARN, DynamoDB Streams ARN, EventBridge bus ARN (cursor over `event_entries`) |
 | Targets | SQS queue ARN, Lambda function ARN |
 | Enrichment | Optional Lambda ARN; sync invoke result becomes the payload forwarded to the target (empty result keeps the original body) |
-| Delivery | Continuous ticker + `PollPipeOnce` receive/get, deliver, delete SQS messages on success. RoleArn session EvaluateFull, or target resource policy Allow for `pipes.amazonaws.com` |
+| Delivery | Continuous ticker + `PollPipeOnce` receive/get, deliver, delete SQS messages on success. Source + enrichment RoleArn (or SQS source policy); target RoleArn session or target resource policy Allow for `pipes.amazonaws.com` |
 
 ### Authz notes
 
-Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present. At poll/delivery time the lab mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root).
+Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present. At poll time source actions require RoleArn session Allow (DynamoDB/EventBridge sources require RoleArn; SQS may use a source queue policy Allow for `pipes.amazonaws.com` instead). Enrichment Invoke always requires RoleArn. Target delivery mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root).
 
 ## How to verify / CLI smoke
 
@@ -32,7 +32,8 @@ SRC_ARN=$(aws sqs get-queue-attributes --queue-url "$SRC_URL" \
 DST_ARN=$(aws sqs get-queue-attributes --queue-url "$DST_URL" \
   --attribute-names QueueArn --endpoint-url "$EP" --query Attributes.QueueArn --output text)
 
-# Destination policy required when RoleArn is omitted:
+# Source + destination policies required when RoleArn is omitted:
+aws sqs set-queue-attributes --queue-url "$SRC_URL" --attributes "{\"Policy\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\",\\\"Principal\\\":{\\\"Service\\\":\\\"pipes.amazonaws.com\\\"},\\\"Action\\\":[\\\"sqs:ReceiveMessage\\\",\\\"sqs:DeleteMessage\\\"],\\\"Resource\\\":\\\"$SRC_ARN\\\"}]}\"}" --endpoint-url "$EP"
 aws sqs set-queue-attributes --queue-url "$DST_URL" --attributes "{\"Policy\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\",\\\"Principal\\\":{\\\"Service\\\":\\\"pipes.amazonaws.com\\\"},\\\"Action\\\":\\\"sqs:SendMessage\\\",\\\"Resource\\\":\\\"$DST_ARN\\\"}]}\"}" --endpoint-url "$EP"
 
 aws pipes create-pipe --name "lab-pipe" --source "$SRC_ARN" --target "$DST_ARN" --endpoint-url "$EP"

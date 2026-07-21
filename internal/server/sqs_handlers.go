@@ -614,7 +614,7 @@ func (s *Server) encryptSQSBody(verified *authn.Verified, attrs map[string]strin
 		if err != nil || kmsKey.AccountID != verified.AccountID {
 			return nil, false, nil, err
 		}
-		if !s.authorizeKMSOp(verified, catalog.ActionKMSGenerateDataKey, kmsKey) {
+		if !s.authorizeKMSOp(verified, catalog.ActionKMSGenerateDataKey, kmsKey, nil) {
 			return nil, false, nil, errSQSAccessDenied
 		}
 		if kmsKey.KeyState != store.KeyStateEnabled {
@@ -628,7 +628,7 @@ func (s *Server) encryptSQSBody(verified *authn.Verified, attrs map[string]strin
 		if _, err := io.ReadFull(rand.Reader, dek); err != nil {
 			return nil, false, nil, err
 		}
-		sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek)
+		sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek, nil)
 		if err != nil {
 			return nil, false, nil, err
 		}
@@ -657,7 +657,7 @@ func (s *Server) decryptSQSBody(verified *authn.Verified, attrs map[string]strin
 		if err != nil {
 			return nil, err
 		}
-		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey) {
+		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey, nil) {
 			return nil, errSQSAccessDenied
 		}
 		dek, err := s.store.DecryptBlobWithKey(keyID, msg.SealedDEK)

@@ -29,6 +29,7 @@ func TestAPIGatewayHTTPAPINoneInvoke(t *testing.T) {
 		t.Fatalf("CreateFunction status=%d body=%q", fnRec.Code, fnRec.Body.String())
 	}
 	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:apigw-hello"
+	mustAddLambdaServicePermission(t, handler, "apigw-hello", "apigateway.amazonaws.com", "apigw-invoke", now)
 
 	apiRec := mustJSONTarget(t, handler, "ApiGatewayV2.CreateApi", "apigateway", map[string]any{
 		"Name": "lab-http", "ProtocolType": "HTTP",
@@ -130,6 +131,7 @@ func TestAPIGatewayIAMAuthorizerAllowsSigV4(t *testing.T) {
 		t.Fatalf("CreateFunction status=%d", fnRec.Code)
 	}
 	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:apigw-iam2-fn"
+	mustAddLambdaServicePermission(t, handler, "apigw-iam2-fn", "apigateway.amazonaws.com", "apigw-iam2", now)
 
 	apiID, integrationID := mustCreateHTTPAPIWithIntegration(t, handler, "iam2-api", lambdaARN, now)
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
@@ -167,6 +169,7 @@ func TestAPIGatewayJWTAuthorizerWithCognito(t *testing.T) {
 		t.Fatalf("CreateFunction status=%d", fnRec.Code)
 	}
 	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:apigw-jwt-fn"
+	mustAddLambdaServicePermission(t, handler, "apigw-jwt-fn", "apigateway.amazonaws.com", "apigw-jwt", now)
 
 	poolID, clientID := mustCreateCognitoPoolClientUser(t, handler, "gw-pool", "gw-client", "dave", "Secret4!", now)
 	issuer := store.CognitoIssuerURL("us-east-1", poolID)
@@ -312,6 +315,60 @@ func mustCreateHTTPAPIWithIntegration(t *testing.T, handler http.Handler, name, 
 	_ = json.Unmarshal(intRec.Body.Bytes(), &intResp)
 	integrationID, _ = intResp["IntegrationId"].(string)
 	return apiID, integrationID
+}
+
+func mustAddLambdaServicePermission(t *testing.T, handler http.Handler, functionName, principal, statementID string, now time.Time) {
+	t.Helper()
+	addRec := mustLambdaJSON(t, handler, "AddPermission", map[string]any{
+		"FunctionName": functionName,
+		"StatementId":  statementID,
+		"Action":       "lambda:InvokeFunction",
+		"Principal":    principal,
+	}, now)
+	if addRec.Code != http.StatusOK {
+		t.Fatalf("AddPermission status=%d body=%q", addRec.Code, addRec.Body.String())
+	}
+}
+
+func TestAPIGatewayInvokeRequiresLambdaResourcePolicy(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "apigw-pol-role", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/apigw-pol-role"
+	fnRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "apigw-pol-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if fnRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d", fnRec.Code)
+	}
+	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:apigw-pol-fn"
+	apiID, integrationID := mustCreateHTTPAPIWithIntegration(t, handler, "pol-http", lambdaARN, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
+		"ApiId": apiID, "RouteKey": "GET /hello", "Target": "integrations/" + integrationID,
+		"AuthorizationType": "NONE",
+	}, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateStage", "apigateway", map[string]any{
+		"ApiId": apiID, "StageName": "$default",
+	}, now)
+
+	deny := httptest.NewRecorder()
+	handler.ServeHTTP(deny, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/hello", nil))
+	if deny.Code != http.StatusForbidden {
+		t.Fatalf("without AddPermission status=%d want 403 body=%q", deny.Code, deny.Body.String())
+	}
+
+	mustAddLambdaServicePermission(t, handler, "apigw-pol-fn", "apigateway.amazonaws.com", "gw-pol", now)
+	allow := httptest.NewRecorder()
+	handler.ServeHTTP(allow, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/hello", nil))
+	if allow.Code != http.StatusServiceUnavailable {
+		t.Fatalf("with AddPermission status=%d want 503 body=%q", allow.Code, allow.Body.String())
+	}
 }
 
 func mustCreateCognitoPoolClientUser(t *testing.T, handler http.Handler, poolName, clientName, user, pass string, now time.Time) (poolID, clientID string) {

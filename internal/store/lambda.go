@@ -317,11 +317,15 @@ func writeLambdaZip(dataRoot, accountID, name string, zipBytes []byte) (relPath,
 	shaHex = hex.EncodeToString(sum[:])
 	dirRel := filepath.Join("lambda", accountID, name)
 	absDir := filepath.Join(dataRoot, dirRel)
-	if err := os.MkdirAll(absDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(absDir); err != nil {
 		return "", "", fmt.Errorf("mkdir lambda code dir: %w", err)
+	}
+	if err := ensureLabSharedAncestors(dataRoot, absDir); err != nil {
+		return "", "", err
 	}
 	relPath = filepath.Join(dirRel, "code.zip")
 	absZip := filepath.Join(dataRoot, relPath)
+	// Zip archive stays private; only the unpacked tree is bind-mounted into DinD.
 	if err := os.WriteFile(absZip, zipBytes, 0o600); err != nil {
 		return "", "", fmt.Errorf("write lambda zip: %w", err)
 	}
@@ -329,11 +333,14 @@ func writeLambdaZip(dataRoot, accountID, name string, zipBytes []byte) (relPath,
 	if err := os.RemoveAll(unpackDir); err != nil {
 		return "", "", fmt.Errorf("clear lambda unpack dir: %w", err)
 	}
-	if err := os.MkdirAll(unpackDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(unpackDir); err != nil {
 		return "", "", fmt.Errorf("mkdir lambda unpack dir: %w", err)
 	}
 	if err := unzipBytes(zipBytes, unpackDir); err != nil {
 		return "", "", fmt.Errorf("unpack lambda zip: %w", err)
+	}
+	if err := chmodLabSharedTree(unpackDir); err != nil {
+		return "", "", err
 	}
 	return relPath, shaHex, nil
 }
@@ -357,19 +364,19 @@ func unzipBytes(zipBytes []byte, destDir string) error {
 			return fmt.Errorf("zip entry escapes dest: %q", f.Name)
 		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o700); err != nil {
+			if err := ensureLabSharedDir(target); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		if err := ensureLabSharedDir(filepath.Dir(target)); err != nil {
 			return err
 		}
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, LabSharedFileMode)
 		if err != nil {
 			_ = rc.Close()
 			return err
@@ -382,6 +389,9 @@ func unzipBytes(zipBytes []byte, destDir string) error {
 		}
 		if closeErr != nil {
 			return closeErr
+		}
+		if err := os.Chmod(target, LabSharedFileMode); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -764,8 +774,11 @@ func copyLambdaVersionArtifacts(dataRoot, accountID, name string, version int, s
 	shaHex = hex.EncodeToString(sum[:])
 	dirRel := filepath.Join("lambda", accountID, name, "versions", fmt.Sprintf("%d", version))
 	absDir := filepath.Join(dataRoot, dirRel)
-	if err := os.MkdirAll(absDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(absDir); err != nil {
 		return "", "", fmt.Errorf("mkdir version dir: %w", err)
+	}
+	if err := ensureLabSharedAncestors(dataRoot, absDir); err != nil {
+		return "", "", err
 	}
 	relPath = filepath.Join(dirRel, "code.zip")
 	absZip := filepath.Join(dataRoot, relPath)
@@ -776,11 +789,14 @@ func copyLambdaVersionArtifacts(dataRoot, accountID, name string, version int, s
 	if err := os.RemoveAll(unpackDir); err != nil {
 		return "", "", fmt.Errorf("clear version unpack dir: %w", err)
 	}
-	if err := os.MkdirAll(unpackDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(unpackDir); err != nil {
 		return "", "", fmt.Errorf("mkdir version unpack dir: %w", err)
 	}
 	if err := unzipBytes(zipBytes, unpackDir); err != nil {
 		return "", "", fmt.Errorf("unpack version zip: %w", err)
+	}
+	if err := chmodLabSharedTree(unpackDir); err != nil {
+		return "", "", err
 	}
 	return relPath, shaHex, nil
 }
@@ -1222,8 +1238,11 @@ func writeLambdaLayerZip(dataRoot, accountID, name string, version int, zipBytes
 	shaHex = hex.EncodeToString(sum[:])
 	dirRel := filepath.Join("lambda", accountID, "layers", name, "versions", fmt.Sprintf("%d", version))
 	absDir := filepath.Join(dataRoot, dirRel)
-	if err := os.MkdirAll(absDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(absDir); err != nil {
 		return "", "", fmt.Errorf("mkdir layer dir: %w", err)
+	}
+	if err := ensureLabSharedAncestors(dataRoot, absDir); err != nil {
+		return "", "", err
 	}
 	relPath = filepath.Join(dirRel, "layer.zip")
 	absZip := filepath.Join(dataRoot, relPath)
@@ -1234,11 +1253,14 @@ func writeLambdaLayerZip(dataRoot, accountID, name string, version int, zipBytes
 	if err := os.RemoveAll(unpackDir); err != nil {
 		return "", "", fmt.Errorf("clear layer unpack dir: %w", err)
 	}
-	if err := os.MkdirAll(unpackDir, 0o700); err != nil {
+	if err := ensureLabSharedDir(unpackDir); err != nil {
 		return "", "", fmt.Errorf("mkdir layer unpack dir: %w", err)
 	}
 	if err := unzipBytes(zipBytes, unpackDir); err != nil {
 		return "", "", fmt.Errorf("unpack layer zip: %w", err)
+	}
+	if err := chmodLabSharedTree(unpackDir); err != nil {
+		return "", "", err
 	}
 	return relPath, shaHex, nil
 }

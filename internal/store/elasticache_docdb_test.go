@@ -31,7 +31,7 @@ func TestElastiCacheClusterCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Status != "available" || c.EndpointPort != store.ElastiCacheNestedPort {
+	if c.Status != "creating" || c.EndpointPort != store.ElastiCacheNestedPort {
 		t.Fatalf("cluster=%+v", c)
 	}
 	if !strings.HasSuffix(c.EndpointAddress, ".cache.noctaxris.internal") {
@@ -57,6 +57,10 @@ func TestElastiCacheClusterCRUD(t *testing.T) {
 	}
 	if err := st.SetElastiCacheContainerID(account, "lab-cache", "ctr-1", "available", ""); err != nil {
 		t.Fatal(err)
+	}
+	ready, err := st.DescribeElastiCacheCluster(account, "lab-cache")
+	if err != nil || ready.Status != "available" || ready.ContainerID != "ctr-1" {
+		t.Fatalf("after nested start: %+v err=%v", ready, err)
 	}
 	ctr, err := st.DeleteElastiCacheCluster(account, "lab-cache")
 	if err != nil || ctr != "ctr-1" {

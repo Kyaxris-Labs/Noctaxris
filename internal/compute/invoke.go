@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -27,9 +28,11 @@ type RunOpts struct {
 	Handler string
 	// TimeoutSec is the container wall-clock limit (default 30).
 	TimeoutSec int
+	// MemoryMB is the optional Docker memory limit in megabytes (0 = engine default).
+	MemoryMB int
 	// Env is merged into the container environment (execution-role AWS_* keys, etc.).
 	Env map[string]string
-	// EventJSON is the Invoke payload written to /var/task/.noctaxris-event.json.
+	// EventJSON is the Invoke payload written under a per-invoke scratch dir.
 	EventJSON string
 	// EndpointURL is injected as AWS_ENDPOINT_URL* for the function SDK.
 	// Empty defaults to http://host.docker.internal:4566 (Compose Desktop path).
@@ -93,25 +96,40 @@ func (c *Client) RunInvoke(ctx context.Context, opts RunOpts) (InvokeResult, err
 		return InvokeResult{}, err
 	}
 
-	eventPath := filepath.Join(opts.CodeHostPath, ".noctaxris-event.json")
-	if err := os.WriteFile(eventPath, []byte(opts.EventJSON), 0o600); err != nil {
+	// Per-invoke scratch under the code dir so concurrent Invokes do not race
+	// shared .noctaxris-event.json / .noctaxris-opt paths.
+	invokeID := uuid.NewString()
+	scratchDir := filepath.Join(opts.CodeHostPath, ".noctaxris-invoke-"+invokeID)
+	// Lab-shared modes: API UID 65532 vs nested DinD; private 0700/0600 yields exit 1.
+	if err := os.MkdirAll(scratchDir, store.LabSharedDirMode); err != nil {
+		return InvokeResult{}, fmt.Errorf("compute: mkdir invoke scratch: %w", err)
+	}
+	if err := os.Chmod(scratchDir, store.LabSharedDirMode); err != nil {
+		return InvokeResult{}, fmt.Errorf("compute: chmod invoke scratch: %w", err)
+	}
+	defer os.RemoveAll(scratchDir)
+
+	eventPath := filepath.Join(scratchDir, ".noctaxris-event.json")
+	if err := os.WriteFile(eventPath, []byte(opts.EventJSON), store.LabSharedFileMode); err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: write event: %w", err)
 	}
-	defer os.Remove(eventPath)
+	if err := os.Chmod(eventPath, store.LabSharedFileMode); err != nil {
+		return InvokeResult{}, fmt.Errorf("compute: chmod event: %w", err)
+	}
 
 	mergedOptDir := ""
 	if len(opts.LayerHostPaths) > 0 {
-		mergedOptDir = filepath.Join(opts.CodeHostPath, ".noctaxris-opt")
+		mergedOptDir = filepath.Join(scratchDir, ".noctaxris-opt")
 		if err := MergeLayerDirs(opts.LayerHostPaths, mergedOptDir); err != nil {
 			return InvokeResult{}, err
 		}
-		defer os.RemoveAll(mergedOptDir)
 	}
 
+	eventInContainer := "/var/task/.noctaxris-invoke-" + invokeID + "/.noctaxris-event.json"
 	env := []string{
 		"AWS_LAMBDA_FUNCTION_HANDLER=" + opts.Handler,
 		"HANDLER=" + opts.Handler,
-		"NOCTAXRIS_EVENT_PATH=/var/task/.noctaxris-event.json",
+		"NOCTAXRIS_EVENT_PATH=" + eventInContainer,
 		"AWS_DEFAULT_REGION=us-east-1",
 		"AWS_ENDPOINT_URL=" + endpoint,
 		"AWS_ENDPOINT_URL_STS=" + endpoint,
@@ -138,12 +156,15 @@ func (c *Client) RunInvoke(ctx context.Context, opts RunOpts) (InvokeResult, err
 	if mergedOptDir != "" {
 		binds = append(binds, mergedOptDir+":/opt:ro")
 	}
+	sec := nestedTaskSecurity(opts.MemoryMB)
 	hostConfig := &container.HostConfig{
-		Binds: binds,
-		AutoRemove:    false,
-		NetworkMode:   container.NetworkMode(FunctionNetworkName),
-		ExtraHosts:    hostGatewayExtraHosts(),
+		Binds:          binds,
+		AutoRemove:     false,
+		NetworkMode:    container.NetworkMode(FunctionNetworkName),
+		ExtraHosts:     hostGatewayExtraHosts(),
 		ReadonlyRootfs: false,
+		CapDrop:        sec.CapDrop,
+		Resources:      container.Resources{Memory: sec.Memory},
 	}
 
 	cfg := &container.Config{

@@ -266,7 +266,7 @@ func (s *Server) sfnStartExecution(
 		return
 	}
 	invoke := func(resourceARN, inputJSON string) (string, error) {
-		return s.sfnInvokeLambdaTask(r, verified, resourceARN, inputJSON)
+		return s.sfnInvokeLambdaTask(r, verified.AccountID, resourceARN, inputJSON)
 	}
 	exec, err := s.store.StartSFNExecution(verified.AccountID, s.sfnRegion(verified), smARN, name, input, invoke)
 	if errors.Is(err, store.ErrSFNStateMachineNotFound) {
@@ -284,21 +284,20 @@ func (s *Server) sfnStartExecution(
 	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "StartExecution", readOnly)
 }
 
-func (s *Server) sfnInvokeLambdaTask(r *http.Request, verified *authn.Verified, resourceARN, inputJSON string) (string, error) {
+func (s *Server) sfnInvokeLambdaTask(r *http.Request, smAccountID, resourceARN, inputJSON string) (string, error) {
 	accountID, functionName, ok := store.ParseLambdaARNFromSFNResource(resourceARN)
 	if !ok {
 		return "", fmt.Errorf("Task Resource must be a Lambda function ARN or name (SQS/SNS/EventBridge bus Tasks are handled in-store)")
 	}
 	if accountID == "" {
-		accountID = verified.AccountID
+		accountID = smAccountID
 	}
 	fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, "$LATEST")
 	if err != nil {
 		return "", fmt.Errorf("resolve function: %w", err)
 	}
-	if !s.authorizeLambda(verified, catalog.ActionLambdaInvoke, fn.FunctionARN, fn.ResourcePolicy) {
-		return "", fmt.Errorf("not authorized to invoke %s", fn.FunctionARN)
-	}
+	// Authz is enforced in-store via the state machine RoleArn session (or states
+	// service principal resource policy) before this callback runs.
 	result, err := s.executeLambdaInvoke(r.Context(), accountID, functionName, fn, executedVersion, inputJSON)
 	if err != nil {
 		return "", err

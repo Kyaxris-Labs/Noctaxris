@@ -83,8 +83,32 @@ func TestLambdaCreateGetUpdateCodeDelete(t *testing.T) {
 	if _, err := os.Stat(absZip); err != nil {
 		t.Fatalf("missing zip %s: %v", absZip, err)
 	}
-	if _, err := os.Stat(filepath.Join(st.DataRoot(), "lambda", account, "hello-world", "code", "app.py")); err != nil {
+	codeDir := filepath.Join(st.DataRoot(), "lambda", account, "hello-world", "code")
+	appPath := filepath.Join(codeDir, "app.py")
+	if _, err := os.Stat(appPath); err != nil {
 		t.Fatalf("missing unpacked app.py: %v", err)
+	}
+	// Nested DinD must traverse API-owned trees (UID 65532); private modes break Invoke.
+	for _, p := range []string{
+		filepath.Join(st.DataRoot(), "lambda"),
+		filepath.Join(st.DataRoot(), "lambda", account),
+		filepath.Join(st.DataRoot(), "lambda", account, "hello-world"),
+		codeDir,
+	} {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if info.Mode().Perm()&0o005 == 0 {
+			t.Fatalf("%s mode=%o want other-executable", p, info.Mode().Perm())
+		}
+	}
+	appInfo, err := os.Stat(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appInfo.Mode().Perm()&0o004 == 0 {
+		t.Fatalf("app.py mode=%o want other-readable", appInfo.Mode().Perm())
 	}
 
 	got, err := st.GetFunction(account, "hello-world")

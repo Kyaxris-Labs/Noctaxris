@@ -19,7 +19,7 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 
 | AuthorizationType | Runtime | Notes |
 |-------------------|---------|-------|
-| `NONE` | Open when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1` | Create and invoke refuse `NONE` on non-loopback without the opt-in |
+| `NONE` | Open when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1` | Create and invoke refuse `NONE` on non-loopback without the opt-in. Default Compose does not set the opt-in (container bind is non-loopback) |
 | `JWT` | Bearer token | Verifies lab Cognito JWKS in-process (issuer `http://127.0.0.1:4566/cognito-idp/...`). Remote JWKS issuers fail closed unless `NOCTAXRIS_ALLOW_REMOTE_JWKS=1` with a public host allowlist. Requires `token_use=access` (rejects missing or `id`). Enforces `exp` and `nbf`. Audience matches `aud` or `client_id`. `IdentitySource` must be `$request.header.Authorization` |
 | `AWS_IAM` | SigV4 service `execute-api` | Identity `execute-api:Invoke` on route ARN. HTTP API resource policies are not supported |
 
@@ -31,13 +31,16 @@ Identity `EvaluateFull` on manage actions. IAM invoke uses `execute-api:Invoke` 
 
 When `CredentialsArn` is set on `CreateIntegration`, PassRole plus `apigateway.amazonaws.com` trust is required. At invoke, a role session for that ARN must Allow `lambda:InvokeFunction` on the integration target.
 
-Lambda invoke from Gateway follows the same nested compute path as Function URLs. Grant `lambda:AddPermission` for `apigateway.amazonaws.com` in labs when you want policy fidelity. Without `CredentialsArn`, the lab invoke path does not require a resource policy statement.
+Without `CredentialsArn`, invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com` (`lambda:AddPermission`; optional `SourceArn` of the execute-api route). Missing permission returns 403.
 
 ## How to verify / CLI smoke
 
 Shared Compose and env setup: [index.md](index.md#shared-verification).
 
 ```bash
+# NONE routes need loopback listen, or NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1 under Compose.
+aws lambda add-permission --function-name hello --statement-id apigw \
+  --action lambda:InvokeFunction --principal apigateway.amazonaws.com --endpoint-url "$EP"
 aws apigatewayv2 create-api --name lab --protocol-type HTTP --endpoint-url "$EP"
 aws apigatewayv2 create-integration --api-id "$API" --integration-type AWS_PROXY \
   --integration-uri "arn:aws:lambda:us-east-1:000000000001:function:hello" --endpoint-url "$EP"

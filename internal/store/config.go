@@ -111,11 +111,18 @@ func (s *Store) PutConfigRecorder(accountID, name, roleARN, recordingGroup strin
 }
 
 // PutConfigDeliveryChannel upserts a delivery channel.
+// The lab S3 bucket must exist (fail closed); Config does not create buckets.
 func (s *Store) PutConfigDeliveryChannel(accountID, name, bucket, prefix, snsARN string) (ConfigDeliveryChannel, error) {
 	name = strings.TrimSpace(name)
 	bucket = strings.TrimSpace(bucket)
 	if name == "" || bucket == "" {
 		return ConfigDeliveryChannel{}, fmt.Errorf("%w: name and s3BucketName required", ErrConfigBadRequest)
+	}
+	if _, err := s.GetBucket(accountID, bucket); err != nil {
+		if errors.Is(err, ErrNoSuchBucket) {
+			return ConfigDeliveryChannel{}, fmt.Errorf("%w: s3BucketName %q does not exist", ErrConfigBadRequest, bucket)
+		}
+		return ConfigDeliveryChannel{}, fmt.Errorf("put delivery channel: get bucket: %w", err)
 	}
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
@@ -161,8 +168,9 @@ func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) 
 	if err != nil {
 		return
 	}
+	// Honest lab signal: recorder started. No config history PutObject is performed.
 	msg := fmt.Sprintf(
-		`{"messageType":"ConfigurationHistoryDeliveryStarted","configurationRecorderName":"%s"}`,
+		`{"messageType":"ConfigurationRecorderStarted","configurationRecorderName":"%s"}`,
 		recorderName,
 	)
 	for _, ch := range channels {
@@ -178,9 +186,25 @@ func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) 
 	}
 }
 
-// StartConfigRecorder marks a recorder as recording.
+// StartConfigRecorder marks a recorder as recording when a delivery channel exists.
+// No configuration history objects are written to S3 (control-plane flag only).
 func (s *Store) StartConfigRecorder(accountID, name string) error {
 	name = strings.TrimSpace(name)
+	channels, err := s.ListConfigDeliveryChannels(accountID)
+	if err != nil {
+		return fmt.Errorf("start configuration recorder: %w", err)
+	}
+	if len(channels) == 0 {
+		return fmt.Errorf("%w: a delivery channel is required before starting the recorder", ErrConfigBadRequest)
+	}
+	for _, ch := range channels {
+		if _, err := s.GetBucket(accountID, ch.S3BucketName); err != nil {
+			if errors.Is(err, ErrNoSuchBucket) {
+				return fmt.Errorf("%w: delivery channel bucket %q does not exist", ErrConfigBadRequest, ch.S3BucketName)
+			}
+			return fmt.Errorf("start configuration recorder: get bucket: %w", err)
+		}
+	}
 	res, err := s.db.Exec(
 		`UPDATE config_recorders SET recording = 1 WHERE account_id = ? AND name = ?`,
 		accountID, name,
@@ -214,41 +238,20 @@ func (s *Store) GetConfigRecorder(accountID, name string) (ConfigRecorder, error
 	return r, nil
 }
 
-// DescribeConfigComplianceByRule stubs compliance over tagged resources.
-// Resources with any tags are COMPLIANT. Untagged ARNs passed in resourceIDs are NON_COMPLIANT.
+// DescribeConfigComplianceByRule returns NOT_APPLICABLE until real config rules exist.
+// Does not invent COMPLIANT rows over Tagging API resources.
 func (s *Store) DescribeConfigComplianceByRule(accountID, ruleName string) ([]ConfigComplianceResult, error) {
+	_ = accountID
 	if ruleName == "" {
-		ruleName = "lab-tagged-resources"
+		ruleName = "default"
 	}
-	tagged, err := s.GetResources(accountID, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("compliance get resources: %w", err)
-	}
-	var out []ConfigComplianceResult
-	for _, tr := range tagged {
-		rtype, rid := splitResourceARN(tr.ResourceARN)
-		ctype := "COMPLIANT"
-		if len(tr.Tags) == 0 {
-			ctype = "NON_COMPLIANT"
-		}
-		out = append(out, ConfigComplianceResult{
-			ConfigRuleName: ruleName,
-			ComplianceType: ctype,
-			ResourceType:   rtype,
-			ResourceID:     rid,
-			Annotation:     "lab stub over Tagging API resources",
-		})
-	}
-	if len(out) == 0 {
-		out = append(out, ConfigComplianceResult{
-			ConfigRuleName: ruleName,
-			ComplianceType: "NOT_APPLICABLE",
-			ResourceType:   "AWS::Tagging::Resource",
-			ResourceID:     "none",
-			Annotation:     "no tagged resources in lab account",
-		})
-	}
-	return out, nil
+	return []ConfigComplianceResult{{
+		ConfigRuleName: ruleName,
+		ComplianceType: "NOT_APPLICABLE",
+		ResourceType:   "AWS::Config::ConfigRule",
+		ResourceID:     ruleName,
+		Annotation:     "rule evaluation not implemented",
+	}}, nil
 }
 
 func splitResourceARN(arn string) (resourceType, resourceID string) {

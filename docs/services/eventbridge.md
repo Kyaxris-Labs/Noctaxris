@@ -27,7 +27,7 @@ EventBridge control-plane APIs use identity `EvaluateFull` on bus and rule ARNs.
 
 `PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). At delivery time the lab mints a temporary role session and requires the role identity policies to Allow the target action. Logs, Kinesis, and Step Functions targets require `RoleArn` (no resource-policy delivery path).
 
-`PutTargets` without `RoleArn` (SQS/Lambda/SNS only) delivers only when the target resource policy Allows `events.amazonaws.com` or the account root. Missing or insufficient policy skips that target (best-effort). Rule or target matches are recorded only when delivery is authorized.
+`PutTargets` without `RoleArn` (SQS/Lambda/SNS only) delivers only when the target resource policy Allows `events.amazonaws.com` or the account root. Condition keys `aws:SourceArn` (rule ARN) and `aws:SourceAccount` are populated so SourceArn locks work. SQS and Lambda target ARNs may be cross-account (resource owner account for policy load and I/O). Missing or insufficient policy skips that target (best-effort). Rule or target matches are recorded only when delivery is authorized.
 
 CloudWatch Logs targets write to stream `eventbridge` (auto-created). Delivery failures after authorization are logged. PutEvents still succeeds (best-effort fan-out).
 

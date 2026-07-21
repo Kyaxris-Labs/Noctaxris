@@ -20,6 +20,8 @@ Parameter metadata lives in SQLite. SecureString values are sealed under the res
 
 SSM uses identity `EvaluateFull` on parameter ARNs (or `*` for `DescribeParameters`). There is no parameter resource policy path. Org SCP/RCP filters apply. Permissions boundary and session intersect on the identity path.
 
+SecureString paths also call `EvaluateKMS` on the parameter CMK: `kms:Encrypt` on `PutParameter`, and `kms:Decrypt` on decrypted `GetParameter` / `GetParameters` / `GetParametersByPath` (`WithDecryption=true`). String parameters stay identity-only. An `ssm:GetParameter` Allow alone cannot decrypt a SecureString when KMS denies.
+
 Cross-account parameter access beyond same-account lab paths is deferred.
 
 ## How to verify / CLI smoke

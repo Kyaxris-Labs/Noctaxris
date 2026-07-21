@@ -12,8 +12,8 @@ Lab AWS Batch core: compute environments, job queues, job definitions, and Submi
 | Job queue | `CreateJobQueue`, `DescribeJobQueues` |
 | Job definition | `RegisterJobDefinition`, `DescribeJobDefinitions` |
 | Jobs | `SubmitJob`, `DescribeJobs` |
-| Roles | Optional `serviceRole` on compute environment requires PassRole for `batch.amazonaws.com`. Optional `jobRoleArn` on container properties requires PassRole for `ecs-tasks.amazonaws.com` |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob reuses the nested ECS run helper on Internal network `noctaxris-ecs` |
+| Roles | Optional `serviceRole` on compute environment requires PassRole for `batch.amazonaws.com`. Optional `jobRoleArn` on container properties requires PassRole for `ecs-tasks.amazonaws.com`. When `jobRoleArn` is set, SubmitJob mints temporary AWS_* credentials for that role into the nested container (same pattern as ECS RunTask) |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob reuses the nested ECS run helper on Internal network `noctaxris-ecs` (host-gateway ExtraHosts off by default). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled with a registry token before start |
 
 ### Authz notes
 

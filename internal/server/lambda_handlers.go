@@ -485,13 +485,13 @@ func (s *Server) lambdaCreateFunction(
 			return
 		}
 	}
-	timeout := intParam(params["Timeout"], defaultLambdaTimeout)
-	if timeout <= 0 {
-		timeout = defaultLambdaTimeout
-	}
-	memory := intParam(params["MemorySize"], defaultLambdaMemory)
-	if memory <= 0 {
-		memory = defaultLambdaMemory
+	timeout := clampLambdaTimeout(intParam(params["Timeout"], defaultLambdaTimeout))
+	memory := clampLambdaMemory(intParam(params["MemorySize"], defaultLambdaMemory))
+	env := lambdaEnvFromParams(params)
+	if err := validateLambdaEnvKeys(env); err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 	deadLetter, onFailure := lambdaDLQFromParams(params)
 	fn, err := s.store.CreateFunction(store.CreateFunctionMeta{
@@ -503,7 +503,7 @@ func (s *Server) lambdaCreateFunction(
 		Handler:                 handler,
 		Timeout:                 timeout,
 		Memory:                  memory,
-		Env:                     lambdaEnvFromParams(params),
+		Env:                     env,
 		Description:             desc,
 		PackageType:             packageType,
 		Zip:                     zipBytes,
@@ -799,13 +799,19 @@ func (s *Server) lambdaUpdateFunctionConfiguration(
 		meta.Runtime = runtime
 	}
 	if _, ok := params["Timeout"]; ok {
-		meta.Timeout = intParam(params["Timeout"], fn.Timeout)
+		meta.Timeout = clampLambdaTimeout(intParam(params["Timeout"], fn.Timeout))
 	}
 	if _, ok := params["MemorySize"]; ok {
-		meta.Memory = intParam(params["MemorySize"], fn.Memory)
+		meta.Memory = clampLambdaMemory(intParam(params["MemorySize"], fn.Memory))
 	}
 	if _, ok := params["Environment"]; ok {
-		meta.Env = lambdaEnvFromParams(params)
+		env := lambdaEnvFromParams(params)
+		if err := validateLambdaEnvKeys(env); err != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		meta.Env = env
 	}
 	if _, ok := params["Layers"]; ok {
 		layers := lambdaLayersFromParams(params)
@@ -1491,7 +1497,8 @@ func (s *Server) lambdaAddPermission(
 	action, _ := params["Action"].(string)
 	principal, _ := params["Principal"].(string)
 	sourceAccount, _ := params["SourceAccount"].(string)
-	statement, err := s.store.AddFunctionPermission(verified.AccountID, name, statementID, action, principal, sourceAccount)
+	sourceARN, _ := params["SourceArn"].(string)
+	statement, err := s.store.AddFunctionPermission(verified.AccountID, name, statementID, action, principal, sourceAccount, sourceARN)
 	if errors.Is(err, store.ErrLambdaPolicyStatementExists) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusConflict, "ResourceConflictException",
 			"The statement id specified already exists.", readOnly, eventID, verified)
@@ -1756,59 +1763,25 @@ func (s *Server) executeLambdaInvoke(
 		return nil, errors.New("compute unavailable")
 	}
 
-	roleAccountID, _, ok := sts.ParseRoleARN(fn.RoleARN)
-	if !ok {
-		return nil, errors.New("function role ARN is invalid")
-	}
-	secret, err := randomSecret()
-	if err != nil {
-		return nil, fmt.Errorf("mint credentials: %w", err)
-	}
-	sessionToken, err := randomSecret()
-	if err != nil {
-		return nil, fmt.Errorf("mint credentials: %w", err)
-	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
-	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
-		AccountID:    roleAccountID,
-		RoleARN:      fn.RoleARN,
-		SessionName:  lambdaInvokeSession,
-		Secret:       secret,
-		SessionToken: sessionToken,
-		Expires:      expires,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("mint execution role credentials: %w", err)
-	}
-
 	endpoint := strings.TrimSpace(s.cfg.LambdaEndpointURL)
 	if endpoint == "" {
 		endpoint = defaultLambdaEndpoint
 	}
-	env := map[string]string{
-		"AWS_ACCESS_KEY_ID":         accessKeyID,
-		"AWS_SECRET_ACCESS_KEY":     secret,
-		"AWS_SESSION_TOKEN":         sessionToken,
-		"AWS_DEFAULT_REGION":        store.DefaultLambdaRegion,
-		"AWS_REGION":                store.DefaultLambdaRegion,
-		"AWS_ENDPOINT_URL":          endpoint,
-		"AWS_ENDPOINT_URL_STS":      endpoint,
-		"AWS_ENDPOINT_URL_IAM":      endpoint,
-		"AWS_ENDPOINT_URL_S3":       endpoint,
-		"AWS_ENDPOINT_URL_DYNAMODB": endpoint,
-		"AWS_ENDPOINT_URL_SQS":      endpoint,
-		"AWS_ENDPOINT_URL_LAMBDA":   endpoint,
-		"AWS_ENDPOINT_URL_KMS":      endpoint,
+	minted, err := s.mintRoleSessionEnv(fn.RoleARN, lambdaInvokeSession, endpoint, store.DefaultLambdaRegion)
+	if err != nil {
+		return nil, fmt.Errorf("mint execution role credentials: %w", err)
 	}
-	for k, v := range fn.Env {
-		env[k] = v
-	}
+	env := mergeLambdaInvokeEnv(fn.Env, minted)
 
 	if fn.PackageType == store.LambdaPackageTypeImage {
 		eventRel := filepath.Join("lambda", accountID, name, "invoke-events", uuid.NewString())
 		eventHostPath := filepath.ToSlash(filepath.Join(s.cfg.DataRoot, eventRel))
-		if err := os.MkdirAll(filepath.Join(s.cfg.DataRoot, eventRel), 0o700); err != nil {
+		eventAbs := filepath.Join(s.cfg.DataRoot, eventRel)
+		if err := os.MkdirAll(eventAbs, store.LabSharedDirMode); err != nil {
 			return nil, fmt.Errorf("prepare image invoke event dir: %w", err)
+		}
+		if err := os.Chmod(eventAbs, store.LabSharedDirMode); err != nil {
+			return nil, fmt.Errorf("chmod image invoke event dir: %w", err)
 		}
 		imageOpts, err := s.prepareLambdaImageRunOpts(accountID, fn, env, eventJSON, endpoint, eventHostPath)
 		if err != nil {
@@ -1836,7 +1809,8 @@ func (s *Server) executeLambdaInvoke(
 		CodeHostPath:   codePath,
 		Runtime:        fn.Runtime,
 		Handler:        fn.Handler,
-		TimeoutSec:     fn.Timeout,
+		TimeoutSec:     clampLambdaTimeout(fn.Timeout),
+		MemoryMB:       clampLambdaMemory(fn.Memory),
 		Env:            env,
 		EventJSON:      eventJSON,
 		EndpointURL:    endpoint,

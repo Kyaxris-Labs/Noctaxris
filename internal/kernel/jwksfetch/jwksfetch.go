@@ -2,6 +2,7 @@
 package jwksfetch
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -102,12 +103,58 @@ func FetchRemoteJWKS(issuer string, client *http.Client) ([]byte, error) {
 }
 
 func secureJWKSClient() *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	var transport *http.Transport
+	if ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = pinnedSafeDialContext
 	return &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout:   5 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return fmt.Errorf("jwksfetch: redirects are not allowed")
 		},
 	}
+}
+
+// pinnedSafeDialContext resolves addr, rejects unsafe IPs at dial time, and connects
+// only to a validated address (mitigates DNS rebinding between check and connect).
+func pinnedSafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("jwksfetch: dial addr: %w", err)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		if ip := net.ParseIP(host); ip != nil {
+			ips = []net.IP{ip}
+		} else {
+			return nil, fmt.Errorf("jwksfetch: resolve dial host: %w", err)
+		}
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("jwksfetch: dial host resolved to no addresses")
+	}
+	var dialer net.Dialer
+	var lastErr error
+	for _, ip := range ips {
+		if err := rejectUnsafeIP(ip); err != nil {
+			lastErr = err
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("jwksfetch: no safe dial target")
 }
 
 func validateRemoteIssuerURL(issuer string) error {

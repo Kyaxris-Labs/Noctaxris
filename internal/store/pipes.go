@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
 var (
@@ -270,11 +271,14 @@ func (s *Store) PollPipeOnce(accountID, pipeName string, invoke PipeInvokeFunc) 
 }
 
 func (s *Store) pollPipeFromSQS(accountID string, p Pipe, sourceARN, targetARN string, invoke PipeInvokeFunc) error {
-	queueName, err := queueNameFromARN(sourceARN)
+	if !s.pipeSourceAuthorized(accountID, p, sourceARN) {
+		return fmt.Errorf("%w: source not authorized for pipe", ErrPipeBadReq)
+	}
+	queueAccount, queueName, err := s.resolveSQSEndpoint(accountID, sourceARN)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrPipeBadReq, err)
 	}
-	msgs, err := s.ReceiveMessages(accountID, queueName, 10)
+	msgs, err := s.ReceiveMessages(queueAccount, queueName, 10)
 	if err != nil {
 		return err
 	}
@@ -293,15 +297,17 @@ func (s *Store) pollPipeFromSQS(accountID string, p Pipe, sourceARN, targetARN s
 		if err := s.deliverPipePayload(accountID, targetARN, body, invoke); err != nil {
 			return err
 		}
-		if err := s.DeleteMessage(accountID, queueName, msg.ReceiptHandle); err != nil {
+		if err := s.DeleteMessage(queueAccount, queueName, msg.ReceiptHandle); err != nil {
 			return err
 		}
 	}
-	_ = p
 	return nil
 }
 
 func (s *Store) pollPipeFromDynamoStream(accountID string, p Pipe, sourceARN, targetARN string, invoke PipeInvokeFunc) error {
+	if !s.pipeSourceAuthorized(accountID, p, sourceARN) {
+		return fmt.Errorf("%w: source not authorized for pipe", ErrPipeBadReq)
+	}
 	acct, tableName, label, ok := ParseDynamoStreamARN(sourceARN)
 	if !ok || acct != accountID {
 		return fmt.Errorf("%w: invalid DynamoDB stream ARN", ErrPipeBadReq)
@@ -348,6 +354,9 @@ func (s *Store) pollPipeFromDynamoStream(accountID string, p Pipe, sourceARN, ta
 }
 
 func (s *Store) pollPipeFromEventBus(accountID string, p Pipe, sourceARN, targetARN string, invoke PipeInvokeFunc) error {
+	if !s.pipeSourceAuthorized(accountID, p, sourceARN) {
+		return fmt.Errorf("%w: source not authorized for pipe", ErrPipeBadReq)
+	}
 	_, busAccount, busName, ok := ParseEventBusARN(sourceARN)
 	if !ok || busAccount != accountID {
 		return fmt.Errorf("%w: invalid EventBridge bus source ARN", ErrPipeBadReq)
@@ -413,14 +422,20 @@ func (s *Store) pipeEnrichPayload(accountID string, p Pipe, body string, invoke 
 	if enrichARN == "" {
 		return body, nil
 	}
-	_, fnName, ok := ParseLambdaARNFromSFNResource(enrichARN)
+	if !s.pipeEnrichmentAuthorized(accountID, p, enrichARN) {
+		return "", fmt.Errorf("%w: enrichment not authorized for pipe", ErrPipeBadReq)
+	}
+	fnAccount, fnName, ok := ParseLambdaARNFromSFNResource(enrichARN)
 	if !ok || fnName == "" {
 		return "", fmt.Errorf("%w: invalid Enrichment ARN", ErrPipeBadReq)
+	}
+	if fnAccount == "" {
+		fnAccount = accountID
 	}
 	if invoke == nil {
 		return "", fmt.Errorf("pipes: enrichment invoke callback is required")
 	}
-	resultJSON, err := invoke(accountID, fnName, body)
+	resultJSON, err := invoke(fnAccount, fnName, body)
 	if err != nil {
 		return "", fmt.Errorf("pipes enrichment: %w", err)
 	}
@@ -433,25 +448,75 @@ func (s *Store) pipeEnrichPayload(accountID string, p Pipe, body string, invoke 
 func (s *Store) deliverPipePayload(accountID, targetARN, body string, invoke PipeInvokeFunc) error {
 	switch {
 	case strings.Contains(targetARN, ":sqs:"):
-		qName, err := queueNameFromARN(targetARN)
+		queueAccount, qName, err := s.resolveSQSEndpoint(accountID, targetARN)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrPipeBadReq, err)
 		}
-		_, err = s.SendMessage(accountID, qName, []byte(body), false, nil, "", nil)
+		_, err = s.SendMessage(queueAccount, qName, []byte(body), false, nil, "", nil)
 		return err
 	case strings.Contains(targetARN, ":lambda:"):
-		_, fnName, ok := ParseLambdaARNFromSFNResource(targetARN)
+		fnAccount, fnName, ok := ParseLambdaARNFromSFNResource(targetARN)
 		if !ok || fnName == "" {
 			return fmt.Errorf("%w: invalid Lambda target ARN", ErrPipeBadReq)
+		}
+		if fnAccount == "" {
+			fnAccount = accountID
 		}
 		if invoke == nil {
 			return fmt.Errorf("pipes: lambda invoke callback is required")
 		}
-		_, err := invoke(accountID, fnName, body)
+		_, err := invoke(fnAccount, fnName, body)
 		return err
 	default:
 		return fmt.Errorf("%w: unsupported Target ARN", ErrPipeBadReq)
 	}
+}
+
+// pipeSourceAuthorized requires a RoleArn session Allow on source poll actions,
+// or (SQS) a source queue policy Allow for pipes.amazonaws.com with SourceArn=pipe.
+func (s *Store) pipeSourceAuthorized(accountID string, p Pipe, sourceARN string) bool {
+	sourceARN = strings.TrimSpace(sourceARN)
+	roleARN := strings.TrimSpace(p.RoleARN)
+	switch {
+	case strings.Contains(sourceARN, ":sqs:"):
+		if roleARN != "" {
+			if s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSReceiveMessage, sourceARN, "pipes-source", DefaultPipesRegion) &&
+				s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSDeleteMessage, sourceARN, "pipes-source", DefaultPipesRegion) {
+				return true
+			}
+		}
+		return s.deliveryTargetResourcePolicyAllows(accountID, sourceARN, actionSQSReceiveMessage, authz.ServicePrincipalPipes, p.ARN) &&
+			s.deliveryTargetResourcePolicyAllows(accountID, sourceARN, actionSQSDeleteMessage, authz.ServicePrincipalPipes, p.ARN)
+	case strings.Contains(sourceARN, ":dynamodb:") && strings.Contains(sourceARN, "/stream/"):
+		if roleARN == "" {
+			return false
+		}
+		return s.deliveryRoleSessionAllows(accountID, roleARN, actionDynamoGetRecords, sourceARN, "pipes-source", DefaultPipesRegion)
+	case strings.Contains(sourceARN, ":events:") && strings.Contains(sourceARN, ":event-bus/"):
+		// Lab bus sources require a RoleArn that exists in-account (full events:Retrieve*
+		// surface is not modeled). Resource-policy-only bus drain is rejected.
+		if roleARN == "" {
+			return false
+		}
+		roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
+		if !ok || roleAccountID != accountID {
+			return false
+		}
+		_, _, err := s.GetRole(accountID, roleName)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+// pipeEnrichmentAuthorized requires RoleArn session Allow on lambda:InvokeFunction
+// for the enrichment ARN (fail closed when Enrichment is set without RoleArn).
+func (s *Store) pipeEnrichmentAuthorized(accountID string, p Pipe, enrichARN string) bool {
+	roleARN := strings.TrimSpace(p.RoleARN)
+	if roleARN == "" {
+		return false
+	}
+	return s.deliveryRoleSessionAllows(accountID, roleARN, actionLambdaInvokeFunction, enrichARN, "pipes-enrichment", DefaultPipesRegion)
 }
 
 // pipeDeliveryAuthorized mirrors Scheduler: RoleArn session EvaluateFull, or
@@ -464,7 +529,7 @@ func (s *Store) pipeDeliveryAuthorized(accountID string, p Pipe, targetARN strin
 	}
 	roleARN := strings.TrimSpace(p.RoleARN)
 	if roleARN == "" {
-		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalPipes)
+		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalPipes, p.ARN)
 	}
 	return s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "pipes-delivery", DefaultPipesRegion)
 }

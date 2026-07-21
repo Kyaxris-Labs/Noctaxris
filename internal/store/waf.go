@@ -333,6 +333,7 @@ func IsWAFAssociableResourceARN(resourceARN string) bool {
 
 // AssociateWAFWebACL associates a Web ACL ARN with a lab resource ARN string.
 // ResourceArn must match IsWAFAssociableResourceARN (fail closed on unknown).
+// WebACLArn must exist in-account (fail closed on phantom ARNs).
 func (s *Store) AssociateWAFWebACL(accountID, webACLARN, resourceARN string) error {
 	webACLARN = strings.TrimSpace(webACLARN)
 	resourceARN = strings.TrimSpace(resourceARN)
@@ -342,7 +343,18 @@ func (s *Store) AssociateWAFWebACL(accountID, webACLARN, resourceARN string) err
 	if !IsWAFAssociableResourceARN(resourceARN) {
 		return fmt.Errorf("%w: ResourceArn is not a supported association target", ErrWAFBadRequest)
 	}
-	_, err := s.db.Exec(
+	var exists int
+	err := s.db.QueryRow(
+		`SELECT 1 FROM wafv2_web_acls WHERE account_id = ? AND arn = ?`,
+		accountID, webACLARN,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrWAFNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("associate web acl: resolve acl: %w", err)
+	}
+	_, err = s.db.Exec(
 		`INSERT INTO wafv2_associations (account_id, web_acl_arn, resource_arn) VALUES (?, ?, ?)
 		 ON CONFLICT(account_id, resource_arn) DO UPDATE SET web_acl_arn = excluded.web_acl_arn`,
 		accountID, webACLARN, resourceARN,

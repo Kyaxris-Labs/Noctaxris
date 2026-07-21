@@ -76,8 +76,12 @@ func TestPipesSQSToSQS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pipes.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"` + dst.QueueARN + `"}]}`
-	if err := st.SetQueueAttributes(account, dst.QueueName, map[string]string{"Policy": policy}); err != nil {
+	dstPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pipes.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"` + dst.QueueARN + `"}]}`
+	if err := st.SetQueueAttributes(account, dst.QueueName, map[string]string{"Policy": dstPolicy}); err != nil {
+		t.Fatal(err)
+	}
+	srcPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pipes.amazonaws.com"},"Action":["sqs:ReceiveMessage","sqs:DeleteMessage"],"Resource":"` + src.QueueARN + `"}]}`
+	if err := st.SetQueueAttributes(account, src.QueueName, map[string]string{"Policy": srcPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	p, err := st.CreatePipe(account, "us-east-1", "lab-pipe", "", src.QueueARN, dst.QueueARN, "", "RUNNING")

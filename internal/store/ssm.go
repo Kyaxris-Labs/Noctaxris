@@ -112,7 +112,8 @@ func (s *Store) EnsureSSMAlias(accountID string) (string, error) {
 	return k.KeyID, nil
 }
 
-func (s *Store) resolveSSMKeyID(accountID, keyIDOrAlias string) (string, error) {
+// ResolveSSMKeyID resolves KeyId for SecureString or defaults to alias/aws/ssm.
+func (s *Store) ResolveSSMKeyID(accountID, keyIDOrAlias string) (string, error) {
 	id := strings.TrimSpace(keyIDOrAlias)
 	if id == "" || id == AliasAWSSSM {
 		return s.EnsureSSMAlias(accountID)
@@ -123,6 +124,10 @@ func (s *Store) resolveSSMKeyID(accountID, keyIDOrAlias string) (string, error) 
 		}
 	}
 	return s.ResolveKeyID(accountID, id)
+}
+
+func (s *Store) resolveSSMKeyID(accountID, keyIDOrAlias string) (string, error) {
+	return s.ResolveSSMKeyID(accountID, keyIDOrAlias)
 }
 
 // PutParameter stores a String or SecureString parameter. keyID is optional for
@@ -186,7 +191,7 @@ func (s *Store) PutParameter(
 		if err != nil {
 			return Parameter{}, fmt.Errorf("put parameter: unseal key: %w", err)
 		}
-		sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, []byte(value))
+		sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, []byte(value), nil)
 		if err != nil {
 			return Parameter{}, fmt.Errorf("put parameter: encrypt: %w", err)
 		}

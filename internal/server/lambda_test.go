@@ -554,6 +554,114 @@ func TestLambdaUpdateFunctionConfigurationRejectedRuntime(t *testing.T) {
 	}
 }
 
+func TestLambdaCreateFunctionRejectsReservedEnvKeys(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "lambda-exec-env", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-env"
+
+	rec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "reserved-env",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Environment": map[string]any{
+			"Variables": map[string]any{
+				"AWS_ACCESS_KEY_ID": "AKIACLIENT",
+				"STAGE":             "lab",
+			},
+		},
+		"Code": map[string]any{
+			"ZipFile": testLambdaZipB64(t),
+		},
+	}, now)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("CreateFunction status=%d want 400 body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "InvalidParameterValueException") {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "AWS_ACCESS_KEY_ID") {
+		t.Fatalf("body missing reserved key detail: %q", rec.Body.String())
+	}
+}
+
+func TestLambdaUpdateFunctionConfigurationRejectsReservedEnvKeys(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "lambda-exec-env2", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-env2"
+
+	createRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "upd-reserved-env",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Environment": map[string]any{
+			"Variables": map[string]any{"STAGE": "lab"},
+		},
+		"Code": map[string]any{
+			"ZipFile": testLambdaZipB64(t),
+		},
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	rec := mustLambdaJSON(t, handler, "UpdateFunctionConfiguration", map[string]any{
+		"FunctionName": "upd-reserved-env",
+		"Environment": map[string]any{
+			"Variables": map[string]any{
+				"AWS_ENDPOINT_URL": "http://evil.example",
+			},
+		},
+	}, now)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateFunctionConfiguration status=%d want 400 body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "AWS_ENDPOINT_URL") {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+}
+
+func TestLambdaCreateFunctionClampsTimeoutAndMemory(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "lambda-exec-clamp", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-clamp"
+
+	rec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "clamp-limits",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Timeout":      5000,
+		"MemorySize":   64,
+		"Code": map[string]any{
+			"ZipFile": testLambdaZipB64(t),
+		},
+	}, now)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created["Timeout"] != float64(900) {
+		t.Fatalf("Timeout=%v want 900", created["Timeout"])
+	}
+	if created["MemorySize"] != float64(128) {
+		t.Fatalf("MemorySize=%v want 128", created["MemorySize"])
+	}
+}
+
 func TestLambdaFunctionPolicyLifecycle(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

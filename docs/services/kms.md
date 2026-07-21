@@ -12,7 +12,7 @@ Lab-complete customer-managed keys: sealed CMK material, key policies with expli
 | Lifecycle | `ScheduleKeyDeletion`, `CancelKeyDeletion` (`PendingDeletion` state. Cancel sets `Disabled`, matching AWS. On-read sweeper hard-deletes keys after `DeletionDate`, including aliases and grants) |
 | Rotation | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` (enable rotates sealed material immediately. Prior generations remain for Decrypt. Lab auto-rotate after `rotation_period_days`, default 365) |
 | Key policy | `GetKeyPolicy`, `PutKeyPolicy` |
-| Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` |
+| Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` (optional `EncryptionContext` bound as GCM AAD; decrypt/re-encrypt must supply the same map) |
 | Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
 | Aliases | `CreateAlias`, `ListAliases`, `DeleteAlias`, `UpdateAlias` |
 | Lab convenience aliases | Per-account `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs` (lab CMK approximations, not AWS-owned keys) |
@@ -22,6 +22,8 @@ CreateKey seeds a default key policy that allows the account root (and the IAM u
 ### Authz notes
 
 KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Key policy statements must name the caller principal (account root, IAM user, or IAM role). Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet).
+
+When `EncryptionContext` is present, request condition keys include `kms:EncryptionContext:<key>` for each pair and `kms:EncryptionContextKeys` (sorted, comma-joined). Ciphertext integrity binds the same map as AES-GCM AAD: a mismatched or omitted context fails decrypt with `InvalidCiphertextException`.
 
 Cross-account Encrypt and similar crypto APIs use a full key ARN. Both the caller identity policy and the trusting account key policy must Allow.
 
@@ -63,6 +65,7 @@ aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
 ## Not yet / deferred
 
 - Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity, `RotateKeyOnDemand` API shape)
+- Grant `Constraints` / distinct `GrantToken` / `GrantTokens` on crypto APIs
 - Cross-account grant flows beyond key policy dual eval
 - True AWS-owned managed key types beyond the lab convenience aliases above
 - AWS-faithful annual rotation calendar and multi-Region material replication

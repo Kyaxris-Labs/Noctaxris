@@ -352,7 +352,7 @@ func TestPublishDeliversToSubscribedLambda(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddFunctionPermission(account, "sns-handler", "sns-allow", "lambda:InvokeFunction", "sns.amazonaws.com", ""); err != nil {
+	if _, err := st.AddFunctionPermission(account, "sns-handler", "sns-allow", "lambda:InvokeFunction", "sns.amazonaws.com", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Subscribe(account, "alerts", "lambda", fn.FunctionARN); err != nil {

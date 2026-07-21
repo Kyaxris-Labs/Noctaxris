@@ -13,7 +13,7 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
 | Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
-| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST`. Arbitrary loopback ports are rejected |
+| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolve to public hosts (private/loopback/metadata rejected; no redirect follow). Arbitrary loopback ports are rejected |
 | Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 

@@ -85,7 +85,7 @@ func TestKMSRotateKeyMaterialKeepsDecrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := store.EncryptUnderCMK(before, k.KeyID, []byte("hello-rotate"))
+	blob, err := store.EncryptUnderCMK(before, k.KeyID, []byte("hello-rotate"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestKMSRotateKeyMaterialKeepsDecrypt(t *testing.T) {
 	if bytes.Equal(before, after) {
 		t.Fatal("expected new key material after rotation")
 	}
-	if _, err := store.DecryptUnderCMK(after, blob); err == nil {
+	if _, err := store.DecryptUnderCMK(after, blob, nil); err == nil {
 		t.Fatal("current material alone should not open pre-rotation ciphertext")
 	}
 	plain, err := st.DecryptBlobWithKey(k.KeyID, blob)

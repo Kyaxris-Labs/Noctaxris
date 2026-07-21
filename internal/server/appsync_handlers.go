@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	appsyncsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/appsync"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -407,6 +408,13 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 			_, _ = w.Write(payload)
 			return
 		}
+		if !strings.EqualFold(v.Service, "appsync") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
+			_, _ = w.Write(payload)
+			return
+		}
 		if v.AccountID != accountID {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -490,6 +498,15 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		payload, _ := appsyncsvc.GraphQLErrorsJSON("lambda function not found")
+		_, _ = w.Write(payload)
+		return
+	}
+	if !s.store.DeliveryTargetResourcePolicyAllows(
+		fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAppSync, api.ARN,
+	) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
 		_, _ = w.Write(payload)
 		return
 	}

@@ -237,9 +237,13 @@ func TestWAFCreateAndEvaluate(t *testing.T) {
 }
 
 func TestConfigRecorder(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := st.CreateBucket(testAccountID, "config-lab"); err != nil {
+		t.Fatal(err)
+	}
 
 	body := []byte(url.Values{
 		"Action":                     {"PutConfigurationRecorder"},
@@ -255,10 +259,25 @@ func TestConfigRecorder(t *testing.T) {
 		t.Fatalf("PutConfigurationRecorder status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
+	delivBody := []byte(url.Values{
+		"Action":                       {"PutDeliveryChannel"},
+		"Version":                      {"2014-11-12"},
+		"DeliveryChannel.Name":         {"default"},
+		"DeliveryChannel.s3BucketName": {"config-lab"},
+	}.Encode())
+	delivReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", delivBody)
+	delivReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, delivReq, delivBody, testAccessKey, testSecret, testRegion, "config", now)
+	delivRec := httptest.NewRecorder()
+	handler.ServeHTTP(delivRec, delivReq)
+	if delivRec.Code != http.StatusOK {
+		t.Fatalf("PutDeliveryChannel status=%d body=%q", delivRec.Code, delivRec.Body.String())
+	}
+
 	startBody := []byte(url.Values{
-		"Action":                     {"StartConfigurationRecorder"},
-		"Version":                    {"2014-11-12"},
-		"ConfigurationRecorderName":  {"default"},
+		"Action":                    {"StartConfigurationRecorder"},
+		"Version":                   {"2014-11-12"},
+		"ConfigurationRecorderName": {"default"},
 	}.Encode())
 	startReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", startBody)
 	startReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")

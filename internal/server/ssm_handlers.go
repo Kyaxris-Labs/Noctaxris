@@ -84,6 +84,36 @@ func (s *Server) authorizeSSM(verified *authn.Verified, action, resource string)
 	return s.authorize(verified, action, resource)
 }
 
+// ssmAuthorizeKMS resolves the SecureString CMK and evaluates KMS Encrypt/Decrypt.
+func (s *Server) ssmAuthorizeKMS(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	keyIDOrAlias, kmsAction string,
+) bool {
+	keyID, err := s.store.ResolveSSMKeyID(verified.AccountID, keyIDOrAlias)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Invalid KeyId.", readOnly, eventID, verified)
+		return false
+	}
+	key, err := s.store.GetKey(keyID)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Invalid KeyId.", readOnly, eventID, verified)
+		return false
+	}
+	if !s.authorizeKMSOp(verified, kmsAction, key, nil) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform "+kmsAction+" on the parameter KMS key.", readOnly, eventID, verified)
+		return false
+	}
+	return true
+}
+
 func (s *Server) ssmPutParameter(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -112,6 +142,11 @@ func (s *Server) ssmPutParameter(
 		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform ssm:PutParameter.", readOnly, eventID, verified)
 		return
+	}
+	if paramType == store.ParamTypeSecureString {
+		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, keyID, catalog.ActionKMSEncrypt) {
+			return
+		}
 	}
 
 	p, err := s.store.PutParameter(
@@ -162,7 +197,7 @@ func (s *Server) ssmGetParameter(
 		return
 	}
 
-	p, err := s.store.GetParameter(verified.AccountID, name, withDecryption)
+	p, err := s.store.GetParameter(verified.AccountID, name, false)
 	if errors.Is(err, store.ErrParameterNotFound) {
 		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterNotFound",
 			"Parameter not found.", readOnly, eventID, verified)
@@ -172,6 +207,17 @@ func (s *Server) ssmGetParameter(
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to get parameter.", readOnly, eventID, verified)
 		return
+	}
+	if withDecryption && p.Type == store.ParamTypeSecureString {
+		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+			return
+		}
+		p, err = s.store.GetParameter(verified.AccountID, name, true)
+		if err != nil {
+			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get parameter.", readOnly, eventID, verified)
+			return
+		}
 	}
 
 	includeValue := p.Type == store.ParamTypeString || withDecryption
@@ -211,11 +257,27 @@ func (s *Server) ssmGetParameters(
 		}
 	}
 
-	found, err := s.store.GetParameters(verified.AccountID, names, withDecryption)
+	found, err := s.store.GetParameters(verified.AccountID, names, false)
 	if err != nil {
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to get parameters.", readOnly, eventID, verified)
 		return
+	}
+	if withDecryption {
+		for _, p := range found {
+			if p.Type != store.ParamTypeSecureString {
+				continue
+			}
+			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+				return
+			}
+		}
+		found, err = s.store.GetParameters(verified.AccountID, names, true)
+		if err != nil {
+			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get parameters.", readOnly, eventID, verified)
+			return
+		}
 	}
 
 	foundSet := map[string]struct{}{}
@@ -264,11 +326,27 @@ func (s *Server) ssmGetParametersByPath(
 		return
 	}
 
-	found, err := s.store.GetParametersByPath(verified.AccountID, path, recursive, withDecryption)
+	found, err := s.store.GetParametersByPath(verified.AccountID, path, recursive, false)
 	if err != nil {
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to get parameters by path.", readOnly, eventID, verified)
 		return
+	}
+	if withDecryption {
+		for _, p := range found {
+			if p.Type != store.ParamTypeSecureString {
+				continue
+			}
+			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+				return
+			}
+		}
+		found, err = s.store.GetParametersByPath(verified.AccountID, path, recursive, true)
+		if err != nil {
+			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get parameters by path.", readOnly, eventID, verified)
+			return
+		}
 	}
 
 	payload, err := ssmsvc.GetParametersByPathJSON(found, withDecryption)

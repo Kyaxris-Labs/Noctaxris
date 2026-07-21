@@ -49,8 +49,12 @@ const ServicePrincipalCodeDeploy = "codedeploy.amazonaws.com"
 const ServicePrincipalCloudControl = "cloudformation.amazonaws.com"
 
 // ServicePrincipalAPIGateway is the API Gateway service principal used in role trust
-// for HTTP API integrations and related RoleArn configure paths.
+// for HTTP API integrations, CredentialsArn PassRole, and Lambda resource-policy invoke.
 const ServicePrincipalAPIGateway = "apigateway.amazonaws.com"
+
+// ServicePrincipalAppSync is the AppSync service principal used for Lambda
+// resource-policy invoke from GraphQL data sources.
+const ServicePrincipalAppSync = "appsync.amazonaws.com"
 
 // ServicePrincipalCognitoIDP is the Cognito User Pools service principal used in
 // role trust when Cognito configure APIs take RoleArn.
@@ -103,16 +107,39 @@ func CheckPassRole(req PassRoleRequest) Decision {
 	if EvaluateFull(ctx, in) != Allow {
 		return Deny
 	}
-	if !TrustAllowsService(req.TrustPolicyDoc, req.ServicePrincipal) {
+	trustKeys := passRoleTrustConditionKeys(req)
+	if !TrustAllowsServiceWithKeys(req.TrustPolicyDoc, req.ServicePrincipal, trustKeys) {
 		return Deny
 	}
 	return Allow
 }
 
+// passRoleTrustConditionKeys builds trust-evaluation keys for configure-time
+// PassRole (aws:SourceAccount from caller; SourceArn when already present).
+func passRoleTrustConditionKeys(req PassRoleRequest) map[string]string {
+	keys := map[string]string{}
+	if req.Caller.ConditionKeys != nil {
+		for k, v := range req.Caller.ConditionKeys {
+			keys[k] = v
+		}
+	}
+	if accountID := strings.TrimSpace(req.Caller.Principal.AccountID); accountID != "" {
+		keys["aws:SourceAccount"] = accountID
+	}
+	return keys
+}
+
 // TrustAllowsService reports whether trustDoc explicitly Allows sts:AssumeRole
 // for the given service principal (Principal.Service). Explicit Deny for that
-// service yields false. Principal "*" matches any service.
+// service yields false. Principal "*" matches any service. Trust Conditions are
+// evaluated with empty keys (positive operators fail closed when unpopulated).
 func TrustAllowsService(trustDoc, servicePrincipal string) bool {
+	return TrustAllowsServiceWithKeys(trustDoc, servicePrincipal, nil)
+}
+
+// TrustAllowsServiceWithKeys is TrustAllowsService with request condition keys
+// for trust Condition evaluation (e.g. aws:SourceAccount, aws:SourceArn).
+func TrustAllowsServiceWithKeys(trustDoc, servicePrincipal string, keys map[string]string) bool {
 	if trustDoc == "" || servicePrincipal == "" {
 		return false
 	}
@@ -120,9 +147,12 @@ func TrustAllowsService(trustDoc, servicePrincipal string) bool {
 	if err != nil {
 		return false
 	}
+	if keys == nil {
+		keys = map[string]string{}
+	}
 	var denyHit, allowHit bool
 	for _, st := range doc.Statement {
-		if !trustServiceStatementMatches(st, servicePrincipal) {
+		if !trustServiceStatementMatches(st, servicePrincipal, keys) {
 			continue
 		}
 		switch {
@@ -138,7 +168,7 @@ func TrustAllowsService(trustDoc, servicePrincipal string) bool {
 	return allowHit
 }
 
-func trustServiceStatementMatches(st statement, servicePrincipal string) bool {
+func trustServiceStatementMatches(st statement, servicePrincipal string, keys map[string]string) bool {
 	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
 	if !effect {
 		return false
@@ -152,7 +182,15 @@ func trustServiceStatementMatches(st statement, servicePrincipal string) bool {
 	if len(st.Resource) > 0 && !resourcesMatch(st.Resource, "*") {
 		return false
 	}
-	return true
+	if conditionCatalogUnknown(st.Condition) {
+		return false
+	}
+	switch conditionApplies(st.Condition, keys) {
+	case condMatch:
+		return true
+	default:
+		return false
+	}
 }
 
 func principalServiceMatches(spec principalSpec, servicePrincipal string) bool {

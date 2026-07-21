@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -549,7 +550,7 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 		}
 		queueARN = q.QueueARN
 	}
-	if !s.deliveryTargetResourcePolicyAllows(queueAccount, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS) {
+	if !s.deliveryTargetResourcePolicyAllows(queueAccount, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS, sub.TopicARN) {
 		return fmt.Errorf("sns sqs delivery: queue policy does not Allow sns.amazonaws.com")
 	}
 	body, err := json.Marshal(snsNotificationEnvelope(msg))
@@ -584,7 +585,7 @@ func (s *Store) deliverSNSToLambda(sub Subscription, msg PublishedMessage) error
 	if err != nil {
 		return fmt.Errorf("sns lambda delivery: %w", err)
 	}
-	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalSNS) {
+	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalSNS, sub.TopicARN) {
 		return fmt.Errorf("sns lambda delivery: function policy does not Allow sns.amazonaws.com")
 	}
 	eventJSON, err := snsLambdaEventJSON(sub, msg)
@@ -1033,11 +1034,12 @@ type SNSHTTPCatcherMessage struct {
 }
 
 // EnvSNSHTTPAllowlist extends the default SNS HTTP catcher allowlist (comma-separated exact URLs).
+// Allowlisted URLs still reject private, loopback, link-local, and metadata hosts.
 const EnvSNSHTTPAllowlist = "NOCTAXRIS_SNS_HTTP_ALLOWLIST"
 
 // validateSNSHTTPEndpoint allows only the lab catcher on loopback :4566
-// (or exact URLs listed in NOCTAXRIS_SNS_HTTP_ALLOWLIST). Arbitrary loopback
-// ports are rejected to avoid open-proxy style delivery.
+// (or exact URLs listed in NOCTAXRIS_SNS_HTTP_ALLOWLIST that pass host safety).
+// Arbitrary loopback ports are rejected to avoid open-proxy style delivery.
 func validateSNSHTTPEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -1047,14 +1049,25 @@ func validateSNSHTTPEndpoint(endpoint string) error {
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("%w: protocol must be http or https", ErrSNSInvalidParameter)
 	}
-	if allowlistedSNSHTTPEndpoint(endpoint) {
+	if isSNSHTTPCatcherEndpoint(u, scheme) {
 		return nil
 	}
+	if !allowlistedSNSHTTPEndpoint(endpoint) {
+		return ErrSNSEndpointNotAllowed
+	}
+	// Allowlist never short-circuits private/metadata/loopback host checks.
+	if err := rejectSNSHTTPUnsafeHost(u.Hostname()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isSNSHTTPCatcherEndpoint(u *url.URL, scheme string) bool {
 	host := strings.ToLower(u.Hostname())
 	switch host {
 	case "127.0.0.1", "localhost", "::1":
 	default:
-		return ErrSNSEndpointNotAllowed
+		return false
 	}
 	port := u.Port()
 	if port == "" {
@@ -1065,13 +1078,10 @@ func validateSNSHTTPEndpoint(endpoint string) error {
 		}
 	}
 	if port != "4566" {
-		return ErrSNSEndpointNotAllowed
+		return false
 	}
 	path := u.Path
-	if path != LabSNSHTTPCatcherPath && !strings.HasPrefix(path, LabSNSHTTPCatcherPath+"/") {
-		return ErrSNSEndpointNotAllowed
-	}
-	return nil
+	return path == LabSNSHTTPCatcherPath || strings.HasPrefix(path, LabSNSHTTPCatcherPath+"/")
 }
 
 func allowlistedSNSHTTPEndpoint(endpoint string) bool {
@@ -1086,6 +1096,47 @@ func allowlistedSNSHTTPEndpoint(endpoint string) bool {
 		}
 	}
 	return false
+}
+
+func rejectSNSHTTPUnsafeHost(host string) error {
+	host = strings.TrimSpace(host)
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return ErrSNSEndpointNotAllowed
+	}
+	if lower == "metadata.google.internal" || strings.Contains(lower, "metadata") {
+		return ErrSNSEndpointNotAllowed
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return rejectSNSHTTPUnsafeIP(ip)
+		}
+		return fmt.Errorf("%w: resolve HTTP endpoint host: %v", ErrSNSEndpointNotAllowed, err)
+	}
+	if len(ips) == 0 {
+		return ErrSNSEndpointNotAllowed
+	}
+	for _, ip := range ips {
+		if err := rejectSNSHTTPUnsafeIP(ip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rejectSNSHTTPUnsafeIP(ip net.IP) error {
+	if ip == nil {
+		return ErrSNSEndpointNotAllowed
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return ErrSNSEndpointNotAllowed
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 {
+		return ErrSNSEndpointNotAllowed
+	}
+	return nil
 }
 
 func (s *Store) deliverSNSToHTTP(sub Subscription, msg PublishedMessage) error {
@@ -1125,15 +1176,23 @@ func (s *Store) deliverSNSHTTPConfirmation(sub Subscription) error {
 }
 
 func (s *Store) postSNSHTTP(endpoint, subARN, topicARN, msgType string, body []byte) error {
+	if err := validateSNSHTTPEndpoint(endpoint); err != nil {
+		return err
+	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return err
 	}
 	// Lab catcher path: persist without outbound HTTP (tests + same-process delivery).
-	if strings.HasPrefix(u.Path, LabSNSHTTPCatcherPath) || u.Path == LabSNSHTTPCatcherPath {
+	if isSNSHTTPCatcherEndpoint(u, strings.ToLower(u.Scheme)) {
 		return s.RecordSNSHTTPCatcher(subARN, topicARN, msgType, string(body))
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("sns http: redirects are not allowed")
+		},
+	}
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err

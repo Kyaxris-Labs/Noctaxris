@@ -66,7 +66,7 @@ func SealItemJSON(cmk []byte, keyID string, plainJSON []byte) (EncryptedItem, er
 	if _, err := io.ReadFull(rand.Reader, dek); err != nil {
 		return EncryptedItem{}, err
 	}
-	sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek)
+	sealedDEK, err := kmssvc.EncryptUnderCMK(cmk, keyID, dek, nil)
 	if err != nil {
 		return EncryptedItem{}, err
 	}
@@ -90,7 +90,7 @@ func OpenItemJSONAny(materials [][]byte, sealed EncryptedItem) ([]byte, error) {
 		if len(cmk) == 0 {
 			continue
 		}
-		dek, err := kmssvc.DecryptUnderCMK(cmk, sealed.SealedDEK)
+		dek, err := kmssvc.DecryptUnderCMK(cmk, sealed.SealedDEK, nil)
 		if err != nil {
 			lastErr = err
 			continue

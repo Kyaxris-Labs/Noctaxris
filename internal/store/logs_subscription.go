@@ -176,7 +176,7 @@ func (s *Store) deliverLogSubscription(accountID, group string, f LogsSubscripti
 		if !s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "logs-subscription", DefaultEventsRegion) {
 			return fmt.Errorf("role session denied")
 		}
-	} else if !s.deliveryTargetResourcePolicyAllows(accountID, arn, action, servicePrincipalLogs) {
+	} else if !s.deliveryTargetResourcePolicyAllows(accountID, arn, action, servicePrincipalLogs, "") {
 		return fmt.Errorf("destination policy denied")
 	}
 	switch {

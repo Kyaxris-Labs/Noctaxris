@@ -114,6 +114,37 @@ func (s *Server) authorizeSecretsManager(verified *authn.Verified, action, resou
 	})
 }
 
+// secretsAuthorizeKMS resolves the secret CMK (or alias/aws/secretsmanager) and
+// evaluates KMS Encrypt/Decrypt for Secrets Manager plaintext paths.
+func (s *Server) secretsAuthorizeKMS(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	accountID, keyIDOrAlias, kmsAction string,
+) bool {
+	keyID, err := s.store.ResolveSecretsManagerKeyID(accountID, keyIDOrAlias)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Invalid KmsKeyId.", readOnly, eventID, verified)
+		return false
+	}
+	key, err := s.store.GetKey(keyID)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Invalid KmsKeyId.", readOnly, eventID, verified)
+		return false
+	}
+	if !s.authorizeKMSOp(verified, kmsAction, key, nil) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform "+kmsAction+" on the secret KMS key.", readOnly, eventID, verified)
+		return false
+	}
+	return true
+}
+
 func (s *Server) secretMetaOrErr(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -203,6 +234,9 @@ func (s *Server) secretsCreateSecret(
 			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
 		return
 	}
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, verified.AccountID, keyID, catalog.ActionKMSEncrypt) {
+		return
+	}
 
 	sec, err := s.store.CreateSecret(
 		verified.AccountID, s.secretsRegion(verified), name, secretString, secretBinary, keyID, description,
@@ -245,6 +279,9 @@ func (s *Server) secretsGetSecretValue(
 	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsGetSecretValue, meta.ARN, meta.ResourcePolicy) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform secretsmanager:GetSecretValue.", readOnly, eventID, verified)
+		return
+	}
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSDecrypt) {
 		return
 	}
 
@@ -292,6 +329,9 @@ func (s *Server) secretsPutSecretValue(
 	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsPutSecretValue, meta.ARN, meta.ResourcePolicy) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform secretsmanager:PutSecretValue.", readOnly, eventID, verified)
+		return
+	}
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt) {
 		return
 	}
 
@@ -443,6 +483,9 @@ func (s *Server) secretsRotateSecret(
 	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsRotateSecret, meta.ARN, meta.ResourcePolicy) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform secretsmanager:RotateSecret.", readOnly, eventID, verified)
+		return
+	}
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt) {
 		return
 	}
 	sec, err := s.store.RotateSecret(secretAccountID, secretID)

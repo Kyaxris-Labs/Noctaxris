@@ -406,8 +406,9 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 		s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSDeleteMessage, eventSourceARN, session, DefaultLambdaRegion) {
 		return true
 	}
-	return s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSReceiveMessage, authz.ServicePrincipalLambda) &&
-		s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSDeleteMessage, authz.ServicePrincipalLambda)
+	sourceARN := fn.FunctionARN
+	return s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSReceiveMessage, authz.ServicePrincipalLambda, sourceARN) &&
+		s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSDeleteMessage, authz.ServicePrincipalLambda, sourceARN)
 }
 
 // PollEventSourceMappingOnce receives up to BatchSize records from SQS or DynamoDB Streams,

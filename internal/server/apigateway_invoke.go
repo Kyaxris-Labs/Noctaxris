@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -146,6 +147,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		http.Error(w, "lambda not found", http.StatusBadRequest)
 		return
 	}
+	executeAPISourceARN := store.APIGatewayRouteARN(region, accountID, apiID, stage, r.Method, routePath)
 	if credARN := strings.TrimSpace(in.CredentialsArn); credARN != "" {
 		if !s.store.RoleSessionAllows(
 			accountID, credARN, catalog.ActionLambdaInvoke, fn.FunctionARN,
@@ -154,6 +156,11 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+	} else if !s.store.DeliveryTargetResourcePolicyAllows(
+		fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAPIGateway, executeAPISourceARN,
+	) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
 	}
 
 	eventJSON, _ := json.Marshal(map[string]any{

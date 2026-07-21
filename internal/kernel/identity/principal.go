@@ -14,13 +14,14 @@ const (
 
 // Principal is a verified IAM identity for request evaluation.
 type Principal struct {
-	Kind        Kind
-	AccountID   string
-	AccessKeyID string
-	IsRoot      bool
-	UserName    string
-	RoleName    string
-	SessionName string
+	Kind                 Kind
+	AccountID            string
+	AccessKeyID          string
+	IsRoot               bool
+	UserName             string
+	RoleName             string
+	SessionName          string
+	FederatedProviderARN string // OIDC/SAML provider ARN for trust Principal.Federated match
 }
 
 // RootPrincipal returns the account root principal for the given access key.
@@ -50,6 +51,22 @@ func FederatedUserPrincipal(accountID, name, accessKeyID string) Principal {
 		AccountID:   accountID,
 		AccessKeyID: accessKeyID,
 		SessionName: name,
+	}
+}
+
+// FederatedProviderPrincipal returns a federation caller principal for trust
+// evaluation (AssumeRoleWithSAML / AssumeRoleWithWebIdentity). FederatedProviderARN
+// is matched against trust Principal.Federated.
+func FederatedProviderPrincipal(accountID, providerARN, sessionName, accessKeyID string) Principal {
+	if sessionName == "" {
+		sessionName = "federated"
+	}
+	return Principal{
+		Kind:                 KindFederated,
+		AccountID:            accountID,
+		AccessKeyID:          accessKeyID,
+		SessionName:          sessionName,
+		FederatedProviderARN: providerARN,
 	}
 }
 

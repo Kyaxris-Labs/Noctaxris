@@ -31,7 +31,7 @@ func TestLambdaFunctionPolicyLifecycle(t *testing.T) {
 		t.Fatalf("want ErrNoSuchResourcePolicy, got %v", err)
 	}
 
-	_, err = st.AddFunctionPermission(account, "policy-fn", "guest-invoke", "lambda:InvokeFunction", principal, "")
+	_, err = st.AddFunctionPermission(account, "policy-fn", "guest-invoke", "lambda:InvokeFunction", principal, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +71,10 @@ func TestLambdaAddFunctionPermissionDuplicateSid(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal := "arn:aws:iam::" + account + ":user/guest"
-	if _, err := st.AddFunctionPermission(account, "dup-sid", "sid-1", "lambda:InvokeFunction", principal, ""); err != nil {
+	if _, err := st.AddFunctionPermission(account, "dup-sid", "sid-1", "lambda:InvokeFunction", principal, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddFunctionPermission(account, "dup-sid", "sid-1", "lambda:InvokeFunction", principal, ""); !errors.Is(err, store.ErrLambdaPolicyStatementExists) {
+	if _, err := st.AddFunctionPermission(account, "dup-sid", "sid-1", "lambda:InvokeFunction", principal, "", ""); !errors.Is(err, store.ErrLambdaPolicyStatementExists) {
 		t.Fatalf("want ErrLambdaPolicyStatementExists, got %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestLambdaAddFunctionPermissionAllowsLabCrossAccountPrincipal(t *testing.T)
 		t.Fatal(err)
 	}
 	other := "arn:aws:iam::" + otherAccount + ":user/outsider"
-	stmt, err := st.AddFunctionPermission(account, "cross-acct", "x", "lambda:InvokeFunction", other, "")
+	stmt, err := st.AddFunctionPermission(account, "cross-acct", "x", "lambda:InvokeFunction", other, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestLambdaAddFunctionPermissionRejectsUnknownAccountPrincipal(t *testing.T)
 		t.Fatal(err)
 	}
 	other := "arn:aws:iam::000000000099:user/outsider"
-	if _, err := st.AddFunctionPermission(account, "unknown-acct", "x", "lambda:InvokeFunction", other, ""); err == nil {
+	if _, err := st.AddFunctionPermission(account, "unknown-acct", "x", "lambda:InvokeFunction", other, "", ""); err == nil {
 		t.Fatal("expected unknown principal account error")
 	}
 }
@@ -151,7 +151,7 @@ func TestLambdaAddFunctionPermissionNormalizesAccountIDPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stmt, err := st.AddFunctionPermission(account, "acct-id-prin", "y", "lambda:InvokeFunction", otherAccount, "")
+	stmt, err := st.AddFunctionPermission(account, "acct-id-prin", "y", "lambda:InvokeFunction", otherAccount, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

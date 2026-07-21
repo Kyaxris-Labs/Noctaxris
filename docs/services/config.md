@@ -2,18 +2,16 @@
 
 **Status:** shipped (lab core)
 
-Configuration recorder and delivery channel lite, StartConfigurationRecorder, and DescribeComplianceByConfigRule stub over Tagging API resources. Identity authz. Optional PassRole for recorder roleARN with `config.amazonaws.com` trust. When a delivery channel has `snsTopicARN`, StartConfigurationRecorder Publishes a lab `ConfigurationHistoryDeliveryStarted` notification (best-effort).
+Configuration recorder and delivery channel lite, StartConfigurationRecorder, and DescribeComplianceByConfigRule. Identity authz. Optional PassRole for recorder roleARN with `config.amazonaws.com` trust. Delivery channel `s3BucketName` must already exist in lab S3. Start requires a delivery channel; it sets the recording flag only (no configuration history PutObject). When a delivery channel has `snsTopicARN`, Start Publishes `ConfigurationRecorderStarted` (best-effort), not a history-delivery claim.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
-| Recorder | `PutConfigurationRecorder`, `StartConfigurationRecorder` |
-| Delivery | `PutDeliveryChannel` (optional `snsTopicARN`) |
-| Compliance | `DescribeComplianceByConfigRule` |
-| Notify | StartConfigurationRecorder → SNS Publish when delivery channel has `snsTopicARN` |
-
-Compliance treats tagged resources as COMPLIANT. When no tags exist, a NOT_APPLICABLE stub row is returned.
+| Recorder | `PutConfigurationRecorder`, `StartConfigurationRecorder` (requires delivery channel + existing bucket) |
+| Delivery | `PutDeliveryChannel` (bucket must exist; optional `snsTopicARN`) |
+| Compliance | `DescribeComplianceByConfigRule` → `NOT_APPLICABLE` (rule evaluation not implemented) |
+| Notify | StartConfigurationRecorder → SNS Publish `ConfigurationRecorderStarted` when delivery channel has `snsTopicARN` |
 
 ### Authz notes
 
@@ -24,6 +22,7 @@ Identity `EvaluateFull` on `config:*`. PassRole applies when ConfigurationRecord
 Shared Compose and env setup: [index.md](index.md#shared-verification).
 
 ```bash
+aws s3 mb s3://config-lab --endpoint-url "$EP"
 aws configservice put-configuration-recorder \
   --configuration-recorder name=default,roleARN=arn:aws:iam::000000000001:role/config \
   --endpoint-url "$EP"
@@ -36,8 +35,9 @@ aws configservice start-configuration-recorder \
 aws configservice describe-compliance-by-config-rule --endpoint-url "$EP"
 ```
 
-Omit roleARN or create a role trusted by `config.amazonaws.com` before PassRole checks.
+Omit roleARN or create a role trusted by `config.amazonaws.com` before PassRole checks. Expect DescribeCompliance to return `NOT_APPLICABLE` until managed rules exist.
 
 ## Not yet / deferred
 
+- Configuration history delivery to S3
 - Full managed rule catalog, remediations, aggregator, organization rules

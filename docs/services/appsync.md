@@ -24,13 +24,15 @@ GraphQL API CRUD lite, schema store, Lambda data source and one Query field reso
 
 ### Authz notes
 
-Identity `EvaluateFull` on management `appsync:*`. GraphQL IAM path also checks `appsync:GraphQL` on the API ARN.
+Identity `EvaluateFull` on management `appsync:*`. GraphQL IAM path requires SigV4 service `appsync` and `appsync:GraphQL` on the API ARN. Lambda data-source invoke requires a function resource policy Allow for `appsync.amazonaws.com` (`lambda:AddPermission`).
 
 ## How to verify / CLI smoke
 
 Shared Compose and env setup: [index.md](index.md#shared-verification).
 
 ```bash
+aws lambda add-permission --function-name hello --statement-id appsync \
+  --action lambda:InvokeFunction --principal appsync.amazonaws.com --endpoint-url "$EP"
 aws appsync create-graphql-api --name lab --authentication-type API_KEY --endpoint-url "$EP"
 aws appsync start-schema-creation --api-id "$API" --definition 'type Query { hello: String }' --endpoint-url "$EP"
 aws appsync create-api-key --api-id "$API" --endpoint-url "$EP"

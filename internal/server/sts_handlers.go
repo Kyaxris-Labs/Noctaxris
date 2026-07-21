@@ -225,15 +225,19 @@ func (s *Server) handleGetFederationToken(
 		return
 	}
 	expires := s.now().UTC().Add(defaultSessionDuration)
-	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
+	userName := verified.Principal.UserName
+	mintOpts := store.MintTempOpts{
 		AccountID:     verified.AccountID,
 		SessionName:   name,
+		UserName:      userName,
 		FederatedUser: name,
 		SessionPolicy: sessionPolicy,
 		Secret:        secret,
 		SessionToken:  sessionToken,
 		Expires:       expires,
-	})
+		IsRoot:        verified.Principal.IsRoot,
+	}
+	accessKeyID, err := s.store.MintTempCredentialsOpts(mintOpts)
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to store temporary credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
@@ -458,9 +462,12 @@ func (s *Server) handleAssumeRoleWithSAML(
 	if storedARN != "" {
 		roleARN = storedARN
 	}
-	// Dual-eval: identity of IdP principal + trust. Use federated-like principal for trust evaluation.
-	fedPrincipal := identity.FederatedUserPrincipal(accountID, "saml", verified.AccessKeyID)
-	callerDocs := s.identityDocs(fedPrincipal)
+	// Trust eval uses Federated provider ARN (not account-root AWS principal over-allow).
+	fedPrincipal := identity.FederatedProviderPrincipal(accountID, principalARN, "saml", verified.AccessKeyID)
+	callerDocs := []string{fmt.Sprintf(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRoleWithSAML","Resource":"%s"}]}`,
+		roleARN,
+	)}
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
 			Principal: fedPrincipal,
@@ -468,31 +475,19 @@ func (s *Server) handleAssumeRoleWithSAML(
 			Resource:  roleARN,
 			Region:    verified.Region,
 			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount": accountID,
-				"aws:RequestedRegion":  verified.Region,
+				"aws:PrincipalAccount":  accountID,
+				"aws:RequestedRegion":   verified.Region,
+				"aws:FederatedProvider": principalARN,
 			},
 		},
 		CallerIdentityDocs: callerDocs,
 		TrustPolicyDoc:     trust,
 	})
 	if decision != authz.Allow {
-		// Root-like allow via trust only if trust permits the SAML provider principal.
-		trustOnly := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
-			Caller: authz.RequestContext{
-				Principal: identity.Principal{Kind: identity.KindFederated, AccountID: accountID, SessionName: "saml"},
-				Action:    catalog.ActionSTSAssumeRoleWithSAML,
-				Resource:  roleARN,
-				Region:    verified.Region,
-			},
-			CallerIdentityDocs: []string{fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRoleWithSAML","Resource":"%s"}]}`, roleARN)},
-			TrustPolicyDoc:     trust,
-		})
-		if trustOnly != authz.Allow {
-			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
-				"Not authorized to perform sts:AssumeRoleWithSAML on the specified resource.", readOnly, r, eventID,
-				verified.AccessKeyID, verified.AccountID, true)
-			return
-		}
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:AssumeRoleWithSAML on the specified resource.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
 	}
 	s.mintAndWriteAssumeRole(w, r, requestID, eventID, verified, readOnly, accountID, roleName, roleARN, params.Get("RoleSessionName"))
 }
@@ -563,14 +558,22 @@ func (s *Server) handleAssumeRoleWithWebIdentity(
 	if storedARN != "" {
 		roleARN = storedARN
 	}
-	fedPrincipal := identity.FederatedUserPrincipal(accountID, "oidc", verified.AccessKeyID)
-	callerDocs := []string{fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRoleWithWebIdentity","Resource":"%s"}]}`, roleARN)}
+	fedPrincipal := identity.FederatedProviderPrincipal(accountID, idp.ProviderARN, "oidc", verified.AccessKeyID)
+	callerDocs := []string{fmt.Sprintf(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRoleWithWebIdentity","Resource":"%s"}]}`,
+		roleARN,
+	)}
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
 			Principal: fedPrincipal,
 			Action:    catalog.ActionSTSAssumeRoleWithWebIdentity,
 			Resource:  roleARN,
 			Region:    verified.Region,
+			ConditionKeys: map[string]string{
+				"aws:PrincipalAccount":  accountID,
+				"aws:RequestedRegion":   verified.Region,
+				"aws:FederatedProvider": idp.ProviderARN,
+			},
 		},
 		CallerIdentityDocs: callerDocs,
 		TrustPolicyDoc:     trust,

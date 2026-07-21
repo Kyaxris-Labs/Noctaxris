@@ -143,7 +143,8 @@ func (s *Store) EnsureSecretsManagerAlias(accountID string) (string, error) {
 	return k.KeyID, nil
 }
 
-func (s *Store) resolveSecretsKeyID(accountID, keyIDOrAlias string) (string, error) {
+// ResolveSecretsManagerKeyID resolves KmsKeyId or defaults to alias/aws/secretsmanager.
+func (s *Store) ResolveSecretsManagerKeyID(accountID, keyIDOrAlias string) (string, error) {
 	id := strings.TrimSpace(keyIDOrAlias)
 	if id == "" || id == AliasAWSSecretsManager {
 		return s.EnsureSecretsManagerAlias(accountID)
@@ -154,6 +155,10 @@ func (s *Store) resolveSecretsKeyID(accountID, keyIDOrAlias string) (string, err
 		}
 	}
 	return s.ResolveKeyID(accountID, id)
+}
+
+func (s *Store) resolveSecretsKeyID(accountID, keyIDOrAlias string) (string, error) {
+	return s.ResolveSecretsManagerKeyID(accountID, keyIDOrAlias)
 }
 
 type secretRow struct {
@@ -243,7 +248,7 @@ func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte) ([]by
 	if err != nil {
 		return nil, "", fmt.Errorf("unseal key: %w", err)
 	}
-	sealed, err := EncryptUnderCMK(cmk, resolvedKeyID, plaintext)
+	sealed, err := EncryptUnderCMK(cmk, resolvedKeyID, plaintext, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("encrypt: %w", err)
 	}

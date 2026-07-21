@@ -145,6 +145,10 @@ func TestSFNTaskSQSAndEventBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"` + q.QueueARN + `"}]}`
+	if err := st.SetQueueAttributes(account, q.QueueName, map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
 	def := `{
   "StartAt": "Send",
   "States": {
@@ -182,7 +186,15 @@ func TestPipesEventBusSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := st.CreatePipe(account, "us-east-1", "bus-pipe", "", bus.ARN, dst.QueueARN, "", "RUNNING")
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pipes.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "pipe-bus-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "deliver", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreatePipe(account, "us-east-1", "bus-pipe", "", bus.ARN, dst.QueueARN, roleARN, "RUNNING")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -58,7 +58,8 @@ func (s *Store) EnsureBudgetsSchema() error {
 }
 
 // CreateBudget creates a budget with optional notification stubs.
-// When NotificationsWithSubscribers include SNS subscriber ARNs, publishes one lab threshold alert per topic (best-effort).
+// When NotificationsWithSubscribers include SNS subscriber ARNs, publishes one lab
+// LAB_CREATE fan-out per topic (best-effort). Does not claim ACTUAL threshold breach.
 func (s *Store) CreateBudget(accountID, name, budgetType, timeUnit, amount, unit string, notifications any) (Budget, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -104,14 +105,15 @@ func (s *Store) CreateBudget(accountID, name, budgetType, timeUnit, amount, unit
 	return b, nil
 }
 
-// notifyBudgetSNS publishes a lab ACTUAL threshold alert to SNS topics listed under NotificationsWithSubscribers.
+// notifyBudgetSNS publishes a lab create fan-out to SNS topics listed under NotificationsWithSubscribers.
+// notificationType is LAB_CREATE (not ACTUAL): no Cost Explorer spend/threshold evaluation runs.
 func (s *Store) notifyBudgetSNS(accountID, budgetName, amount, unit string, notifications any) {
 	topicARNs := extractBudgetSNSTopicARNs(notifications)
 	if len(topicARNs) == 0 {
 		return
 	}
 	msg := fmt.Sprintf(
-		`{"notificationType":"ACTUAL","budgetName":"%s","budgetLimit":{"amount":"%s","unit":"%s"},"message":"Noctaxris lab budget threshold notification"}`,
+		`{"notificationType":"LAB_CREATE","budgetName":"%s","budgetLimit":{"amount":"%s","unit":"%s"},"message":"Noctaxris lab budget created (no ACTUAL threshold evaluation)"}`,
 		budgetName, amount, unit,
 	)
 	for _, arn := range topicARNs {

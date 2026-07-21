@@ -212,3 +212,51 @@ func TestCheckPassRolePassedToServiceCondition(t *testing.T) {
 		t.Fatalf("PassedToService mismatch got %v, want Deny", got)
 	}
 }
+
+func TestCheckPassRoleTrustSourceAccountCondition(t *testing.T) {
+	trust := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Principal":{"Service":"lambda.amazonaws.com"},
+			"Action":"sts:AssumeRole",
+			"Condition":{"StringEquals":{"aws:SourceAccount":"` + passRoleAccountID + `"}}
+		}]
+	}`
+	req := authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal: identity.RootPrincipal(passRoleAccountID, "AKIAROOT"),
+		},
+		RoleARN:          lambdaExecRoleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalLambda,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Allow {
+		t.Fatalf("SourceAccount match got %v, want Allow", got)
+	}
+
+	req.Caller.Principal = identity.RootPrincipal("999999999999", "AKIAROOT")
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("SourceAccount mismatch got %v, want Deny", got)
+	}
+}
+
+func TestTrustAllowsServiceConditionFailClosedWithoutKeys(t *testing.T) {
+	trust := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Principal":{"Service":"lambda.amazonaws.com"},
+			"Action":"sts:AssumeRole",
+			"Condition":{"StringEquals":{"aws:SourceAccount":"000000000001"}}
+		}]
+	}`
+	if authz.TrustAllowsService(trust, authz.ServicePrincipalLambda) {
+		t.Fatal("StringEquals SourceAccount without keys must fail closed")
+	}
+	if !authz.TrustAllowsServiceWithKeys(trust, authz.ServicePrincipalLambda, map[string]string{
+		"aws:SourceAccount": "000000000001",
+	}) {
+		t.Fatal("expected Allow with matching SourceAccount")
+	}
+}

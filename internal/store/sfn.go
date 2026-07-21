@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/google/uuid"
 )
 
@@ -251,7 +252,7 @@ func (s *Store) StartSFNExecution(accountID, region, stateMachineARN, name, inpu
 	}
 	_ = s.appendSFNHistory(execARN, "ExecutionStarted", map[string]any{"input": input, "roleArn": sm.RoleARN})
 
-	wrapped := s.wrapSFNTaskInvoker(accountID, invoke)
+	wrapped := s.wrapSFNTaskInvoker(accountID, sm.RoleARN, sm.StateMachineARN, invoke)
 	output, status, errCode, cause, hist := runSFNDefinition(sm.Definition, input, wrapped)
 	for _, h := range hist {
 		_ = s.appendSFNHistory(execARN, h.Type, h.DetailsMap)
@@ -487,10 +488,15 @@ func ParseLambdaARNFromSFNResource(resource string) (accountID, functionName str
 	return "", resource, resource != ""
 }
 
-func (s *Store) wrapSFNTaskInvoker(accountID string, invoke SFNTaskInvoker) SFNTaskInvoker {
+func (s *Store) wrapSFNTaskInvoker(accountID, roleARN, stateMachineARN string, invoke SFNTaskInvoker) SFNTaskInvoker {
 	return func(resourceARN, inputJSON string) (string, error) {
-		if out, handled, err := s.sfnInvokeBuiltInTask(accountID, resourceARN, inputJSON); handled {
+		if out, handled, err := s.sfnInvokeBuiltInTask(accountID, roleARN, stateMachineARN, resourceARN, inputJSON); handled {
 			return out, err
+		}
+		if fnARN, ok := sfnLambdaTaskARN(accountID, resourceARN); ok {
+			if !s.sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, actionLambdaInvokeFunction, fnARN) {
+				return "", fmt.Errorf("not authorized to invoke %s via state machine role", fnARN)
+			}
 		}
 		if invoke != nil {
 			return invoke(resourceARN, inputJSON)
@@ -502,36 +508,75 @@ func (s *Store) wrapSFNTaskInvoker(accountID string, invoke SFNTaskInvoker) SFNT
 	}
 }
 
+func sfnLambdaTaskARN(accountID, resourceARN string) (string, bool) {
+	acct, name, ok := ParseLambdaARNFromSFNResource(resourceARN)
+	if !ok || name == "" {
+		return "", false
+	}
+	if acct == "" {
+		acct = accountID
+	}
+	if strings.HasPrefix(strings.TrimSpace(resourceARN), "arn:aws:lambda:") {
+		return strings.TrimSpace(resourceARN), true
+	}
+	return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", DefaultLambdaRegion, acct, name), true
+}
+
+// sfnTaskDeliveryAuthorized authorizes Task delivery via the state machine RoleArn
+// session, or (when RoleArn empty) a target resource policy Allow for states.amazonaws.com.
+func (s *Store) sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, action, targetARN string) bool {
+	roleARN = strings.TrimSpace(roleARN)
+	if roleARN != "" {
+		if s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, "sfn-task", DefaultSFNRegion) {
+			return true
+		}
+	}
+	return s.deliveryTargetResourcePolicyAllows(accountID, targetARN, action, authz.ServicePrincipalStates, stateMachineARN)
+}
+
 // sfnInvokeBuiltInTask handles lab Task resources that do not need nested Lambda compute:
 // SQS SendMessage, SNS Publish, and EventBridge PutEvents (bus ARN or name).
-func (s *Store) sfnInvokeBuiltInTask(accountID, resourceARN, inputJSON string) (output string, handled bool, err error) {
+func (s *Store) sfnInvokeBuiltInTask(accountID, roleARN, stateMachineARN, resourceARN, inputJSON string) (output string, handled bool, err error) {
 	resourceARN = strings.TrimSpace(resourceARN)
 	switch {
 	case strings.HasPrefix(resourceARN, "arn:aws:sqs:"):
-		qName, qerr := queueNameFromARN(resourceARN)
+		if !s.sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, actionSQSSendMessage, resourceARN) {
+			return "", true, fmt.Errorf("not authorized to SendMessage via state machine role")
+		}
+		queueAccount, qName, qerr := s.resolveSQSEndpoint(accountID, resourceARN)
 		if qerr != nil {
 			return "", true, qerr
 		}
-		if _, err := s.SendMessage(accountID, qName, []byte(inputJSON), false, nil, "", nil); err != nil {
+		if _, err := s.SendMessage(queueAccount, qName, []byte(inputJSON), false, nil, "", nil); err != nil {
 			return "", true, err
 		}
 		return `{"ok":true}`, true, nil
 	case strings.HasPrefix(resourceARN, "arn:aws:sns:"):
+		if !s.sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, actionSNSPublish, resourceARN) {
+			return "", true, fmt.Errorf("not authorized to Publish via state machine role")
+		}
 		topic, terr := s.GetTopicByARN(resourceARN)
 		if terr != nil {
 			return "", true, terr
 		}
-		if _, err := s.Publish(accountID, topic.TopicName, inputJSON, "", nil); err != nil {
+		if _, err := s.Publish(topic.AccountID, topic.TopicName, inputJSON, "", nil); err != nil {
 			return "", true, err
 		}
 		return `{"ok":true}`, true, nil
 	case strings.HasPrefix(resourceARN, "arn:aws:events:") && strings.Contains(resourceARN, ":event-bus/"):
+		if !s.sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, actionEventsPutEvents, resourceARN) {
+			return "", true, fmt.Errorf("not authorized to PutEvents via state machine role")
+		}
 		busName := resourceARN[strings.LastIndex(resourceARN, "/")+1:]
 		detail := inputJSON
 		if strings.TrimSpace(detail) == "" {
 			detail = "{}"
 		}
-		result, perr := s.PutEvents(accountID, []PutEventsEntry{{
+		busAccount := accountID
+		if owner := resourceOwnerAccountFromARN(resourceARN); owner != "" {
+			busAccount = owner
+		}
+		result, perr := s.PutEvents(busAccount, []PutEventsEntry{{
 			Source:       "noctaxris.sfn",
 			DetailType:   "StepFunctionsTask",
 			Detail:       detail,

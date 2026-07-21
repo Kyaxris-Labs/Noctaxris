@@ -41,11 +41,13 @@ func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
 
 // principalSpec is the IAM Principal element (trust / resource policies).
 // Supports Principal "*", {"AWS":"..."}, {"AWS":["...",...]},
-// {"Service":"..."}, and {"Service":["...",...]}.
+// {"Service":"..."}, {"Service":["...",...]}, {"Federated":"..."},
+// and {"Federated":["...",...]}.
 type principalSpec struct {
-	All     bool
-	AWS     stringOrSlice
-	Service stringOrSlice
+	All       bool
+	AWS       stringOrSlice
+	Service   stringOrSlice
+	Federated stringOrSlice
 }
 
 func (p *principalSpec) UnmarshalJSON(data []byte) error {
@@ -58,8 +60,9 @@ func (p *principalSpec) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var obj struct {
-		AWS     json.RawMessage `json:"AWS"`
-		Service json.RawMessage `json:"Service"`
+		AWS       json.RawMessage `json:"AWS"`
+		Service   json.RawMessage `json:"Service"`
+		Federated json.RawMessage `json:"Federated"`
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return err
@@ -77,6 +80,13 @@ func (p *principalSpec) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		p.Service = svc
+	}
+	if len(obj.Federated) > 0 && string(obj.Federated) != "null" {
+		var fed stringOrSlice
+		if err := json.Unmarshal(obj.Federated, &fed); err != nil {
+			return err
+		}
+		p.Federated = fed
 	}
 	return nil
 }
@@ -223,6 +233,18 @@ func trustStatementMatches(st statement, ctx RequestContext) (matches bool, cata
 func principalMatches(spec principalSpec, caller identity.Principal) bool {
 	if spec.All {
 		return true
+	}
+	for _, p := range spec.Federated {
+		if p == "*" {
+			return true
+		}
+		if caller.FederatedProviderARN != "" && p == caller.FederatedProviderARN {
+			return true
+		}
+	}
+	// Federation assume paths must not over-allow via account-root AWS principals.
+	if caller.FederatedProviderARN != "" || (caller.Kind == identity.KindFederated && len(spec.Federated) > 0) {
+		return false
 	}
 	callerARN := caller.ARN()
 	for _, p := range spec.AWS {

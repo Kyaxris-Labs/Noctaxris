@@ -135,6 +135,13 @@ func (s *Server) handleKMS(
 		resource = key.ARN
 	}
 
+	encCtx, encCtxErr := kmssvc.ParseEncryptionContext(params["EncryptionContext"])
+	if encCtxErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			encCtxErr.Error(), readOnly, eventID, verified)
+		return
+	}
+
 	grantSatisfied := false
 	if keyID != "" {
 		ok, gerr := s.store.FindMatchingGrant(keyID, verified.Principal.ARN(), action)
@@ -143,7 +150,7 @@ func (s *Server) handleKMS(
 		}
 	}
 
-	if !s.authorizeDataplaneKMS(verified, normalizeAction(action), resource, keyPolicy, grantSatisfied) {
+	if !s.authorizeDataplaneKMS(verified, normalizeAction(action), resource, keyPolicy, grantSatisfied, encCtx) {
 		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+normalizeAction(action)+".", readOnly, eventID, verified)
 		return
@@ -300,7 +307,7 @@ func (s *Server) handleKMS(
 				"Unable to load key material.", readOnly, eventID, verified)
 			return
 		}
-		ct, encErr := kmssvc.EncryptUnderCMK(cmk, keyID, plain)
+		ct, encErr := kmssvc.EncryptUnderCMK(cmk, keyID, plain, encCtx)
 		if encErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to encrypt.", readOnly, eventID, verified)
@@ -318,7 +325,7 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
-		plain, openErr := s.store.DecryptBlobWithKey(keyID, blob)
+		plain, openErr := s.store.DecryptBlobWithKeyContext(keyID, blob, encCtx)
 		if openErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
 				"Unable to decrypt ciphertext.", readOnly, eventID, verified)
@@ -348,7 +355,7 @@ func (s *Server) handleKMS(
 				"Unable to load key material.", readOnly, eventID, verified)
 			return
 		}
-		ct, encErr := kmssvc.EncryptUnderCMK(cmk, keyID, dek)
+		ct, encErr := kmssvc.EncryptUnderCMK(cmk, keyID, dek, encCtx)
 		if encErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to encrypt data key.", readOnly, eventID, verified)
@@ -558,6 +565,31 @@ func (s *Server) handleKMSReEncrypt(
 		return
 	}
 
+	srcEncCtx, srcCtxErr := kmssvc.ParseEncryptionContext(params["SourceEncryptionContext"])
+	if srcCtxErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			srcCtxErr.Error(), readOnly, eventID, verified)
+		return
+	}
+	if srcEncCtx == nil {
+		// AWS accepts EncryptionContext as an alias for source context.
+		srcEncCtx, srcCtxErr = kmssvc.ParseEncryptionContext(params["EncryptionContext"])
+		if srcCtxErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				srcCtxErr.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	destEncCtx, destCtxErr := kmssvc.ParseEncryptionContext(params["DestinationEncryptionContext"])
+	if destCtxErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			destCtxErr.Error(), readOnly, eventID, verified)
+		return
+	}
+	if destEncCtx == nil {
+		destEncCtx = srcEncCtx
+	}
+
 	grantFrom := false
 	if ok, gerr := s.store.FindMatchingGrant(sourceKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptFrom); gerr == nil {
 		grantFrom = ok
@@ -567,12 +599,12 @@ func (s *Server) handleKMSReEncrypt(
 		grantTo = ok
 	}
 
-	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptFrom, sourceKey.ARN, sourceKey.KeyPolicy, grantFrom) {
+	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptFrom, sourceKey.ARN, sourceKey.KeyPolicy, grantFrom, srcEncCtx) {
 		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+catalog.ActionKMSReEncryptFrom+".", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptTo, destKey.ARN, destKey.KeyPolicy, grantTo) {
+	if !s.authorizeDataplaneKMS(verified, catalog.ActionKMSReEncryptTo, destKey.ARN, destKey.KeyPolicy, grantTo, destEncCtx) {
 		s.writeKMSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+catalog.ActionKMSReEncryptTo+".", readOnly, eventID, verified)
 		return
@@ -587,7 +619,7 @@ func (s *Server) handleKMSReEncrypt(
 		return
 	}
 
-	plain, openErr := s.store.DecryptBlobWithKey(sourceKeyID, blob)
+	plain, openErr := s.store.DecryptBlobWithKeyContext(sourceKeyID, blob, srcEncCtx)
 	if openErr != nil {
 		s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
 			"Unable to decrypt ciphertext.", readOnly, eventID, verified)
@@ -605,7 +637,7 @@ func (s *Server) handleKMSReEncrypt(
 			"Unable to load destination key material.", readOnly, eventID, verified)
 		return
 	}
-	ct, encErr := kmssvc.EncryptUnderCMK(destCMK, destKeyID, plain)
+	ct, encErr := kmssvc.EncryptUnderCMK(destCMK, destKeyID, plain, destEncCtx)
 	if encErr != nil {
 		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to encrypt.", readOnly, eventID, verified)

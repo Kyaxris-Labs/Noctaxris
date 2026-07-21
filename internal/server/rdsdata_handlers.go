@@ -23,8 +23,8 @@ var (
 )
 
 // SetRDSDataExecutor replaces the Data API executor (tests).
-// Nil clears the override so ExecuteStatement prefers nested Postgres when
-// DinD has started a container, otherwise the recorded-statement stub.
+// Nil clears the override so ExecuteStatement requires nested Postgres
+// (fail closed with DatabaseUnavailableException when no engine).
 func (s *Server) SetRDSDataExecutor(exec store.RDSDataExecutor) {
 	rdsDataExecutorMu.Lock()
 	defer rdsDataExecutorMu.Unlock()
@@ -102,6 +102,11 @@ func (s *Server) rdsDataExecute(
 			"sql is required.", readOnly, eventID, verified)
 		return
 	}
+	if strings.TrimSpace(req.TransactionID) != "" {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
+			"ExecuteStatement with transactionId is not implemented.", readOnly, eventID, verified)
+		return
+	}
 	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
 	if err != nil {
 		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
@@ -109,6 +114,10 @@ func (s *Server) rdsDataExecute(
 	}
 	res, err := s.preferNestedRDSDataExecute(r.Context(), verified.AccountID, inst, req)
 	if err != nil {
+		if errors.Is(err, store.ErrRDSDataUnavailable) {
+			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+			return
+		}
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -128,60 +137,43 @@ func (s *Server) rdsDataBegin(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
+	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataBeginTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:BeginTransaction.", readOnly, eventID, verified)
 		return
 	}
-	resourceARN := stringParam(params["resourceArn"])
-	secretARN := stringParam(params["secretArn"])
-	database := stringParam(params["database"])
-	txnID, err := s.store.BeginRDSDataTransaction(verified.AccountID, resourceARN, secretARN, database)
-	if err != nil {
-		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
-		return
-	}
-	payload, _ := rdsdatasvc.BeginTransactionJSON(txnID)
-	s.writeRDSDataOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "BeginTransaction", readOnly)
+	// Control-plane txn ids without nested SQL BEGIN are fake success; refuse until real txn exists.
+	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
+		"BeginTransaction is not implemented.", readOnly, eventID, verified)
 }
 
 func (s *Server) rdsDataCommit(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
+	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataCommitTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:CommitTransaction.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.FinishRDSDataTransaction(verified.AccountID, stringParam(params["transactionId"]), "committed")
-	if err != nil {
-		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
-		return
-	}
-	payload, _ := rdsdatasvc.CommitTransactionJSON()
-	s.writeRDSDataOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "CommitTransaction", readOnly)
+	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
+		"CommitTransaction is not implemented.", readOnly, eventID, verified)
 }
 
 func (s *Server) rdsDataRollback(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
+	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataRollbackTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:RollbackTransaction.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.FinishRDSDataTransaction(verified.AccountID, stringParam(params["transactionId"]), "rolled_back")
-	if err != nil {
-		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
-		return
-	}
-	payload, _ := rdsdatasvc.RollbackTransactionJSON()
-	s.writeRDSDataOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "RollbackTransaction", readOnly)
+	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
+		"RollbackTransaction is not implemented.", readOnly, eventID, verified)
 }
 
 func (s *Server) writeRDSDataResolveError(

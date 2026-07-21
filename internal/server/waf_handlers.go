@@ -273,6 +273,11 @@ func (s *Server) wafAssociate(
 	}
 	err := s.store.AssociateWAFWebACL(verified.AccountID, webARN, resARN)
 	if err != nil {
+		if errors.Is(err, store.ErrWAFNotFound) {
+			s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFNonexistentItemException",
+				"WebACL not found.", readOnly, eventID, verified)
+			return
+		}
 		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFInvalidParameterException",
 			err.Error(), readOnly, eventID, verified)
 		return

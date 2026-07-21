@@ -18,6 +18,8 @@ const (
 const (
 	condOpStringEquals            = "StringEquals"
 	condOpStringLike              = "StringLike"
+	condOpArnLike                 = "ArnLike"
+	condOpArnEquals               = "ArnEquals"
 	condOpStringNotEquals         = "StringNotEquals"
 	condOpStringEqualsIfExists    = "StringEqualsIfExists"
 	condOpStringLikeIfExists      = "StringLikeIfExists"
@@ -67,11 +69,16 @@ func operatorMatches(op, actual string, present bool, expected stringOrSlice) bo
 			return false
 		}
 		return conditionValuesMatch(condOpStringEquals, actual, expected)
-	case condOpStringLike:
+	case condOpStringLike, condOpArnLike:
 		if !present {
 			return false
 		}
 		return conditionValuesMatch(condOpStringLike, actual, expected)
+	case condOpArnEquals:
+		if !present {
+			return false
+		}
+		return conditionValuesMatch(condOpStringEquals, actual, expected)
 	case condOpStringNotEquals:
 		if !present {
 			return true

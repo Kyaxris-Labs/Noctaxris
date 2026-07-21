@@ -34,7 +34,7 @@ aws elasticache describe-cache-clusters \
   --endpoint-url "$EP"
 ```
 
-Describe returns the nested endpoint. With `noctaxris-engine` up, create starts a nested Valkey or Redis image on the DinD data network (no host publish). Skip live RESP smoke when Docker is unavailable. Unit tests cover control-plane CRUD without Docker.
+Describe returns the nested endpoint. Create starts as `creating`. Status becomes `available` only after a nested Valkey or Redis container starts on the DinD data network (no host publish). Without `noctaxris-engine`, the cluster stays `creating` (same honesty as RDS). Skip live RESP smoke when Docker is unavailable. Unit tests cover control-plane CRUD without Docker.
 
 ## Not yet / deferred
 

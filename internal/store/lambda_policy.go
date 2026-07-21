@@ -26,7 +26,9 @@ func EnsureLambdaPolicySchema(db *sql.DB) error {
 }
 
 // AddFunctionPermission appends an Allow statement to the function resource policy.
-func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, action, principal, sourceAccount string) (string, error) {
+// sourceAccount / sourceArn are persisted as Condition keys (aws:SourceAccount /
+// aws:SourceArn) for service-principal confused-deputy locks.
+func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, action, principal, sourceAccount, sourceARN string) (string, error) {
 	name, err := resolveFunctionName(accountID, nameOrARN)
 	if err != nil {
 		return "", err
@@ -47,8 +49,15 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	if principal == "" {
 		return "", fmt.Errorf("validation: Principal is required")
 	}
-	if src := strings.TrimSpace(sourceAccount); src != "" && src != accountID {
-		return "", fmt.Errorf("validation: SourceAccount must match function account")
+	sourceAccount = strings.TrimSpace(sourceAccount)
+	sourceARN = strings.TrimSpace(sourceARN)
+	if sourceAccount != "" {
+		if sourceAccount != accountID && !s.AccountExists(sourceAccount) {
+			return "", fmt.Errorf("validation: SourceAccount is not a lab account")
+		}
+	}
+	if sourceARN != "" && !strings.HasPrefix(sourceARN, "arn:") {
+		return "", fmt.Errorf("validation: SourceArn must be an ARN")
 	}
 
 	doc, err := parseLambdaPolicyDoc(fn.ResourcePolicy)
@@ -81,6 +90,9 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 			"Resource":  fn.FunctionARN,
 		}
 	}
+	if cond := lambdaPermissionCondition(sourceAccount, sourceARN); cond != nil {
+		stmt["Condition"] = cond
+	}
 	statements, err := lambdaPolicyStatements(doc)
 	if err != nil {
 		return "", err
@@ -100,6 +112,20 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 		return "", fmt.Errorf("marshal statement: %w", err)
 	}
 	return string(rawStmt), nil
+}
+
+func lambdaPermissionCondition(sourceAccount, sourceARN string) map[string]any {
+	if sourceAccount == "" && sourceARN == "" {
+		return nil
+	}
+	cond := map[string]any{}
+	if sourceAccount != "" {
+		cond["StringEquals"] = map[string]string{"aws:SourceAccount": sourceAccount}
+	}
+	if sourceARN != "" {
+		cond["ArnLike"] = map[string]string{"aws:SourceArn": sourceARN}
+	}
+	return cond
 }
 
 // RemoveFunctionPermission deletes a statement by Sid from the function resource policy.
@@ -207,7 +233,11 @@ func isLabServicePrincipal(principal string) bool {
 		"pipes.amazonaws.com",
 		"sqs.amazonaws.com",
 		"dynamodb.amazonaws.com",
-		"s3.amazonaws.com":
+		"s3.amazonaws.com",
+		"apigateway.amazonaws.com",
+		"appsync.amazonaws.com",
+		"states.amazonaws.com",
+		"lambda.amazonaws.com":
 		return true
 	default:
 		return false

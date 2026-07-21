@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Standard state machines with a small ASL subset. Executions run synchronously in-process. Identity authz. Optional PassRole for `RoleArn` with `states.amazonaws.com` trust.
+Standard state machines with a small ASL subset. Executions run synchronously in-process. Identity authz. Optional PassRole for `RoleArn` with `states.amazonaws.com` trust. Task delivery uses the state machine `RoleArn` session (or a target resource policy Allow for `states.amazonaws.com`) for Lambda Invoke and built-in SQS/SNS/EventBridge Tasks; StartExecution callers are not used for Task resource access.
 
 ## Implemented
 
@@ -13,7 +13,7 @@ Standard state machines with a small ASL subset. Executions run synchronously in
 | ASL subset | `Pass`, `Succeed`, `Fail`, `Task` |
 | Task resources | Lambda (sync Invoke), SQS SendMessage, SNS Publish, EventBridge bus ARN (PutEvents) |
 
-Lambda Task states call the same Invoke path as `lambda:InvokeFunction`. Without nested compute (`DockerHost` empty), Lambda Task fails with `States.TaskFailed` / compute unavailable. SQS/SNS/EventBridge Tasks do not need Docker. EventBridge can target a state machine ARN with `RoleArn` (StartExecution).
+Lambda Task states call the same Invoke path as `lambda:InvokeFunction` after the state machine role (or `states.amazonaws.com` resource policy) Allows Invoke. Without nested compute (`DockerHost` empty), Lambda Task fails with `States.TaskFailed` / compute unavailable. SQS/SNS/EventBridge Tasks do not need Docker and resolve foreign SQS queue accounts from the Task ARN. EventBridge can target a state machine ARN with `RoleArn` (StartExecution).
 
 ### Authz notes
 

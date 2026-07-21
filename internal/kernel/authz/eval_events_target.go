@@ -5,11 +5,51 @@ import (
 	"strings"
 )
 
+// DeliverySourceConditionKeys builds aws:SourceArn / aws:SourceAccount for
+// service-principal delivery evaluation (confused-deputy locks).
+func DeliverySourceConditionKeys(sourceARN, sourceAccount string) map[string]string {
+	keys := map[string]string{}
+	sourceARN = strings.TrimSpace(sourceARN)
+	sourceAccount = strings.TrimSpace(sourceAccount)
+	if sourceARN != "" {
+		keys["aws:SourceArn"] = sourceARN
+	}
+	if sourceAccount != "" {
+		keys["aws:SourceAccount"] = sourceAccount
+	} else if sourceARN != "" {
+		if acct := accountIDFromResourceARN(sourceARN); acct != "" {
+			keys["aws:SourceAccount"] = acct
+		}
+	}
+	return keys
+}
+
+func accountIDFromResourceARN(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 {
+		return ""
+	}
+	acct := strings.TrimSpace(parts[4])
+	if len(acct) != 12 {
+		return ""
+	}
+	for _, r := range acct {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return acct
+}
+
 // EventTargetResourcePolicyAllows reports whether policyDoc explicitly Allows action
 // on resourceARN for Principal Service = servicePrincipal or Principal AWS = account root.
 // Explicit Deny for a matching principal blocks that path. Allow when either path Allows
 // and is not Denied.
-func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrincipal, accountID string) bool {
+//
+// When a statement includes Condition, conditionKeys must satisfy it (same engine as
+// identity Evaluate). Unpopulated aws:SourceArn / aws:SourceAccount fail closed on
+// positive operators so SourceArn locks deny mismatched or missing delivery sources.
+func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrincipal, accountID string, conditionKeys map[string]string) bool {
 	policyDoc = strings.TrimSpace(policyDoc)
 	if policyDoc == "" || action == "" || resourceARN == "" || servicePrincipal == "" || accountID == "" {
 		return false
@@ -18,9 +58,12 @@ func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrin
 	if err != nil {
 		return false
 	}
+	if conditionKeys == nil {
+		conditionKeys = map[string]string{}
+	}
 	var serviceDeny, serviceAllow, rootDeny, rootAllow bool
 	for _, st := range doc.Statement {
-		if resourcePrincipalStatementMatches(st, action, resourceARN, func(spec principalSpec) bool {
+		if resourcePrincipalStatementMatches(st, action, resourceARN, conditionKeys, func(spec principalSpec) bool {
 			return principalServiceMatches(spec, servicePrincipal)
 		}) {
 			switch {
@@ -30,7 +73,7 @@ func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrin
 				serviceAllow = true
 			}
 		}
-		if resourcePrincipalStatementMatches(st, action, resourceARN, func(spec principalSpec) bool {
+		if resourcePrincipalStatementMatches(st, action, resourceARN, conditionKeys, func(spec principalSpec) bool {
 			return principalRootMatches(spec, accountID)
 		}) {
 			switch {
@@ -51,7 +94,7 @@ func eventTargetPathAllowed(denyHit, allowHit bool) bool {
 	return allowHit
 }
 
-func resourcePrincipalStatementMatches(st statement, action, resourceARN string, principalCheck func(principalSpec) bool) bool {
+func resourcePrincipalStatementMatches(st statement, action, resourceARN string, conditionKeys map[string]string, principalCheck func(principalSpec) bool) bool {
 	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
 	if !effect {
 		return false
@@ -65,7 +108,14 @@ func resourcePrincipalStatementMatches(st statement, action, resourceARN string,
 	if len(st.Resource) > 0 && !resourcesMatch(st.Resource, resourceARN) {
 		return false
 	}
-	return true
+	switch conditionApplies(st.Condition, conditionKeys) {
+	case condMatch:
+		return true
+	case condNoMatch, condCatalogUnknown:
+		return false
+	default:
+		return false
+	}
 }
 
 func principalRootMatches(spec principalSpec, accountID string) bool {

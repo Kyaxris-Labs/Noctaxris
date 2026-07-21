@@ -272,6 +272,10 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if !strings.EqualFold(verified.Service, "lambda") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		fn, err := s.store.GetFunction(accountID, functionName)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)

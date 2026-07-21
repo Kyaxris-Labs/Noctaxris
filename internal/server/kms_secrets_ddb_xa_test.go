@@ -162,7 +162,7 @@ func TestKMSCrossAccountPolicyOnlyDeny(t *testing.T) {
 }
 
 func TestSecretsCrossAccountIdentityAndPolicyAllow(t *testing.T) {
-	handler, st, _, ownerAKID, ownerSecret, _, callerAKID, callerSecret, callerUserARN := setupCrossAccountPair(t)
+	handler, st, ownerAccount, ownerAKID, ownerSecret, _, callerAKID, callerSecret, callerUserARN := setupCrossAccountPair(t)
 	now := time.Now().UTC().Truncate(time.Second)
 
 	createRec := mustSecretsJSONWithCreds(t, handler, "CreateSecret", map[string]any{
@@ -176,7 +176,7 @@ func TestSecretsCrossAccountIdentityAndPolicyAllow(t *testing.T) {
 	_ = json.Unmarshal(createRec.Body.Bytes(), &createOut)
 	secretARN, _ := createOut["ARN"].(string)
 
-	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`
+	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue","kms:Decrypt"],"Resource":"*"}]}`
 	if err := st.PutInlinePolicy(callerUserARN, "smget", identityAllow); err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +190,27 @@ func TestSecretsCrossAccountIdentityAndPolicyAllow(t *testing.T) {
 	}, ownerAKID, ownerSecret, now)
 	if putPol.Code != http.StatusOK {
 		t.Fatalf("PutResourcePolicy status=%d body=%q", putPol.Code, putPol.Body.String())
+	}
+	desc := mustSecretsJSONWithCreds(t, handler, "DescribeSecret", map[string]any{
+		"SecretId": "xa-secret",
+	}, ownerAKID, ownerSecret, now)
+	if desc.Code != http.StatusOK {
+		t.Fatalf("DescribeSecret status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	var descOut map[string]any
+	_ = json.Unmarshal(desc.Body.Bytes(), &descOut)
+	kmsKeyID, _ := descOut["KmsKeyId"].(string)
+	keyPolicy := fmt.Sprintf(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"%s"},"Action":"kms:Decrypt","Resource":"*"},{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::%s:root"},"Action":"kms:*","Resource":"*"}]}`,
+		callerUserARN, ownerAccount,
+	)
+	putKeyPol := mustKMSJSONWithCreds(t, handler, "PutKeyPolicy", map[string]any{
+		"KeyId":      kmsKeyID,
+		"PolicyName": "default",
+		"Policy":     keyPolicy,
+	}, ownerAKID, ownerSecret, now)
+	if putKeyPol.Code != http.StatusOK {
+		t.Fatalf("PutKeyPolicy status=%d body=%q", putKeyPol.Code, putKeyPol.Body.String())
 	}
 
 	getRec := mustSecretsJSONWithCreds(t, handler, "GetSecretValue", map[string]any{

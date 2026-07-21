@@ -965,6 +965,10 @@ func (s *Server) dynamoQuery(
 	if err != nil {
 		return
 	}
+	items, ok = s.dynamoApplyFilterExpression(w, r, body, requestID, eventID, verified, readOnly, params, items)
+	if !ok {
+		return
+	}
 	payload, err := ddb.QueryJSON(items, lastKey, hasMore)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -1016,6 +1020,10 @@ func (s *Server) dynamoScan(
 		table, startPK, startSK, limit,
 	)
 	if err != nil {
+		return
+	}
+	items, ok = s.dynamoApplyFilterExpression(w, r, body, requestID, eventID, verified, readOnly, params, items)
+	if !ok {
 		return
 	}
 	payload, err := ddb.ScanJSON(items, lastKey, hasMore)
@@ -1506,6 +1514,47 @@ func (s *Server) dynamoEvalConditionOnItem(
 	return true
 }
 
+// dynamoApplyFilterExpression filters Query/Scan items. Unsupported FilterExpression
+// operators fail closed with ValidationException (never silently ignored).
+func (s *Server) dynamoApplyFilterExpression(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+	items []ddb.ItemMap,
+) ([]ddb.ItemMap, bool) {
+	filter, _ := params["FilterExpression"].(string)
+	if strings.TrimSpace(filter) == "" {
+		return items, true
+	}
+	names, _ := params["ExpressionAttributeNames"].(map[string]any)
+	values, _ := params["ExpressionAttributeValues"].(map[string]any)
+	// Fail closed on unsupported expressions even when the page is empty.
+	if err := ddb.EvaluateFilterExpression(ddb.ItemMap{}, filter, names, values); err != nil &&
+		!errors.Is(err, ddb.ErrFilterNoMatch) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return nil, false
+	}
+	out := make([]ddb.ItemMap, 0, len(items))
+	for _, it := range items {
+		err := ddb.EvaluateFilterExpression(it, filter, names, values)
+		if errors.Is(err, ddb.ErrFilterNoMatch) {
+			continue
+		}
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return nil, false
+		}
+		out = append(out, it)
+	}
+	return out, true
+}
+
 // dynamoQueryCollectLive over-fetches Query pages until Limit live (non-TTL-expired,
 // sort-key matching) items are collected or the store is exhausted.
 func (s *Server) dynamoQueryCollectLive(
@@ -1763,7 +1812,7 @@ func (s *Server) dynamoUnsealTableCMK(
 			"Table SSE-KMS key is disabled.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
-	if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, key) {
+	if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, key, nil) {
 		err = errors.New("kms decrypt denied")
 		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform kms:Decrypt on the table SSE-KMS key.", readOnly, eventID, verified)

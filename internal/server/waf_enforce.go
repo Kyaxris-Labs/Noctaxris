@@ -9,9 +9,19 @@ import (
 
 // enforceAssociatedWAF blocks the request with 403 when a Web ACL associated to
 // any candidate ARN evaluates to Block. Missing associations are a no-op.
+// Evaluation errors with an association present fail closed (403).
 func (s *Server) enforceAssociatedWAF(w http.ResponseWriter, accountID string, candidateARNs []string) bool {
 	action, associated, err := s.store.EvaluateAssociatedWAF(accountID, candidateARNs, "")
-	if err != nil || !associated {
+	if err != nil {
+		if associated {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return false
+		}
+		// Lookup/store failure before any association match: fail closed.
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return false
+	}
+	if !associated {
 		return true
 	}
 	if strings.EqualFold(action, "Block") {

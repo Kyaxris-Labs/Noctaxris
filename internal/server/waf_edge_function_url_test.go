@@ -45,6 +45,25 @@ func TestWAFAssociateHTTPAPIAndRejectUnknown(t *testing.T) {
 	}
 }
 
+func TestWAFAssociateRejectsPhantomWebACL(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	phantom := "arn:aws:wafv2:us-east-1:" + testAccountID + ":regional/webacl/missing/00000000-0000-0000-0000-000000000000"
+	bad := mustJSONTarget(t, handler, "AWSWAF_20190729.AssociateWebACL", "wafv2", map[string]any{
+		"WebACLArn":   phantom,
+		"ResourceArn": "arn:aws:apigateway:us-east-1::/apis/http1/stages/$default",
+	}, now)
+	if bad.Code == http.StatusOK {
+		t.Fatalf("phantom AssociateWebACL should fail, got %s", bad.Body.String())
+	}
+	if !strings.Contains(bad.Body.String(), "WAFNonexistentItemException") &&
+		!strings.Contains(bad.Body.String(), "not found") {
+		t.Fatalf("expected nonexistent ACL error, body=%q", bad.Body.String())
+	}
+}
+
 func TestWAFAssociateBlocksHTTPAPIInvoke(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

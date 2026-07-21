@@ -10,6 +10,9 @@ import (
 // ErrConditionalCheckFailed is returned when a ConditionExpression evaluates to false.
 var ErrConditionalCheckFailed = errors.New("ConditionalCheckFailedException")
 
+// ErrFilterNoMatch is returned when a FilterExpression evaluates to false for an item.
+var ErrFilterNoMatch = errors.New("FilterExpressionNoMatch")
+
 // EvaluateConditionExpression evaluates a documented lab subset of DynamoDB
 // ConditionExpression against an existing item (nil/empty when the item is absent).
 //
@@ -27,6 +30,29 @@ func EvaluateConditionExpression(
 	names map[string]any,
 	values map[string]any,
 ) error {
+	return evaluateItemExpression(item, expr, names, values, "ConditionExpression", ErrConditionalCheckFailed)
+}
+
+// EvaluateFilterExpression evaluates FilterExpression with the same lab subset as
+// ConditionExpression. Non-matching items return ErrFilterNoMatch (omit from results).
+// Unsupported operators fail closed with a ValidationException-shaped error.
+func EvaluateFilterExpression(
+	item ItemMap,
+	expr string,
+	names map[string]any,
+	values map[string]any,
+) error {
+	return evaluateItemExpression(item, expr, names, values, "FilterExpression", ErrFilterNoMatch)
+}
+
+func evaluateItemExpression(
+	item ItemMap,
+	expr string,
+	names map[string]any,
+	values map[string]any,
+	label string,
+	noMatch error,
+) error {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
 		return nil
@@ -36,10 +62,10 @@ func EvaluateConditionExpression(
 	}
 	ok, err := evalConditionOR(item, expr, names, values)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), "ConditionExpression", label))
 	}
 	if !ok {
-		return ErrConditionalCheckFailed
+		return noMatch
 	}
 	return nil
 }

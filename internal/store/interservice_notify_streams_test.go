@@ -135,6 +135,9 @@ func TestBudgetSNSNotifyOnCreate(t *testing.T) {
 	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Body), "lab-budget") {
 		t.Fatalf("want budget SNS notify, got %+v", msgs)
 	}
+	if !strings.Contains(string(msgs[0].Body), "LAB_CREATE") || strings.Contains(string(msgs[0].Body), `"notificationType":"ACTUAL"`) {
+		t.Fatalf("want LAB_CREATE notify (not ACTUAL), got %s", msgs[0].Body)
+	}
 }
 
 func TestConfigSNSNotifyOnStart(t *testing.T) {
@@ -152,6 +155,9 @@ func TestConfigSNSNotifyOnStart(t *testing.T) {
 	if _, err := st.Subscribe(account, topic.TopicARN, "sqs", q.QueueARN); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +172,11 @@ func TestConfigSNSNotifyOnStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Body), "ConfigurationHistoryDeliveryStarted") {
+	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Body), "ConfigurationRecorderStarted") {
 		t.Fatalf("want config SNS notify, got %+v", msgs)
+	}
+	if strings.Contains(string(msgs[0].Body), "ConfigurationHistoryDeliveryStarted") {
+		t.Fatalf("must not claim history delivery: %s", msgs[0].Body)
 	}
 }
 

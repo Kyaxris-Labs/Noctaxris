@@ -38,7 +38,11 @@ Compose project prefixes may rename volumes (for example `docker_noctaxris-data`
 3. Pull or rebuild the API image (`docker compose ... up --build`).
 4. Start Compose and confirm `/_noctaxris/ready` returns `ready`.
 
-Schema changes are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` row records the applied level for operators and tests. There is no down-migration. Prefer stop → backup → start over live multi-writer upgrades.
+Schema changes are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` marker row exists (currently `1`) for operators and tests; migrations are still independent `Ensure*` helpers and do **not** consult that integer as a migration ledger. Do not treat the value as proof that a particular ALTER has applied. There is no down-migration. Prefer stop → backup → start over live multi-writer upgrades.
+
+## Graceful shutdown
+
+On `SIGTERM` or interrupt, the API stops in-process workers (Scheduler ticker, Lambda ESM poller, Pipes ticker, ECS service reconciler), then drains HTTP with a short shutdown timeout (about 10s). Prefer `docker compose ... stop` or `down` over `kill -9`. Backup still requires writers idle (Compose down) so SQLite and volume archives are consistent.
 
 ## Health vs ready
 
@@ -58,10 +62,12 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | unit / compose-static / govulncheck | Every push and PR |
 | race | Scoped `-race` on `internal/kernel` and `internal/store` |
 | image | `docker build -f docker/Dockerfile .` |
-| smoke-core | After unit + compose-static + image: Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
-| smoke-nested | Manual `workflow_dispatch` with `nested_smoke=true`: runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, optional Lambda Invoke). Skips cleanly if Docker is unavailable |
+| smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
+| smoke-nested | **Manual only:** Actions `workflow_dispatch` with input `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, optional Lambda Invoke). Skips cleanly if Docker is unavailable. **Not** on push/PR |
 
-Operator shortcut (same script as CI):
+A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via Actions `workflow_dispatch` or the script below before relying on those paths.
+
+Operator shortcut (same script as the manual CI job):
 
 ```bash
 cp docker/.env.example docker/.env   # if needed
