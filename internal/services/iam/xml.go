@@ -32,22 +32,29 @@ type createUserResponse struct {
 	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
 }
 
+type permissionsBoundaryXML struct {
+	PermissionsBoundaryType string `xml:"PermissionsBoundaryType"`
+	PermissionsBoundaryArn  string `xml:"PermissionsBoundaryArn"`
+}
+
 type userXML struct {
-	Path       string `xml:"Path"`
-	UserName   string `xml:"UserName"`
-	UserId     string `xml:"UserId"`
-	Arn        string `xml:"Arn"`
-	CreateDate string `xml:"CreateDate,omitempty"`
+	Path                string                  `xml:"Path"`
+	UserName            string                  `xml:"UserName"`
+	UserId              string                  `xml:"UserId"`
+	Arn                 string                  `xml:"Arn"`
+	CreateDate          string                  `xml:"CreateDate,omitempty"`
+	PermissionsBoundary *permissionsBoundaryXML `xml:"PermissionsBoundary,omitempty"`
 }
 
 // CreateUserXML builds CreateUser response XML.
 func CreateUserXML(u store.User, requestID string) ([]byte, error) {
 	resp := createUserResponse{XMLNS: iamXMLNS}
 	resp.CreateUserResult.User = userXML{
-		Path:     "/",
-		UserName: u.UserName,
-		UserId:   u.UserID,
-		Arn:      u.ARN,
+		Path:       "/",
+		UserName:   u.UserName,
+		UserId:     u.UserID,
+		Arn:        u.ARN,
+		CreateDate: u.CreateDate,
 	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
@@ -63,9 +70,18 @@ type getUserResponse struct {
 }
 
 // GetUserXML builds GetUser response XML.
-func GetUserXML(u store.User, requestID string) ([]byte, error) {
+// boundaryARN, when non-empty, is embedded as PermissionsBoundary (AWS-shaped).
+func GetUserXML(u store.User, boundaryARN, requestID string) ([]byte, error) {
 	resp := getUserResponse{XMLNS: iamXMLNS}
-	resp.GetUserResult.User = userXML{Path: "/", UserName: u.UserName, UserId: u.UserID, Arn: u.ARN}
+	resp.GetUserResult.User = userXML{
+		Path: "/", UserName: u.UserName, UserId: u.UserID, Arn: u.ARN, CreateDate: u.CreateDate,
+	}
+	if boundaryARN != "" {
+		resp.GetUserResult.User.PermissionsBoundary = &permissionsBoundaryXML{
+			PermissionsBoundaryType: "PermissionsBoundaryPolicy",
+			PermissionsBoundaryArn:  boundaryARN,
+		}
+	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
 }
@@ -85,7 +101,7 @@ func ListUsersXML(users []store.User, requestID string) ([]byte, error) {
 	resp := listUsersResponse{XMLNS: iamXMLNS}
 	for _, u := range users {
 		resp.ListUsersResult.Users = append(resp.ListUsersResult.Users, userXML{
-			Path: "/", UserName: u.UserName, UserId: u.UserID, Arn: u.ARN,
+			Path: "/", UserName: u.UserName, UserId: u.UserID, Arn: u.ARN, CreateDate: u.CreateDate,
 		})
 	}
 	resp.ResponseMetadata.RequestId = requestID
@@ -272,6 +288,103 @@ type deletePolicyResponse struct {
 // DeletePolicyXML builds DeletePolicy response XML.
 func DeletePolicyXML(requestID string) ([]byte, error) {
 	return marshalResponse(deletePolicyResponse{XMLNS: iamXMLNS, ResponseMetadata: responseMetadata{RequestId: requestID}})
+}
+
+// --- Managed policy versions ---
+
+type policyVersionXML struct {
+	VersionId        string `xml:"VersionId"`
+	IsDefaultVersion bool   `xml:"IsDefaultVersion"`
+	CreateDate       string `xml:"CreateDate,omitempty"`
+	Document         string `xml:"Document,omitempty"`
+}
+
+func policyVersionFromStore(v store.ManagedPolicyVersion, includeDocument bool) policyVersionXML {
+	out := policyVersionXML{
+		VersionId:        v.VersionID,
+		IsDefaultVersion: v.IsDefaultVersion,
+		CreateDate:       v.CreateDate,
+	}
+	if includeDocument {
+		out.Document = v.Document
+	}
+	return out
+}
+
+type createPolicyVersionResponse struct {
+	XMLName                   xml.Name `xml:"CreatePolicyVersionResponse"`
+	XMLNS                     string   `xml:"xmlns,attr"`
+	CreatePolicyVersionResult struct {
+		PolicyVersion policyVersionXML `xml:"PolicyVersion"`
+	} `xml:"CreatePolicyVersionResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// CreatePolicyVersionXML builds CreatePolicyVersion response XML.
+func CreatePolicyVersionXML(v store.ManagedPolicyVersion, requestID string) ([]byte, error) {
+	resp := createPolicyVersionResponse{XMLNS: iamXMLNS}
+	resp.CreatePolicyVersionResult.PolicyVersion = policyVersionFromStore(v, false)
+	resp.ResponseMetadata.RequestId = requestID
+	return marshalResponse(resp)
+}
+
+type getPolicyVersionResponse struct {
+	XMLName                xml.Name `xml:"GetPolicyVersionResponse"`
+	XMLNS                  string   `xml:"xmlns,attr"`
+	GetPolicyVersionResult struct {
+		PolicyVersion policyVersionXML `xml:"PolicyVersion"`
+	} `xml:"GetPolicyVersionResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// GetPolicyVersionXML builds GetPolicyVersion response XML (includes Document).
+func GetPolicyVersionXML(v store.ManagedPolicyVersion, requestID string) ([]byte, error) {
+	resp := getPolicyVersionResponse{XMLNS: iamXMLNS}
+	resp.GetPolicyVersionResult.PolicyVersion = policyVersionFromStore(v, true)
+	resp.ResponseMetadata.RequestId = requestID
+	return marshalResponse(resp)
+}
+
+type listPolicyVersionsResponse struct {
+	XMLName                  xml.Name `xml:"ListPolicyVersionsResponse"`
+	XMLNS                    string   `xml:"xmlns,attr"`
+	ListPolicyVersionsResult struct {
+		Versions    []policyVersionXML `xml:"Versions>member"`
+		IsTruncated bool               `xml:"IsTruncated"`
+	} `xml:"ListPolicyVersionsResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// ListPolicyVersionsXML builds ListPolicyVersions response XML.
+func ListPolicyVersionsXML(versions []store.ManagedPolicyVersion, requestID string) ([]byte, error) {
+	resp := listPolicyVersionsResponse{XMLNS: iamXMLNS}
+	for _, v := range versions {
+		resp.ListPolicyVersionsResult.Versions = append(resp.ListPolicyVersionsResult.Versions, policyVersionFromStore(v, false))
+	}
+	resp.ResponseMetadata.RequestId = requestID
+	return marshalResponse(resp)
+}
+
+type deletePolicyVersionResponse struct {
+	XMLName          xml.Name         `xml:"DeletePolicyVersionResponse"`
+	XMLNS            string           `xml:"xmlns,attr"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// DeletePolicyVersionXML builds DeletePolicyVersion response XML.
+func DeletePolicyVersionXML(requestID string) ([]byte, error) {
+	return marshalResponse(deletePolicyVersionResponse{XMLNS: iamXMLNS, ResponseMetadata: responseMetadata{RequestId: requestID}})
+}
+
+type setDefaultPolicyVersionResponse struct {
+	XMLName          xml.Name         `xml:"SetDefaultPolicyVersionResponse"`
+	XMLNS            string           `xml:"xmlns,attr"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// SetDefaultPolicyVersionXML builds SetDefaultPolicyVersion response XML.
+func SetDefaultPolicyVersionXML(requestID string) ([]byte, error) {
+	return marshalResponse(setDefaultPolicyVersionResponse{XMLNS: iamXMLNS, ResponseMetadata: responseMetadata{RequestId: requestID}})
 }
 
 // --- Attachments ---
@@ -496,12 +609,13 @@ func ListRolePoliciesXML(names []string, requestID string) ([]byte, error) {
 // --- Roles ---
 
 type roleXML struct {
-	Path                     string `xml:"Path"`
-	RoleName                 string `xml:"RoleName"`
-	RoleId                   string `xml:"RoleId"`
-	Arn                      string `xml:"Arn"`
-	CreateDate               string `xml:"CreateDate,omitempty"`
-	AssumeRolePolicyDocument string `xml:"AssumeRolePolicyDocument,omitempty"`
+	Path                     string                  `xml:"Path"`
+	RoleName                 string                  `xml:"RoleName"`
+	RoleId                   string                  `xml:"RoleId"`
+	Arn                      string                  `xml:"Arn"`
+	CreateDate               string                  `xml:"CreateDate,omitempty"`
+	AssumeRolePolicyDocument string                  `xml:"AssumeRolePolicyDocument,omitempty"`
+	PermissionsBoundary      *permissionsBoundaryXML `xml:"PermissionsBoundary,omitempty"`
 }
 
 type createRoleResponse struct {
@@ -518,7 +632,7 @@ func CreateRoleXML(r store.Role, requestID string) ([]byte, error) {
 	resp := createRoleResponse{XMLNS: iamXMLNS}
 	resp.CreateRoleResult.Role = roleXML{
 		Path: "/", RoleName: r.RoleName, RoleId: r.RoleID, Arn: r.RoleARN,
-		AssumeRolePolicyDocument: r.TrustPolicy,
+		CreateDate: r.CreateDate, AssumeRolePolicyDocument: r.TrustPolicy,
 	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
@@ -534,11 +648,18 @@ type getRoleResponse struct {
 }
 
 // GetRoleXML builds GetRole response XML.
-func GetRoleXML(r store.Role, requestID string) ([]byte, error) {
+// boundaryARN, when non-empty, is embedded as PermissionsBoundary (AWS-shaped).
+func GetRoleXML(r store.Role, boundaryARN, requestID string) ([]byte, error) {
 	resp := getRoleResponse{XMLNS: iamXMLNS}
 	resp.GetRoleResult.Role = roleXML{
 		Path: "/", RoleName: r.RoleName, RoleId: r.RoleID, Arn: r.RoleARN,
-		AssumeRolePolicyDocument: r.TrustPolicy,
+		CreateDate: r.CreateDate, AssumeRolePolicyDocument: r.TrustPolicy,
+	}
+	if boundaryARN != "" {
+		resp.GetRoleResult.Role.PermissionsBoundary = &permissionsBoundaryXML{
+			PermissionsBoundaryType: "PermissionsBoundaryPolicy",
+			PermissionsBoundaryArn:  boundaryARN,
+		}
 	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
@@ -560,7 +681,7 @@ func ListRolesXML(roles []store.Role, requestID string) ([]byte, error) {
 	for _, r := range roles {
 		resp.ListRolesResult.Roles = append(resp.ListRolesResult.Roles, roleXML{
 			Path: "/", RoleName: r.RoleName, RoleId: r.RoleID, Arn: r.RoleARN,
-			AssumeRolePolicyDocument: r.TrustPolicy,
+			CreateDate: r.CreateDate, AssumeRolePolicyDocument: r.TrustPolicy,
 		})
 	}
 	resp.ResponseMetadata.RequestId = requestID

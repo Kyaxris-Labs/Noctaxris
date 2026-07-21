@@ -81,6 +81,10 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 	var verified *authn.Verified
 	switch route.AuthorizationType {
 	case store.APIGatewayAuthNone:
+		if !s.cfg.OpenDataPlaneAllowed() {
+			http.Error(w, "open data plane disabled (set NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1)", http.StatusForbidden)
+			return
+		}
 		verified = &authn.Verified{AccountID: accountID, Region: region, Service: "execute-api"}
 	case store.APIGatewayAuthJWT:
 		authz, err := s.store.GetAPIGatewayAuthorizer(accountID, apiID, route.AuthorizerID)
@@ -141,6 +145,15 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 	if err != nil {
 		http.Error(w, "lambda not found", http.StatusBadRequest)
 		return
+	}
+	if credARN := strings.TrimSpace(in.CredentialsArn); credARN != "" {
+		if !s.store.RoleSessionAllows(
+			accountID, credARN, catalog.ActionLambdaInvoke, fn.FunctionARN,
+			"apigateway-credentials", region,
+		) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	eventJSON, _ := json.Marshal(map[string]any{

@@ -787,3 +787,44 @@ func TestLambdaImageInvokeMicroVMOptInFailsClosed(t *testing.T) {
 		t.Fatalf("expected microVM fail-closed message in %q", body)
 	}
 }
+
+func TestLambdaPublishLayerVersionREST(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	raw, err := json.Marshal(map[string]any{
+		"Content": map[string]any{
+			"ZipFile": testLambdaLayerZipB64(t),
+		},
+		"Description": "rest-layer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// AWS CLI uses /2018-10-31/layers/{name}/versions (not X-Amz-Target).
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/2018-10-31/layers/cli-layer/versions", raw)
+	req.Header.Set("Content-Type", "application/json")
+	signHeader(t, req, raw, testAccessKey, testSecret, testRegion, "lambda", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PublishLayerVersion REST status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var published map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	want := "arn:aws:lambda:us-east-1:" + testAccountID + ":layer:cli-layer:1"
+	if published["LayerVersionArn"] != want {
+		t.Fatalf("LayerVersionArn=%v want %s body=%s", published["LayerVersionArn"], want, rec.Body.String())
+	}
+
+	getReq := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/2018-10-31/layers/cli-layer/versions/1", nil)
+	signHeader(t, getReq, nil, testAccessKey, testSecret, testRegion, "lambda", now)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetLayerVersion REST status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+}

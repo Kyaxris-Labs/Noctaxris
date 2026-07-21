@@ -283,7 +283,11 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
-		_ = s.store.MaybeAutoRotate(keyID, time.Time{})
+		if rotErr := s.store.MaybeAutoRotate(keyID, time.Time{}); rotErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to auto-rotate key material.", readOnly, eventID, verified)
+			return
+		}
 		plain, decErr := kmssvc.DecodeBinaryField(params["Plaintext"])
 		if decErr != nil || len(plain) == 0 {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -327,7 +331,11 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
-		_ = s.store.MaybeAutoRotate(keyID, time.Time{})
+		if rotErr := s.store.MaybeAutoRotate(keyID, time.Time{}); rotErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to auto-rotate key material.", readOnly, eventID, verified)
+			return
+		}
 		dek := make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, dek); err != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -586,7 +594,11 @@ func (s *Server) handleKMSReEncrypt(
 		return
 	}
 
-	_ = s.store.MaybeAutoRotate(destKeyID, time.Time{})
+	if rotErr := s.store.MaybeAutoRotate(destKeyID, time.Time{}); rotErr != nil {
+		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to auto-rotate key material.", readOnly, eventID, verified)
+		return
+	}
 	destCMK, unsealErr := s.store.UnsealKeyMaterial(destKeyID)
 	if unsealErr != nil {
 		s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",

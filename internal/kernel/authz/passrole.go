@@ -82,6 +82,19 @@ func CheckPassRole(req PassRoleRequest) Decision {
 	ctx := req.Caller
 	ctx.Action = actionPassRole
 	ctx.Resource = req.RoleARN
+	if ctx.ConditionKeys == nil {
+		ctx.ConditionKeys = map[string]string{}
+	} else {
+		// Copy so callers' maps are not mutated.
+		copied := make(map[string]string, len(ctx.ConditionKeys)+1)
+		for k, v := range ctx.ConditionKeys {
+			copied[k] = v
+		}
+		ctx.ConditionKeys = copied
+	}
+	if req.ServicePrincipal != "" {
+		ctx.ConditionKeys["iam:PassedToService"] = req.ServicePrincipal
+	}
 
 	in := req.EvalInputs
 	if in.IdentityDocs == nil {

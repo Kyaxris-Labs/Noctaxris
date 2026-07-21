@@ -31,6 +31,18 @@ func (s *Server) handleIAM(
 	}
 	params := requestParams(r, body)
 	resource := "*"
+	switch action {
+	case catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion",
+		catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion",
+		catalog.ActionIAMListPolicyVersions, "ListPolicyVersions",
+		catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion",
+		catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion",
+		catalog.ActionIAMGetPolicy, "GetPolicy",
+		catalog.ActionIAMDeletePolicy, "DeletePolicy":
+		if arn := strings.TrimSpace(params["PolicyArn"]); arn != "" {
+			resource = arn
+		}
+	}
 	if !s.authorize(verified, action, resource) {
 		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform "+action+".", readOnly, r, eventID,
@@ -63,7 +75,11 @@ func (s *Server) handleIAM(
 				"User already exists.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
-		payload, err = iam.CreateUserXML(store.User{AccountID: accountID, UserName: userName, UserID: userID, ARN: arn}, requestID)
+		u := store.User{AccountID: accountID, UserName: userName, UserID: userID, ARN: arn}
+		if got, getErr := s.store.GetUser(accountID, userName); getErr == nil {
+			u = got
+		}
+		payload, err = iam.CreateUserXML(u, requestID)
 	case catalog.ActionIAMGetUser, "GetUser":
 		userName := params["UserName"]
 		if userName == "" && verified.Principal.UserName != "" {
@@ -80,7 +96,11 @@ func (s *Server) handleIAM(
 				"User not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
-		payload, err = iam.GetUserXML(u, requestID)
+		boundaryARN := ""
+		if arn, bErr := s.store.GetUserPermissionsBoundary(accountID, userName); bErr == nil {
+			boundaryARN = arn
+		}
+		payload, err = iam.GetUserXML(u, boundaryARN, requestID)
 	case catalog.ActionIAMListUsers, "ListUsers":
 		users, listErr := s.store.ListUsers(accountID)
 		if listErr != nil {
@@ -183,6 +203,89 @@ func (s *Server) handleIAM(
 			return
 		}
 		payload, err = iam.DeletePolicyXML(requestID)
+	case catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion":
+		setDefault := strings.EqualFold(params["SetAsDefault"], "true")
+		v, createErr := s.store.CreateManagedPolicyVersion(params["PolicyArn"], params["PolicyDocument"], setDefault)
+		if createErr != nil {
+			switch {
+			case errors.Is(createErr, sql.ErrNoRows):
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			case errors.Is(createErr, store.ErrPolicyVersionLimit):
+				s.writeAWSError(w, requestID, http.StatusBadRequest, "LimitExceeded",
+					createErr.Error(), readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			case validate.IsInvalid(createErr):
+				code := "MalformedPolicyDocument"
+				if !strings.Contains(createErr.Error(), "PolicyDocument") {
+					code = "ValidationError"
+				}
+				s.writeAWSError(w, requestID, http.StatusBadRequest, code,
+					createErr.Error(), readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			default:
+				s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to create policy version.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			}
+			return
+		}
+		payload, err = iam.CreatePolicyVersionXML(v, requestID)
+	case catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion":
+		v, getErr := s.store.GetManagedPolicyVersion(params["PolicyArn"], params["VersionId"])
+		if getErr != nil {
+			if errors.Is(getErr, store.ErrNoSuchPolicyVersion) || errors.Is(getErr, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy version not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get policy version.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.GetPolicyVersionXML(v, requestID)
+	case catalog.ActionIAMListPolicyVersions, "ListPolicyVersions":
+		versions, listErr := s.store.ListManagedPolicyVersions(params["PolicyArn"])
+		if listErr != nil {
+			if errors.Is(listErr, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to list policy versions.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.ListPolicyVersionsXML(versions, requestID)
+	case catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion":
+		if delErr := s.store.DeleteManagedPolicyVersion(params["PolicyArn"], params["VersionId"]); delErr != nil {
+			switch {
+			case errors.Is(delErr, store.ErrDeleteDefaultPolicyVersion):
+				s.writeAWSError(w, requestID, http.StatusBadRequest, "DeleteConflict",
+					delErr.Error(), readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			case errors.Is(delErr, store.ErrNoSuchPolicyVersion), errors.Is(delErr, sql.ErrNoRows):
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy version not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			default:
+				s.writeAWSError(w, requestID, http.StatusBadRequest, "DeleteConflict",
+					"Unable to delete policy version.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			}
+			return
+		}
+		payload, err = iam.DeletePolicyVersionXML(requestID)
+	case catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion":
+		if setErr := s.store.SetDefaultManagedPolicyVersion(params["PolicyArn"], params["VersionId"]); setErr != nil {
+			switch {
+			case errors.Is(setErr, store.ErrNoSuchPolicyVersion):
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy version not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			case errors.Is(setErr, sql.ErrNoRows):
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Policy not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			default:
+				s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+					setErr.Error(), readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			}
+			return
+		}
+		payload, err = iam.SetDefaultPolicyVersionXML(requestID)
 	case catalog.ActionIAMAttachUserPolicy, "AttachUserPolicy":
 		if err := s.store.AttachUserPolicy(accountID, params["UserName"], params["PolicyArn"]); err != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
@@ -396,7 +499,11 @@ func (s *Server) handleIAM(
 				"Role not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
-		payload, err = iam.GetRoleXML(rec, requestID)
+		boundaryARN := ""
+		if arn, bErr := s.store.GetRolePermissionsBoundary(accountID, params["RoleName"]); bErr == nil {
+			boundaryARN = arn
+		}
+		payload, err = iam.GetRoleXML(rec, boundaryARN, requestID)
 	case catalog.ActionIAMListRoles, "ListRoles":
 		roles, listErr := s.store.ListRoles(accountID)
 		if listErr != nil {

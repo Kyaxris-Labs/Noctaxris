@@ -69,3 +69,19 @@ func GetLogEventsJSON(events []store.LogEvent) ([]byte, error) {
 		"nextBackwardToken": "",
 	})
 }
+
+// DescribeSubscriptionFiltersJSON builds DescribeSubscriptionFilters response.
+func DescribeSubscriptionFiltersJSON(filters []store.LogsSubscriptionFilter) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(filters))
+	for _, f := range filters {
+		entries = append(entries, map[string]any{
+			"filterName":      f.FilterName,
+			"logGroupName":    f.LogGroupName,
+			"filterPattern":   f.FilterPattern,
+			"destinationArn":  f.DestinationARN,
+			"roleArn":         f.RoleARN,
+			"creationTime":    f.CreatedAt,
+		})
+	}
+	return json.Marshal(map[string]any{"subscriptionFilters": entries})
+}

@@ -10,9 +10,10 @@ Standard state machines with a small ASL subset. Executions run synchronously in
 |------|---------|
 | State machines | `CreateStateMachine`, `DeleteStateMachine`, `DescribeStateMachine`, `ListStateMachines` |
 | Executions | `StartExecution`, `DescribeExecution`, `GetExecutionHistory` |
-| ASL subset | `Pass`, `Succeed`, `Fail`, `Task` (Resource = Lambda function ARN or name, sync Invoke) |
+| ASL subset | `Pass`, `Succeed`, `Fail`, `Task` |
+| Task resources | Lambda (sync Invoke), SQS SendMessage, SNS Publish, EventBridge bus ARN (PutEvents) |
 
-Task states call the same Lambda Invoke path as `lambda:InvokeFunction`. Without nested compute (`DockerHost` empty), Task fails with `States.TaskFailed` / compute unavailable. Pass/Succeed/Fail do not need Docker.
+Lambda Task states call the same Invoke path as `lambda:InvokeFunction`. Without nested compute (`DockerHost` empty), Lambda Task fails with `States.TaskFailed` / compute unavailable. SQS/SNS/EventBridge Tasks do not need Docker. EventBridge can target a state machine ARN with `RoleArn` (StartExecution).
 
 ### Authz notes
 
@@ -48,3 +49,4 @@ Task to Lambda needs Compose DinD for a successful Invoke. Without Docker, expec
 - Choice, Wait, Parallel, Map, Callback / activity patterns
 - Express workflows, Map distributed mode
 - InputPath / ResultPath / OutputPath depth beyond Pass Result
+- Scheduler Task resources and EventBridge→SFN Lambda Tasks without a wired sync invoker

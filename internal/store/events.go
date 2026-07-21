@@ -22,7 +22,13 @@ const (
 	actionSQSSendMessage      = "sqs:SendMessage"
 	actionLambdaInvokeFunction = "lambda:InvokeFunction"
 	actionSNSPublish          = "sns:Publish"
+	actionLogsPutLogEvents    = "logs:PutLogEvents"
+	actionKinesisPutRecord    = "kinesis:PutRecord"
+	actionSFNStartExecution   = "states:StartExecution"
 )
+
+// LabEventBridgeLogStream is the auto-created stream name for CloudWatch Logs targets.
+const LabEventBridgeLogStream = "eventbridge"
 
 const (
 	// DefaultEventsRegion is the lab region embedded in EventBridge ARNs.
@@ -66,23 +72,25 @@ type EventRule struct {
 
 // EventTarget is a rule target row.
 type EventTarget struct {
-	AccountID string
-	BusName   string
-	RuleName  string
-	ID        string
-	ARN       string
-	RoleARN   string
-	Input     string
-	InputPath string
+	AccountID              string
+	BusName                string
+	RuleName               string
+	ID                     string
+	ARN                    string
+	RoleARN                string
+	Input                  string
+	InputPath              string
+	InputTransformerJSON   string
 }
 
 // EventTargetInput is the PutTargets input shape.
 type EventTargetInput struct {
-	ID        string
-	ARN       string
-	RoleARN   string
-	Input     string
-	InputPath string
+	ID               string
+	ARN              string
+	RoleARN          string
+	Input            string
+	InputPath        string
+	InputTransformer *EventBridgeInputTransformer
 }
 
 // PutEventsEntry is a single PutEvents entry.
@@ -143,6 +151,7 @@ CREATE TABLE IF NOT EXISTS event_targets (
   role_arn TEXT NOT NULL DEFAULT '',
   input_json TEXT NOT NULL DEFAULT '',
   input_path TEXT NOT NULL DEFAULT '',
+  input_transformer_json TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, bus_name, rule_name, target_id)
 );
 CREATE TABLE IF NOT EXISTS event_entries (
@@ -174,6 +183,12 @@ func EnsureEventsSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(eventsSchema); err != nil {
 		return fmt.Errorf("ensure events schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE event_targets ADD COLUMN input_transformer_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("ensure events schema: input_transformer_json: %w", err)
+		}
 	}
 	return nil
 }
@@ -560,19 +575,28 @@ func (s *Store) PutTargets(accountID, busName, ruleName string, targets []EventT
 		if id == "" || arn == "" {
 			return fmt.Errorf("put targets: target id and arn are required")
 		}
-		_, err := tx.Exec(
+		transformerJSON, err := marshalEventBridgeInputTransformer(tgt.InputTransformer)
+		if err != nil {
+			return fmt.Errorf("put targets: InputTransformer: %w", err)
+		}
+		if transformerJSON != "" && (strings.TrimSpace(tgt.Input) != "" || strings.TrimSpace(tgt.InputPath) != "") {
+			return fmt.Errorf("put targets: InputTransformer cannot be combined with Input or InputPath")
+		}
+		_, err = tx.Exec(
 			`INSERT INTO event_targets
-			 (account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 (account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path, input_transformer_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id, bus_name, rule_name, target_id) DO UPDATE SET
 			   target_arn = excluded.target_arn,
 			   role_arn = excluded.role_arn,
 			   input_json = excluded.input_json,
-			   input_path = excluded.input_path`,
+			   input_path = excluded.input_path,
+			   input_transformer_json = excluded.input_transformer_json`,
 			accountID, busName, ruleName, id, arn,
 			strings.TrimSpace(tgt.RoleARN),
 			strings.TrimSpace(tgt.Input),
 			strings.TrimSpace(tgt.InputPath),
+			transformerJSON,
 		)
 		if err != nil {
 			return fmt.Errorf("put targets: %w", err)
@@ -614,7 +638,8 @@ func (s *Store) ListTargetsByRule(accountID, busName, ruleName string) ([]EventT
 	}
 	busName = normalizeEventBusName(busName)
 	rows, err := s.db.Query(
-		`SELECT account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path
+		`SELECT account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path,
+		        COALESCE(input_transformer_json, '')
 		 FROM event_targets WHERE account_id = ? AND bus_name = ? AND rule_name = ?
 		 ORDER BY target_id`,
 		accountID, busName, ruleName,
@@ -628,7 +653,7 @@ func (s *Store) ListTargetsByRule(accountID, busName, ruleName string) ([]EventT
 		var tgt EventTarget
 		if err := rows.Scan(
 			&tgt.AccountID, &tgt.BusName, &tgt.RuleName, &tgt.ID, &tgt.ARN,
-			&tgt.RoleARN, &tgt.Input, &tgt.InputPath,
+			&tgt.RoleARN, &tgt.Input, &tgt.InputPath, &tgt.InputTransformerJSON,
 		); err != nil {
 			return nil, fmt.Errorf("list targets by rule: %w", err)
 		}
@@ -742,13 +767,13 @@ func (s *Store) recordEventRuleMatch(entryID, ruleARN, targetARN, targetID, crea
 	return nil
 }
 
-// deliverEventTarget fans out a matched event to SQS, Lambda, or SNS targets.
+// deliverEventTarget fans out a matched event to supported targets.
 // Callers must authorize delivery first via eventTargetDeliveryAuthorized.
 // Without RoleArn, delivery requires the target resource policy to Allow
 // events.amazonaws.com or the account root for the target action (best-effort skip).
 // With RoleArn, PassRole is enforced at PutTargets and delivery mints a role session
 // then requires the role identity policies to Allow the target action.
-// Constant Input overrides the envelope. Otherwise InputPath (JSONPath subset) is applied.
+// Constant Input overrides the envelope. Otherwise InputTransformer, then InputPath.
 func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tgt EventTarget, source, detailType, detailJSON, created string) {
 	body, err := eventBridgeDeliveryBody(accountID, entryID, DefaultEventsRegion, source, detailType, detailJSON, created)
 	if err != nil {
@@ -757,6 +782,16 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 	}
 	if input := strings.TrimSpace(tgt.Input); input != "" {
 		body = input
+	} else if tr, ok, trErr := parseEventBridgeInputTransformerJSON(tgt.InputTransformerJSON); trErr != nil {
+		log.Printf("events InputTransformer parse failed entry=%s target=%s err=%v", entryID, tgt.ARN, trErr)
+		return
+	} else if ok {
+		transformed, trErr := applyEventBridgeInputTransformer(body, tr)
+		if trErr != nil {
+			log.Printf("events InputTransformer failed entry=%s target=%s err=%v", entryID, tgt.ARN, trErr)
+			return
+		}
+		body = transformed
 	} else if path := strings.TrimSpace(tgt.InputPath); path != "" {
 		extracted, pathErr := applyEventBridgeInputPath(body, path)
 		if pathErr != nil {
@@ -789,6 +824,12 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 			break
 		}
 		_, deliverErr = s.Publish(accountID, topic.TopicName, body, "", nil)
+	case strings.HasPrefix(arn, "arn:aws:logs:"):
+		deliverErr = s.deliverEventTargetToLogs(accountID, arn, body, source, created)
+	case strings.HasPrefix(arn, "arn:aws:kinesis:"):
+		deliverErr = s.deliverEventTargetToKinesis(accountID, arn, body, entryID)
+	case strings.Contains(arn, ":stateMachine:"):
+		deliverErr = s.deliverEventTargetToSFN(accountID, arn, body)
 	default:
 		_ = rule
 		return
@@ -799,6 +840,92 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 	}
 }
 
+func (s *Store) deliverEventTargetToLogs(accountID, logGroupARN, body, source, created string) error {
+	group, err := parseLogGroupNameFromARN(logGroupARN)
+	if err != nil {
+		return err
+	}
+	if _, err := s.getLogGroup(accountID, group); err != nil {
+		return err
+	}
+	if _, err := s.getLogStream(accountID, group, LabEventBridgeLogStream); errors.Is(err, ErrLogStreamNotFound) {
+		if _, err := s.CreateLogStream(accountID, DefaultEventsRegion, group, LabEventBridgeLogStream); err != nil && !errors.Is(err, ErrLogStreamAlreadyExists) {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	st, err := s.getLogStream(accountID, group, LabEventBridgeLogStream)
+	if err != nil {
+		return err
+	}
+	ts := time.Now().UTC().UnixMilli()
+	if t, perr := time.Parse(time.RFC3339, created); perr == nil {
+		ts = t.UnixMilli()
+	}
+	msg := body
+	if strings.TrimSpace(source) != "" {
+		// AWS without InputTransformer uses event payload as message.
+		_ = source
+	}
+	_, _, err = s.PutLogEvents(accountID, group, LabEventBridgeLogStream, st.UploadSequenceToken, []LogEvent{{
+		Timestamp: ts,
+		Message:   msg,
+	}})
+	return err
+}
+
+func (s *Store) deliverEventTargetToKinesis(accountID, streamARN, body, entryID string) error {
+	name, err := parseKinesisStreamNameFromARN(streamARN)
+	if err != nil {
+		return err
+	}
+	partitionKey := entryID
+	if partitionKey == "" {
+		partitionKey = uuid.NewString()
+	}
+	_, _, err = s.PutKinesisRecord(accountID, name, partitionKey, []byte(body))
+	return err
+}
+
+func (s *Store) deliverEventTargetToSFN(accountID, stateMachineARN, body string) error {
+	_, err := s.StartSFNExecution(accountID, DefaultSFNRegion, stateMachineARN, "", body, s.getSFNTaskInvoker())
+	return err
+}
+
+func parseLogGroupNameFromARN(arn string) (string, error) {
+	// arn:aws:logs:region:account:log-group:NAME[:*]
+	const marker = ":log-group:"
+	i := strings.Index(arn, marker)
+	if i < 0 {
+		return "", fmt.Errorf("invalid logs ARN")
+	}
+	rest := arn[i+len(marker):]
+	rest = strings.TrimSuffix(rest, ":*")
+	if j := strings.Index(rest, ":log-stream:"); j >= 0 {
+		rest = rest[:j]
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", fmt.Errorf("invalid logs ARN")
+	}
+	return rest, nil
+}
+
+func parseKinesisStreamNameFromARN(arn string) (string, error) {
+	// arn:aws:kinesis:region:account:stream/NAME
+	const marker = ":stream/"
+	i := strings.Index(arn, marker)
+	if i < 0 {
+		return "", fmt.Errorf("invalid kinesis ARN")
+	}
+	name := strings.TrimSpace(arn[i+len(marker):])
+	if name == "" {
+		return "", fmt.Errorf("invalid kinesis ARN")
+	}
+	return name, nil
+}
+
 func (s *Store) eventTargetDeliveryAuthorized(accountID string, tgt EventTarget) bool {
 	arn := strings.TrimSpace(tgt.ARN)
 	action, ok := eventTargetDeliveryAction(arn)
@@ -806,7 +933,14 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID string, tgt EventTarget)
 		return false
 	}
 	roleARN := strings.TrimSpace(tgt.RoleARN)
+	// CloudWatch Logs, Kinesis, and Step Functions targets require RoleArn in the lab
+	// (no resource-policy delivery path for these targets yet).
 	if roleARN == "" {
+		if strings.HasPrefix(arn, "arn:aws:logs:") ||
+			strings.HasPrefix(arn, "arn:aws:kinesis:") ||
+			strings.Contains(arn, ":stateMachine:") {
+			return false
+		}
 		return s.eventTargetResourcePolicyAllows(accountID, arn, action)
 	}
 	return s.eventTargetRoleSessionAllows(accountID, roleARN, action, arn)
@@ -913,6 +1047,12 @@ func eventTargetDeliveryAction(targetARN string) (string, bool) {
 		return actionLambdaInvokeFunction, true
 	case strings.HasPrefix(targetARN, "arn:aws:sns:"):
 		return actionSNSPublish, true
+	case strings.HasPrefix(targetARN, "arn:aws:logs:"):
+		return actionLogsPutLogEvents, true
+	case strings.HasPrefix(targetARN, "arn:aws:kinesis:"):
+		return actionKinesisPutRecord, true
+	case strings.Contains(targetARN, ":stateMachine:"):
+		return actionSFNStartExecution, true
 	default:
 		return "", false
 	}

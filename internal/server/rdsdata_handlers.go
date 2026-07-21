@@ -18,25 +18,23 @@ const (
 )
 
 var (
-	rdsDataExecutorMu sync.Mutex
-	rdsDataExecutor   store.RDSDataExecutor = &store.StubRDSDataExecutor{}
+	rdsDataExecutorMu       sync.Mutex
+	rdsDataExecutorOverride store.RDSDataExecutor // nil = prefer nested DinD psql, else stub
 )
 
-// SetRDSDataExecutor replaces the Data API executor (tests / leftovers live driver).
+// SetRDSDataExecutor replaces the Data API executor (tests).
+// Nil clears the override so ExecuteStatement prefers nested Postgres when
+// DinD has started a container, otherwise the recorded-statement stub.
 func (s *Server) SetRDSDataExecutor(exec store.RDSDataExecutor) {
 	rdsDataExecutorMu.Lock()
 	defer rdsDataExecutorMu.Unlock()
-	if exec == nil {
-		rdsDataExecutor = &store.StubRDSDataExecutor{}
-		return
-	}
-	rdsDataExecutor = exec
+	rdsDataExecutorOverride = exec
 }
 
-func getRDSDataExecutor() store.RDSDataExecutor {
+func getRDSDataExecutorOverride() store.RDSDataExecutor {
 	rdsDataExecutorMu.Lock()
 	defer rdsDataExecutorMu.Unlock()
-	return rdsDataExecutor
+	return rdsDataExecutorOverride
 }
 
 func (s *Server) handleRDSData(
@@ -104,11 +102,12 @@ func (s *Server) rdsDataExecute(
 			"sql is required.", readOnly, eventID, verified)
 		return
 	}
-	if _, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN); err != nil {
+	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
+	if err != nil {
 		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 		return
 	}
-	res, err := getRDSDataExecutor().Execute(req)
+	res, err := s.preferNestedRDSDataExecute(r.Context(), verified.AccountID, inst, req)
 	if err != nil {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
 			err.Error(), readOnly, eventID, verified)

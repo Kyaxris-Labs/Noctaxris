@@ -83,7 +83,8 @@ type RDSDataExecutor interface {
 }
 
 // StubRDSDataExecutor records statements and returns canned SELECT-shaped results.
-// No pgx / live Postgres. Live SQL is deferred (DONE_WITH_CONCERNS for leftovers).
+// Used when DinD is unset or the RDS instance has no nested container.
+// Live SQL against nested Postgres uses DinD exec + psql (no pgx / go.mod driver).
 type StubRDSDataExecutor struct {
 	mu         sync.Mutex
 	Statements []RDSDataExecuteRequest

@@ -360,6 +360,7 @@ func DeleteRolePermissionsBoundaryXML(requestID string) ([]byte, error) {
 type roleSummaryXML struct {
 	Path     string `xml:"Path"`
 	RoleName string `xml:"RoleName"`
+	RoleId   string `xml:"RoleId,omitempty"`
 	Arn      string `xml:"Arn,omitempty"`
 }
 
@@ -375,7 +376,9 @@ func instanceProfileToXML(p store.InstanceProfile) instanceProfileXML {
 		Path: "/", InstanceProfileName: p.ProfileName, Arn: p.ProfileARN,
 	}
 	if p.RoleName != "" {
-		out.Roles = []roleSummaryXML{{Path: "/", RoleName: p.RoleName}}
+		out.Roles = []roleSummaryXML{{
+			Path: "/", RoleName: p.RoleName, RoleId: p.RoleID, Arn: p.RoleARN,
+		}}
 	}
 	return out
 }

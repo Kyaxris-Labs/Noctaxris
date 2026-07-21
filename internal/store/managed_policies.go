@@ -42,6 +42,7 @@ func (s *Store) CreateManagedPolicy(accountID, name, document string) (arn strin
 	}
 	defer tx.Rollback()
 
+	created := nowRFC3339()
 	if _, err := tx.Exec(
 		`INSERT INTO managed_policies
 		 (policy_arn, account_id, policy_name, policy_id, default_version_id, document)
@@ -49,6 +50,14 @@ func (s *Store) CreateManagedPolicy(accountID, name, document string) (arn strin
 		arn, accountID, name, policyID, versionID, document,
 	); err != nil {
 		return "", fmt.Errorf("create managed policy %s: %w", name, err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO managed_policy_versions
+		 (policy_arn, version_id, document, is_default, create_date)
+		 VALUES (?, ?, ?, 1, ?)`,
+		arn, versionID, document, created,
+	); err != nil {
+		return "", fmt.Errorf("create managed policy %s version: %w", name, err)
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO policies (policy_id, document, policy_name, account_id, arn, path, default_version_id)
@@ -143,6 +152,9 @@ func (s *Store) DeleteManagedPolicy(policyARN string) error {
 	}
 	if affected == 0 {
 		return sql.ErrNoRows
+	}
+	if _, err := tx.Exec(`DELETE FROM managed_policy_versions WHERE policy_arn = ?`, policyARN); err != nil {
+		return fmt.Errorf("delete managed policy versions %s: %w", policyARN, err)
 	}
 	if _, err := tx.Exec(`DELETE FROM policies WHERE policy_id = ?`, policyARN); err != nil {
 		return fmt.Errorf("delete synced policy %s: %w", policyARN, err)

@@ -84,9 +84,9 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 
 ## Compute path
 
-Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with `Internal: true` (no public internet route by default). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
+Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
 
-Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` selects a Firecracker-class path on Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. Live guest zip/Image Invoke and ECS RunTask still require kernel/rootfs assets on a Linux+KVM host. CodeBuild and Batch stay on the DinD path.
+Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` probes for Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. A successful probe does not boot a guest: zip/Image Invoke and ECS RunTask on the microVM path fail closed until kernel/rootfs assets and a real runner ship. CodeBuild and Batch stay on the DinD path.
 
 ## Nested data planes
 
@@ -99,7 +99,7 @@ flowchart TD
   Helper["data-plane helper<br/>compute.Client DinD TLS"]
   Start["start labeled nested container<br/>no host port publish"]
   Describe["Describe* returns nested-network hostname:port"]
-  DataAPI["RDS Data API ExecuteStatement on :4566<br/>stub executor by default"]
+  DataAPI["RDS Data API ExecuteStatement on :4566<br/>nested psql when DinD up; stub otherwise"]
 
   Create --> Store --> Helper --> Start --> Describe
   Helper -.-> DataAPI
@@ -113,7 +113,7 @@ When DinD is unset, create paths keep control-plane rows and nested start is a n
 
 - EventBridge Scheduler advances due schedules inside the API process and delivers via existing Lambda async enqueue, SQS SendMessage, and SNS Publish helpers.
 - Lambda SQS event source mappings poll continuously with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
-- EventBridge Pipes expose the same poll helpers for SQS and DynamoDB Streams sources, but delivery is **manual** via `PollPipeOnce` (tests and operators). There is no continuous Pipes ticker yet.
+- EventBridge Pipes expose poll helpers for SQS, DynamoDB Streams, and EventBridge bus sources, with optional Lambda enrichment. An in-process ticker calls `PollPipeOnce` for RUNNING pipes.
 - SNS HTTP(S) subscriptions deliver only to allowlisted loopback endpoints (lab catcher). Non-allowlisted URLs fail closed.
 
 ## Edge identity

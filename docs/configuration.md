@@ -24,6 +24,10 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` | empty | Comma-separated image reference prefixes allowed beyond the built-in lab pin list. Registry hosts require `@sha256:` digests. |
 | `NOCTAXRIS_ALLOW_REMOTE_JWKS` | empty | Set to `1` to allow non-lab JWT issuer JWKS fetch (API Gateway / AppSync / STS web identity). Fail-closed when unset. |
 | `NOCTAXRIS_JWKS_HOST_ALLOWLIST` | empty | Comma-separated `host` or `host:port` entries required when remote JWKS is enabled. Private, loopback, link-local, and metadata targets are rejected. |
+| `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN` | empty | Set to `1` to allow non-loopback bind without TLS (Compose container bind with host publish on `127.0.0.1`). Prefer TLS instead for real non-loopback exposure. |
+| `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE` | empty | Set to `1` to allow Function URL / HTTP API `NONE` when listen is non-loopback. Loopback listen allows `NONE` without this env. |
+| `NOCTAXRIS_SNS_HTTP_ALLOWLIST` | empty | Comma-separated exact HTTP(S) URLs allowed for SNS subscriptions beyond the lab catcher on `127.0.0.1:4566/_noctaxris/sns-http-catcher`. |
+| `NOCTAXRIS_INJECT_HOST_GATEWAY` | enabled | Set to `0` to omit `host.docker.internal:host-gateway` ExtraHosts on nested Lambda/ECS containers. |
 | `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Lambda and ECS compute runtime: `dind` (default) or `microvm` (opt-in). Unknown values fail process start. Nested data engines use the DinD path. |
 | `NOCTAXRIS_FIRECRACKER_BIN` | empty | Optional path to the Firecracker binary when `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. If empty, `firecracker` must be on `PATH`. |
 | `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
@@ -48,27 +52,11 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 
 **Single API replica only.** Do not run multiple Noctaxris API processes against one data root. SQLite sets `busy_timeout=5000` on every connection via the DSN. Multi-instance access is unsupported and can corrupt state. WAL is not enabled by default; one API process is the durable-lab posture. SQS receive/send serialize in-process so concurrent claims stay atomic without a global `_txlock=immediate` (which would deadlock nested writers such as CloudFormation → CreateBucket).
 
-## Schema and upgrades
+## Schema, backup, and upgrades
 
-Schema evolution is additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` row is maintained for operators and tests. There is no down-migration. Prefer stop → backup → start on image upgrades.
+Schema evolution is additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` row is maintained for operators and tests. There is no down-migration.
 
-## Backup and restore
-
-1. Stop Compose (`docker compose -f docker/compose.yaml --env-file docker/.env down`).
-2. Archive the data volume (or data root), at least: `master.key`, `state.db`, `s3/`, `lambda/`, `cloudtrail/`, plus `transfer/`, `transcribe/`, `bcm-exports/`, and `ecr/` if used.
-3. Restore onto a fresh volume or host path, verify files are present, then start Compose.
-4. Without `master.key`, sealed secrets and CMK material cannot be decrypted even if `state.db` is restored.
-
-Example (named volumes `noctaxris-data` and `noctaxris-compute`):
-
-```bash
-docker compose -f docker/compose.yaml --env-file docker/.env down
-docker run --rm -v noctaxris-data:/data -v "$PWD:/backup" busybox \
-  tar czf /backup/noctaxris-data.tgz -C /data .
-docker run --rm -v noctaxris-compute:/data -v "$PWD:/backup" busybox \
-  tar czf /backup/noctaxris-compute.tgz -C /data .
-# restore: extract into empty volumes, then compose up
-```
+Operator runbook (stop → tar volumes → restore verify → start, plus image-upgrade notes and the single-replica rule): [ops.md](ops.md).
 
 ## Docker / Compose
 

@@ -2,12 +2,30 @@
 
 ## Unreleased
 
+### CTF fidelity
+
+- IAM managed policy versions: `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (five-version cap; default document syncs into Evaluate)
+- Lambda layers REST: map `/2018-10-31/layers/...` and `/2015-03-31/layers/...` for CLI Publish/Get/List/Delete layer version
+- Function network: masquerade-off bridge so in-function SDK calls reach `host.docker.internal` lab API without WAN SNAT
+- Compose `noctaxris-compute-init`: chown `noctaxris-compute` to UID `65532` before CreateFunction zip writes
+- SNS schema upgrade: ALTER FIFO columns before creating the dedup index (old volumes no longer crash on boot)
+
+### Platform depth
+
+- RDS Data API: ExecuteStatement runs real SQL via nested `psql` (DinD exec) when a Postgres container was started; stub marker when DinD is unset (still no `pgx`)
+- Opt-in microVM: clearer fail-closed errors (WSL2 / missing binary / guest boot not packaged); no fake live guest boot
+- Nested DinD smoke: `docker/smoke-nested.sh` and CI `workflow_dispatch` input `nested_smoke`
+
 ### Security hardening (H1)
 
 - JWT / AppSync issuers: lab Cognito JWKS only by default; remote JWKS behind `NOCTAXRIS_ALLOW_REMOTE_JWKS` + public host allowlist (no redirects / no RFC1918)
 - `NOCTAXRIS_DOCKER_HOST` allowlist (default `tcp://noctaxris-engine:2376`); reject `unix://`, `npipe://`, `docker.sock`; TLS client PEMs required when host is set
 - Compose volume split: API-only `noctaxris-data` vs `noctaxris-compute` for Lambda code (engine cannot read `master.key`)
 - Image pull allowlist for DinD (lab registry + pinned lab bases; `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras with digest pins)
+- SigV4 requires `host` in SignedHeaders; SNS HTTP limited to lab catcher on `:4566` (or `NOCTAXRIS_SNS_HTTP_ALLOWLIST`)
+- Non-loopback listen without TLS fails closed unless `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1`; Function URL / HTTP API `NONE` gated on non-loopback via `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE`
+- AppSync API keys hashed at rest (HMAC with master key); Gateway JWT enforces `nbf`; CredentialsArn evaluated at invoke; `iam:PassedToService` on PassRole
+- Internal network reuse inspect; optional `NOCTAXRIS_INJECT_HOST_GATEWAY=0`; nested data start fail → `failed`; CodeBuild/Batch non-zero exit → Failed
 
 ## Nested data planes and ML stubs
 
@@ -17,7 +35,7 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 
 - Nested data-plane helper on the existing DinD TLS client (labeled containers, no host port publish)
 - RDS lite: CreateDBInstance / DescribeDBInstances / DeleteDBInstance for Postgres, Secrets Manager master secret, nested start when engine is up
-- RDS Data API lite: ExecuteStatement plus Begin/Commit/Rollback with resourceArn and secretArn validation (recorded-statement stub executor, no pgx)
+- RDS Data API lite: ExecuteStatement plus Begin/Commit/Rollback with resourceArn and secretArn validation (nested `psql` when DinD started Postgres; stub otherwise; no pgx)
 - ElastiCache lite: Create/Describe/Delete cache cluster (redis or valkey), nested Valkey/Redis when DinD is up
 - DocumentDB lite: Create/Describe/Delete DB cluster (`Engine=docdb`), nested Mongo-compatible when DinD is up (not Neptune)
 - Athena lite: Start/Get/Stop/GetQueryResults over Glue catalog plus lab S3 CSV/JSON SELECT subset
@@ -28,7 +46,7 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 - Textract stub: DetectDocumentText / AnalyzeDocument canned Blocks
 - Transcribe stub: Start/Get/List transcription jobs with canned transcript under the data root
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Live `pgx` Data API executor, MemoryDB, Neptune, real ML model runtimes, and live Firecracker guest boot remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Wire-protocol `pgx` Data API executor, MemoryDB, Neptune, real ML model runtimes, and live Firecracker guest boot remain deferred.
 
 ## Cognito, HTTP API, and edge stubs
 

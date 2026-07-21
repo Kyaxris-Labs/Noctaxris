@@ -153,3 +153,83 @@ func TestDynamoDBTTLDescribeUpdateAndLazyExpiry(t *testing.T) {
 		t.Fatalf("expired item should be omitted, body=%q", getRec.Body.String())
 	}
 }
+
+func TestDynamoDBTTLQueryOverFetchesForLimit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustDynamoJSON(t, handler, "CreateTable", map[string]any{
+		"TableName": "ttl-query-limit",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+			{"AttributeName": "sk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+			{"AttributeName": "sk", "KeyType": "RANGE"},
+		},
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateTable status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	updateTTL := mustDynamoJSON(t, handler, "UpdateTimeToLive", map[string]any{
+		"TableName": "ttl-query-limit",
+		"TimeToLiveSpecification": map[string]any{
+			"AttributeName": "expires",
+			"Enabled":       true,
+		},
+	}, now)
+	if updateTTL.Code != http.StatusOK {
+		t.Fatalf("UpdateTimeToLive status=%d body=%q", updateTTL.Code, updateTTL.Body.String())
+	}
+
+	past := strconv.FormatInt(now.Add(-time.Hour).Unix(), 10)
+	future := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	for _, sk := range []string{"a", "b", "c"} {
+		putRec := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+			"TableName": "ttl-query-limit",
+			"Item": map[string]any{
+				"pk":      map[string]any{"S": "p1"},
+				"sk":      map[string]any{"S": sk},
+				"expires": map[string]any{"N": past},
+			},
+		}, now)
+		if putRec.Code != http.StatusOK {
+			t.Fatalf("PutItem expired %s status=%d", sk, putRec.Code)
+		}
+	}
+	liveRec := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "ttl-query-limit",
+		"Item": map[string]any{
+			"pk":      map[string]any{"S": "p1"},
+			"sk":      map[string]any{"S": "z-live"},
+			"expires": map[string]any{"N": future},
+		},
+	}, now)
+	if liveRec.Code != http.StatusOK {
+		t.Fatalf("PutItem live status=%d", liveRec.Code)
+	}
+
+	queryRec := mustDynamoJSON(t, handler, "Query", map[string]any{
+		"TableName": "ttl-query-limit",
+		"KeyConditions": map[string]any{
+			"pk": map[string]any{
+				"AttributeValueList": []any{map[string]any{"S": "p1"}},
+				"ComparisonOperator": "EQ",
+			},
+		},
+		"Limit": 1,
+	}, now)
+	if queryRec.Code != http.StatusOK {
+		t.Fatalf("Query status=%d body=%q", queryRec.Code, queryRec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(queryRec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := out["Items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("want 1 live item after TTL over-fetch, got %d body=%q", len(items), queryRec.Body.String())
+	}
+}

@@ -142,7 +142,7 @@ func (c *Client) RunInvoke(ctx context.Context, opts RunOpts) (InvokeResult, err
 		Binds: binds,
 		AutoRemove:    false,
 		NetworkMode:   container.NetworkMode(FunctionNetworkName),
-		ExtraHosts:    []string{"host.docker.internal:host-gateway"},
+		ExtraHosts:    hostGatewayExtraHosts(),
 		ReadonlyRootfs: false,
 	}
 

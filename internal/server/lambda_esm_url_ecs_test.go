@@ -35,7 +35,23 @@ func TestLambdaEventSourceMappingCRUD(t *testing.T) {
 	if qRec.Code != http.StatusOK {
 		t.Fatalf("CreateQueue status=%d body=%q", qRec.Code, qRec.Body.String())
 	}
+	var qOut map[string]any
+	if err := json.Unmarshal(qRec.Body.Bytes(), &qOut); err != nil {
+		t.Fatal(err)
+	}
+	queueURL, _ := qOut["QueueUrl"].(string)
+	if queueURL == "" {
+		t.Fatalf("missing QueueUrl in %q", qRec.Body.String())
+	}
 	queueARN := store.QueueARN("us-east-1", testAccountID, "esm-handler-q")
+	esmQueuePolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sqs:ReceiveMessage","sqs:DeleteMessage"],"Resource":"*"}]}`
+	attrRec := mustSQSJSON(t, handler, "SetQueueAttributes", map[string]any{
+		"QueueUrl":   queueURL,
+		"Attributes": map[string]string{"Policy": esmQueuePolicy},
+	}, now)
+	if attrRec.Code != http.StatusOK {
+		t.Fatalf("SetQueueAttributes status=%d body=%q", attrRec.Code, attrRec.Body.String())
+	}
 
 	rec := mustLambdaJSON(t, handler, "CreateEventSourceMapping", map[string]any{
 		"FunctionName":   "esm-handler",

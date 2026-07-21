@@ -76,10 +76,15 @@ const (
 
 // Managed policies
 const (
-	ActionIAMCreatePolicy = "iam:CreatePolicy"
-	ActionIAMGetPolicy    = "iam:GetPolicy"
-	ActionIAMListPolicies = "iam:ListPolicies"
-	ActionIAMDeletePolicy = "iam:DeletePolicy"
+	ActionIAMCreatePolicy             = "iam:CreatePolicy"
+	ActionIAMGetPolicy                = "iam:GetPolicy"
+	ActionIAMListPolicies             = "iam:ListPolicies"
+	ActionIAMDeletePolicy             = "iam:DeletePolicy"
+	ActionIAMCreatePolicyVersion      = "iam:CreatePolicyVersion"
+	ActionIAMGetPolicyVersion         = "iam:GetPolicyVersion"
+	ActionIAMListPolicyVersions       = "iam:ListPolicyVersions"
+	ActionIAMDeletePolicyVersion      = "iam:DeletePolicyVersion"
+	ActionIAMSetDefaultPolicyVersion  = "iam:SetDefaultPolicyVersion"
 )
 
 // Attachments
@@ -376,6 +381,8 @@ const (
 	ActionEventsPutTargets        = "events:PutTargets"
 	ActionEventsRemoveTargets     = "events:RemoveTargets"
 	ActionEventsListTargetsByRule = "events:ListTargetsByRule"
+	ActionEventsPutPermission     = "events:PutPermission"
+	ActionEventsRemovePermission  = "events:RemovePermission"
 )
 
 // ECR lab actions.
@@ -443,9 +450,12 @@ const (
 	ActionLogsDeleteLogGroup     = "logs:DeleteLogGroup"
 	ActionLogsDeleteLogStream    = "logs:DeleteLogStream"
 	ActionLogsDescribeLogStreams = "logs:DescribeLogStreams"
-	ActionLogsPutLogEvents       = "logs:PutLogEvents"
-	ActionLogsGetLogEvents       = "logs:GetLogEvents"
-	ActionLogsDescribeLogGroups  = "logs:DescribeLogGroups"
+	ActionLogsPutLogEvents             = "logs:PutLogEvents"
+	ActionLogsGetLogEvents             = "logs:GetLogEvents"
+	ActionLogsDescribeLogGroups        = "logs:DescribeLogGroups"
+	ActionLogsPutSubscriptionFilter    = "logs:PutSubscriptionFilter"
+	ActionLogsDeleteSubscriptionFilter = "logs:DeleteSubscriptionFilter"
+	ActionLogsDescribeSubscriptionFilters = "logs:DescribeSubscriptionFilters"
 )
 
 // Resource Groups Tagging API lab actions.
@@ -853,6 +863,11 @@ func KnownAction(action string) bool {
 		ActionIAMGetPolicy,
 		ActionIAMListPolicies,
 		ActionIAMDeletePolicy,
+		ActionIAMCreatePolicyVersion,
+		ActionIAMGetPolicyVersion,
+		ActionIAMListPolicyVersions,
+		ActionIAMDeletePolicyVersion,
+		ActionIAMSetDefaultPolicyVersion,
 		ActionIAMAttachUserPolicy,
 		ActionIAMDetachUserPolicy,
 		ActionIAMAttachRolePolicy,
@@ -1095,6 +1110,8 @@ func KnownAction(action string) bool {
 		ActionEventsPutTargets,
 		ActionEventsRemoveTargets,
 		ActionEventsListTargetsByRule,
+		ActionEventsPutPermission,
+		ActionEventsRemovePermission,
 		ActionECRCreateRepository,
 		ActionECRDescribeRepositories,
 		ActionECRDeleteRepository,
@@ -1134,6 +1151,9 @@ func KnownAction(action string) bool {
 		ActionLogsPutLogEvents,
 		ActionLogsGetLogEvents,
 		ActionLogsDescribeLogGroups,
+		ActionLogsPutSubscriptionFilter,
+		ActionLogsDeleteSubscriptionFilter,
+		ActionLogsDescribeSubscriptionFilters,
 		ActionTaggingTagResources,
 		ActionTaggingUntagResources,
 		ActionTaggingGetResources,

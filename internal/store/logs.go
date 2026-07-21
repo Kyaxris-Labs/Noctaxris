@@ -387,6 +387,7 @@ func (s *Store) PutLogEvents(
 	if err := tx.Commit(); err != nil {
 		return "", nil, fmt.Errorf("put log events: commit: %w", err)
 	}
+	s.fanOutLogSubscriptionFilters(accountID, group, events)
 	return next, nil, nil
 }
 

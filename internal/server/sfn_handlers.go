@@ -287,7 +287,7 @@ func (s *Server) sfnStartExecution(
 func (s *Server) sfnInvokeLambdaTask(r *http.Request, verified *authn.Verified, resourceARN, inputJSON string) (string, error) {
 	accountID, functionName, ok := store.ParseLambdaARNFromSFNResource(resourceARN)
 	if !ok {
-		return "", fmt.Errorf("Task Resource must be a Lambda function ARN or name")
+		return "", fmt.Errorf("Task Resource must be a Lambda function ARN or name (SQS/SNS/EventBridge bus Tasks are handled in-store)")
 	}
 	if accountID == "" {
 		accountID = verified.AccountID

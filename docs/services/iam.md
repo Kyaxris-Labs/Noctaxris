@@ -10,15 +10,15 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 |------|---------|
 | Users | `CreateUser`, `GetUser`, `ListUsers`, `DeleteUser` |
 | Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey` |
-| Managed policies | `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy` |
+| Managed policies | `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy`, `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (max five versions; default document feeds Evaluate) |
 | Attachments | `AttachUserPolicy`, `DetachUserPolicy`, `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedUserPolicies`, `ListAttachedRolePolicies` |
 | Inline user | `PutUserPolicy`, `GetUserPolicy`, `DeleteUserPolicy`, `ListUserPolicies` |
 | Inline role | `PutRolePolicy`, `GetRolePolicy`, `DeleteRolePolicy`, `ListRolePolicies` |
 | Roles | `CreateRole`, `GetRole`, `ListRoles`, `DeleteRole`, `UpdateAssumeRolePolicy` |
 | Groups | `CreateGroup`, `DeleteGroup`, `GetGroup`, `ListGroups`, `AddUserToGroup`, `RemoveUserFromGroup` |
 | Group policies | `AttachGroupPolicy`, `DetachGroupPolicy`, `ListAttachedGroupPolicies`, `PutGroupPolicy`, `GetGroupPolicy`, `DeleteGroupPolicy`, `ListGroupPolicies` |
-| Boundaries | `PutUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `DeleteRolePermissionsBoundary`. Lab-only: `GetUserPermissionsBoundary` / `GetRolePermissionsBoundary` (AWS embeds boundary on GetUser/GetRole; GetUser/GetRole boundary XML fields remain deferred) |
-| Instance profiles | `CreateInstanceProfile`, `DeleteInstanceProfile`, `GetInstanceProfile`, `AddRoleToInstanceProfile`, `RemoveRoleFromInstanceProfile`, `ListInstanceProfiles` |
+| Boundaries | `PutUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `DeleteRolePermissionsBoundary`. `GetUser` / `GetRole` embed `PermissionsBoundary` and `CreateDate`. Lab-only: `GetUserPermissionsBoundary` / `GetRolePermissionsBoundary` |
+| Instance profiles | `CreateInstanceProfile`, `DeleteInstanceProfile`, `GetInstanceProfile`, `AddRoleToInstanceProfile`, `RemoveRoleFromInstanceProfile`, `ListInstanceProfiles`. Role members include `Arn` and `RoleId` |
 | OIDC IdP | `CreateOpenIDConnectProvider`, `DeleteOpenIDConnectProvider`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider` |
 | SAML IdP | `CreateSAMLProvider`, `DeleteSAMLProvider`, `ListSAMLProviders`, `GetSAMLProvider` |
 | Virtual MFA | `CreateVirtualMFADevice`, `EnableMFADevice`, `ListMFADevices`, `DeactivateMFADevice` |
@@ -56,6 +56,18 @@ POLICY_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName==
 aws iam attach-group-policy --group-name Admins --policy-arn "$POLICY_ARN" --endpoint-url "$EP"
 ```
 
+Managed policy versioning (lab subset; `SetAsDefault` updates the operative document for attached principals):
+
+```bash
+ADMIN_DOC='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}'
+aws iam create-policy-version \
+  --policy-arn "$POLICY_ARN" \
+  --policy-document "$ADMIN_DOC" \
+  --set-as-default \
+  --endpoint-url "$EP"
+aws iam list-policy-versions --policy-arn "$POLICY_ARN" --endpoint-url "$EP"
+```
+
 Boundary deny: identity allows `ListUsers` but the boundary allows only `GetUser`.
 
 ```bash
@@ -76,18 +88,34 @@ AWS_ACCESS_KEY_ID="$BOUNDED_AKID" AWS_SECRET_ACCESS_KEY="$BOUNDED_SECRET" \
 
 Expect `AccessDenied` for the last command.
 
-Virtual MFA device setup (lab token used by STS `GetSessionToken`): after `CreateVirtualMFADevice`, `Base32StringSeed` is hex-encoded seed bytes. Token is the first 6 hex chars of `sha256(seed + ":" + unixMinute)` (see `internal/kernel/sts/mfa.go`). Full MFA session smoke is on [sts.md](sts.md).
+Virtual MFA device setup (lab token used by STS `GetSessionToken`): after `CreateVirtualMFADevice`, `Base32StringSeed` is hex-encoded seed bytes. Token is the first 6 hex chars of `sha256(seed + ":" + unixMinute)` (see `internal/kernel/sts/mfa.go`). `EnableMFADevice` requires `AuthenticationCode1` and `AuthenticationCode2` as consecutive lab tokens (current and next minute). Full MFA session smoke is on [sts.md](sts.md).
 
 ```bash
 aws iam create-user --user-name mfa-user --endpoint-url "$EP"
 MFA_JSON=$(aws iam create-virtual-mfa-device --endpoint-url "$EP" --output json)
 SERIAL=$(echo "$MFA_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["VirtualMFADevice"]["SerialNumber"])')
-aws iam enable-mfa-device --user-name mfa-user --serial-number "$SERIAL" --endpoint-url "$EP"
+SEED_HEX=$(echo "$MFA_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["VirtualMFADevice"]["Base32StringSeed"])')
+CODES=$(SEED_HEX="$SEED_HEX" python3 - <<'PY'
+import hashlib, time, os, binascii
+seed = binascii.unhexlify(os.environ["SEED_HEX"])
+m = int(time.time()) // 60
+def code(minute):
+    return hashlib.sha256(seed + (":%d" % minute).encode("ascii")).hexdigest()[:6]
+print(code(m), code(m + 1))
+PY
+)
+CODE1=$(echo "$CODES" | awk '{print $1}')
+CODE2=$(echo "$CODES" | awk '{print $2}')
+aws iam enable-mfa-device \
+  --user-name mfa-user \
+  --serial-number "$SERIAL" \
+  --authentication-code1 "$CODE1" \
+  --authentication-code2 "$CODE2" \
+  --endpoint-url "$EP"
 ```
 
 ## Not yet / deferred
 
 - Service-linked roles
 - Full IAM pagination, tagging, and API parity beyond the lab subset
-- Embed `PermissionsBoundary` / `CreateDate` on GetUser/GetRole XML (AWS-shaped); prefer that over Get*PermissionsBoundary for SDK labs
 - PassRole on non-Lambda service configure APIs when those services gain role ARNs later

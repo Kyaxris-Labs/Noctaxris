@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+func TestSmokeNestedScriptPresent(t *testing.T) {
+	b, err := os.ReadFile("smoke-nested.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	for _, needle := range []string{
+		"compose.yaml",
+		"/_noctaxris/ready",
+		"noctaxris-engine",
+		"healthy",
+		"create-db-instance",
+		"execute-statement",
+		"nested-psql",
+		"lambda invoke",
+	} {
+		if !strings.Contains(strings.ToLower(content), strings.ToLower(needle)) {
+			t.Fatalf("smoke-nested.sh missing %q", needle)
+		}
+	}
+}
+
 func TestComposeFileHasNoDockerSock(t *testing.T) {
 	b, err := os.ReadFile("compose.yaml")
 	if err != nil {
@@ -118,6 +140,7 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	content := string(b)
 	noctaxris := serviceBlock(content, "noctaxris")
 	engine := serviceBlock(content, "noctaxris-engine")
+	initSvc := serviceBlock(content, "noctaxris-compute-init")
 	if !strings.Contains(noctaxris, "noctaxris-data:/var/lib/noctaxris") {
 		t.Fatal("noctaxris must mount noctaxris-data for API state (master.key / state.db)")
 	}
@@ -132,6 +155,13 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	}
 	if !strings.Contains(content, "noctaxris-compute:") {
 		t.Fatal("compose must declare noctaxris-compute volume")
+	}
+	if !strings.Contains(initSvc, "chown -R 65532:65532 /lambda") {
+		t.Fatal("noctaxris-compute-init must chown compute volume to API UID 65532")
+	}
+	if !strings.Contains(noctaxris, "noctaxris-compute-init:") ||
+		!strings.Contains(noctaxris, "service_completed_successfully") {
+		t.Fatal("noctaxris must wait for noctaxris-compute-init to finish before start")
 	}
 }
 

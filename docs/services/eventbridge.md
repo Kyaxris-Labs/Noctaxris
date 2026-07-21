@@ -13,8 +13,9 @@ Lab-complete EventBridge core: default and custom event buses, rules, targets, a
 | Targets | `PutTargets`, `RemoveTargets`, `ListTargetsByRule` |
 | Events | `PutEvents` matches enabled rules and fans out to targets |
 | Pattern | Lab match on `source`, `detail-type`, and simple `detail` key equality |
-| Targets | SQS (`sqs:SendMessage`), Lambda (async invoke), SNS (`sns:Publish`) |
-| Input | Constant `Input` JSON on a target overrides the generated EventBridge envelope when set. Otherwise lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys like `$.detail-type`) extracts a portion of the event |
+| Targets | SQS, Lambda (async invoke), SNS, CloudWatch Logs (RoleArn), Kinesis (RoleArn), Step Functions state machine (RoleArn) |
+| Input | Constant `Input` overrides the envelope. Else lab `InputTransformer` (`InputPathsMap` + `InputTemplate` with `<var>` placeholders). Else lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys). InputTransformer cannot combine with Input/InputPath |
+| Bus policy | `PutPermission` / `RemovePermission` maintain bus `Policy`. `PutEvents` uses identity **or** bus policy (same account) and identity **and** bus policy (cross-account ARN). `EventBusName` may be a bus ARN |
 
 Bus, rule, and target metadata live in SQLite.
 
@@ -22,11 +23,13 @@ Bus, rule, and target metadata live in SQLite.
 
 EventBridge control-plane APIs use identity `EvaluateFull` on bus and rule ARNs.
 
-`PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). At delivery time the lab mints a temporary role session and requires the role identity policies to Allow the target action (`sqs:SendMessage`, `lambda:InvokeFunction`, or `sns:Publish`). Roles without an Allow skip that target.
+`PutEvents` uses dataplane dual-eval against the bus resource policy (`EvaluateResourceAccess`). Cross-account PutEvents requires a bus ARN in `EventBusName` and a bus policy Allow for the caller.
 
-`PutTargets` without `RoleArn` delivers only when the target resource policy Allows `events.amazonaws.com` or the account root for the required action. Missing or insufficient policy skips that target (best-effort). Rule or target matches are recorded only when delivery is authorized.
+`PutTargets` with `RoleArn` requires `iam:PassRole` on the role and role trust must Allow `sts:AssumeRole` for `events.amazonaws.com` (`CheckPassRole` at PutTargets). At delivery time the lab mints a temporary role session and requires the role identity policies to Allow the target action. Logs, Kinesis, and Step Functions targets require `RoleArn` (no resource-policy delivery path).
 
-Delivery failures after authorization are logged. PutEvents still succeeds (best-effort fan-out).
+`PutTargets` without `RoleArn` (SQS/Lambda/SNS only) delivers only when the target resource policy Allows `events.amazonaws.com` or the account root. Missing or insufficient policy skips that target (best-effort). Rule or target matches are recorded only when delivery is authorized.
+
+CloudWatch Logs targets write to stream `eventbridge` (auto-created). Delivery failures after authorization are logged. PutEvents still succeeds (best-effort fan-out).
 
 ## How to verify / CLI smoke
 
@@ -70,8 +73,6 @@ aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
 - Full EventBridge SAR (partner buses, archive and replay, API Destinations). Pipes lab core: [pipes.md](pipes.md)
 - Legacy scheduled rules (`ScheduleExpression` on Rules). Prefer the Scheduler service for time-based labs
 - Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
-- CloudWatch Logs and Kinesis targets
-- `InputTransformer` (and InputPath bracket/wildcard notation)
-- Bus resource policy dual-eval depth beyond same-account lab paths
+- InputPath / InputTransformer bracket and wildcard notation
+- Resource-policy delivery path for Logs/Kinesis/SFN targets (RoleArn required)
 - Exact AWS retry and jitter timing for delivery failures
-- Cross-account bus policies beyond same-account lab paths

@@ -134,6 +134,36 @@ func TestVerifyExpiresOverMax(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsMissingHostSignedHeader(t *testing.T) {
+	now := fixedNow()
+	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
+
+	auth := req.Header.Get("Authorization")
+	auth = strings.Replace(auth, "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date",
+		"SignedHeaders=content-type;x-amz-content-sha256;x-amz-date", 1)
+	req.Header.Set("Authorization", auth)
+
+	_, err := authn.Verify(req, body, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
+func TestVerifyQueryRejectsMissingHostSignedHeader(t *testing.T) {
+	now := fixedNow()
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/?Action=GetCallerIdentity&Version=2011-06-15", nil)
+	signQuery(t, req, nil, testAKID, testSecret, testRegion, testSvc, now, 900)
+	q := req.URL.Query()
+	q.Set("X-Amz-SignedHeaders", "x-amz-date")
+	req.URL.RawQuery = q.Encode()
+	_, err := authn.Verify(req, nil, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
 func TestVerifyMissingAuth(t *testing.T) {
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", nil)
 	_, err := authn.Verify(req, nil, fixedNow(), 15*time.Minute, lookupOK)

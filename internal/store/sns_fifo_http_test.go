@@ -81,6 +81,12 @@ func TestSNSHTTPCatcherAllowlistAndDelivery(t *testing.T) {
 	if _, err := st.Subscribe(account, topic.TopicARN, "http", "https://evil.example/hook"); !errors.Is(err, store.ErrSNSEndpointNotAllowed) {
 		t.Fatalf("want not allowlisted got %v", err)
 	}
+	if _, err := st.Subscribe(account, topic.TopicARN, "http", "http://127.0.0.1:9999/hook"); !errors.Is(err, store.ErrSNSEndpointNotAllowed) {
+		t.Fatalf("want reject arbitrary loopback port got %v", err)
+	}
+	if _, err := st.Subscribe(account, topic.TopicARN, "http", "http://127.0.0.1:4566/other"); !errors.Is(err, store.ErrSNSEndpointNotAllowed) {
+		t.Fatalf("want reject non-catcher path got %v", err)
+	}
 
 	endpoint := "http://127.0.0.1:4566" + store.LabSNSHTTPCatcherPath
 	sub, err := st.Subscribe(account, topic.TopicARN, "http", endpoint)

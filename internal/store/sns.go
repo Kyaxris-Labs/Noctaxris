@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -77,6 +78,8 @@ type PublishedMessage struct {
 	MessageDeduplicationID string
 }
 
+// snsSchema creates tables and indexes that do not depend on migrated columns.
+// FIFO columns and their indexes are applied after ALTER so old volumes upgrade cleanly.
 const snsSchema = `
 CREATE TABLE IF NOT EXISTS sns_topics (
   account_id TEXT NOT NULL,
@@ -115,10 +118,9 @@ CREATE TABLE IF NOT EXISTS sns_http_catcher (
   received_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sns_subscriptions_topic ON sns_subscriptions(topic_arn);
-CREATE INDEX IF NOT EXISTS idx_sns_fifo_dedup ON sns_published_messages(topic_arn, message_deduplication_id);
 `
 
-// EnsureSNSSchema creates SNS tables if missing.
+// EnsureSNSSchema creates SNS tables if missing and migrates FIFO columns before indexes.
 func EnsureSNSSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure sns schema: db is nil")
@@ -131,7 +133,14 @@ func EnsureSNSSchema(db *sql.DB) error {
 		`ALTER TABLE sns_published_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_subscriptions ADD COLUMN confirm_token TEXT NOT NULL DEFAULT ''`,
 	} {
-		_, _ = db.Exec(stmt) // ignore "duplicate column" on fresh schema
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("ensure sns schema: migrate: %w", err)
+		}
+	}
+	if _, err := db.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sns_fifo_dedup ON sns_published_messages(topic_arn, message_deduplication_id)`,
+	); err != nil {
+		return fmt.Errorf("ensure sns schema: fifo index: %w", err)
 	}
 	return nil
 }
@@ -528,19 +537,19 @@ func (s *Store) deliverSNSSubscriptionOnce(msg PublishedMessage, sub Subscriptio
 }
 
 func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
-	queueName, err := s.resolveSQSQueueName(sub.Owner, sub.Endpoint)
+	queueAccount, queueName, err := s.resolveSQSEndpoint(sub.Owner, sub.Endpoint)
 	if err != nil {
 		return err
 	}
 	queueARN := sub.Endpoint
 	if !strings.HasPrefix(strings.TrimSpace(queueARN), "arn:aws:sqs:") {
-		q, qerr := s.GetQueue(sub.Owner, queueName)
+		q, qerr := s.GetQueue(queueAccount, queueName)
 		if qerr != nil {
 			return qerr
 		}
 		queueARN = q.QueueARN
 	}
-	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS) {
+	if !s.deliveryTargetResourcePolicyAllows(queueAccount, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS) {
 		return fmt.Errorf("sns sqs delivery: queue policy does not Allow sns.amazonaws.com")
 	}
 	body, err := json.Marshal(snsNotificationEnvelope(msg))
@@ -548,7 +557,7 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 		return fmt.Errorf("marshal sns sqs envelope: %w", err)
 	}
 	var opts *SendMessageOpts
-	q, qerr := s.GetQueue(sub.Owner, queueName)
+	q, qerr := s.GetQueue(queueAccount, queueName)
 	if qerr == nil && queueIsFIFO(q.Attributes) {
 		groupID := msg.MessageGroupID
 		if groupID == "" {
@@ -560,7 +569,7 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 		}
 		opts = &SendMessageOpts{MessageGroupID: groupID, MessageDeduplicationID: dedup}
 	}
-	if _, err := s.SendMessage(sub.Owner, queueName, body, false, nil, "", opts); err != nil {
+	if _, err := s.SendMessage(queueAccount, queueName, body, false, nil, "", opts); err != nil {
 		return fmt.Errorf("sns sqs delivery: %w", err)
 	}
 	return nil
@@ -589,31 +598,42 @@ func (s *Store) deliverSNSToLambda(sub Subscription, msg PublishedMessage) error
 }
 
 func (s *Store) resolveSQSQueueName(accountID, endpoint string) (string, error) {
+	_, name, err := s.resolveSQSEndpoint(accountID, endpoint)
+	return name, err
+}
+
+// resolveSQSEndpoint resolves a queue endpoint to (queueAccount, queueName).
+// Same-account URL/name endpoints must match accountID. SQS ARNs may be cross-account.
+func (s *Store) resolveSQSEndpoint(accountID, endpoint string) (queueAccount, queueName string, err error) {
 	endpoint = strings.TrimSpace(endpoint)
 	switch {
 	case strings.HasPrefix(endpoint, "arn:aws:sqs:"):
 		arnAccount, err := queueAccountFromARN(endpoint)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		if arnAccount != accountID {
-			return "", ErrNoSuchQueue
+		name, err := queueNameFromARN(endpoint)
+		if err != nil {
+			return "", "", err
 		}
-		return queueNameFromARN(endpoint)
+		if _, err := s.GetQueue(arnAccount, name); err != nil {
+			return "", "", err
+		}
+		return arnAccount, name, nil
 	case strings.Contains(endpoint, "://"):
 		q, err := s.GetQueueByURL(endpoint)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if q.AccountID != accountID {
-			return "", ErrNoSuchQueue
+			return "", "", ErrNoSuchQueue
 		}
-		return q.QueueName, nil
+		return q.AccountID, q.QueueName, nil
 	default:
 		if _, err := s.GetQueue(accountID, endpoint); err != nil {
-			return "", err
+			return "", "", err
 		}
-		return endpoint, nil
+		return accountID, endpoint, nil
 	}
 }
 
@@ -691,6 +711,9 @@ func scanSubscription(row *sql.Row) (Subscription, error) {
 }
 
 // Subscribe creates a subscription on the topic. SQS and Lambda protocols are auto-confirmed in the lab.
+// Cross-account Subscribe is allowed when topicNameOrARN is a foreign topic ARN; authz is enforced
+// in the SNS handler via EvaluateSNS dual-eval. Delivery to foreign SQS endpoints uses the queue
+// owner account for SendMessage and queue-policy checks.
 func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) (Subscription, error) {
 	var topic Topic
 	var err error
@@ -701,9 +724,6 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 	}
 	if err != nil {
 		return Subscription{}, err
-	}
-	if topic.AccountID != accountID {
-		return Subscription{}, ErrNoSuchTopic
 	}
 	protocol = strings.TrimSpace(protocol)
 	endpoint = strings.TrimSpace(endpoint)
@@ -717,9 +737,9 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 		}
 	}
 	if topicIsFIFO(topic.Attributes, topic.TopicName) && protoLower == "sqs" {
-		qName, qerr := s.resolveSQSQueueName(accountID, endpoint)
+		qAccount, qName, qerr := s.resolveSQSEndpoint(accountID, endpoint)
 		if qerr == nil {
-			q, gerr := s.GetQueue(accountID, qName)
+			q, gerr := s.GetQueue(qAccount, qName)
 			if gerr == nil && !queueIsFIFO(q.Attributes) {
 				return Subscription{}, fmt.Errorf("%w: FIFO topic requires FIFO SQS subscription", ErrSNSInvalidParameter)
 			}
@@ -1012,7 +1032,12 @@ type SNSHTTPCatcherMessage struct {
 	ReceivedAt      string
 }
 
-// validateSNSHTTPEndpoint allows only loopback hosts or the lab catcher path.
+// EnvSNSHTTPAllowlist extends the default SNS HTTP catcher allowlist (comma-separated exact URLs).
+const EnvSNSHTTPAllowlist = "NOCTAXRIS_SNS_HTTP_ALLOWLIST"
+
+// validateSNSHTTPEndpoint allows only the lab catcher on loopback :4566
+// (or exact URLs listed in NOCTAXRIS_SNS_HTTP_ALLOWLIST). Arbitrary loopback
+// ports are rejected to avoid open-proxy style delivery.
 func validateSNSHTTPEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -1022,13 +1047,45 @@ func validateSNSHTTPEndpoint(endpoint string) error {
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("%w: protocol must be http or https", ErrSNSInvalidParameter)
 	}
+	if allowlistedSNSHTTPEndpoint(endpoint) {
+		return nil
+	}
 	host := strings.ToLower(u.Hostname())
 	switch host {
 	case "127.0.0.1", "localhost", "::1":
-		return nil
 	default:
 		return ErrSNSEndpointNotAllowed
 	}
+	port := u.Port()
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	if port != "4566" {
+		return ErrSNSEndpointNotAllowed
+	}
+	path := u.Path
+	if path != LabSNSHTTPCatcherPath && !strings.HasPrefix(path, LabSNSHTTPCatcherPath+"/") {
+		return ErrSNSEndpointNotAllowed
+	}
+	return nil
+}
+
+func allowlistedSNSHTTPEndpoint(endpoint string) bool {
+	raw := strings.TrimSpace(os.Getenv(EnvSNSHTTPAllowlist))
+	if raw == "" {
+		return false
+	}
+	want := strings.TrimSpace(endpoint)
+	for _, entry := range strings.Split(raw, ",") {
+		if strings.TrimSpace(entry) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) deliverSNSToHTTP(sub Subscription, msg PublishedMessage) error {

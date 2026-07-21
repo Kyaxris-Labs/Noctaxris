@@ -3,7 +3,7 @@ module github.com/Kyaxris-Labs/Noctaxris
 go 1.26.5
 
 require (
-	github.com/docker/docker v28.3.3+incompatible
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/google/uuid v1.6.0
@@ -27,7 +27,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

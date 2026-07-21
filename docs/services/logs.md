@@ -11,12 +11,13 @@ Lab log groups and streams with Put/GetLogEvents, DescribeLogGroups/DescribeLogS
 | Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
 | Streams | `CreateLogStream`, `DeleteLogStream`, `DescribeLogStreams` (optional `logStreamNamePrefix`) |
 | Events | `PutLogEvents` (sequence token after first put) and `GetLogEvents` (`startFromHead`, optional time bounds) |
+| Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Lab filter pattern is substring match on the message. Fan-out on PutLogEvents (best-effort). Destination policy must Allow `logs.amazonaws.com` unless `roleArn` is set |
 
 Log group ARN shape: `arn:aws:logs:REGION:ACCOUNT:log-group:NAME`. Stream ARN adds `:log-stream:STREAM`.
 
 ### Authz notes
 
-Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups). Org SCP/RCP filters apply. No resource policy path.
+Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups). Org SCP/RCP filters apply. No log-group resource policy path.
 
 ## How to verify / CLI smoke
 
@@ -63,7 +64,8 @@ aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Subscriptions, metric filters, Insights queries, export tasks
+- Metric filters, Insights queries, export tasks
+- CloudWatch Logs filter syntax (lab uses substring match)
 - FilterLogEvents
-- Cross-account observability and resource policies
+- Cross-account observability and log-group resource policies
 - Full pagination token parity

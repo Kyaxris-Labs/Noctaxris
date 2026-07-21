@@ -44,13 +44,16 @@ func (s *Server) pollAllRunningPipes() {
 		return
 	}
 	for _, entry := range pipes {
-		err := s.store.PollPipeOnce(entry.AccountID, entry.Pipe.Name, func(accountID, functionName, payloadJSON string) error {
+		err := s.store.PollPipeOnce(entry.AccountID, entry.Pipe.Name, func(accountID, functionName, payloadJSON string) (string, error) {
 			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, "$LATEST")
 			if err != nil {
-				return err
+				return "", err
 			}
-			_, err = s.executeLambdaInvoke(context.Background(), accountID, functionName, fn, executedVersion, payloadJSON)
-			return err
+			out, err := s.executeLambdaInvoke(context.Background(), accountID, functionName, fn, executedVersion, payloadJSON)
+			if err != nil {
+				return "", err
+			}
+			return string(out), nil
 		})
 		if err != nil {
 			log.Printf("pipes ticker: pipe=%s err=%v", entry.Pipe.ARN, err)

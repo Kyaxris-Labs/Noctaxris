@@ -141,30 +141,12 @@ func dataPlaneHostConfig() *container.HostConfig {
 
 // EnsureDataPlaneNetwork creates (or reuses) an Internal Docker network for
 // nested data engines. Internal:true is best-effort egress deny.
+// Existing networks that are not Internal are refused (fail closed).
 func (c *Client) EnsureDataPlaneNetwork(ctx context.Context) (string, error) {
 	if c == nil || c.cli == nil {
 		return "", fmt.Errorf("compute: data-plane client unavailable")
 	}
-	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
-	if err != nil {
-		return "", fmt.Errorf("compute: list networks: %w", err)
-	}
-	for _, n := range networks {
-		if n.Name == DataPlaneNetworkName {
-			return n.ID, nil
-		}
-	}
-	resp, err := c.cli.NetworkCreate(ctx, DataPlaneNetworkName, network.CreateOptions{
-		Driver:   "bridge",
-		Internal: true,
-		Labels: map[string]string{
-			LabelManaged: "true",
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("compute: create network %s: %w", DataPlaneNetworkName, err)
-	}
-	return resp.ID, nil
+	return c.ensureInternalNetwork(ctx, DataPlaneNetworkName)
 }
 
 // StartDataPlane pulls (once), creates, and starts a nested data container.

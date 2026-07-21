@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -340,22 +342,28 @@ func (s *Store) CreateAppSyncAPIKey(accountID, apiID string, expiresAt int64) (A
 		return AppSyncAPIKey{}, fmt.Errorf("generate api key: %w", err)
 	}
 	apiKey := "da2-" + hex.EncodeToString(keyBytes)
+	keyHash := s.hashAppSyncAPIKey(apiKey)
 	_, err = s.db.Exec(
 		`INSERT INTO appsync_api_keys (account_id, api_id, id, api_key, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		accountID, apiID, id, apiKey, expiresAt,
+		accountID, apiID, id, keyHash, expiresAt,
 	)
 	if err != nil {
 		return AppSyncAPIKey{}, fmt.Errorf("create api key: %w", err)
 	}
+	// Return plaintext once; only the HMAC hash is stored at rest.
 	return AppSyncAPIKey{ID: id, APIID: apiID, APIKey: apiKey, ExpiresAt: expiresAt}, nil
 }
 
-// LookupAppSyncAPIKey finds an API by raw API key value.
+// LookupAppSyncAPIKey finds an API by raw API key value (HMAC lookup).
 func (s *Store) LookupAppSyncAPIKey(apiKey string) (accountID, apiID string, err error) {
 	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return "", "", ErrAppSyncAuth
+	}
+	keyHash := s.hashAppSyncAPIKey(apiKey)
 	err = s.db.QueryRow(
 		`SELECT account_id, api_id FROM appsync_api_keys WHERE api_key = ? AND expires_at > ?`,
-		apiKey, time.Now().UTC().Unix(),
+		keyHash, time.Now().UTC().Unix(),
 	).Scan(&accountID, &apiID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", ErrAppSyncAuth
@@ -364,6 +372,12 @@ func (s *Store) LookupAppSyncAPIKey(apiKey string) (accountID, apiID string, err
 		return "", "", fmt.Errorf("lookup api key: %w", err)
 	}
 	return accountID, apiID, nil
+}
+
+func (s *Store) hashAppSyncAPIKey(apiKey string) string {
+	mac := hmac.New(sha256.New, s.master[:])
+	_, _ = mac.Write([]byte(apiKey))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // CreateAppSyncDataSource creates a Lambda data source.

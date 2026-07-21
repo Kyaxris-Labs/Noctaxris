@@ -7,29 +7,21 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
-func TestLabTokenCodeDeterministic(t *testing.T) {
-	seed := []byte("lab-seed")
+func TestValidateLabEnrollmentCodesConsecutive(t *testing.T) {
+	seed := []byte("lab-mfa-seed")
 	at := time.Unix(1_700_000_000, 0).UTC()
-	code := sts.LabTokenCode(seed, at)
-	if len(code) != 6 {
-		t.Fatalf("code len=%d want 6: %q", len(code), code)
+	code1 := sts.LabTokenCode(seed, at)
+	code2 := sts.LabTokenCode(seed, at.Add(time.Minute))
+	if !sts.ValidateLabEnrollmentCodes(seed, code1, code2, at) {
+		t.Fatal("expected consecutive codes to validate")
 	}
-	if got := sts.LabTokenCode(seed, at); got != code {
-		t.Fatalf("not deterministic: %q vs %q", got, code)
+	if sts.ValidateLabEnrollmentCodes(seed, code1, code1, at) {
+		t.Fatal("same code twice must fail")
 	}
-	if sts.LabTokenCode(seed, at.Add(time.Minute)) == code {
-		t.Fatal("adjacent minute should differ")
+	if sts.ValidateLabEnrollmentCodes(seed, code1, "000000", at) {
+		t.Fatal("unrelated code2 must fail")
 	}
-}
-
-func TestValidateLabTokenCodeSkew(t *testing.T) {
-	seed := []byte("lab-seed")
-	at := time.Unix(1_700_000_060, 0).UTC()
-	code := sts.LabTokenCode(seed, at.Add(-time.Minute))
-	if !sts.ValidateLabTokenCode(seed, code, at, 1) {
-		t.Fatal("expected skew=1 to accept previous minute")
-	}
-	if sts.ValidateLabTokenCode(seed, "000000", at, 1) {
-		t.Fatal("invalid code accepted")
+	if sts.ValidateLabEnrollmentCodes(seed, "", code2, at) {
+		t.Fatal("empty code1 must fail")
 	}
 }

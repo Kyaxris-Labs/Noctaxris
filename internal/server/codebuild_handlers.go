@@ -270,12 +270,18 @@ func (s *Server) executeCodeBuild(ctx context.Context, accountID string, b store
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	_ = cli.WaitECSTaskExit(waitCtx, cid)
+	exitCode, waitErr := cli.WaitECSTaskExit(waitCtx, cid)
 	end := time.Now().UTC().Format(time.RFC3339)
 	status := store.CodeBuildStatusSucceeded
-	running, runErr := cli.ContainerRunning(ctx, cid)
-	if runErr == nil && running {
-		status = store.CodeBuildStatusInProgress
+	if waitErr != nil {
+		status = store.CodeBuildStatusFailed
+	} else if exitCode != 0 {
+		status = store.CodeBuildStatusFailed
+	} else {
+		running, runErr := cli.ContainerRunning(ctx, cid)
+		if runErr == nil && running {
+			status = store.CodeBuildStatusInProgress
+		}
 	}
 	return s.store.SetCodeBuildBuildRuntime(accountID, b.ID, cid, status, end)
 }

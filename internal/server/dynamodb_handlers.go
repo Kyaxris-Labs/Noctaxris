@@ -807,13 +807,22 @@ func (s *Server) dynamoDeleteItem(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	keysJSON, _ := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
+	keysJSON, keysErr := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
+	if keysErr != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build stream keys.", readOnly, eventID, verified)
+		return
+	}
 	if err := s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete item.", readOnly, eventID, verified)
 		return
 	}
-	_ = s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, "REMOVE", keysJSON, nil)
+	if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, "REMOVE", keysJSON, nil); err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to append stream record.", readOnly, eventID, verified)
+		return
+	}
 	payload, _ := ddb.DeleteItemJSON()
 	s.writeDynamoOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "DeleteItem", readOnly)
@@ -949,73 +958,14 @@ func (s *Server) dynamoQuery(
 			startSK = itemSK
 		}
 	}
-	var page store.ItemPage
-	fetchLimit := limit
-	if keyCond.RangeOp != "" && limit > 0 {
-		// Over-fetch so sort-key filtering can still fill Limit.
-		fetchLimit = limit * 4
-		if fetchLimit < 32 {
-			fetchLimit = 32
-		}
-	}
-	if gsiSlot > 0 {
-		page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, gsiSlot, queryPK, fetchLimit, startSK)
-	} else {
-		page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, fetchLimit, startSK)
-	}
-	if err != nil {
-		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to query items.", readOnly, eventID, verified)
-		return
-	}
-	items, lastKey, err := s.dynamoDecodePage(w, r, body, requestID, eventID, verified, readOnly, table, page)
+	items, lastKey, hasMore, err := s.dynamoQueryCollectLive(
+		w, r, body, requestID, eventID, verified, readOnly,
+		table, gsiSlot, queryPK, startSK, limit, keyCond.RangeOp, rangeAttr, keyCond.RangeValues,
+	)
 	if err != nil {
 		return
 	}
-	if keyCond.RangeOp != "" {
-		filtered := make([]ddb.ItemMap, 0, len(items))
-		for _, it := range items {
-			if ddb.ItemMatchesSortKey(it, rangeAttr, keyCond.RangeOp, keyCond.RangeValues) {
-				filtered = append(filtered, it)
-			}
-		}
-		hasMore := page.HasMore
-		if limit > 0 && len(filtered) > limit {
-			filtered = filtered[:limit]
-			hasMore = true
-		} else if limit > 0 && len(filtered) == limit && page.HasMore {
-			hasMore = true
-		} else if !page.HasMore {
-			hasMore = false
-		}
-		var filteredLast ddb.ItemMap
-		if hasMore && len(filtered) > 0 {
-			last := filtered[len(filtered)-1]
-			itemPK, itemSK, keyErr := ddb.PrimaryKeyStrings(table, last)
-			if keyErr != nil {
-				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-					"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
-				return
-			}
-			filteredLast, keyErr = ddb.KeyFromCanonical(table, itemPK, itemSK)
-			if keyErr != nil {
-				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-					"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
-				return
-			}
-		}
-		items = filtered
-		payload, err := ddb.QueryJSON(items, filteredLast, hasMore)
-		if err != nil {
-			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-				"Unable to build response.", readOnly, eventID, verified)
-			return
-		}
-		s.writeDynamoOK(w, requestID, payload)
-		s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "Query", readOnly)
-		return
-	}
-	payload, err := ddb.QueryJSON(items, lastKey, page.HasMore)
+	payload, err := ddb.QueryJSON(items, lastKey, hasMore)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -1061,17 +1011,14 @@ func (s *Server) dynamoScan(
 			return
 		}
 	}
-	page, err := s.store.ScanItems(table.AccountID, table.TableName, limit, startPK, startSK)
-	if err != nil {
-		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to scan items.", readOnly, eventID, verified)
-		return
-	}
-	items, lastKey, err := s.dynamoDecodePage(w, r, body, requestID, eventID, verified, readOnly, table, page)
+	items, lastKey, hasMore, err := s.dynamoScanCollectLive(
+		w, r, body, requestID, eventID, verified, readOnly,
+		table, startPK, startSK, limit,
+	)
 	if err != nil {
 		return
 	}
-	payload, err := ddb.ScanJSON(items, lastKey, page.HasMore)
+	payload, err := ddb.ScanJSON(items, lastKey, hasMore)
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -1438,8 +1385,17 @@ func (s *Server) dynamoStoreItem(
 		return err
 	}
 	if table.StreamEnabled {
-		keysJSON, _ := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
-		_ = s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, eventName, keysJSON, plain)
+		keysJSON, keysErr := store.DynamoStreamKeysJSON(table, itemPK, itemSK)
+		if keysErr != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build stream keys.", readOnly, eventID, verified)
+			return keysErr
+		}
+		if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, eventName, keysJSON, plain); err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to append stream record.", readOnly, eventID, verified)
+			return err
+		}
 	}
 	return nil
 }
@@ -1548,6 +1504,172 @@ func (s *Server) dynamoEvalConditionOnItem(
 		return false
 	}
 	return true
+}
+
+// dynamoQueryCollectLive over-fetches Query pages until Limit live (non-TTL-expired,
+// sort-key matching) items are collected or the store is exhausted.
+func (s *Server) dynamoQueryCollectLive(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	table store.DynamoTable,
+	gsiSlot int,
+	queryPK, startSK string,
+	limit int,
+	rangeOp, rangeAttr string,
+	rangeValues []map[string]any,
+) (items []ddb.ItemMap, lastKey ddb.ItemMap, hasMore bool, err error) {
+	curSK := startSK
+	const maxRounds = 32
+	for round := 0; round < maxRounds; round++ {
+		need := 0
+		if limit > 0 {
+			need = limit - len(items)
+			if need <= 0 {
+				break
+			}
+		}
+		fetchLimit := need
+		if fetchLimit > 0 {
+			fetchLimit = need * 4
+			if fetchLimit < 32 {
+				fetchLimit = 32
+			}
+		}
+		var page store.ItemPage
+		if gsiSlot > 0 {
+			page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, gsiSlot, queryPK, fetchLimit, curSK)
+		} else {
+			page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, fetchLimit, curSK)
+		}
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to query items.", readOnly, eventID, verified)
+			return nil, nil, false, err
+		}
+		decoded, pageLast, decErr := s.dynamoDecodePage(w, r, body, requestID, eventID, verified, readOnly, table, page)
+		if decErr != nil {
+			return nil, nil, false, decErr
+		}
+		for _, it := range decoded {
+			if rangeOp != "" && !ddb.ItemMatchesSortKey(it, rangeAttr, rangeOp, rangeValues) {
+				continue
+			}
+			items = append(items, it)
+			if limit > 0 && len(items) >= limit {
+				break
+			}
+		}
+		if limit > 0 && len(items) >= limit {
+			items = items[:limit]
+			hasMore = page.HasMore || len(decoded) > 0
+			if hasMore && len(items) > 0 {
+				last := items[len(items)-1]
+				itemPK, itemSK, keyErr := ddb.PrimaryKeyStrings(table, last)
+				if keyErr != nil {
+					s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+						"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+					return nil, nil, false, keyErr
+				}
+				lastKey, keyErr = ddb.KeyFromCanonical(table, itemPK, itemSK)
+				if keyErr != nil {
+					s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+						"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+					return nil, nil, false, keyErr
+				}
+			}
+			return items, lastKey, hasMore, nil
+		}
+		if !page.HasMore {
+			return items, nil, false, nil
+		}
+		hasMore = true
+		lastKey = pageLast
+		curSK = page.LastSK
+		if limit == 0 {
+			// Unlimited: one store page (decoded) is enough.
+			return items, lastKey, hasMore, nil
+		}
+	}
+	return items, lastKey, hasMore, nil
+}
+
+func (s *Server) dynamoScanCollectLive(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	table store.DynamoTable,
+	startPK, startSK string,
+	limit int,
+) (items []ddb.ItemMap, lastKey ddb.ItemMap, hasMore bool, err error) {
+	curPK, curSK := startPK, startSK
+	const maxRounds = 32
+	for round := 0; round < maxRounds; round++ {
+		need := 0
+		if limit > 0 {
+			need = limit - len(items)
+			if need <= 0 {
+				break
+			}
+		}
+		fetchLimit := need
+		if fetchLimit > 0 {
+			fetchLimit = need * 4
+			if fetchLimit < 32 {
+				fetchLimit = 32
+			}
+		}
+		page, err := s.store.ScanItems(table.AccountID, table.TableName, fetchLimit, curPK, curSK)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to scan items.", readOnly, eventID, verified)
+			return nil, nil, false, err
+		}
+		decoded, pageLast, decErr := s.dynamoDecodePage(w, r, body, requestID, eventID, verified, readOnly, table, page)
+		if decErr != nil {
+			return nil, nil, false, decErr
+		}
+		items = append(items, decoded...)
+		if limit > 0 && len(items) >= limit {
+			items = items[:limit]
+			hasMore = page.HasMore || len(decoded) > len(items) // truncated from this page
+			if page.HasMore || len(decoded) > 0 {
+				hasMore = true
+			}
+			if hasMore && len(items) > 0 {
+				last := items[len(items)-1]
+				itemPK, itemSK, keyErr := ddb.PrimaryKeyStrings(table, last)
+				if keyErr != nil {
+					s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+						"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+					return nil, nil, false, keyErr
+				}
+				lastKey, keyErr = ddb.KeyFromCanonical(table, itemPK, itemSK)
+				if keyErr != nil {
+					s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+						"Unable to build LastEvaluatedKey.", readOnly, eventID, verified)
+					return nil, nil, false, keyErr
+				}
+			}
+			return items, lastKey, hasMore, nil
+		}
+		if !page.HasMore {
+			return items, nil, false, nil
+		}
+		hasMore = true
+		lastKey = pageLast
+		curPK, curSK = page.LastPK, page.LastSK
+		if limit == 0 {
+			return items, lastKey, hasMore, nil
+		}
+	}
+	return items, lastKey, hasMore, nil
 }
 
 func (s *Server) dynamoDecodePage(

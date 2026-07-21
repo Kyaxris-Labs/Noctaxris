@@ -358,6 +358,9 @@ func (s *Store) CreateAPIGatewayAuthorizer(accountID, apiID, name, authorizerTyp
 	if identitySource == "" {
 		identitySource = "$request.header.Authorization"
 	}
+	if identitySource != "$request.header.Authorization" {
+		return APIGatewayAuthorizer{}, fmt.Errorf("%w: IdentitySource must be $request.header.Authorization", ErrAPIGatewayBadRequest)
+	}
 	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
 		return APIGatewayAuthorizer{}, err
 	}

@@ -10,10 +10,11 @@ import (
 
 // User is an IAM user record.
 type User struct {
-	AccountID string
-	UserName  string
-	UserID    string
-	ARN       string
+	AccountID  string
+	UserName   string
+	UserID     string
+	ARN        string
+	CreateDate string
 }
 
 // CreateUser creates an IAM user in accountID.
@@ -29,9 +30,10 @@ func (s *Store) CreateUser(accountID, userName string) (userID, arn string, err 
 		return "", "", err
 	}
 	arn = UserARN(accountID, "/", userName)
+	createDate := nowRFC3339()
 	_, err = s.db.Exec(
-		`INSERT INTO users (account_id, user_name, user_id, arn) VALUES (?, ?, ?, ?)`,
-		accountID, userName, userID, arn,
+		`INSERT INTO users (account_id, user_name, user_id, arn, create_date) VALUES (?, ?, ?, ?, ?)`,
+		accountID, userName, userID, arn, createDate,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("create user %s/%s: %w", accountID, userName, err)
@@ -43,9 +45,10 @@ func (s *Store) CreateUser(accountID, userName string) (userID, arn string, err 
 func (s *Store) GetUser(accountID, userName string) (User, error) {
 	var u User
 	err := s.db.QueryRow(
-		`SELECT account_id, user_name, user_id, arn FROM users WHERE account_id = ? AND user_name = ?`,
+		`SELECT account_id, user_name, user_id, arn, COALESCE(create_date, '')
+		 FROM users WHERE account_id = ? AND user_name = ?`,
 		accountID, userName,
-	).Scan(&u.AccountID, &u.UserName, &u.UserID, &u.ARN)
+	).Scan(&u.AccountID, &u.UserName, &u.UserID, &u.ARN, &u.CreateDate)
 	if err != nil {
 		return User{}, err
 	}
@@ -55,7 +58,8 @@ func (s *Store) GetUser(accountID, userName string) (User, error) {
 // ListUsers returns IAM users in accountID ordered by user_name.
 func (s *Store) ListUsers(accountID string) ([]User, error) {
 	rows, err := s.db.Query(
-		`SELECT account_id, user_name, user_id, arn FROM users WHERE account_id = ? ORDER BY user_name`,
+		`SELECT account_id, user_name, user_id, arn, COALESCE(create_date, '')
+		 FROM users WHERE account_id = ? ORDER BY user_name`,
 		accountID,
 	)
 	if err != nil {
@@ -66,7 +70,7 @@ func (s *Store) ListUsers(accountID string) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.AccountID, &u.UserName, &u.UserID, &u.ARN); err != nil {
+		if err := rows.Scan(&u.AccountID, &u.UserName, &u.UserID, &u.ARN, &u.CreateDate); err != nil {
 			return nil, fmt.Errorf("list users %s: %w", accountID, err)
 		}
 		out = append(out, u)

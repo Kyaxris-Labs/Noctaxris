@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -359,16 +360,43 @@ func (s *Server) sqsReceiveMessage(
 	if max > 10 {
 		max = 10
 	}
-	msgs, err := s.store.ReceiveMessages(queue.AccountID, queue.QueueName, max)
-	if err != nil {
-		if errors.Is(err, store.ErrNoSuchQueue) {
-			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
-				"The specified queue does not exist.", readOnly, eventID, verified)
+	waitSec := intParam(params["WaitTimeSeconds"], 0)
+	if waitSec < 0 {
+		waitSec = 0
+	}
+	if waitSec > 20 {
+		waitSec = 20
+	}
+	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
+	var msgs []store.Message
+	for {
+		var err error
+		msgs, err = s.store.ReceiveMessages(queue.AccountID, queue.QueueName, max)
+		if err != nil {
+			if errors.Is(err, store.ErrNoSuchQueue) {
+				s.writeSQSError(w, r, requestID, http.StatusBadRequest, "AWS.SimpleQueueService.NonExistentQueue",
+					"The specified queue does not exist.", readOnly, eventID, verified)
+				return nil, nil
+			}
+			s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to receive messages.", readOnly, eventID, verified)
 			return nil, nil
 		}
-		s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to receive messages.", readOnly, eventID, verified)
-		return nil, nil
+		if len(msgs) > 0 || waitSec == 0 || !time.Now().Before(deadline) {
+			break
+		}
+		sleep := 100 * time.Millisecond
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		if sleep <= 0 {
+			break
+		}
+		select {
+		case <-r.Context().Done():
+			return sqssvc.ReceiveMessageJSON([]sqssvc.ReceivedMessage{})
+		case <-time.After(sleep):
+		}
 	}
 
 	out := make([]sqssvc.ReceivedMessage, 0, len(msgs))

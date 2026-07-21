@@ -7,8 +7,10 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/services/iam"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
@@ -446,9 +448,27 @@ func (s *Server) handleIAMIdentity(
 		handled = true
 		userName := params["UserName"]
 		serial := params["SerialNumber"]
+		code1 := params["AuthenticationCode1"]
+		code2 := params["AuthenticationCode2"]
 		if userName == "" || serial == "" {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
 				"UserName and SerialNumber are required.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+			return nil, true, errHandled
+		}
+		if code1 == "" || code2 == "" {
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+				"AuthenticationCode1 and AuthenticationCode2 are required.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+			return nil, true, errHandled
+		}
+		dev, getDevErr := s.store.GetMFADevice(accountID, serial)
+		if getDevErr != nil {
+			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+				"Unable to enable MFA device.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+			return nil, true, errHandled
+		}
+		if !sts.ValidateLabEnrollmentCodes(dev.Seed, code1, code2, time.Now().UTC()) {
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "InvalidAuthenticationCode",
+				"Authentication codes do not match consecutive lab MFA tokens.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
 			return nil, true, errHandled
 		}
 		if enErr := s.store.EnableMFADevice(accountID, serial, userName); enErr != nil {

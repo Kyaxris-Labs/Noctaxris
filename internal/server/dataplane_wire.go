@@ -9,7 +9,8 @@ import (
 )
 
 // tryStartNestedDataEngine starts a nested data engine via compute.StartDataPlane when DinD is configured.
-// Without DockerHost, this is a no-op (control-plane endpoint still recorded in store).
+// Without DockerHost, this is a no-op (control-plane may stay creating).
+// When DockerHost is set and start fails, status is marked failed (fail closed).
 // env is optional engine bootstrap (for example Mongo init credentials). Never log env values.
 func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[string]string) error {
 	if s == nil || strings.TrimSpace(accountID) == "" {
@@ -34,6 +35,7 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		Env:   env,
 	})
 	if err != nil {
+		_ = markNestedDataFailed(s, accountID, dk, name)
 		return err
 	}
 	_ = cli.WaitDataPlaneHealthy(ctx, inst.ContainerID)
@@ -48,6 +50,17 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		return s.store.SetElastiCacheContainerID(accountID, name, inst.ContainerID, "available", host)
 	case compute.DataKindDocDB:
 		return s.store.SetDocDBContainerID(accountID, name, inst.ContainerID, "available", host)
+	default:
+		return nil
+	}
+}
+
+func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name string) error {
+	switch dk {
+	case compute.DataKindElastiCache:
+		return s.store.SetElastiCacheContainerID(accountID, name, "", "failed", "")
+	case compute.DataKindDocDB:
+		return s.store.SetDocDBContainerID(accountID, name, "", "failed", "")
 	default:
 		return nil
 	}

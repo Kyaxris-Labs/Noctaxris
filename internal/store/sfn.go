@@ -206,6 +206,20 @@ func (s *Store) ListSFNStateMachines(accountID string) ([]SFNStateMachine, error
 	return out, rows.Err()
 }
 
+// SetSFNTaskInvoker registers an optional Lambda Task invoker used when EventBridge
+// (or other store paths) start executions without a request-scoped callback.
+func (s *Store) SetSFNTaskInvoker(fn SFNTaskInvoker) {
+	s.sfnTaskMu.Lock()
+	defer s.sfnTaskMu.Unlock()
+	s.sfnTaskInvoker = fn
+}
+
+func (s *Store) getSFNTaskInvoker() SFNTaskInvoker {
+	s.sfnTaskMu.Lock()
+	defer s.sfnTaskMu.Unlock()
+	return s.sfnTaskInvoker
+}
+
 // StartSFNExecution runs the ASL subset to completion (sync lab).
 func (s *Store) StartSFNExecution(accountID, region, stateMachineARN, name, input string, invoke SFNTaskInvoker) (SFNExecution, error) {
 	sm, err := s.GetSFNStateMachine(accountID, stateMachineARN)
@@ -237,7 +251,8 @@ func (s *Store) StartSFNExecution(accountID, region, stateMachineARN, name, inpu
 	}
 	_ = s.appendSFNHistory(execARN, "ExecutionStarted", map[string]any{"input": input, "roleArn": sm.RoleARN})
 
-	output, status, errCode, cause, hist := runSFNDefinition(sm.Definition, input, invoke)
+	wrapped := s.wrapSFNTaskInvoker(accountID, invoke)
+	output, status, errCode, cause, hist := runSFNDefinition(sm.Definition, input, wrapped)
 	for _, h := range hist {
 		_ = s.appendSFNHistory(execARN, h.Type, h.DetailsMap)
 	}
@@ -470,4 +485,71 @@ func ParseLambdaARNFromSFNResource(resource string) (accountID, functionName str
 		return "", "", false
 	}
 	return "", resource, resource != ""
+}
+
+func (s *Store) wrapSFNTaskInvoker(accountID string, invoke SFNTaskInvoker) SFNTaskInvoker {
+	return func(resourceARN, inputJSON string) (string, error) {
+		if out, handled, err := s.sfnInvokeBuiltInTask(accountID, resourceARN, inputJSON); handled {
+			return out, err
+		}
+		if invoke != nil {
+			return invoke(resourceARN, inputJSON)
+		}
+		if fallback := s.getSFNTaskInvoker(); fallback != nil {
+			return fallback(resourceARN, inputJSON)
+		}
+		return "", fmt.Errorf("Task invoker unavailable")
+	}
+}
+
+// sfnInvokeBuiltInTask handles lab Task resources that do not need nested Lambda compute:
+// SQS SendMessage, SNS Publish, and EventBridge PutEvents (bus ARN or name).
+func (s *Store) sfnInvokeBuiltInTask(accountID, resourceARN, inputJSON string) (output string, handled bool, err error) {
+	resourceARN = strings.TrimSpace(resourceARN)
+	switch {
+	case strings.HasPrefix(resourceARN, "arn:aws:sqs:"):
+		qName, qerr := queueNameFromARN(resourceARN)
+		if qerr != nil {
+			return "", true, qerr
+		}
+		if _, err := s.SendMessage(accountID, qName, []byte(inputJSON), false, nil, "", nil); err != nil {
+			return "", true, err
+		}
+		return `{"ok":true}`, true, nil
+	case strings.HasPrefix(resourceARN, "arn:aws:sns:"):
+		topic, terr := s.GetTopicByARN(resourceARN)
+		if terr != nil {
+			return "", true, terr
+		}
+		if _, err := s.Publish(accountID, topic.TopicName, inputJSON, "", nil); err != nil {
+			return "", true, err
+		}
+		return `{"ok":true}`, true, nil
+	case strings.HasPrefix(resourceARN, "arn:aws:events:") && strings.Contains(resourceARN, ":event-bus/"):
+		busName := resourceARN[strings.LastIndex(resourceARN, "/")+1:]
+		detail := inputJSON
+		if strings.TrimSpace(detail) == "" {
+			detail = "{}"
+		}
+		result, perr := s.PutEvents(accountID, []PutEventsEntry{{
+			Source:       "noctaxris.sfn",
+			DetailType:   "StepFunctionsTask",
+			Detail:       detail,
+			EventBusName: busName,
+		}})
+		if perr != nil {
+			return "", true, perr
+		}
+		if result.FailedEntryCount > 0 {
+			return "", true, fmt.Errorf("PutEvents failed")
+		}
+		eventID := ""
+		if len(result.Entries) > 0 {
+			eventID = result.Entries[0].EventID
+		}
+		out, _ := json.Marshal(map[string]any{"Entries": []map[string]string{{"EventId": eventID}}})
+		return string(out), true, nil
+	default:
+		return "", false, nil
+	}
 }

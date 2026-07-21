@@ -34,6 +34,9 @@ func (s *Server) verifyAPIGatewayJWT(token, issuer string, audience []string, no
 	if jwtutil.ClaimExpired(claims, now) {
 		return fmt.Errorf("token expired")
 	}
+	if jwtutil.ClaimNotYetValid(claims, now) {
+		return fmt.Errorf("token not yet valid")
+	}
 	tokenUse := strings.ToLower(strings.TrimSpace(jwtutil.ClaimString(claims, "token_use")))
 	if tokenUse == "" {
 		return fmt.Errorf("missing token_use")

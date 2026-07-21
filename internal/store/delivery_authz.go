@@ -14,6 +14,12 @@ import (
 
 const actionS3PutObject = "s3:PutObject"
 
+// RoleSessionAllows mints a temporary session for roleARN and evaluates whether
+// the role identity policies Allow action on targetARN (Gateway CredentialsArn, etc.).
+func (s *Store) RoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region string) bool {
+	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region)
+}
+
 // deliveryRoleSessionAllows mints a temporary session for roleARN and evaluates
 // whether the role identity policies Allow action on targetARN.
 func (s *Store) deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region string) bool {

@@ -18,9 +18,9 @@ GraphQL API CRUD lite, schema store, Lambda data source and one Query field reso
 
 | authenticationType | Runtime auth | Notes |
 |--------------------|--------------|-------|
-| `API_KEY` | Header `x-api-key` | CreateApiKey returns the key in `apiKey.id` |
+| `API_KEY` | Header `x-api-key` | CreateApiKey returns the plaintext key once; only an HMAC-SHA256 hash (master key) is stored at rest |
 | `AWS_IAM` | SigV4 service `appsync` + `appsync:GraphQL` | Unsigned requests rejected |
-| `AMAZON_COGNITO_USER_POOLS` | Bearer JWT | `userPoolConfig` with `userPoolId`, `clientId` (audience), optional `issuer` (lab Cognito shape by default). Verifies via shared jose helper against lab Cognito JWKS. Requires `token_use=id`. Non-lab issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` |
+| `AMAZON_COGNITO_USER_POOLS` | Bearer JWT | `userPoolConfig` with `userPoolId`, `clientId` (audience), optional `issuer` (lab Cognito shape by default). Verifies via shared jose helper against lab Cognito JWKS. Requires `token_use=id`. Enforces `exp` and `nbf`. Non-lab issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` |
 
 ### Authz notes
 

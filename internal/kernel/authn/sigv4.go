@@ -76,6 +76,9 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	if err != nil {
 		return nil, err
 	}
+	if !signedHeadersIncludeHost(mat.signedHeaders) {
+		return nil, newError(CodeSignatureDoesNotMatch, "SignedHeaders must include host")
+	}
 
 	reqTime, err := parseAmzDate(mat.amzDate)
 	if err != nil {
@@ -268,6 +271,15 @@ func parseQueryAuth(r *http.Request, q url.Values) (*authMaterial, error) {
 		queryAuth:     true,
 		expires:       q.Get("X-Amz-Expires"),
 	}, nil
+}
+
+func signedHeadersIncludeHost(signed []string) bool {
+	for _, h := range signed {
+		if strings.EqualFold(strings.TrimSpace(h), "host") {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCredential(cred string) (akid, date, region, service string, err error) {

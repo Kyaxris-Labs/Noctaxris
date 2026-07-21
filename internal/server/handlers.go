@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -636,14 +637,24 @@ func (s *Server) identityDocs(principal identity.Principal) []string {
 		if err == nil {
 			return docs
 		}
+		log.Printf("identity docs user load failed account=%s user=%s err=%v", principal.AccountID, principal.UserName, err)
+		return nil
 	}
 	// Assumed-role sessions use sts:assumed-role/... ARNs; IAM attachments live on the role ARN.
 	arn := principal.ARN()
 	if principal.Kind == identity.KindRole && principal.RoleName != "" {
 		arn = principalArnForCondition(principal)
 	}
-	docs, _ := s.store.ListAttachedPolicyDocuments(arn)
-	inline, _ := s.store.ListInlinePolicies(arn)
+	docs, err := s.store.ListAttachedPolicyDocuments(arn)
+	if err != nil {
+		log.Printf("identity docs attached load failed arn=%s err=%v", arn, err)
+		return nil
+	}
+	inline, err := s.store.ListInlinePolicies(arn)
+	if err != nil {
+		log.Printf("identity docs inline load failed arn=%s err=%v", arn, err)
+		return nil
+	}
 	for _, p := range inline {
 		docs = append(docs, p.Document)
 	}

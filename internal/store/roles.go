@@ -14,6 +14,7 @@ type Role struct {
 	RoleARN     string
 	TrustPolicy string
 	RoleID      string
+	CreateDate  string
 }
 
 // PutRole stores or replaces a role trust policy for accountID/roleName.
@@ -72,10 +73,10 @@ func (s *Store) GetRole(accountID, roleName string) (roleARN, trustPolicy string
 func (s *Store) GetRoleRecord(accountID, roleName string) (Role, error) {
 	var r Role
 	err := s.db.QueryRow(
-		`SELECT account_id, role_name, role_arn, trust_policy, COALESCE(role_id, '')
+		`SELECT account_id, role_name, role_arn, trust_policy, COALESCE(role_id, ''), COALESCE(create_date, '')
 		 FROM roles WHERE account_id = ? AND role_name = ?`,
 		accountID, roleName,
-	).Scan(&r.AccountID, &r.RoleName, &r.RoleARN, &r.TrustPolicy, &r.RoleID)
+	).Scan(&r.AccountID, &r.RoleName, &r.RoleARN, &r.TrustPolicy, &r.RoleID, &r.CreateDate)
 	if err != nil {
 		return Role{}, err
 	}
@@ -85,7 +86,7 @@ func (s *Store) GetRoleRecord(accountID, roleName string) (Role, error) {
 // ListRoles returns IAM roles in accountID ordered by role_name.
 func (s *Store) ListRoles(accountID string) ([]Role, error) {
 	rows, err := s.db.Query(
-		`SELECT account_id, role_name, role_arn, trust_policy, COALESCE(role_id, '')
+		`SELECT account_id, role_name, role_arn, trust_policy, COALESCE(role_id, ''), COALESCE(create_date, '')
 		 FROM roles WHERE account_id = ? ORDER BY role_name`,
 		accountID,
 	)
@@ -97,7 +98,7 @@ func (s *Store) ListRoles(accountID string) ([]Role, error) {
 	var out []Role
 	for rows.Next() {
 		var r Role
-		if err := rows.Scan(&r.AccountID, &r.RoleName, &r.RoleARN, &r.TrustPolicy, &r.RoleID); err != nil {
+		if err := rows.Scan(&r.AccountID, &r.RoleName, &r.RoleARN, &r.TrustPolicy, &r.RoleID, &r.CreateDate); err != nil {
 			return nil, fmt.Errorf("list roles %s: %w", accountID, err)
 		}
 		out = append(out, r)

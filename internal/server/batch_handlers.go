@@ -486,11 +486,15 @@ func (s *Server) executeBatchJob(ctx context.Context, accountID string, job stor
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	_ = cli.WaitECSTaskExit(waitCtx, cid)
+	exitCode, waitErr := cli.WaitECSTaskExit(waitCtx, cid)
 	status := store.BatchJobStatusSucceeded
-	running, runErr := cli.ContainerRunning(ctx, cid)
-	if runErr == nil && running {
-		status = store.BatchJobStatusRunning
+	if waitErr != nil || exitCode != 0 {
+		status = store.BatchJobStatusFailed
+	} else {
+		running, runErr := cli.ContainerRunning(ctx, cid)
+		if runErr == nil && running {
+			status = store.BatchJobStatusRunning
+		}
 	}
 	return s.store.SetBatchJobRuntime(accountID, job.JobID, cid, status, time.Now().UTC().Format(time.RFC3339))
 }

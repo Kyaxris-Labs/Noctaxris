@@ -45,6 +45,12 @@ func (s *Server) handleLogs(
 		s.logsGetLogEvents(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsDescribeLogGroups:
 		s.logsDescribeLogGroups(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsPutSubscriptionFilter:
+		s.logsPutSubscriptionFilter(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteSubscriptionFilter:
+		s.logsDeleteSubscriptionFilter(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDescribeSubscriptionFilters:
+		s.logsDescribeSubscriptionFilters(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLogsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CloudWatch Logs action is not implemented.", readOnly, eventID, verified)
@@ -72,6 +78,12 @@ func logsAction(action string) string {
 		return catalog.ActionLogsGetLogEvents
 	case "DescribeLogGroups":
 		return catalog.ActionLogsDescribeLogGroups
+	case "PutSubscriptionFilter":
+		return catalog.ActionLogsPutSubscriptionFilter
+	case "DeleteSubscriptionFilter":
+		return catalog.ActionLogsDeleteSubscriptionFilter
+	case "DescribeSubscriptionFilters":
+		return catalog.ActionLogsDescribeSubscriptionFilters
 	default:
 		return action
 	}
@@ -428,6 +440,103 @@ func (s *Server) logsDescribeLogGroups(
 	}
 	s.writeLogsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeLogGroups", readOnly)
+}
+
+func (s *Server) logsPutSubscriptionFilter(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	name, _ := params["filterName"].(string)
+	pattern, _ := params["filterPattern"].(string)
+	dest, _ := params["destinationArn"].(string)
+	role, _ := params["roleArn"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsPutSubscriptionFilter, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:PutSubscriptionFilter.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.PutSubscriptionFilter(verified.AccountID, group, name, pattern, dest, role); err != nil {
+		if errors.Is(err, store.ErrLogGroupNotFound) {
+			s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+				"Log group does not exist.", readOnly, eventID, verified)
+			return
+		}
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "PutSubscriptionFilter", readOnly)
+}
+
+func (s *Server) logsDeleteSubscriptionFilter(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	name, _ := params["filterName"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsDeleteSubscriptionFilter, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteSubscriptionFilter.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteSubscriptionFilter(verified.AccountID, group, name); err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Subscription filter does not exist.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteSubscriptionFilter", readOnly)
+}
+
+func (s *Server) logsDescribeSubscriptionFilters(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsDescribeSubscriptionFilters, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DescribeSubscriptionFilters.", readOnly, eventID, verified)
+		return
+	}
+	filters, err := s.store.DescribeSubscriptionFilters(verified.AccountID, group)
+	if errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Log group does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to describe subscription filters.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := logssvc.DescribeSubscriptionFiltersJSON(filters)
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeSubscriptionFilters", readOnly)
 }
 
 func logsInt64Param(v any) int64 {

@@ -8,13 +8,14 @@
 //   - EndpointURL for invokes should be http://host.docker.internal:4566 under
 //     Docker Desktop (host publishes 127.0.0.1:4566). Override with
 //     NOCTAXRIS_LAMBDA_ENDPOINT_URL when host.docker.internal is wrong (e.g. some
-//     Linux setups). Function containers get ExtraHosts host.docker.internal:host-gateway.
+//     Linux setups). Function containers get ExtraHosts host.docker.internal:host-gateway
+//     unless NOCTAXRIS_INJECT_HOST_GATEWAY=0.
 //
-// Egress deny:
-//   - EnsureNetwork creates noctaxris-fn with Internal:true so functions have no
-//     default route to the public internet. Reaching the Noctaxris API still depends
-//     on host.docker.internal / host-gateway working on the platform. Full egress
-//     policy hardening beyond Internal networks is out of scope for the lab core (see docs/services/lambda.md).
+// Egress deny + lab API allow:
+//   - EnsureNetwork creates noctaxris-fn as a bridge with IP masquerade disabled
+//     (not Internal). Functions can reach the Docker host gateway
+//     (host.docker.internal → published API) without SNAT to the public internet.
+//   - Data-plane networks stay Internal:true (see EnsureDataPlaneNetwork).
 package compute
 
 import (
@@ -25,7 +26,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 )
 
@@ -87,29 +87,11 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// EnsureNetwork creates (or reuses) an Internal Docker network for function
-// containers. Internal:true is best-effort egress deny (no public internet route).
+// EnsureNetwork creates (or reuses) the function Docker network with lab-API
+// host-gateway reachability and WAN egress deny (masquerade off).
+// Legacy Internal:true networks are replaced when unused; otherwise fail closed.
 func (c *Client) EnsureNetwork(ctx context.Context) (string, error) {
-	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
-	if err != nil {
-		return "", fmt.Errorf("compute: list networks: %w", err)
-	}
-	for _, n := range networks {
-		if n.Name == FunctionNetworkName {
-			return n.ID, nil
-		}
-	}
-	resp, err := c.cli.NetworkCreate(ctx, FunctionNetworkName, network.CreateOptions{
-		Driver:   "bridge",
-		Internal: true,
-		Labels: map[string]string{
-			"noctaxris.managed": "true",
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("compute: create network %s: %w", FunctionNetworkName, err)
-	}
-	return resp.ID, nil
+	return c.ensureFunctionNetwork(ctx, FunctionNetworkName)
 }
 
 // EnsureImage pulls the preferred Lambda runtime image, falling back to a slim variant.

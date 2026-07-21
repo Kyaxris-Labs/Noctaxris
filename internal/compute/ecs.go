@@ -33,27 +33,9 @@ func ValidateECSRunOpts(opts ECSRunOpts) error {
 }
 
 // EnsureECSNetwork creates (or reuses) an Internal Docker network for ECS tasks.
+// Existing networks that are not Internal are refused (fail closed).
 func (c *Client) EnsureECSNetwork(ctx context.Context) (string, error) {
-	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
-	if err != nil {
-		return "", fmt.Errorf("compute: list networks: %w", err)
-	}
-	for _, n := range networks {
-		if n.Name == ECSNetworkName {
-			return n.ID, nil
-		}
-	}
-	resp, err := c.cli.NetworkCreate(ctx, ECSNetworkName, network.CreateOptions{
-		Driver:   "bridge",
-		Internal: true,
-		Labels: map[string]string{
-			"noctaxris.managed": "true",
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("compute: create network %s: %w", ECSNetworkName, err)
-	}
-	return resp.ID, nil
+	return c.ensureInternalNetwork(ctx, ECSNetworkName)
 }
 
 // RunECSTask starts a detached ECS task container and returns its Docker ID.
@@ -97,7 +79,7 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	hostConfig := &container.HostConfig{
 		AutoRemove:  false,
 		NetworkMode: container.NetworkMode(ECSNetworkName),
-		ExtraHosts:  []string{"host.docker.internal:host-gateway"},
+		ExtraHosts:  hostGatewayExtraHosts(),
 	}
 	cfg := &container.Config{
 		Image: opts.ImageURI,
@@ -139,25 +121,26 @@ func (c *Client) StopECSTask(ctx context.Context, containerID string) error {
 }
 
 // WaitECSTaskExit blocks until the container is not running or ctx ends.
-func (c *Client) WaitECSTaskExit(ctx context.Context, containerID string) error {
+// Returns the container exit code (0 on success).
+func (c *Client) WaitECSTaskExit(ctx context.Context, containerID string) (int64, error) {
 	containerID = strings.TrimSpace(containerID)
 	if containerID == "" {
-		return fmt.Errorf("compute: container ID is required")
+		return -1, fmt.Errorf("compute: container ID is required")
 	}
 	statusCh, errCh := c.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
 		if err != nil {
-			return fmt.Errorf("compute: ecs container wait: %w", err)
+			return -1, fmt.Errorf("compute: ecs container wait: %w", err)
 		}
-		return nil
+		return 0, nil
 	case st := <-statusCh:
 		if st.Error != nil && st.Error.Message != "" {
-			return fmt.Errorf("compute: ecs container wait: %s", st.Error.Message)
+			return st.StatusCode, fmt.Errorf("compute: ecs container wait: %s", st.Error.Message)
 		}
-		return nil
+		return st.StatusCode, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return -1, ctx.Err()
 	}
 }
 

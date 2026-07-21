@@ -55,9 +55,10 @@ type MicroVMProbeOpts struct {
 	ReadFile func(name string) ([]byte, error)
 }
 
-// ProbeMicroVM checks whether the opt-in microVM path can run on this host.
-// WSL2 is always unsupported (product policy). Missing KVM or Firecracker binary fails closed.
-// Never opens host docker.sock.
+// ProbeMicroVM checks whether the opt-in microVM *selection* can run on this host.
+// OK means Linux (non-WSL2) with usable KVM and a Firecracker binary — not that
+// live guest boot is packaged. WSL2 is always unsupported (product policy).
+// Missing KVM or Firecracker binary fails closed. Never opens host docker.sock.
 func ProbeMicroVM(opts MicroVMProbeOpts) MicroVMProbeResult {
 	goos := opts.GOOS
 	if goos == "" {
@@ -83,7 +84,7 @@ func ProbeMicroVM(opts MicroVMProbeOpts) MicroVMProbeResult {
 	res := MicroVMProbeResult{}
 
 	if goos != "linux" {
-		res.Reason = "microVM compute requires Linux with KVM (this GOOS is unsupported); use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
+		res.Reason = "microVM compute requires Linux with KVM (this GOOS is unsupported); live guest boot is not available; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
 		return res
 	}
 
@@ -95,7 +96,7 @@ func ProbeMicroVM(opts MicroVMProbeOpts) MicroVMProbeResult {
 	}
 	if isWSL2(procVersion, os.Getenv("WSL_DISTRO_NAME")) {
 		res.WSL2 = true
-		res.Reason = "microVM compute is unsupported on WSL2; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
+		res.Reason = "microVM compute is unsupported on WSL2 (even when /dev/kvm appears present); live guest boot is not available; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
 		return res
 	}
 
@@ -103,7 +104,7 @@ func ProbeMicroVM(opts MicroVMProbeOpts) MicroVMProbeResult {
 		res.HasKVM = true
 	}
 	if !res.HasKVM {
-		res.Reason = "microVM compute requires /dev/kvm; KVM is missing or unusable; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
+		res.Reason = "microVM compute requires /dev/kvm; KVM is missing or unusable; live guest boot is not available; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
 		return res
 	}
 
@@ -112,16 +113,21 @@ func ProbeMicroVM(opts MicroVMProbeOpts) MicroVMProbeResult {
 		if fi, err := stat(bin); err == nil && !fi.IsDir() {
 			res.HasBin = true
 			res.BinPath = bin
+		} else {
+			res.Reason = "microVM compute: NOCTAXRIS_FIRECRACKER_BIN is set but not a usable file; live guest boot is not available; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
+			return res
 		}
 	} else if p, err := lookPath("firecracker"); err == nil && p != "" {
 		res.HasBin = true
 		res.BinPath = p
 	}
 	if !res.HasBin {
-		res.Reason = "microVM compute requires the firecracker binary (set NOCTAXRIS_FIRECRACKER_BIN or install on PATH); use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
+		res.Reason = "microVM compute requires the firecracker binary (set NOCTAXRIS_FIRECRACKER_BIN or install on PATH); live guest boot is not available; use DinD (NOCTAXRIS_COMPUTE_RUNTIME=dind or unset)"
 		return res
 	}
 
+	// Platform selection probe only. Guest kernel/rootfs assets and a real
+	// runner are not checked here; Invoke/RunTask fail closed separately.
 	res.OK = true
 	return res
 }

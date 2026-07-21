@@ -307,6 +307,16 @@ func (s *Server) apigwCreateRoute(
 			"User is not authorized to perform apigatewayv2:CreateRoute.", readOnly, eventID, verified)
 		return
 	}
+	effectiveAuth := strings.ToUpper(strings.TrimSpace(authType))
+	if effectiveAuth == "" {
+		effectiveAuth = store.APIGatewayAuthNone
+	}
+	if effectiveAuth == store.APIGatewayAuthNone && !s.cfg.OpenDataPlaneAllowed() {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"AuthorizationType NONE requires NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1 when listen is non-loopback.",
+			readOnly, eventID, verified)
+		return
+	}
 	route, err := s.store.CreateAPIGatewayRoute(verified.AccountID, apiID, routeKey, target, authType, authorizerID)
 	if errors.Is(err, store.ErrAPIGatewayNotFound) {
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",

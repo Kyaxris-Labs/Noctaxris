@@ -1,8 +1,8 @@
 # RDS Data API
 
-**Status:** shipped (lab core, stub executor)
+**Status:** shipped (lab core)
 
-HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager). The default executor records SQL and returns canned SELECT-shaped records with an explicit stub marker (`formattedRecords` contains `noctaxrisExecutor=stub`). Live Postgres wire protocol (`pgx`) is not in `go.mod` yet.
+HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager).
 
 ## Implemented
 
@@ -13,9 +13,14 @@ HTTPS Data API on `:4566` for `ExecuteStatement` and Begin/Commit/Rollback lite.
 | Authz | Identity `EvaluateFull` on `rds-data:*` |
 | Secrets | Rejects missing or mismatched `secretArn` (fail closed) |
 
-### Stub vs live SQL
+### Stub vs nested SQL
 
-The default executor validates ARNs and authz without Docker. Successful SELECT responses are **stub**, not live SQL against nested Postgres. A live nested Postgres driver may be added later with explicit dependency buy-in.
+| Condition | Executor | Marker in `formattedRecords` |
+|-----------|----------|------------------------------|
+| No DinD, or RDS instance has no nested container | Recorded-statement **stub** (canned SELECT shape) | `noctaxrisExecutor=stub` |
+| DinD up and CreateDBInstance started nested Postgres | Real SQL via `psql` **inside** the nested container (Docker exec; no host DB port) | `noctaxrisExecutor=nested-psql` |
+
+There is no `pgx` (or other Postgres wire driver) in `go.mod`. Nested SQL reuses the existing DinD TLS client. Unit tests without Docker stay on the stub path.
 
 ## How to verify / CLI smoke
 
@@ -31,10 +36,11 @@ aws rds-data execute-statement \
   --endpoint-url "$EP"
 ```
 
-Skip live nested smoke when Docker/DinD is unavailable. Stub path still works in unit tests.
+When Compose includes `noctaxris-engine` and the instance reaches `available` with a nested container, expect `noctaxrisExecutor=nested-psql`. Without DinD, the stub marker is expected. Full nested harness: [docker/smoke-nested.sh](../../docker/smoke-nested.sh).
 
 ## Not yet / deferred
 
-- Live `pgx` executor against nested Postgres (needs explicit dependency buy-in)
+- Wire-protocol `pgx` executor (needs explicit dependency buy-in)
 - `BatchExecuteStatement`, `ExecuteSql` legacy
 - Full result type matrix and `formatRecordsAs=JSON`
+- Real SQL transactions (Begin/Commit/Rollback remain control-plane lite)

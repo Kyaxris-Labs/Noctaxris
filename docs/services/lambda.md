@@ -16,25 +16,26 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 | Layers | Up to five same-account layer-version ARNs per function. Merged at `/opt` on zip and Image Invoke |
 | Invoke (sync) | `InvocationType=RequestResponse` (default). One-shot nested container |
 | Invoke (async) | `InvocationType=Event` returns HTTP 202 immediately. Two lab retries, then SQS DLQ via `DeadLetterConfig.TargetArn` or SQS/SNS via `DestinationConfig.OnFailure` |
-| SQS / DynamoDB Streams ESM | `CreateEventSourceMapping` for SQS queue ARNs or DynamoDB stream ARNs. In-process poller: SQS ReceiveMessage → sync Invoke → DeleteMessage on success; DynamoDB Streams GetRecords → sync Invoke → advance shard cursor on success. Lab `BatchSize` max 10. Disable stops polling. DynamoDB starts at `TRIM_HORIZON` |
-| Function URLs | `CreateFunctionUrlConfig` with `AuthType` `NONE` or `AWS_IAM`. Lab invoke path `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION`. AuthType `NONE` returns simple CORS headers (`Access-Control-Allow-Origin: *`) including OPTIONS preflight |
+| SQS / DynamoDB Streams ESM | `CreateEventSourceMapping` for SQS queue ARNs or DynamoDB stream ARNs. Optional lab `FilterCriteria` (OR of JSON patterns; SQS matches `body`, DynamoDB matches `eventName`). Create/poll require the function `Role` session to Allow source actions (`sqs:ReceiveMessage`+`sqs:DeleteMessage`, or `dynamodb:GetRecords`), or (SQS) a queue policy Allow for `lambda.amazonaws.com`. In-process poller: SQS ReceiveMessage → filter → sync Invoke → DeleteMessage on success (non-matching SQS messages are deleted without invoke); DynamoDB Streams GetRecords → filter → sync Invoke → advance shard cursor on success. Lab `BatchSize` max 10. Disable stops polling. DynamoDB starts at `TRIM_HORIZON` |
+| Function URLs | `CreateFunctionUrlConfig` with `AuthType` `NONE` or `AWS_IAM`. Lab invoke path `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION`. AuthType `NONE` returns simple CORS headers (`Access-Control-Allow-Origin: *`) including OPTIONS preflight. On non-loopback listen, `NONE` requires `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1` |
 | Role configure | Caller needs `iam:PassRole` on the role ARN. Role trust must Allow `sts:AssumeRole` for `lambda.amazonaws.com` |
 | Resource policy | `AddPermission`, `RemovePermission`, `GetPolicy`. Same-account Invoke allows identity **or** function policy Allow. Cross-account Invoke requires identity **and** function policy Allow |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Default runtime. No host `docker.sock` on the API container. Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed without host Docker |
 | Invoke session | Temporary AWS_* credentials for the function execution role injected into the container |
-| Egress | Function network `noctaxris-fn` with `Internal: true` (platform egress deny) |
+| Egress | Function network `noctaxris-fn`: bridge with IP masquerade off (WAN deny) plus host-gateway reachability for the lab API |
+| Layers REST | CLI paths under `/2018-10-31/layers/...` (and `/2015-03-31/layers/...`) map to Publish/Get/List/Delete layer version |
 
-Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume (API sealed state stays on `noctaxris-data` only). Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables DinD compute so unit tests can run without DinD. Without the engine, sync Invoke on the default DinD path returns compute unavailable. ImageUri pulls are allowlisted (lab ECR rewrite path plus pinned public Lambda bases).
+Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume (API sealed state stays on `noctaxris-data` only). Compose `noctaxris-compute-init` chowns that volume to UID `65532` before the API writes zips. Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client`. The engine API stays on the Compose network only. Empty `NOCTAXRIS_DOCKER_HOST` disables DinD compute so unit tests can run without DinD. Without the engine, sync Invoke on the default DinD path returns compute unavailable. ImageUri pulls are allowlisted (lab ECR rewrite path plus pinned public Lambda bases). In-function SDK calls to `AWS_ENDPOINT_URL` / `NOCTAXRIS_LAMBDA_ENDPOINT_URL` (default `http://host.docker.internal:4566`) reach the published lab API without opening public internet egress.
 
 ### Compute runtime matrix
 
-| Host | DinD (default) | Opt-in microVM |
-|------|----------------|----------------|
-| Linux with usable `/dev/kvm` and Firecracker binary | Supported | Supported when opted in (guest invoke may still be deferred until assets ship) |
-| WSL2 | Supported (default and only nested path) | Unsupported (fails closed) |
-| Windows native (no Linux VM) | Unsupported for nested compute | Unsupported |
+| Host | DinD (default) | Opt-in microVM selection | Live Firecracker guest Invoke / RunTask |
+|------|----------------|--------------------------|------------------------------------------|
+| Linux with usable `/dev/kvm` and Firecracker binary | Supported | Probe succeeds when opted in | Not packaged (fails closed; no fake boot) |
+| WSL2 | Supported (default and only nested path) | Unsupported (fails closed, even if `/dev/kvm` appears) | Unavailable |
+| Windows native (no Linux VM) | Unsupported for nested compute | Unsupported | Unavailable |
 
-Set `NOCTAXRIS_COMPUTE_RUNTIME=dind` (or leave unset) for the default path. Set `microvm` only on Linux/KVM labs. Optional `NOCTAXRIS_FIRECRACKER_BIN` points at the Firecracker binary when it is not on `PATH`. Opt-in never falls through to host Docker.
+Set `NOCTAXRIS_COMPUTE_RUNTIME=dind` (or leave unset) for the default path. Set `microvm` only to exercise the fail-closed selection probe on a Linux/KVM host. Optional `NOCTAXRIS_FIRECRACKER_BIN` points at the Firecracker binary when it is not on `PATH`. Opt-in never falls through to host Docker. A successful probe is not live guest boot.
 
 Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports AWS Lambda Python base images and compatible `python:` or `nodejs:` refs. For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`. Invoke issues a lab ECR authorization token and pulls with Registry V2 auth (same path as ECS RunTask). Public images are unchanged.
 
@@ -188,7 +189,7 @@ aws lambda create-event-source-mapping \
   --endpoint-url "$EP"
 ```
 
-Function URL lite. AuthType `NONE` skips SigV4 on `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION` and sets CORS allow-origin `*` (OPTIONS returns 204). AuthType `AWS_IAM` requires SigV4 plus `lambda:InvokeFunctionUrl`. For JWT-protected HTTP fronts, use API Gateway HTTP API rather than Function URLs.
+Function URL lite. AuthType `NONE` skips SigV4 on `http://127.0.0.1:4566/lambda-url/ACCOUNT/FUNCTION` and sets CORS allow-origin `*` (OPTIONS returns 204). On non-loopback listen, create and invoke require `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1`. AuthType `AWS_IAM` requires SigV4 plus `lambda:InvokeFunctionUrl`. For JWT-protected HTTP fronts, use API Gateway HTTP API rather than Function URLs. Nested containers get `host.docker.internal:host-gateway` by default; set `NOCTAXRIS_INJECT_HOST_GATEWAY=0` to omit that ExtraHosts entry.
 
 ```bash
 aws lambda create-function-url-config \
@@ -226,11 +227,12 @@ aws lambda invoke \
 - EventBridge or Lambda-to-Lambda failure destinations (OnFailure to SQS and SNS is shipped)
 - Service-principal cross-account grants on function policies
 - Non-lab private registries (Docker Hub private, third-party hosts). Lab ECR on `127.0.0.1:4566` is supported for Image Invoke
-- FilterCriteria / ReportBatchItemFailures / provisioned pollers / non-SQS-or-DynamoDB ESM sources (Kinesis, MQ)
+- ReportBatchItemFailures / provisioned pollers / non-SQS-or-DynamoDB ESM sources (Kinesis, MQ)
+- Full AWS content-filtering operators beyond lab string/list equality on SQS `body` and DynamoDB `eventName`
 - Function URL CORS configuration object depth (simple ACAO headers on NONE are shipped). Prefer API Gateway HTTP API for JWT labs. CloudFront is a config stub only (see [cloudfront.md](cloudfront.md))
 - Rootless DinD
 - Live Firecracker guest zip/Image Invoke on Linux+KVM (opt-in selection and fail-closed probe ship. Real guest boot awaits a Linux+KVM host with kernel/rootfs assets)
 
 ### Opt-in microVM
 
-MicroVM isolation selection is opt-in via `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. DinD remains the default. Live Firecracker guest invoke for zip and Image packaging is still deferred until a Linux+KVM lab host completes asset packaging. ECS RunTask uses the same opt-in selection and fail-closed stubs. See [ecs.md](ecs.md) and [index.md](index.md#cross-cutting).
+MicroVM isolation selection is opt-in via `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. DinD remains the default. This build packages the platform probe and fail-closed errors only: zip/Image Invoke and ECS RunTask on the microVM path refuse with an explicit “guest boot is not packaged” error after a successful Linux+KVM+binary probe. There is no simulated guest boot. See [ecs.md](ecs.md) and [index.md](index.md#cross-cutting).

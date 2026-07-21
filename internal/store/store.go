@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_name TEXT NOT NULL,
   user_id TEXT NOT NULL,
   arn TEXT NOT NULL,
+  create_date TEXT,
   PRIMARY KEY (account_id, user_name)
 );
 CREATE TABLE IF NOT EXISTS managed_policies (
@@ -341,9 +342,21 @@ type Store struct {
 	asyncEnqueueMu sync.Mutex
 	onAsyncEnqueue func(job LambdaAsyncInvocation)
 
+	sfnTaskMu      sync.Mutex
+	sfnTaskInvoker SFNTaskInvoker
+
 	// sqsMu serializes receive/send so claim+CAS and FIFO sequence stay atomic
 	// under concurrent goroutines without global BEGIN IMMEDIATE (nested writers).
 	sqsMu sync.Mutex
+
+	// s3ObjectMu + s3ObjectLocks serialize PutObject file+SQL per account/bucket/key.
+	s3ObjectMu    sync.Mutex
+	s3ObjectLocks map[string]*s3ObjectLock
+}
+
+type s3ObjectLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func Open(dataRoot string, master MasterKey) (*Store, error) {
@@ -364,10 +377,14 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, master: master, dataRoot: dataRoot}
+	s := &Store{db: db, master: master, dataRoot: dataRoot, s3ObjectLocks: map[string]*s3ObjectLock{}}
 	if err := s.migrateSchema(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := EnsureManagedPolicyVersionsSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open store: ensure managed policy versions schema: %w", err)
 	}
 	if err := EnsureLambdaVersionSchema(db); err != nil {
 		db.Close()
@@ -430,6 +447,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureLogsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureLogsSubscriptionSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -699,6 +720,7 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE roles ADD COLUMN path TEXT NOT NULL DEFAULT '/'`,
 		`ALTER TABLE roles ADD COLUMN create_date TEXT`,
 		`ALTER TABLE roles ADD COLUMN description TEXT`,
+		`ALTER TABLE users ADD COLUMN create_date TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
 		`ALTER TABLE kms_keys ADD COLUMN deletion_date TEXT NOT NULL DEFAULT ''`,

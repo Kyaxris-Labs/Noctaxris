@@ -14,7 +14,7 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`) |
 | Batch | `BatchGetItem`, `BatchWriteItem` (lab soft cap 25; overflow returned in `UnprocessedKeys` / `UnprocessedItems`) |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
-| TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`) |
+| TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`; `Query`/`Scan` over-fetch until `Limit` live items) |
 | Encryption | Table SSE with AWS-owned or customer-managed KMS |
 
 Table and item metadata live in SQLite. Item ciphertext uses table SSE. Expired TTL items are omitted on read, not deleted in the background.

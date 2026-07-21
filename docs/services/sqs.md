@@ -10,7 +10,7 @@ Lab-complete standard and FIFO queues: send/receive/delete (including batch and 
 |------|---------|
 | Queues | `CreateQueue`, `GetQueueUrl`, `GetQueueAttributes`, `SetQueueAttributes`, `DeleteQueue`, `ListQueues`, `PurgeQueue` |
 | FIFO | `FifoQueue` attribute, `.fifo` name suffix, `MessageGroupId`, content-based or explicit deduplication |
-| Messages | `SendMessage`, `ReceiveMessage`, `DeleteMessage` |
+| Messages | `SendMessage`, `ReceiveMessage` (honors `WaitTimeSeconds` 0–20), `DeleteMessage` |
 | Batch / visibility | `SendMessageBatch`, `DeleteMessageBatch`, `ChangeMessageVisibility` |
 | Redrive | `RedrivePolicy` moves messages to a dead-letter queue after `maxReceiveCount`. DLQ `RedriveAllowPolicy` (`allowAll`, `denyAll`, `byQueue` + `sourceQueueArns`) is enforced on redrive |
 | Delay | Queue `DelaySeconds` and per-message `DelaySeconds` (up to 900) set `visible_after` before receive |

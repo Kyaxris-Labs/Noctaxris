@@ -88,6 +88,9 @@ func LoadFromEnv() (Config, error) {
 	if err := compute.ValidateDockerHost(cfg.DockerHost, cfg.DockerTLSCertPath); err != nil {
 		return Config{}, err
 	}
+	if err := ValidateListenSecurity(cfg); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -104,19 +105,31 @@ func (s *Server) lambdaCreateEventSourceMapping(
 			enabled = &t
 		}
 	}
+	filterJSON := ""
+	if rawFC, ok := params["FilterCriteria"]; ok && rawFC != nil {
+		b, mErr := json.Marshal(rawFC)
+		if mErr != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+				"FilterCriteria must be an object.", readOnly, eventID, verified)
+			return
+		}
+		filterJSON = string(b)
+	}
 	m, err := s.store.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
-		AccountID:      verified.AccountID,
-		FunctionName:   fnName,
-		EventSourceARN: eventSourceARN,
-		BatchSize:      batchSize,
-		Enabled:        enabled,
+		AccountID:          verified.AccountID,
+		FunctionName:       fnName,
+		EventSourceARN:     eventSourceARN,
+		BatchSize:          batchSize,
+		Enabled:            enabled,
+		FilterCriteriaJSON: filterJSON,
 	})
 	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 			"Function not found.", readOnly, eventID, verified)
 		return
 	}
-	if errors.Is(err, store.ErrNoSuchQueue) || errors.Is(err, store.ErrInvalidEventSourceARN) || errors.Is(err, store.ErrInvalidESMBatchSize) {
+	if errors.Is(err, store.ErrNoSuchQueue) || errors.Is(err, store.ErrInvalidEventSourceARN) ||
+		errors.Is(err, store.ErrInvalidESMBatchSize) || errors.Is(err, store.ErrESMSourceAuthz) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
 			err.Error(), readOnly, eventID, verified)
 		return

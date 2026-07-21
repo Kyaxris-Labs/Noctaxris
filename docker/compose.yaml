@@ -1,4 +1,11 @@
 services:
+  noctaxris-compute-init:
+    image: busybox:1.36
+    user: "0:0"
+    volumes:
+      - noctaxris-compute:/lambda
+    # Named volumes are root-owned on first create; API runs as UID 65532 (distroless nonroot).
+    command: ["sh", "-c", "chown -R 65532:65532 /lambda && chmod 775 /lambda"]
   noctaxris:
     build:
       context: ..
@@ -7,6 +14,10 @@ services:
       - "127.0.0.1:4566:4566"
     environment:
       NOCTAXRIS_LISTEN: "0.0.0.0:4566"
+      # Container binds all interfaces; host publish stays 127.0.0.1:4566 (see ports).
+      NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN: "1"
+      # Lab open paths (Function URL / HTTP API NONE) on the Compose container bind.
+      NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"
       NOCTAXRIS_DATA_ROOT: "/var/lib/noctaxris"
       NOCTAXRIS_ROOT_ACCESS_KEY_ID: "${NOCTAXRIS_ROOT_ACCESS_KEY_ID}"
       NOCTAXRIS_ROOT_SECRET_ACCESS_KEY: "${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY}"
@@ -17,6 +28,8 @@ services:
       # Function containers run inside DinD and reach the published API via
       # host.docker.internal (Docker Desktop). Override for Linux or custom wiring.
       NOCTAXRIS_LAMBDA_ENDPOINT_URL: "${NOCTAXRIS_LAMBDA_ENDPOINT_URL:-http://host.docker.internal:4566}"
+      # Set to 0 to omit ExtraHosts host.docker.internal (labs without in-function SDK).
+      # NOCTAXRIS_INJECT_HOST_GATEWAY: "1"
     volumes:
       # API-only sealed state (master.key, state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris
@@ -28,6 +41,8 @@ services:
     tmpfs:
       - /tmp
     depends_on:
+      noctaxris-compute-init:
+        condition: service_completed_successfully
       noctaxris-engine:
         condition: service_healthy
     healthcheck:

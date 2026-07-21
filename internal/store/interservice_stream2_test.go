@@ -25,6 +25,15 @@ func TestDynamoStreamsEventSourceMappingPoll(t *testing.T) {
 	if err := st.EnsureDynamoDBStreamsSchema(); err != nil {
 		t.Fatal(err)
 	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "lambda", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:GetRecords","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "esm-ddb", allowDoc); err != nil {
+		t.Fatal(err)
+	}
 	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
 	fn, err := st.CreateFunction(store.CreateFunctionMeta{
 		AccountID:    account,

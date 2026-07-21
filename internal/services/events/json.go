@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -133,6 +134,12 @@ func ListTargetsByRuleJSON(targets []store.EventTarget) ([]byte, error) {
 		}
 		if tgt.InputPath != "" {
 			entry["InputPath"] = tgt.InputPath
+		}
+		if strings.TrimSpace(tgt.InputTransformerJSON) != "" {
+			var tr any
+			if err := json.Unmarshal([]byte(tgt.InputTransformerJSON), &tr); err == nil {
+				entry["InputTransformer"] = tr
+			}
 		}
 		entries = append(entries, entry)
 	}

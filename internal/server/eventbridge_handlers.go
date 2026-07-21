@@ -56,6 +56,10 @@ func (s *Server) handleEventBridge(
 		s.eventsRemoveTargets(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionEventsListTargetsByRule:
 		s.eventsListTargetsByRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEventsPutPermission:
+		s.eventsPutPermission(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEventsRemovePermission:
+		s.eventsRemovePermission(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeEventsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This EventBridge action is not implemented.", readOnly, eventID, verified)
@@ -95,6 +99,10 @@ func eventsAction(action string) string {
 		return catalog.ActionEventsRemoveTargets
 	case "ListTargetsByRule":
 		return catalog.ActionEventsListTargetsByRule
+	case "PutPermission":
+		return catalog.ActionEventsPutPermission
+	case "RemovePermission":
+		return catalog.ActionEventsRemovePermission
 	default:
 		return action
 	}
@@ -172,8 +180,8 @@ func (s *Server) eventsPutEvents(
 		return
 	}
 
-	busName := store.DefaultEventBusName
 	entries := make([]store.PutEventsEntry, 0, len(entriesRaw))
+	ownerByBus := map[string]string{}
 	for _, raw := range entriesRaw {
 		m, ok := raw.(map[string]any)
 		if !ok {
@@ -184,14 +192,19 @@ func (s *Server) eventsPutEvents(
 			DetailType: stringParam(m["DetailType"]),
 			Detail:     stringParam(m["Detail"]),
 		}
-		if v := stringParam(m["EventBusName"]); v != "" {
-			entry.EventBusName = v
-			busName = v
+		busRef := stringParam(m["EventBusName"])
+		owner, busName, ok := store.ResolveEventBusRef(verified.AccountID, busRef)
+		if !ok {
+			s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"EventBusName is invalid.", readOnly, eventID, verified)
+			return
 		}
+		entry.EventBusName = busName
 		if v := stringParam(m["Time"]); v != "" {
 			entry.Time = v
 		}
 		entries = append(entries, entry)
+		ownerByBus[busName] = owner
 	}
 	if len(entries) == 0 {
 		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -199,18 +212,35 @@ func (s *Server) eventsPutEvents(
 		return
 	}
 
-	resource := s.eventsBusARN(verified, busName)
-	if !s.authorizeEvents(verified, catalog.ActionEventsPutEvents, resource) {
-		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
-			"User is not authorized to perform events:PutEvents.", readOnly, eventID, verified)
-		return
+	for busName, owner := range ownerByBus {
+		bus, err := s.store.DescribeEventBus(owner, busName)
+		if errors.Is(err, store.ErrNoSuchEventBus) {
+			s.writeEventsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+				"Event bus does not exist.", readOnly, eventID, verified)
+			return
+		} else if err != nil {
+			s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to resolve event bus.", readOnly, eventID, verified)
+			return
+		}
+		if !s.authorizeEventsPutEvents(verified, bus) {
+			s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform events:PutEvents.", readOnly, eventID, verified)
+			return
+		}
 	}
 
-	result, err := s.store.PutEvents(verified.AccountID, entries)
-	if err != nil {
-		s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-			"Unable to put events.", readOnly, eventID, verified)
-		return
+	// PutEvents runs under each bus owner account (XA PutEvents writes into the owner bus).
+	var result store.PutEventsResult
+	for owner, ownerEntries := range groupPutEventsByOwner(entries, ownerByBus) {
+		partial, err := s.store.PutEvents(owner, ownerEntries)
+		if err != nil {
+			s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to put events.", readOnly, eventID, verified)
+			return
+		}
+		result.FailedEntryCount += partial.FailedEntryCount
+		result.Entries = append(result.Entries, partial.Entries...)
 	}
 
 	payload, err := eb.PutEventsJSON(result)
@@ -311,13 +341,24 @@ func (s *Server) eventsPutTargets(
 				return
 			}
 		}
-		inputs = append(inputs, store.EventTargetInput{
+		in := store.EventTargetInput{
 			ID:        stringParam(m["Id"]),
 			ARN:       stringParam(m["Arn"]),
 			RoleARN:   roleARN,
 			Input:     stringParam(m["Input"]),
 			InputPath: stringParam(m["InputPath"]),
-		})
+		}
+		if rawTr, ok := m["InputTransformer"].(map[string]any); ok {
+			tr := &store.EventBridgeInputTransformer{InputPathsMap: map[string]string{}}
+			tr.InputTemplate = stringParam(rawTr["InputTemplate"])
+			if paths, ok := rawTr["InputPathsMap"].(map[string]any); ok {
+				for k, v := range paths {
+					tr.InputPathsMap[k] = stringParam(v)
+				}
+			}
+			in.InputTransformer = tr
+		}
+		inputs = append(inputs, in)
 	}
 	if len(inputs) == 0 {
 		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -777,6 +818,100 @@ func (s *Server) eventsListTargetsByRule(
 func stringParam(v any) string {
 	s, _ := v.(string)
 	return strings.TrimSpace(s)
+}
+
+func groupPutEventsByOwner(entries []store.PutEventsEntry, ownerByBus map[string]string) map[string][]store.PutEventsEntry {
+	out := map[string][]store.PutEventsEntry{}
+	for _, e := range entries {
+		bus := store.DefaultEventBusName
+		if strings.TrimSpace(e.EventBusName) != "" {
+			bus = e.EventBusName
+		}
+		owner := ownerByBus[bus]
+		if owner == "" {
+			continue
+		}
+		out[owner] = append(out[owner], e)
+	}
+	return out
+}
+
+func (s *Server) authorizeEventsPutEvents(verified *authn.Verified, bus store.EventBus) bool {
+	return s.authorizeDataplaneOR(verified, catalog.ActionEventsPutEvents, bus.ARN, bus.AccountID,
+		func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
+			return authz.EvaluateResourceAccess(authz.ResourceAccessRequest{
+				Caller:            caller,
+				IdentityDocs:      identityDocs,
+				ResourcePolicyDoc: bus.Policy,
+				ResourceAccountID: resourceAccountID,
+			})
+		})
+}
+
+func (s *Server) eventsPutPermission(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	busName := stringParam(params["EventBusName"])
+	statementID := stringParam(params["StatementId"])
+	principal := stringParam(params["Principal"])
+	actions := stringSliceParam(params["Action"])
+	resource := s.eventsBusARN(verified, busName)
+	if !s.authorizeEvents(verified, catalog.ActionEventsPutPermission, resource) {
+		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform events:PutPermission.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.PutEventBusPermission(verified.AccountID, busName, statementID, principal, actions); err != nil {
+		if errors.Is(err, store.ErrNoSuchEventBus) {
+			s.writeEventsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+				"Event bus does not exist.", readOnly, eventID, verified)
+			return
+		}
+		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := eb.EmptyOKJSON()
+	s.writeEventsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "PutPermission", readOnly)
+}
+
+func (s *Server) eventsRemovePermission(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	busName := stringParam(params["EventBusName"])
+	statementID := stringParam(params["StatementId"])
+	resource := s.eventsBusARN(verified, busName)
+	if !s.authorizeEvents(verified, catalog.ActionEventsRemovePermission, resource) {
+		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform events:RemovePermission.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.RemoveEventBusPermission(verified.AccountID, busName, statementID); err != nil {
+		if errors.Is(err, store.ErrNoSuchEventBus) {
+			s.writeEventsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+				"Event bus does not exist.", readOnly, eventID, verified)
+			return
+		}
+		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := eb.EmptyOKJSON()
+	s.writeEventsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "RemovePermission", readOnly)
 }
 
 func (s *Server) writeEventsOK(w http.ResponseWriter, requestID string, payload []byte) {

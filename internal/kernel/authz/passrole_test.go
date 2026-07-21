@@ -177,3 +177,38 @@ func TestCheckPassRoleWrongServiceDeny(t *testing.T) {
 		t.Fatalf("s3 trust for lambda got %v, want Deny", got)
 	}
 }
+
+func TestCheckPassRolePassedToServiceCondition(t *testing.T) {
+	req := authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal: identity.UserPrincipal(passRoleAccountID, "alice", "AKIAA"),
+		},
+		IdentityDocs: []string{`{
+			"Version":"2012-10-17",
+			"Statement":[{
+				"Effect":"Allow",
+				"Action":"iam:PassRole",
+				"Resource":"` + lambdaExecRoleARN + `",
+				"Condition":{"StringEquals":{"iam:PassedToService":"lambda.amazonaws.com"}}
+			}]
+		}`},
+		RoleARN:          lambdaExecRoleARN,
+		TrustPolicyDoc:   lambdaTrustDoc,
+		ServicePrincipal: authz.ServicePrincipalLambda,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Allow {
+		t.Fatalf("PassedToService lambda got %v, want Allow", got)
+	}
+	req.ServicePrincipal = authz.ServicePrincipalAPIGateway
+	req.TrustPolicyDoc = `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Principal":{"Service":"apigateway.amazonaws.com"},
+			"Action":"sts:AssumeRole"
+		}]
+	}`
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("PassedToService mismatch got %v, want Deny", got)
+	}
+}

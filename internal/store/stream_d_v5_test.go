@@ -113,6 +113,13 @@ func TestAppSyncAPIKeyAndResolver(t *testing.T) {
 	if err != nil || !strings.HasPrefix(key.APIKey, "da2-") {
 		t.Fatalf("api key: %v %#v", err, key)
 	}
+	gotAcct, gotAPI, err := st.LookupAppSyncAPIKey(key.APIKey)
+	if err != nil || gotAcct != account || gotAPI != api.APIID {
+		t.Fatalf("lookup plaintext key: acct=%s api=%s err=%v", gotAcct, gotAPI, err)
+	}
+	if _, _, err := st.LookupAppSyncAPIKey("da2-" + strings.Repeat("00", 16)); err == nil {
+		t.Fatal("lookup with wrong key should fail")
+	}
 	_, err = st.CreateAppSyncDataSource(account, api.APIID, "HelloFn", "AWS_LAMBDA",
 		"arn:aws:lambda:us-east-1:"+account+":function:hello")
 	if err != nil {

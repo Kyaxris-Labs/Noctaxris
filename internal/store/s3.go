@@ -18,6 +18,31 @@ import (
 	"github.com/google/uuid"
 )
 
+func (s *Store) lockS3Object(accountID, bucket, key string) func() {
+	lockKey := accountID + "\x00" + bucket + "\x00" + key
+	s.s3ObjectMu.Lock()
+	if s.s3ObjectLocks == nil {
+		s.s3ObjectLocks = map[string]*s3ObjectLock{}
+	}
+	entry, ok := s.s3ObjectLocks[lockKey]
+	if !ok {
+		entry = &s3ObjectLock{}
+		s.s3ObjectLocks[lockKey] = entry
+	}
+	entry.refs++
+	s.s3ObjectMu.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		s.s3ObjectMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(s.s3ObjectLocks, lockKey)
+		}
+		s.s3ObjectMu.Unlock()
+	}
+}
+
 const (
 	sseAES256 = "AES256"
 	sseAWSKMS = "aws:kms"
@@ -399,6 +424,7 @@ type PutObjectMeta struct {
 }
 
 // PutObject writes object bytes under dataRoot and upserts metadata.
+// File write and SQL upsert are serialized per account/bucket/key (temp file + rename).
 func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (ObjectMeta, error) {
 	if err := ValidateBucketName(bucket); err != nil {
 		return ObjectMeta{}, err
@@ -411,12 +437,16 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		return ObjectMeta{}, err
 	}
 
+	unlock := s.lockS3Object(accountID, bucket, key)
+	defer unlock()
+
 	rel := filepath.Join("s3", accountID, bucket, filepath.FromSlash(key))
 	abs := filepath.Join(s.dataRoot, rel)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return ObjectMeta{}, fmt.Errorf("put object mkdir: %w", err)
 	}
-	if err := os.WriteFile(abs, meta.Data, 0o600); err != nil {
+	tmp := abs + ".tmp-" + uuid.NewString()
+	if err := os.WriteFile(tmp, meta.Data, 0o600); err != nil {
 		return ObjectMeta{}, fmt.Errorf("put object write: %w", err)
 	}
 
@@ -451,7 +481,12 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
 	)
 	if err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, fmt.Errorf("put object meta: %w", err)
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		_ = os.Remove(tmp)
+		return ObjectMeta{}, fmt.Errorf("put object rename: %w", err)
 	}
 	return ObjectMeta{
 		AccountID:    accountID,

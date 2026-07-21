@@ -14,6 +14,8 @@ type InstanceProfile struct {
 	ProfileName string
 	ProfileARN  string
 	RoleName    string // empty when no role is associated
+	RoleARN     string
+	RoleID      string
 }
 
 // CreateInstanceProfile creates an instance profile with no role.
@@ -87,6 +89,10 @@ func (s *Store) GetInstanceProfile(accountID, profileName string) (InstanceProfi
 	}
 	if roleName.Valid {
 		p.RoleName = roleName.String
+		if role, roleErr := s.GetRoleRecord(accountID, p.RoleName); roleErr == nil {
+			p.RoleARN = role.RoleARN
+			p.RoleID = role.RoleID
+		}
 	}
 	return p, nil
 }
@@ -167,6 +173,10 @@ func (s *Store) ListInstanceProfiles(accountID string) ([]InstanceProfile, error
 		}
 		if roleName.Valid {
 			p.RoleName = roleName.String
+			if role, roleErr := s.GetRoleRecord(p.AccountID, p.RoleName); roleErr == nil {
+				p.RoleARN = role.RoleARN
+				p.RoleID = role.RoleID
+			}
 		}
 		out = append(out, p)
 	}

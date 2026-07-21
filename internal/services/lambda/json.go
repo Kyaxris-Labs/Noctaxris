@@ -258,7 +258,7 @@ func DecodeZipFile(v any) ([]byte, error) {
 }
 
 func eventSourceMappingConfiguration(m store.LambdaEventSourceMapping) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"UUID":           m.UUID,
 		"FunctionArn":    m.FunctionARN,
 		"EventSourceArn": m.EventSourceARN,
@@ -266,6 +266,13 @@ func eventSourceMappingConfiguration(m store.LambdaEventSourceMapping) map[strin
 		"State":          m.State,
 		"LastModified":   m.LastModified,
 	}
+	if strings.TrimSpace(m.FilterCriteriaJSON) != "" {
+		var fc any
+		if err := json.Unmarshal([]byte(m.FilterCriteriaJSON), &fc); err == nil {
+			out["FilterCriteria"] = fc
+		}
+	}
+	return out
 }
 
 // EventSourceMappingJSON builds Create/Get/UpdateEventSourceMapping success body.

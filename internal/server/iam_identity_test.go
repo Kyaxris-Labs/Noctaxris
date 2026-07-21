@@ -109,6 +109,19 @@ func TestIAMGroupsBoundariesInstanceProfilesIdP(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ec2Role") {
 		t.Fatalf("GetInstanceProfile status=%d body=%q", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), "<Arn>arn:aws:iam::"+testAccountID+":role/ec2Role</Arn>") {
+		t.Fatalf("GetInstanceProfile missing role Arn: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<RoleId>") {
+		t.Fatalf("GetInstanceProfile missing RoleId: %q", rec.Body.String())
+	}
+	rec = post("Action=GetUser&Version=2010-05-08&UserName=alice")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), boundARN) || !strings.Contains(rec.Body.String(), "PermissionsBoundary") {
+		t.Fatalf("GetUser missing embedded boundary: %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<CreateDate>") {
+		t.Fatalf("GetUser missing CreateDate: %q", rec.Body.String())
+	}
 	rec = post("Action=ListInstanceProfiles&Version=2010-05-08")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ec2Profile") {
 		t.Fatalf("ListInstanceProfiles status=%d body=%q", rec.Code, rec.Body.String())
@@ -122,6 +135,13 @@ func TestIAMGroupsBoundariesInstanceProfilesIdP(t *testing.T) {
 	rec = post("Action=GetRolePermissionsBoundary&Version=2010-05-08&RoleName=ec2Role")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), boundARN) {
 		t.Fatalf("GetRolePermissionsBoundary status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = post("Action=GetRole&Version=2010-05-08&RoleName=ec2Role")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), boundARN) || !strings.Contains(rec.Body.String(), "PermissionsBoundary") {
+		t.Fatalf("GetRole missing embedded boundary: %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<CreateDate>") {
+		t.Fatalf("GetRole missing CreateDate: %q", rec.Body.String())
 	}
 
 	// OIDC / SAML IdP

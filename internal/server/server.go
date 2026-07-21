@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -480,6 +481,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMGetPolicy, "GetPolicy",
 		catalog.ActionIAMListPolicies, "ListPolicies",
 		catalog.ActionIAMDeletePolicy, "DeletePolicy",
+		catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion",
+		catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion",
+		catalog.ActionIAMListPolicyVersions, "ListPolicyVersions",
+		catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion",
+		catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion",
 		catalog.ActionIAMAttachUserPolicy, "AttachUserPolicy",
 		catalog.ActionIAMDetachUserPolicy, "DetachUserPolicy",
 		catalog.ActionIAMAttachRolePolicy, "AttachRolePolicy",
@@ -640,7 +646,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionEventsDisableRule, "DisableRule",
 		catalog.ActionEventsPutTargets, "PutTargets",
 		catalog.ActionEventsRemoveTargets, "RemoveTargets",
-		catalog.ActionEventsListTargetsByRule, "ListTargetsByRule":
+		catalog.ActionEventsListTargetsByRule, "ListTargetsByRule",
+		catalog.ActionEventsPutPermission, "PutPermission",
+		catalog.ActionEventsRemovePermission:
 		s.handleEventBridge(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLambdaCreateFunction, "CreateFunction",
 		catalog.ActionLambdaGetFunction, "GetFunction",
@@ -698,7 +706,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLogsDescribeLogStreams, "DescribeLogStreams",
 		catalog.ActionLogsPutLogEvents, "PutLogEvents",
 		catalog.ActionLogsGetLogEvents, "GetLogEvents",
-		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups":
+		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups",
+		catalog.ActionLogsPutSubscriptionFilter, "PutSubscriptionFilter",
+		catalog.ActionLogsDeleteSubscriptionFilter, "DeleteSubscriptionFilter",
+		catalog.ActionLogsDescribeSubscriptionFilters, "DescribeSubscriptionFilters":
 		s.handleLogs(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionTaggingTagResources, "TagResources",
 		catalog.ActionTaggingUntagResources, "UntagResources",
@@ -1006,22 +1017,37 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 }
 
 func isLambdaRESTPath(path string) bool {
-	return strings.HasPrefix(path, "/2015-03-31/")
+	return strings.HasPrefix(path, "/2015-03-31/") || strings.HasPrefix(path, "/2018-10-31/")
+}
+
+func isLambdaRESTAPIVersion(v string) bool {
+	return v == "2015-03-31" || v == "2018-10-31"
 }
 
 // resolveLambdaREST maps AWS Lambda REST paths to catalog actions and injects
-// FunctionName from the URL into the JSON body when missing (CLI REST shape).
+// FunctionName / LayerName from the URL into the JSON body when missing (CLI REST shape).
 func resolveLambdaREST(r *http.Request, body []byte) (action string, outBody []byte) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "2015-03-31" || parts[1] != "functions" {
+	if len(parts) < 2 || !isLambdaRESTAPIVersion(parts[0]) {
 		return "", body
 	}
+	switch parts[1] {
+	case "functions":
+		return resolveLambdaFunctionsREST(r.Method, parts, body)
+	case "layers":
+		return resolveLambdaLayersREST(r.Method, parts, body)
+	default:
+		return "", body
+	}
+}
+
+func resolveLambdaFunctionsREST(method string, parts []string, body []byte) (string, []byte) {
 	name := ""
 	if len(parts) >= 3 {
 		name = parts[2]
 	}
-	switch r.Method {
+	switch method {
 	case http.MethodPost:
 		if len(parts) == 2 {
 			return catalog.ActionLambdaCreateFunction, body
@@ -1051,16 +1077,74 @@ func resolveLambdaREST(r *http.Request, body []byte) (action string, outBody []b
 	return "", body
 }
 
+// resolveLambdaLayersREST maps /{2015-03-31|2018-10-31}/layers/... (AWS CLI uses 2018-10-31).
+func resolveLambdaLayersREST(method string, parts []string, body []byte) (string, []byte) {
+	// parts: [apiVer, "layers", LayerName?, "versions"?, VersionNumber?]
+	if len(parts) < 3 {
+		return "", body
+	}
+	layerName, err := url.PathUnescape(parts[2])
+	if err != nil {
+		layerName = parts[2]
+	}
+	switch method {
+	case http.MethodPost:
+		if len(parts) == 4 && parts[3] == "versions" {
+			return catalog.ActionLambdaPublishLayerVersion, injectLayerNameJSON(body, layerName)
+		}
+	case http.MethodGet:
+		if len(parts) == 4 && parts[3] == "versions" {
+			return catalog.ActionLambdaListLayerVersions, injectLayerNameJSON(body, layerName)
+		}
+		if len(parts) == 5 && parts[3] == "versions" {
+			return catalog.ActionLambdaGetLayerVersion, injectLayerVersionJSON(body, layerName, parts[4])
+		}
+	case http.MethodDelete:
+		if len(parts) == 5 && parts[3] == "versions" {
+			return catalog.ActionLambdaDeleteLayerVersion, injectLayerVersionJSON(body, layerName, parts[4])
+		}
+	}
+	return "", body
+}
+
 func injectFunctionNameJSON(body []byte, name string) []byte {
-	if strings.TrimSpace(name) == "" {
+	return injectJSONStringField(body, "FunctionName", name)
+}
+
+func injectLayerNameJSON(body []byte, name string) []byte {
+	return injectJSONStringField(body, "LayerName", name)
+}
+
+func injectLayerVersionJSON(body []byte, name, version string) []byte {
+	out := injectLayerNameJSON(body, name)
+	params := jsonBodyMap(out)
+	if params == nil {
+		params = map[string]any{}
+	}
+	if _, ok := params["VersionNumber"]; !ok {
+		if n, err := strconv.ParseInt(version, 10, 64); err == nil {
+			params["VersionNumber"] = n
+		} else {
+			params["VersionNumber"] = version
+		}
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return out
+	}
+	return raw
+}
+
+func injectJSONStringField(body []byte, field, value string) []byte {
+	if strings.TrimSpace(value) == "" {
 		return body
 	}
 	params := jsonBodyMap(body)
 	if params == nil {
 		params = map[string]any{}
 	}
-	if existing, _ := params["FunctionName"].(string); strings.TrimSpace(existing) == "" {
-		params["FunctionName"] = name
+	if existing, _ := params[field].(string); strings.TrimSpace(existing) == "" {
+		params[field] = value
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -1390,6 +1474,16 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMListPolicies
 	case "DeletePolicy":
 		return catalog.ActionIAMDeletePolicy
+	case "CreatePolicyVersion":
+		return catalog.ActionIAMCreatePolicyVersion
+	case "GetPolicyVersion":
+		return catalog.ActionIAMGetPolicyVersion
+	case "ListPolicyVersions":
+		return catalog.ActionIAMListPolicyVersions
+	case "DeletePolicyVersion":
+		return catalog.ActionIAMDeletePolicyVersion
+	case "SetDefaultPolicyVersion":
+		return catalog.ActionIAMSetDefaultPolicyVersion
 	case "AttachUserPolicy":
 		return catalog.ActionIAMAttachUserPolicy
 	case "DetachUserPolicy":
@@ -1686,6 +1780,10 @@ func normalizeAction(action string) string {
 		return catalog.ActionEventsRemoveTargets
 	case "ListTargetsByRule":
 		return catalog.ActionEventsListTargetsByRule
+	case "PutPermission":
+		return catalog.ActionEventsPutPermission
+	case "RemovePermission":
+		return catalog.ActionEventsRemovePermission
 	case "CreateFunction":
 		return catalog.ActionLambdaCreateFunction
 	case "GetFunction":

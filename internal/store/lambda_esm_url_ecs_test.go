@@ -8,6 +8,14 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func allowLambdaESMQueuePolicy(t *testing.T, st *store.Store, account, queueName string) {
+	t.Helper()
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sqs:ReceiveMessage","sqs:DeleteMessage"],"Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, queueName, map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEventSourceMappingCRUDAndPollDelete(t *testing.T) {
 	st := openLambdaStore(t)
 	account := "000000000001"
@@ -31,6 +39,7 @@ func TestEventSourceMappingCRUDAndPollDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	allowLambdaESMQueuePolicy(t, st, account, q.QueueName)
 	enabled := true
 	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
 		AccountID:      account,
@@ -122,6 +131,7 @@ func TestEventSourceMappingPollLeavesOnInvokeError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	allowLambdaESMQueuePolicy(t, st, account, q.QueueName)
 	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
 		AccountID:      account,
 		FunctionName:   fn.FunctionName,

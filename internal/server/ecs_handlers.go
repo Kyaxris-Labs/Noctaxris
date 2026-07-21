@@ -674,7 +674,7 @@ func (s *Server) reapECSTask(accountID, region, cluster, taskARN, containerID st
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	if err := cli.WaitECSTaskExit(ctx, containerID); err != nil {
+	if _, err := cli.WaitECSTaskExit(ctx, containerID); err != nil {
 		return
 	}
 	_ = cli.StopECSTask(context.Background(), containerID)

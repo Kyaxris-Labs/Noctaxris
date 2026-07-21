@@ -19,8 +19,8 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 
 | AuthorizationType | Runtime | Notes |
 |-------------------|---------|-------|
-| `NONE` | Open on loopback | Lab open path |
-| `JWT` | Bearer token | Verifies lab Cognito JWKS in-process (issuer `http://127.0.0.1:4566/cognito-idp/...`). Remote JWKS issuers fail closed unless `NOCTAXRIS_ALLOW_REMOTE_JWKS=1` with a public host allowlist. Requires `token_use=access` (rejects missing or `id`). Audience matches `aud` or `client_id` |
+| `NONE` | Open when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1` | Create and invoke refuse `NONE` on non-loopback without the opt-in |
+| `JWT` | Bearer token | Verifies lab Cognito JWKS in-process (issuer `http://127.0.0.1:4566/cognito-idp/...`). Remote JWKS issuers fail closed unless `NOCTAXRIS_ALLOW_REMOTE_JWKS=1` with a public host allowlist. Requires `token_use=access` (rejects missing or `id`). Enforces `exp` and `nbf`. Audience matches `aud` or `client_id`. `IdentitySource` must be `$request.header.Authorization` |
 | `AWS_IAM` | SigV4 service `execute-api` | Identity `execute-api:Invoke` on route ARN. HTTP API resource policies are not supported |
 
 Management APIs use SigV4 service `apigateway` and `apigatewayv2:*` identity actions.
@@ -29,9 +29,9 @@ Management APIs use SigV4 service `apigateway` and `apigatewayv2:*` identity act
 
 Identity `EvaluateFull` on manage actions. IAM invoke uses `execute-api:Invoke` only (no invent HTTP API resource policy).
 
-When `CredentialsArn` is set on `CreateIntegration`, PassRole plus `apigateway.amazonaws.com` trust is required.
+When `CredentialsArn` is set on `CreateIntegration`, PassRole plus `apigateway.amazonaws.com` trust is required. At invoke, a role session for that ARN must Allow `lambda:InvokeFunction` on the integration target.
 
-Lambda invoke from Gateway follows the same nested compute path as Function URLs. Grant `lambda:AddPermission` for `apigateway.amazonaws.com` in labs when you want policy fidelity. The lab invoke path does not require a resource policy statement.
+Lambda invoke from Gateway follows the same nested compute path as Function URLs. Grant `lambda:AddPermission` for `apigateway.amazonaws.com` in labs when you want policy fidelity. Without `CredentialsArn`, the lab invoke path does not require a resource policy statement.
 
 ## How to verify / CLI smoke
 

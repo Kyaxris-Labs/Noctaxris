@@ -101,17 +101,20 @@ func TestMFARegistryAndGetSessionToken(t *testing.T) {
 		t.Fatalf("decode seed %q: %v", seedHex, err)
 	}
 
+	mfaNow := time.Now().UTC()
+	code1 := sts.LabTokenCode(seed, mfaNow)
+	code2 := sts.LabTokenCode(seed, mfaNow.Add(time.Minute))
 	rec = iamPost(fmt.Sprintf(
-		"Action=EnableMFADevice&Version=2010-05-08&UserName=mfa-user&SerialNumber=%s",
-		url.QueryEscape(serial),
+		"Action=EnableMFADevice&Version=2010-05-08&UserName=mfa-user&SerialNumber=%s&AuthenticationCode1=%s&AuthenticationCode2=%s",
+		url.QueryEscape(serial), code1, code2,
 	))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("EnableMFADevice: %d %s", rec.Code, rec.Body.String())
 	}
 
 	rec = iamPost(fmt.Sprintf(
-		"Action=EnableMFADevice&Version=2010-05-08&UserName=other&SerialNumber=%s",
-		url.QueryEscape(serial),
+		"Action=EnableMFADevice&Version=2010-05-08&UserName=other&SerialNumber=%s&AuthenticationCode1=%s&AuthenticationCode2=%s",
+		url.QueryEscape(serial), code1, code2,
 	))
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "EntityAlreadyExists") {
 		t.Fatalf("reassign EnableMFADevice: %d %s", rec.Code, rec.Body.String())

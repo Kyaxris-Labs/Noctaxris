@@ -147,7 +147,7 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 		Binds:          binds,
 		AutoRemove:     false,
 		NetworkMode:    container.NetworkMode(FunctionNetworkName),
-		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
+		ExtraHosts:     hostGatewayExtraHosts(),
 		ReadonlyRootfs: false,
 	}
 

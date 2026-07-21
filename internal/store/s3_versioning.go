@@ -112,6 +112,9 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		return ObjectMeta{}, "", err
 	}
 
+	unlock := s.lockS3Object(accountID, bucket, key)
+	defer unlock()
+
 	versionID := "null"
 	if status == VersioningEnabled {
 		versionID = uuid.NewString()
@@ -122,7 +125,8 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return ObjectMeta{}, "", fmt.Errorf("put object version mkdir: %w", err)
 	}
-	if err := os.WriteFile(abs, meta.Data, 0o600); err != nil {
+	tmp := abs + ".tmp-" + uuid.NewString()
+	if err := os.WriteFile(tmp, meta.Data, 0o600); err != nil {
 		return ObjectMeta{}, "", fmt.Errorf("put object version write: %w", err)
 	}
 
@@ -143,6 +147,7 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 
 	tx, err := s.db.Begin()
 	if err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", err
 	}
 	defer tx.Rollback()
@@ -151,6 +156,7 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		`UPDATE s3_object_versions SET is_latest = 0 WHERE account_id = ? AND bucket = ? AND key = ?`,
 		accountID, bucket, key,
 	); err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version clear latest: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -169,6 +175,7 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   last_modified = excluded.last_modified`,
 		accountID, bucket, key, versionID, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
 	); err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version insert: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -186,10 +193,16 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   last_modified = excluded.last_modified`,
 		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
 	); err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version current: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", err
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		_ = os.Remove(tmp)
+		return ObjectMeta{}, "", fmt.Errorf("put object version rename: %w", err)
 	}
 	return ObjectMeta{
 		AccountID: accountID, Bucket: bucket, Key: key, ETag: etag, Size: size,

@@ -2,15 +2,16 @@
 
 **Status:** shipped (lab core)
 
-Pipe CRUD with SQS or DynamoDB Streams sources and Lambda or SQS targets. An in-process ticker polls RUNNING pipes via `PollPipeOnce` (same pattern as Scheduler and SQS ESM). Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Delivery uses a RoleArn session (Scheduler-shaped) or requires the target resource policy to Allow `pipes.amazonaws.com`.
+Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or SQS targets. Optional Lambda `Enrichment` ARN runs sync before target delivery (ticker uses nested Invoke). An in-process ticker polls RUNNING pipes via `PollPipeOnce`. Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Delivery uses a RoleArn session or requires the target resource policy to Allow `pipes.amazonaws.com`.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | CRUD | `CreatePipe`, `DescribePipe`, `DeletePipe`, `ListPipes` |
-| Sources | SQS queue ARN, DynamoDB Streams ARN |
+| Sources | SQS queue ARN, DynamoDB Streams ARN, EventBridge bus ARN (cursor over `event_entries`) |
 | Targets | SQS queue ARN, Lambda function ARN |
+| Enrichment | Optional Lambda ARN; sync invoke result becomes the payload forwarded to the target (empty result keeps the original body) |
 | Delivery | Continuous ticker + `PollPipeOnce` receive/get, deliver, delete SQS messages on success. RoleArn session EvaluateFull, or target resource policy Allow for `pipes.amazonaws.com` |
 
 ### Authz notes
@@ -46,5 +47,5 @@ Skip live Compose smoke when Docker is unavailable.
 
 ## Not yet / deferred
 
-- Enrichment and filter partner matrix
-- EventBridge bus as a source
+- Filter partner matrix and enrichment HTTP/API destinations
+- Cross-account bus sources

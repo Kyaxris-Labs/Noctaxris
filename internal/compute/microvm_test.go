@@ -104,20 +104,43 @@ func TestMicroVMRunnerNotImplementedWhenProbeOK(t *testing.T) {
 		Runtime:      "python3.12",
 		Handler:      "handler.handler",
 	})
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("want not implemented, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not packaged") {
+		t.Fatalf("want guest not packaged, got %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "docker.sock") {
+		t.Fatalf("must not mention docker.sock fallthrough: %v", err)
 	}
 	_, err = r.RunImageInvoke(context.Background(), ImageRunOpts{
 		ImageURI:      "public.ecr.aws/lambda/python:3.12",
 		Handler:       "handler.handler",
 		EventHostPath: "/var/lib/noctaxris/lambda/events",
 	})
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("want not implemented image path, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not packaged") {
+		t.Fatalf("want guest not packaged image path, got %v", err)
 	}
 	_, err = r.RunECSTask(context.Background(), ECSRunOpts{ImageURI: "alpine:3.20"})
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("want not implemented ECS path, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not packaged") {
+		t.Fatalf("want guest not packaged ECS path, got %v", err)
+	}
+}
+
+func TestProbeMicroVMBadFirecrackerBinFailsClosed(t *testing.T) {
+	res := ProbeMicroVM(MicroVMProbeOpts{
+		GOOS:            "linux",
+		ProcVersion:     "Linux version 6.1.0-generic",
+		FirecrackerPath: "/missing/firecracker",
+		Stat: func(name string) (os.FileInfo, error) {
+			if name == "/dev/kvm" {
+				return fakeFileInfo{}, nil
+			}
+			return nil, os.ErrNotExist
+		},
+	})
+	if res.OK {
+		t.Fatal("expected probe failure for missing firecracker bin path")
+	}
+	if !strings.Contains(res.Reason, "FIRECRACKER_BIN") {
+		t.Fatalf("reason=%q", res.Reason)
 	}
 }
 

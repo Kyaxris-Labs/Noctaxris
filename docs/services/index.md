@@ -14,25 +14,25 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
-| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD default, opt-in microVM |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM with lab FilterCriteria, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD default, opt-in microVM |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, RotateSecret, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
-| [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, topic policies, cross-account dual eval |
-| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents routing to SQS, Lambda, and SNS (RoleArn delivery sessions; lab InputPath) |
+| [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, topic policies, XA Subscribe + foreign SQS delivery |
+| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
 | [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS targets, in-process ticker, PassRole |
-| [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS or DynamoDB Streams source to Lambda or SQS; continuous in-process ticker + `PollPipeOnce`; RoleArn or target policy on deliver |
+| [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy |
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD **control-plane stub** (ActiveMQ/RabbitMQ); loopback `stub://` endpoint; not a live broker |
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox under data root; Describe reports `OFFLINE` (no listener) |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD default, opt-in microVM |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |
-| [CloudWatch Logs](logs.md) | Shipped | Log groups/streams CRUD lite, Put/GetLogEvents, DescribeLogGroups/DescribeLogStreams |
+| [CloudWatch Logs](logs.md) | Shipped | Log groups/streams CRUD lite, Put/GetLogEvents, subscription filters to Lambda/SQS |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
 | [Kinesis Data Streams](kinesis.md) | Shipped | Stream CRUD, Put/Get records, single-shard iterators |
 | [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3 or Lambda; RoleARN session or destination policy on Put |
 | [SES](ses.md) | Shipped | Local catcher: verify, SendEmail/SendRawEmail, ListIdentities, SetIdentityNotificationTopic Bounce, GetSendStatistics |
 | [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, GetConfiguration, AppConfigData session |
-| [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Task to Lambda |
+| [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Task to Lambda/SQS/SNS/EventBridge |
 | [CloudFormation](cloudformation.md) | Shipped | Stack CRUD lite for S3 bucket and IAM role resources |
 | [CodeBuild](codebuild.md) | Shipped | Project CRUD lite, StartBuild on nested DinD, BatchGetBuilds/ListBuilds |
 | [CodePipeline](codepipeline.md) | Shipped | Pipeline CRUD, StartPipelineExecution with nested CodeBuild StartBuild, GetPipelineState |
@@ -56,7 +56,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
 | [CodeDeploy](codedeploy.md) | Shipped | Application / deployment group / deployment lite, optional ECS DesiredCount or Lambda PublishVersion hooks |
 | [RDS](rds.md) | Shipped | Postgres Create/Describe/Delete, nested DinD when engine up, nested-network endpoint |
-| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement + txn lite; **stub executor** (explicit stub marker; no pgx); secretArn fail-closed |
+| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement + txn lite; nested `psql` when DinD started Postgres, else stub marker; no pgx; secretArn fail-closed |
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
 | [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete cluster, nested Mongo-compatible when engine up |
 | [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; missing bucket fails closed |
@@ -102,13 +102,13 @@ EP=http://127.0.0.1:4566
 
 Prefer WSL or Linux for AWS CLI smoke against `http://127.0.0.1:4566`. On Windows, run the same commands inside WSL when Docker Desktop publishes that port on the Windows host.
 
-Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) needs a Linux host with usable `/dev/kvm` and a Firecracker binary. On WSL2 or without KVM the path fails closed. Live guest zip/Image Invoke and ECS RunTask still await kernel/rootfs assets on that host. Leave the runtime unset (or `dind`) for normal labs.
+Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) needs a Linux host with usable `/dev/kvm` and a Firecracker binary for selection. On WSL2 or without KVM/binary the path fails closed. Even when the probe succeeds, live guest zip/Image Invoke and ECS RunTask are not packaged (fail closed; no fake boot). Leave the runtime unset (or `dind`) for normal labs. Nested DinD operator/CI smoke: [docker/smoke-nested.sh](../../docker/smoke-nested.sh) (also `workflow_dispatch` input `nested_smoke` on CI).
 
 Per-service CLI smoke lives on each shipped service page above.
 
 ## Cross-cutting
 
-**Cross-account resource policies:** For S3, SQS, Lambda, ECR, SNS, Secrets Manager, and DynamoDB, same-account access stays identity **or** resource policy Allow. Cross-account access requires identity **and** resource policy Allow (empty resource policy denies). KMS stays key-policy-required, with cross-account callers needing both identity and key policy Allow. See each service Authz notes. EventBridge bus policy dual-eval depth remains deferred.
+**Cross-account resource policies:** For S3, SQS, Lambda, ECR, SNS, Secrets Manager, DynamoDB, and EventBridge buses, same-account access stays identity **or** resource policy Allow. Cross-account access requires identity **and** resource policy Allow (empty resource policy denies). KMS stays key-policy-required, with cross-account callers needing both identity and key policy Allow. See each service Authz notes.
 
 **Organizations SCP/RCP:** Member authorize loads policies attached to the account, each OU on the path to root, and the organization root. Management account is exempt. See [organizations.md](organizations.md).
 

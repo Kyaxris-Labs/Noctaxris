@@ -141,6 +141,7 @@ func (s *Server) rdsTryStartNested(
 ) store.RDSDBInstance {
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
+		// Without DinD, control-plane create stays creating (documented).
 		return inst
 	}
 	password := plaintextPassword
@@ -151,6 +152,14 @@ func (s *Server) rdsTryStartNested(
 		}
 	}
 	if password == "" {
+		if strings.TrimSpace(s.cfg.DockerHost) != "" {
+			_ = s.store.UpdateRDSDBInstanceRuntime(
+				verified.AccountID, inst.DBInstanceIdentifier, "failed", "", "", 0,
+			)
+			if updated, getErr := s.store.DescribeRDSDBInstance(verified.AccountID, inst.DBInstanceIdentifier); getErr == nil {
+				return updated
+			}
+		}
 		return inst
 	}
 	name := "noctaxris-data-rds-" + inst.DBInstanceIdentifier
@@ -168,6 +177,13 @@ func (s *Server) rdsTryStartNested(
 		ContainerPort: 5432,
 	})
 	if err != nil {
+		// DinD configured but start failed: surface failed status (not silent creating).
+		_ = s.store.UpdateRDSDBInstanceRuntime(
+			verified.AccountID, inst.DBInstanceIdentifier, "failed", "", "", 0,
+		)
+		if updated, getErr := s.store.DescribeRDSDBInstance(verified.AccountID, inst.DBInstanceIdentifier); getErr == nil {
+			return updated
+		}
 		return inst
 	}
 	_ = cli.WaitDataPlaneHealthy(startCtx, dp.ContainerID)

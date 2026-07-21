@@ -33,3 +33,24 @@ func ValidateLabTokenCode(seed []byte, tokenCode string, at time.Time, skewMinut
 	}
 	return false
 }
+
+// ValidateLabEnrollmentCodes reports whether code1 and code2 are consecutive
+// lab MFA tokens (adjacent minute windows), matching AWS EnableMFADevice's
+// AuthenticationCode1 / AuthenticationCode2 requirement.
+func ValidateLabEnrollmentCodes(seed []byte, code1, code2 string, at time.Time) bool {
+	if code1 == "" || code2 == "" || code1 == code2 || len(seed) == 0 {
+		return false
+	}
+	for d := -1; d <= 1; d++ {
+		t1 := at.Add(time.Duration(d) * time.Minute)
+		if LabTokenCode(seed, t1) != code1 {
+			continue
+		}
+		prev := LabTokenCode(seed, t1.Add(-time.Minute))
+		next := LabTokenCode(seed, t1.Add(time.Minute))
+		if code2 == prev || code2 == next {
+			return true
+		}
+	}
+	return false
+}

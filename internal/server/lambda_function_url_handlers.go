@@ -47,6 +47,12 @@ func (s *Server) lambdaCreateFunctionUrlConfig(
 			"User is not authorized to perform lambda:CreateFunctionUrlConfig.", readOnly, eventID, verified)
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(authType), store.FunctionURLAuthNone) && !s.cfg.OpenDataPlaneAllowed() {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"AuthType NONE requires NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1 when listen is non-loopback.",
+			readOnly, eventID, verified)
+		return
+	}
 	host := strings.TrimPrefix(strings.TrimSpace(s.cfg.ListenAddr), ":")
 	if host == "" || strings.HasPrefix(host, "0.0.0.0") || strings.HasPrefix(host, "[::]") {
 		host = "127.0.0.1:4566"
@@ -247,6 +253,10 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 
 	// CORS lite for AuthType NONE (lab browser invoke). IAM URLs stay SigV4-only.
 	if u.AuthType == store.FunctionURLAuthNone {
+		if !s.cfg.OpenDataPlaneAllowed() {
+			http.Error(w, "open data plane disabled (set NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1)", http.StatusForbidden)
+			return
+		}
 		setFunctionURLCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
