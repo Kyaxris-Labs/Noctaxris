@@ -215,6 +215,10 @@ func (s *Server) handleS3(
 	switch {
 	case r.Method == http.MethodGet && bucket == "" && key == "":
 		s.s3ListBuckets(w, r, requestID, eventID, verified, readOnly)
+	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("notification"):
+		s.s3PutBucketNotificationConfiguration(w, r, body, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("notification"):
+		s.s3GetBucketNotificationConfiguration(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("versioning"):
 		s.s3PutBucketVersioning(w, r, body, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("versioning"):
@@ -1153,14 +1157,15 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	putMeta := store.PutObjectMeta{
-		ContentType:       result.Upload.ContentType,
-		Data:              result.Data,
-		PlainSize:         int64(len(result.Data)),
-		ETag:              result.ETag,
-		SSEAlgorithm:      result.Upload.SSEAlgorithm,
-		KMSKeyID:          result.Upload.KMSKeyID,
-		SealedDEK:         result.Upload.SealedDEK,
-		SSEKMSContextJSON: result.Upload.SSEKMSContextJSON,
+		ContentType:           result.Upload.ContentType,
+		Data:                  result.Data,
+		PlainSize:             int64(len(result.Data)),
+		ETag:                  result.ETag,
+		SSEAlgorithm:          result.Upload.SSEAlgorithm,
+		KMSKeyID:              result.Upload.KMSKeyID,
+		SealedDEK:             result.Upload.SealedDEK,
+		SSEKMSContextJSON:     result.Upload.SSEKMSContextJSON,
+		NotificationEventName: "ObjectCreated:CompleteMultipartUpload",
 	}
 	if putMeta.SSEAlgorithm != "" {
 		encrypted, encErr := s.s3EncryptObjectPayload(verified, putMeta.SSEAlgorithm, putMeta.KMSKeyID, resource, putMeta.SSEKMSContextJSON, putMeta.SealedDEK, result.Data)

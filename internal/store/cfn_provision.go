@@ -10,12 +10,18 @@ func (s *Store) deleteCFNPhysical(accountID string, res CFNStackResource) {
 	switch res.ResourceType {
 	case "AWS::S3::Bucket":
 		_ = s.DeleteBucket(accountID, res.PhysicalID)
+	case "AWS::S3::BucketPolicy":
+		bucket := strings.TrimSuffix(res.PhysicalID, "#BucketPolicy")
+		_ = s.DeleteBucketPolicy(accountID, bucket)
 	case "AWS::IAM::Role":
 		if _, name, ok := parseIAMRoleARN(res.PhysicalID); ok {
 			_ = s.DeleteRole(accountID, name)
 		} else {
 			_ = s.DeleteRole(accountID, res.PhysicalID)
 		}
+	case "AWS::IAM::ManagedPolicy", "AWS::IAM::Policy":
+		_ = s.clearManagedPolicyAttachments(res.PhysicalID)
+		_ = s.DeleteManagedPolicy(res.PhysicalID)
 	case "AWS::SQS::Queue":
 		name := res.PhysicalID
 		if q, err := s.GetQueueByURL(res.PhysicalID); err == nil {
@@ -31,6 +37,10 @@ func (s *Store) deleteCFNPhysical(accountID string, res CFNStackResource) {
 		_ = s.DeleteTable(accountID, res.PhysicalID)
 	case "AWS::Lambda::Function":
 		_ = s.DeleteFunction(accountID, res.PhysicalID)
+	case "AWS::Lambda::Permission":
+		if fn, sid, ok := splitCFNLambdaPermissionPhysical(res.PhysicalID); ok {
+			_ = s.RemoveFunctionPermission(accountID, fn, sid)
+		}
 	case "AWS::KMS::Key":
 		_, _ = s.ScheduleKeyDeletion(res.PhysicalID, 7)
 	case "AWS::SNS::Topic":
@@ -75,10 +85,16 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			_ = s.DeleteBucket(accountID, b.Name)
 			return "", nil, err
 		}
+		if err := s.applyCFNS3NotificationConfiguration(accountID, b.Name, props); err != nil {
+			_ = s.DeleteBucket(accountID, b.Name)
+			return "", nil, err
+		}
 		arn := fmt.Sprintf("arn:aws:s3:::%s", b.Name)
 		return b.Name, map[string]string{
 			"Ref": b.Name, "Arn": arn, "DomainName": b.Name + ".s3.amazonaws.com",
 		}, nil
+	case "AWS::S3::BucketPolicy":
+		return s.provisionCFNBucketPolicy(accountID, logicalID, props)
 	case "AWS::IAM::Role":
 		name := cfnStringProp(props, "RoleName")
 		if name == "" {
@@ -101,6 +117,10 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			return "", nil, err
 		}
 		return arn, map[string]string{"Ref": name, "Arn": arn}, nil
+	case "AWS::IAM::ManagedPolicy":
+		return s.provisionCFNManagedPolicy(accountID, logicalID, props)
+	case "AWS::IAM::Policy":
+		return s.provisionCFNIAMPolicy(accountID, logicalID, props)
 	case "AWS::SQS::Queue":
 		name := cfnStringProp(props, "QueueName")
 		if name == "" {
@@ -171,6 +191,8 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		return fn.FunctionName, map[string]string{
 			"Ref": fn.FunctionARN, "Arn": fn.FunctionARN,
 		}, nil
+	case "AWS::Lambda::Permission":
+		return s.provisionCFNLambdaPermission(accountID, logicalID, props)
 	case "AWS::KMS::Key":
 		creator := fmt.Sprintf("arn:aws:iam::%s:root", accountID)
 		policy := ""

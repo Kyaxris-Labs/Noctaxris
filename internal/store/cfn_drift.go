@@ -133,6 +133,33 @@ func (s *Store) cfnLiveDriftStatus(accountID string, res CFNStackResource, expec
 			return "MODIFIED"
 		}
 		return "IN_SYNC"
+	case "AWS::IAM::ManagedPolicy", "AWS::IAM::Policy":
+		if _, err := s.GetManagedPolicy(res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::S3::BucketPolicy":
+		bucket := strings.TrimSuffix(res.PhysicalID, "#BucketPolicy")
+		if _, err := s.GetBucketPolicy(accountID, bucket); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::Lambda::Permission":
+		fn, sid, ok := splitCFNLambdaPermissionPhysical(res.PhysicalID)
+		if !ok {
+			return "NOT_CHECKED"
+		}
+		pol, err := s.GetFunctionPolicy(accountID, fn)
+		if err != nil {
+			return "DELETED"
+		}
+		if !strings.Contains(pol, `"Sid":"`+sid+`"`) && !strings.Contains(pol, `"Sid": "`+sid+`"`) {
+			// Sid may be encoded without spaces; also accept substring match on statement id.
+			if !strings.Contains(pol, sid) {
+				return "DELETED"
+			}
+		}
+		return "IN_SYNC"
 	case "AWS::SNS::Topic", "AWS::KMS::Key", "AWS::Events::EventBus", "AWS::Events::Rule",
 		"AWS::SecretsManager::Secret", "AWS::SQS::QueuePolicy":
 		return "IN_SYNC"

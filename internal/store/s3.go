@@ -430,6 +430,9 @@ type PutObjectMeta struct {
 	PlainSize int64
 	// ETag overrides MD5 of Data when set (typically MD5 of plaintext).
 	ETag string
+	// NotificationEventName overrides the S3 notification eventName (without s3: prefix).
+	// Empty means ObjectCreated:Put. CompleteMultipartUpload sets CompleteMultipartUpload.
+	NotificationEventName string
 }
 
 func normalizeCannedACL(acl string) string {
@@ -512,7 +515,7 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, fmt.Errorf("put object rename: %w", err)
 	}
-	return ObjectMeta{
+	out := ObjectMeta{
 		AccountID:         accountID,
 		Bucket:            bucket,
 		Key:               key,
@@ -526,7 +529,13 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		CannedACL:         acl,
 		StoragePath:       rel,
 		LastModified:      modified,
-	}, nil
+	}
+	eventName := strings.TrimSpace(meta.NotificationEventName)
+	if eventName == "" {
+		eventName = "ObjectCreated:Put"
+	}
+	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, eventName, "", size, etag)
+	return out, nil
 }
 
 // GetObject returns metadata and on-disk bytes (ciphertext when SSE applies).
@@ -602,6 +611,7 @@ func (s *Store) DeleteObject(accountID, bucket, key string) error {
 		return fmt.Errorf("delete object: %w", err)
 	}
 	_ = os.Remove(filepath.Join(s.dataRoot, meta.StoragePath))
+	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, "ObjectRemoved:Delete", "", meta.Size, meta.ETag)
 	return nil
 }
 

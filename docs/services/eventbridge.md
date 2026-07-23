@@ -12,7 +12,7 @@ Lab-complete EventBridge core: default and custom event buses, rules, targets, a
 | Rules | `PutRule`, `DescribeRule`, `ListRules`, `DeleteRule`, `EnableRule`, `DisableRule` |
 | Targets | `PutTargets`, `RemoveTargets`, `ListTargetsByRule` |
 | Events | `PutEvents` matches enabled rules and fans out to targets |
-| Pattern | Lab match on `source`, `detail-type`, and simple `detail` key equality |
+| Pattern | Content-based match on `source`, `detail-type`, and nested `detail`: exact/OR lists, `prefix`, `suffix`, `exists`, `anything-but` (value, list, or prefix/suffix), `numeric`, `equals-ignore-case`. Unsupported operators rejected at `PutRule` |
 | Targets | SQS, Lambda (async invoke), SNS, CloudWatch Logs (RoleArn), Kinesis (RoleArn), Step Functions state machine (RoleArn) |
 | Input | Constant `Input` overrides the envelope. Else lab `InputTransformer` (`InputPathsMap` + `InputTemplate` with `<var>` placeholders). Else lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys). InputTransformer cannot combine with Input/InputPath |
 | Bus policy | `PutPermission` / `RemovePermission` maintain bus `Policy`. `PutEvents` uses identity **or** bus policy (same account) and identity **and** bus policy (cross-account ARN). `EventBusName` may be a bus ARN |
@@ -69,11 +69,23 @@ aws events put-events \
 aws sqs receive-message --queue-url "$QUEUE_URL" --endpoint-url "$EP"
 ```
 
+### Event pattern operators
+
+| Operator | Lab support |
+|----------|-------------|
+| Exact / OR lists | `"state": ["A","B"]` |
+| Nested objects | `"detail": {"a": {"b": ["x"]}}` |
+| `prefix` / `suffix` | String prefix/suffix (case-sensitive) |
+| `exists` | `true` / `false` on leaf fields |
+| `anything-but` | Scalar, list, or nested `prefix` / `suffix` |
+| `numeric` | Comparisons `=`, `>`, `>=`, `<`, `<=` (paired arrays) |
+| `equals-ignore-case` | Case-insensitive string equality |
+
 ## Not yet / deferred
 
 - Full EventBridge SAR (partner buses, archive and replay, API Destinations). Pipes lab core: [pipes.md](pipes.md)
 - Legacy scheduled rules (`ScheduleExpression` on Rules). Prefer the Scheduler service for time-based labs
-- Full EventBridge pattern language beyond source, detail-type, and simple detail key equality
+- Pattern operators: `wildcard`, `$or`, IP/`cidr`, `anything-but`+`wildcard`, and `prefix`/`suffix` nested `equals-ignore-case` combos (`PutRule` rejects these)
 - InputPath / InputTransformer bracket and wildcard notation
 - Resource-policy delivery path for Logs/Kinesis/SFN targets (RoleArn required)
 - Exact AWS retry and jitter timing for delivery failures

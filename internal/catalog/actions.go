@@ -237,6 +237,8 @@ const (
 	ActionS3PutBucketVersioning           = "s3:PutBucketVersioning"
 	ActionS3GetBucketVersioning           = "s3:GetBucketVersioning"
 	ActionS3ListBucketVersions            = "s3:ListBucketVersions"
+	ActionS3PutBucketNotification         = "s3:PutBucketNotification"
+	ActionS3GetBucketNotification         = "s3:GetBucketNotification"
 )
 
 // DynamoDB lab actions.
@@ -1019,6 +1021,8 @@ func KnownAction(action string) bool {
 		ActionS3PutBucketVersioning,
 		ActionS3GetBucketVersioning,
 		ActionS3ListBucketVersions,
+		ActionS3PutBucketNotification,
+		ActionS3GetBucketNotification,
 		ActionDynamoDBCreateTable,
 		ActionDynamoDBDescribeTable,
 		ActionDynamoDBDeleteTable,

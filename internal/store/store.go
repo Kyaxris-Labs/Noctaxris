@@ -524,6 +524,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureS3NotificationsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureDynamoDBStreamsSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -762,6 +766,7 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE sqs_messages ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_algorithm TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_kms_key_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_buckets ADD COLUMN notification_json TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_objects ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_multipart_uploads ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_object_versions ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,

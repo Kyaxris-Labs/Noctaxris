@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"reflect"
 	"strings"
 	"time"
 
@@ -457,11 +456,7 @@ func normalizeRuleState(state string) string {
 }
 
 func validateEventPattern(pattern string) error {
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(pattern), &doc); err != nil {
-		return fmt.Errorf("put rule: invalid event pattern: %w", err)
-	}
-	return nil
+	return validateEventPatternDeep(pattern)
 }
 
 // DescribeRule returns a rule by bus and name.
@@ -1056,99 +1051,5 @@ func (s *Store) GetPutEventsMatches(entryID string) ([]EventRuleMatch, error) {
 }
 
 func matchEventPattern(patternJSON, source, detailType, detailJSON string) (bool, error) {
-	var pattern map[string]any
-	if err := json.Unmarshal([]byte(patternJSON), &pattern); err != nil {
-		return false, fmt.Errorf("match event pattern: %w", err)
-	}
-	if len(pattern) == 0 {
-		return false, nil
-	}
-	if raw, ok := pattern["source"]; ok {
-		if !patternStringFieldMatches(raw, source) {
-			return false, nil
-		}
-	}
-	if raw, ok := pattern["detail-type"]; ok {
-		if !patternStringFieldMatches(raw, detailType) {
-			return false, nil
-		}
-	}
-	if raw, ok := pattern["detail"]; ok {
-		detailMap, ok := raw.(map[string]any)
-		if !ok {
-			return false, fmt.Errorf("match event pattern: detail must be an object")
-		}
-		var eventDetail map[string]any
-		if err := json.Unmarshal([]byte(detailJSON), &eventDetail); err != nil {
-			return false, fmt.Errorf("match event pattern: event detail: %w", err)
-		}
-		for key, expected := range detailMap {
-			actual, ok := eventDetail[key]
-			if !ok {
-				return false, nil
-			}
-			if !patternValueMatches(expected, actual) {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
-}
-
-func patternStringFieldMatches(patternVal any, actual string) bool {
-	switch typed := patternVal.(type) {
-	case []any:
-		for _, item := range typed {
-			if s, ok := item.(string); ok && s == actual {
-				return true
-			}
-		}
-		return false
-	case string:
-		return typed == actual
-	default:
-		return false
-	}
-}
-
-func patternValueMatches(patternVal, actual any) bool {
-	switch typed := patternVal.(type) {
-	case []any:
-		for _, item := range typed {
-			if jsonValueEqual(item, actual) {
-				return true
-			}
-		}
-		return false
-	default:
-		return jsonValueEqual(typed, actual)
-	}
-}
-
-func jsonValueEqual(a, b any) bool {
-	return reflect.DeepEqual(normalizeJSONValue(a), normalizeJSONValue(b))
-}
-
-func normalizeJSONValue(v any) any {
-	switch typed := v.(type) {
-	case float64:
-		if typed == float64(int64(typed)) {
-			return int64(typed)
-		}
-		return typed
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for k, val := range typed {
-			out[k] = normalizeJSONValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, val := range typed {
-			out[i] = normalizeJSONValue(val)
-		}
-		return out
-	default:
-		return v
-	}
+	return matchEventPatternJSON(patternJSON, source, detailType, detailJSON)
 }

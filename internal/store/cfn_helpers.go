@@ -7,6 +7,134 @@ import (
 	"strings"
 )
 
+func (s *Store) applyCFNS3NotificationConfiguration(accountID, bucket string, props map[string]any) error {
+	raw, ok := props["NotificationConfiguration"]
+	if !ok || raw == nil {
+		return nil
+	}
+	nc, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%w: NotificationConfiguration must be an object", ErrCFNBadTemplate)
+	}
+	cfg := S3NotificationConfig{}
+	if ebRaw, ok := nc["EventBridgeConfiguration"]; ok && ebRaw != nil {
+		switch v := ebRaw.(type) {
+		case map[string]any:
+			enabled := true
+			if rawEnabled, has := v["EventBridgeEnabled"]; has {
+				switch e := rawEnabled.(type) {
+				case bool:
+					enabled = e
+				case string:
+					enabled = strings.EqualFold(strings.TrimSpace(e), "true")
+				default:
+					enabled = true
+				}
+			}
+			cfg.EventBridgeEnabled = enabled
+		default:
+			cfg.EventBridgeEnabled = true
+		}
+	}
+	if arr, ok := nc["LambdaConfigurations"].([]any); ok {
+		for i, item := range arr {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%w: LambdaConfigurations[%d] must be an object", ErrCFNBadTemplate, i)
+			}
+			fn := cfnStringProp(m, "Function")
+			ev := cfnStringProp(m, "Event")
+			if fn == "" || ev == "" {
+				return fmt.Errorf("%w: LambdaConfigurations require Event and Function", ErrCFNBadTemplate)
+			}
+			prefix, suffix := cfnS3NotificationFilter(m)
+			cfg.LambdaConfigs = append(cfg.LambdaConfigs, S3LambdaFunctionConfig{
+				ID:           fmt.Sprintf("cfn-lambda-%d", i+1),
+				Events:       []string{ev},
+				FilterPrefix: prefix,
+				FilterSuffix: suffix,
+				FunctionARN:  fn,
+			})
+		}
+	}
+	if arr, ok := nc["QueueConfigurations"].([]any); ok {
+		for i, item := range arr {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%w: QueueConfigurations[%d] must be an object", ErrCFNBadTemplate, i)
+			}
+			q := cfnStringProp(m, "Queue")
+			ev := cfnStringProp(m, "Event")
+			if q == "" || ev == "" {
+				return fmt.Errorf("%w: QueueConfigurations require Event and Queue", ErrCFNBadTemplate)
+			}
+			prefix, suffix := cfnS3NotificationFilter(m)
+			cfg.QueueConfigs = append(cfg.QueueConfigs, S3QueueConfig{
+				ID:           fmt.Sprintf("cfn-queue-%d", i+1),
+				Events:       []string{ev},
+				FilterPrefix: prefix,
+				FilterSuffix: suffix,
+				QueueARN:     q,
+			})
+		}
+	}
+	if arr, ok := nc["TopicConfigurations"].([]any); ok {
+		for i, item := range arr {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("%w: TopicConfigurations[%d] must be an object", ErrCFNBadTemplate, i)
+			}
+			topic := cfnStringProp(m, "Topic")
+			ev := cfnStringProp(m, "Event")
+			if topic == "" || ev == "" {
+				return fmt.Errorf("%w: TopicConfigurations require Event and Topic", ErrCFNBadTemplate)
+			}
+			prefix, suffix := cfnS3NotificationFilter(m)
+			cfg.TopicConfigs = append(cfg.TopicConfigs, S3TopicConfig{
+				ID:           fmt.Sprintf("cfn-topic-%d", i+1),
+				Events:       []string{ev},
+				FilterPrefix: prefix,
+				FilterSuffix: suffix,
+				TopicARN:     topic,
+			})
+		}
+	}
+	if isEmptyS3NotificationConfig(cfg) {
+		return nil
+	}
+	if err := s.PutBucketNotificationConfiguration(accountID, bucket, cfg); err != nil {
+		return fmt.Errorf("%w: NotificationConfiguration: %v", ErrCFNBadTemplate, err)
+	}
+	return nil
+}
+
+func cfnS3NotificationFilter(m map[string]any) (prefix, suffix string) {
+	filter, _ := m["Filter"].(map[string]any)
+	if filter == nil {
+		return "", ""
+	}
+	s3key, _ := filter["S3Key"].(map[string]any)
+	if s3key == nil {
+		return "", ""
+	}
+	rules, _ := s3key["Rules"].([]any)
+	for _, item := range rules {
+		rule, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(cfnStringProp(rule, "Name")))
+		value := cfnStringProp(rule, "Value")
+		switch name {
+		case "prefix":
+			prefix = value
+		case "suffix":
+			suffix = value
+		}
+	}
+	return prefix, suffix
+}
+
 func (s *Store) applyCFNS3Encryption(accountID, bucket string, props map[string]any) error {
 	raw, ok := props["BucketEncryption"]
 	if !ok || raw == nil {
@@ -146,6 +274,14 @@ func splitCFNEventRulePhysical(physicalID string) (busName, ruleName string, ok 
 	return parts[0], parts[1], true
 }
 
+func splitCFNLambdaPermissionPhysical(physicalID string) (functionName, statementID string, ok bool) {
+	parts := strings.SplitN(physicalID, "|", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 func (s *Store) provisionCFNEventRule(accountID, region, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
 	name := cfnStringProp(props, "Name")
 	if name == "" {
@@ -265,4 +401,204 @@ func (s *Store) provisionCFNNestedStack(accountID, region, parentStackID, logica
 	return st.StackID, map[string]string{
 		"Ref": st.StackID, "Arn": st.StackID,
 	}, nil
+}
+
+func cfnStringListProp(props map[string]any, key string) []string {
+	raw, ok := props[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		s := strings.TrimSpace(fmt.Sprint(item))
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func cfnIAMEntityName(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if _, name, ok := parseIAMRoleARN(ref); ok {
+		return name
+	}
+	const prefix = "arn:aws:iam::"
+	if strings.HasPrefix(ref, prefix) {
+		rest := strings.TrimPrefix(ref, prefix)
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) == 2 {
+			for _, kind := range []string{"user/", "group/", "role/"} {
+				if strings.HasPrefix(parts[1], kind) {
+					name := strings.TrimPrefix(parts[1], kind)
+					if i := strings.LastIndex(name, "/"); i >= 0 {
+						return name[i+1:]
+					}
+					return name
+				}
+			}
+		}
+	}
+	return ref
+}
+
+func (s *Store) attachCFNManagedPolicyTargets(accountID, policyARN string, props map[string]any) error {
+	for _, roleRef := range cfnStringListProp(props, "Roles") {
+		name := cfnIAMEntityName(roleRef)
+		if name == "" {
+			continue
+		}
+		if err := s.AttachRolePolicy(accountID, name, policyARN); err != nil {
+			return fmt.Errorf("%w: AttachRolePolicy %s: %v", ErrCFNBadTemplate, name, err)
+		}
+	}
+	for _, userRef := range cfnStringListProp(props, "Users") {
+		name := cfnIAMEntityName(userRef)
+		if name == "" {
+			continue
+		}
+		if err := s.AttachUserPolicy(accountID, name, policyARN); err != nil {
+			return fmt.Errorf("%w: AttachUserPolicy %s: %v", ErrCFNBadTemplate, name, err)
+		}
+	}
+	for _, groupRef := range cfnStringListProp(props, "Groups") {
+		name := cfnIAMEntityName(groupRef)
+		if name == "" {
+			continue
+		}
+		if err := s.AttachGroupPolicy(accountID, name, policyARN); err != nil {
+			return fmt.Errorf("%w: AttachGroupPolicy %s: %v", ErrCFNBadTemplate, name, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) clearManagedPolicyAttachments(policyARN string) error {
+	_, err := s.db.Exec(`DELETE FROM policy_attachments WHERE policy_id = ?`, policyARN)
+	if err != nil {
+		return fmt.Errorf("clear managed policy attachments %s: %w", policyARN, err)
+	}
+	return nil
+}
+
+func (s *Store) provisionCFNManagedPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	name := cfnStringProp(props, "ManagedPolicyName")
+	if name == "" {
+		name = logicalID + shortID()
+	}
+	path := cfnStringProp(props, "Path")
+	if path != "" && path != "/" {
+		return "", nil, fmt.Errorf("%w: ManagedPolicy Path other than / is not supported for %s", ErrCFNBadTemplate, logicalID)
+	}
+	docRaw, ok := props["PolicyDocument"]
+	if !ok || docRaw == nil {
+		return "", nil, fmt.Errorf("%w: ManagedPolicy PolicyDocument required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	docBytes, err := json.Marshal(docRaw)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: ManagedPolicy PolicyDocument for %s", ErrCFNBadTemplate, logicalID)
+	}
+	arn, err := s.CreateManagedPolicy(accountID, name, string(docBytes))
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: ManagedPolicy %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props); err != nil {
+		_ = s.clearManagedPolicyAttachments(arn)
+		_ = s.DeleteManagedPolicy(arn)
+		return "", nil, err
+	}
+	return arn, map[string]string{"Ref": arn, "Arn": arn}, nil
+}
+
+func (s *Store) provisionCFNIAMPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	name := cfnStringProp(props, "PolicyName")
+	if name == "" {
+		return "", nil, fmt.Errorf("%w: Policy PolicyName required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	roles := cfnStringListProp(props, "Roles")
+	users := cfnStringListProp(props, "Users")
+	groups := cfnStringListProp(props, "Groups")
+	if len(roles) == 0 && len(users) == 0 && len(groups) == 0 {
+		return "", nil, fmt.Errorf("%w: Policy %s requires Roles, Users, or Groups", ErrCFNBadTemplate, logicalID)
+	}
+	docRaw, ok := props["PolicyDocument"]
+	if !ok || docRaw == nil {
+		return "", nil, fmt.Errorf("%w: Policy PolicyDocument required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	docBytes, err := json.Marshal(docRaw)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: Policy PolicyDocument for %s", ErrCFNBadTemplate, logicalID)
+	}
+	// Lab maps AWS::IAM::Policy onto a customer-managed policy so Attach* APIs apply.
+	arn, err := s.CreateManagedPolicy(accountID, name, string(docBytes))
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: Policy %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props); err != nil {
+		_ = s.clearManagedPolicyAttachments(arn)
+		_ = s.DeleteManagedPolicy(arn)
+		return "", nil, err
+	}
+	return arn, map[string]string{"Ref": name, "Arn": arn, "Id": arn}, nil
+}
+
+func (s *Store) provisionCFNBucketPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	bucket := cfnStringProp(props, "Bucket")
+	if bucket == "" {
+		return "", nil, fmt.Errorf("%w: BucketPolicy Bucket required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	docRaw, ok := props["PolicyDocument"]
+	if !ok || docRaw == nil {
+		return "", nil, fmt.Errorf("%w: BucketPolicy PolicyDocument required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	docBytes, err := json.Marshal(docRaw)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: BucketPolicy PolicyDocument for %s", ErrCFNBadTemplate, logicalID)
+	}
+	if err := s.PutBucketPolicy(accountID, bucket, string(docBytes)); err != nil {
+		return "", nil, fmt.Errorf("%w: BucketPolicy %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	phys := bucket + "#BucketPolicy"
+	return phys, map[string]string{"Ref": phys, "Bucket": bucket}, nil
+}
+
+func (s *Store) provisionCFNLambdaPermission(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	fn := cfnStringProp(props, "FunctionName")
+	if fn == "" {
+		return "", nil, fmt.Errorf("%w: Lambda Permission FunctionName required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	action := cfnStringProp(props, "Action")
+	if action == "" {
+		return "", nil, fmt.Errorf("%w: Lambda Permission Action required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	principal := cfnStringProp(props, "Principal")
+	if principal == "" {
+		return "", nil, fmt.Errorf("%w: Lambda Permission Principal required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	if principal == "*" {
+		return "", nil, fmt.Errorf("%w: Lambda Permission wildcard Principal is not supported for %s", ErrCFNBadTemplate, logicalID)
+	}
+	sid := cfnStringProp(props, "StatementId")
+	if sid == "" {
+		sid = logicalID
+	}
+	sourceARN := cfnStringProp(props, "SourceArn")
+	sourceAccount := cfnStringProp(props, "SourceAccount")
+	if _, err := s.AddFunctionPermission(accountID, fn, sid, action, principal, sourceAccount, sourceARN); err != nil {
+		return "", nil, fmt.Errorf("%w: Lambda Permission %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	fnName, err := resolveFunctionName(accountID, fn)
+	if err != nil {
+		_ = s.RemoveFunctionPermission(accountID, fn, sid)
+		return "", nil, fmt.Errorf("%w: Lambda Permission %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	phys := fnName + "|" + sid
+	return phys, map[string]string{"Ref": phys}, nil
 }

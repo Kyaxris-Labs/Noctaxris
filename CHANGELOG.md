@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Interservice depth (S3 notifications, EventBridge patterns, CFN policies)
+
+- S3 bucket notifications: Put/Get configuration plus emit on PutObject / DeleteObject / CompleteMultipartUpload to Lambda (async), SQS, EventBridge (`aws.s3`), and SNS Publish (HTTP subscribers remain allowlist/catcher-only); destination authz re-checked on emit
+- EventBridge content-based pattern operators: nested `detail`, `prefix` / `suffix`, `exists`, `anything-but`, `numeric`, `equals-ignore-case` (`wildcard` / `$or` / IP still rejected at PutRule)
+- CloudFormation: `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::S3::BucketPolicy`, `AWS::Lambda::Permission`, and `AWS::S3::Bucket` `NotificationConfiguration`
+
 ### Stabilization (CLI fidelity + docs)
 
 - Lambda `FunctionConfiguration.Layers` returns AWS Layer objects (`Arn`, `CodeSize`) instead of bare ARN strings

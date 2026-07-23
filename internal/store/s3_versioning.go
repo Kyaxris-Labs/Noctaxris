@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -211,12 +212,22 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version rename: %w", err)
 	}
-	return ObjectMeta{
+	out := ObjectMeta{
 		AccountID: accountID, Bucket: bucket, Key: key, ETag: etag, Size: size,
 		ContentType: ct, SSEAlgorithm: meta.SSEAlgorithm, KMSKeyID: meta.KMSKeyID,
 		SealedDEK: meta.SealedDEK, SSEKMSContextJSON: meta.SSEKMSContextJSON,
 		CannedACL: acl, StoragePath: rel, LastModified: modified,
-	}, versionID, nil
+	}
+	eventName := strings.TrimSpace(meta.NotificationEventName)
+	if eventName == "" {
+		eventName = "ObjectCreated:Put"
+	}
+	emitVersionID := versionID
+	if emitVersionID == "null" {
+		emitVersionID = ""
+	}
+	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, eventName, emitVersionID, size, etag)
+	return out, versionID, nil
 }
 
 func md5SumHex(data []byte) string {

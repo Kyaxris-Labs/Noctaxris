@@ -8,11 +8,15 @@ import (
 func supportedCFNType(t string) bool {
 	switch t {
 	case "AWS::S3::Bucket",
+		"AWS::S3::BucketPolicy",
 		"AWS::IAM::Role",
+		"AWS::IAM::ManagedPolicy",
+		"AWS::IAM::Policy",
 		"AWS::SQS::Queue",
 		"AWS::SQS::QueuePolicy",
 		"AWS::DynamoDB::Table",
 		"AWS::Lambda::Function",
+		"AWS::Lambda::Permission",
 		"AWS::KMS::Key",
 		"AWS::SNS::Topic",
 		"AWS::Events::EventBus",
@@ -28,7 +32,11 @@ func supportedCFNType(t string) bool {
 
 func cloudControlSupportedCFNType(t string) bool {
 	switch t {
-	case "AWS::CloudFormation::Stack", "AWS::SQS::QueuePolicy":
+	case "AWS::CloudFormation::Stack",
+		"AWS::SQS::QueuePolicy",
+		"AWS::S3::BucketPolicy",
+		"AWS::Lambda::Permission",
+		"AWS::IAM::Policy":
 		return false
 	default:
 		return supportedCFNType(t)
@@ -37,12 +45,16 @@ func cloudControlSupportedCFNType(t string) bool {
 
 func cfnAllowedProps(resType string) map[string]struct{} {
 	list := map[string][]string{
-		"AWS::S3::Bucket":             {"BucketName", "BucketEncryption", "Tags"},
+		"AWS::S3::Bucket":             {"BucketName", "BucketEncryption", "Tags", "NotificationConfiguration"},
+		"AWS::S3::BucketPolicy":       {"Bucket", "PolicyDocument"},
 		"AWS::IAM::Role":              {"RoleName", "AssumeRolePolicyDocument", "Policies", "ManagedPolicyArns", "MaxSessionDuration", "Description", "Path", "Tags"},
+		"AWS::IAM::ManagedPolicy":     {"ManagedPolicyName", "Path", "Description", "PolicyDocument", "Roles", "Users", "Groups"},
+		"AWS::IAM::Policy":            {"PolicyName", "PolicyDocument", "Roles", "Users", "Groups"},
 		"AWS::SQS::Queue":             {"QueueName", "DelaySeconds", "VisibilityTimeout", "MessageRetentionPeriod", "ReceiveMessageWaitTimeSeconds", "FifoQueue", "ContentBasedDeduplication", "KmsMasterKeyId", "Tags"},
 		"AWS::SQS::QueuePolicy":       {"Queues", "PolicyDocument"},
 		"AWS::DynamoDB::Table":        {"TableName", "BillingMode", "AttributeDefinitions", "KeySchema", "SSESpecification", "Tags"},
 		"AWS::Lambda::Function":       {"FunctionName", "Role", "Runtime", "Handler", "Code", "Timeout", "MemorySize", "Description", "Environment", "Tags"},
+		"AWS::Lambda::Permission":     {"FunctionName", "Action", "Principal", "SourceArn", "SourceAccount", "StatementId"},
 		"AWS::KMS::Key":               {"Description", "KeyPolicy", "EnableKeyRotation", "PendingWindowInDays", "Tags"},
 		"AWS::SNS::Topic":             {"TopicName", "DisplayName", "KmsMasterKeyId", "Tags"},
 		"AWS::Events::EventBus":       {"Name", "Tags"},
