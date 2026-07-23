@@ -1,35 +1,42 @@
-# Noctaxris
+<p align="center">
+  <img src="assets/noctaxris_bg.png" alt="Noctaxris" width="640">
+</p>
 
-**Run AWS-shaped security labs on your laptop without a cloud bill or a host Docker socket.**
+<p align="center">
+  <b>Run AWS-shaped security labs on your laptop without a cloud bill or a host Docker socket.</b>
+</p>
 
 ```bash
 docker compose -f docker/compose.yaml --env-file docker/.env up --build
 curl http://127.0.0.1:4566/_noctaxris/health
-curl http://127.0.0.1:4566/_noctaxris/ready
-curl http://127.0.0.1:4566/_noctaxris/version
-# ok / ready / 1.0.0
+# ok
 ```
 
-SigV4 endpoint on `127.0.0.1:4566`. Point the AWS CLI at it and exercise the lab services in the table below the way you would against real AWS.
+<p align="center">
+  <a href="https://github.com/Kyaxris-Labs/Noctaxris"><img src="https://img.shields.io/badge/GitHub-Kyaxris--Labs%2FNoctaxris-181717?logo=github" alt="GitHub"></a>
+  <a href="https://hub.docker.com/r/kyaxris/noctaxris"><img src="https://img.shields.io/badge/Docker_Hub-kyaxris%2Fnoctaxris-2496ED?logo=docker&logoColor=white" alt="Docker Hub"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+</p>
 
-Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs/Noctaxris). Docker Hub image: [`kyaxris/noctaxris`](https://hub.docker.com/r/kyaxris/noctaxris) (`latest` / semver releases; `nightly` from CI).
+Point the AWS CLI or SDK at it and call the lab services the same way you would against real AWS.
+
+Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs/Noctaxris). Image tags: `latest`, semver releases, and `nightly` from CI.
 
 ## Why this exists
 
 | | |
 |---|---|
 | Lab fidelity | Identity evaluation with boundaries, SCP/RCP filters, PassRole, and condition keys |
-| Secure defaults | Loopback publish only. No host `docker.sock`. Sealed secrets and CMK material at rest |
-| Nested compute | Nested Docker (DinD) via Compose `noctaxris-engine` over TLS. Live Invoke needs a healthy engine. Default engine is restricted (`privileged: false` + caps/cgroup); opt in with `compose.engine-privileged.yaml` only if nested smoke fails on your host |
+| Secure defaults | Loopback publish only. No host `docker.sock`. Secrets and CMK material sealed at rest |
+| Nested compute | DinD via Compose `noctaxris-engine` over TLS. Live Invoke needs a healthy engine. Default engine is restricted (`privileged: false` + caps/cgroup); use `compose.engine-privileged.yaml` only if nested smoke fails on your host |
 | CLI-shaped | Latest AWS CLI v2 via `--endpoint-url` |
 
 ## Quick start
 
-Copy env, start Compose, hit health, then call STS and S3.
+Copy env, bring Compose up, then hit STS and S3 with the same root keys you put in `docker/.env`.
 
 ```bash
 cp docker/.env.example docker/.env
-# edit docker/.env root access keys if you want non-example values
 
 docker compose -f docker/compose.yaml --env-file docker/.env up --build
 
@@ -47,9 +54,27 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Use the same root keys you put in `docker/.env`. Full per-service CLI smoke lives under [docs/services/](docs/services/index.md).
+Per-service CLI smoke: [docs/services/](docs/services/index.md).
 
 ## Services
+
+| Area | Services |
+|------|----------|
+| Identity | IAM, STS, Organizations, Cognito User Pools |
+| Crypto | KMS |
+| Data | S3, DynamoDB, DynamoDB Streams, SQS, SSM, Secrets Manager, SNS, EventBridge, Scheduler, Pipes, S3 Vectors, RDS, RDS Data API, ElastiCache, DocumentDB |
+| Audit and tags | CloudTrail, CloudWatch Logs, Resource Groups Tagging API |
+| Streams and delivery | Kinesis, Firehose, Amazon MQ, Transfer Family, SES, AppConfig, Step Functions |
+| IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2 |
+| Compute | Lambda, ECR, ECS, CodeBuild, CodePipeline, CodeDeploy, Batch, AppSync |
+| API edge | API Gateway HTTP API |
+| Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
+| Billing | Pricing, BCM Data Exports, Cost Explorer, Budgets |
+
+Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
+
+<details>
+<summary><b>Service matrix</b> (detailed actions / not implemented)</summary>
 
 <table>
   <thead>
@@ -369,7 +394,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
   </tbody>
 </table>
 
-Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/index.md).
+</details>
 
 ## Defaults
 
@@ -377,23 +402,17 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 |---------|--------|
 | Listen | `127.0.0.1:4566` only |
 | Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch, and nested data engines) |
-| Compute runtime | Nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Lambda/ECS compute needs healthy `noctaxris-engine`. Nested data engines use the same path |
-| Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of nested DataKind ports (Postgres, Redis/Valkey, Mongo, AMQP, OpenSearch) |
+| Compute runtime | Nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Lambda/ECS compute needs healthy `noctaxris-engine` |
+| Data ports | Compose publishes only `127.0.0.1:4566`. Nested DataKind ports stay off the host |
 | API replicas | **One process per data root.** Multi-replica against the same SQLite volume is unsupported and can corrupt state |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |
 | Authn | SigV4 on AWS API paths except documented open/alternate-auth routes (health, ready, JWKS, federation STS, Function URL NONE, HTTP API NONE, AppSync auth types, optional anonymous S3 GetObject behind `NOCTAXRIS_ALLOW_ANONYMOUS_S3`) |
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
-Backup, restore, upgrade, graceful shutdown, and CI matrix (PR `smoke-core` vs manual nested smoke): [docs/ops.md](docs/ops.md).
-
-Cut a release (`v1.0.0`, Hub `latest` / semver): [docs/release.md](docs/release.md).
-
-SDK, Terraform, and CloudFormation integration suites (Compose required): [tests/README.md](tests/README.md).
-
 ## Architecture
 
-Loopback API only. Nested DinD over TLS. No host `docker.sock`. Full graph and request path: [docs/architecture.md](docs/architecture.md).
+Loopback API only. Nested DinD over TLS. No host `docker.sock`.
 
 ```mermaid
 flowchart LR
@@ -403,9 +422,17 @@ flowchart LR
   Engine --> Nested["Lambda / ECS / nested data"]
 ```
 
+Full graph and request path: [docs/architecture.md](docs/architecture.md).
+
 ## Docs
 
-Architecture, configuration, ops, and security posture: [docs/index.md](docs/index.md).
+| | |
+|---|---|
+| [docs/index.md](docs/index.md) | Architecture, configuration, ops, security posture |
+| [docs/services/](docs/services/index.md) | Per-service APIs, authz notes, CLI smoke |
+| [docs/ops.md](docs/ops.md) | Backup, restore, upgrade, graceful shutdown, CI matrix |
+| [docs/release.md](docs/release.md) | Cutting a release (`v1.0.0`, Hub `latest` / semver) |
+| [tests/README.md](tests/README.md) | SDK, Terraform, and CloudFormation suites (Compose required) |
 
 ## Author
 
