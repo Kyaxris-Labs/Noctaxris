@@ -16,6 +16,7 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 		"arn:aws:execute-api:us-east-1:000000000001:abc123/$default/GET/hello",
 		"arn:aws:appsync:us-east-1:000000000001:apis/gql1",
 		"arn:aws:lambda:us-east-1:000000000001:function:fn",
+		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/lab/abc",
 	}
 	for _, arn := range ok {
 		if !store.IsWAFAssociableResourceARN(arn) {
@@ -28,7 +29,7 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 		"arn:aws:s3:::bucket",
 		"arn:aws:apigateway:us-east-1::/unknown/x",
 		"arn:aws:apigateway:us-east-1::/restapis/api1/stages/prod",
-		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/lab/abc",
+		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/net/lab/abc",
 		"arn:aws:cognito-idp:us-east-1:000000000001:userpool/us-east-1_abc",
 	}
 	for _, arn := range bad {
@@ -175,6 +176,25 @@ func TestELBv2LambdaTarget(t *testing.T) {
 	targets, err := st.ListELBv2Targets(account, tg.ARN)
 	if err != nil || len(targets) != 1 {
 		t.Fatalf("targets=%v err=%v", targets, err)
+	}
+	health, err := st.DescribeELBv2TargetHealth(account, tg.ARN)
+	if err != nil || len(health) != 1 || health[0].State != "healthy" {
+		t.Fatalf("health=%v err=%v want healthy with listener", health, err)
+	}
+	tg2, err := st.CreateELBv2TargetGroup(account, "us-east-1", "no-listener", "lambda", "HTTP", 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddFunctionPermission(account, "lab", "elb-allow-2", "lambda:InvokeFunction",
+		"elasticloadbalancing.amazonaws.com", "", tg2.ARN); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RegisterELBv2Targets(account, tg2.ARN, []store.ELBv2Target{{ID: fn.FunctionARN}}); err != nil {
+		t.Fatal(err)
+	}
+	unused, err := st.DescribeELBv2TargetHealth(account, tg2.ARN)
+	if err != nil || len(unused) != 1 || unused[0].State != "unused" {
+		t.Fatalf("health=%v err=%v want unused without listener", unused, err)
 	}
 }
 

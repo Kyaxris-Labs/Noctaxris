@@ -98,6 +98,14 @@ type ELBv2Target struct {
 	Port int
 }
 
+// ELBv2TargetHealthDesc is one DescribeTargetHealth row.
+type ELBv2TargetHealthDesc struct {
+	Target      ELBv2Target
+	State       string
+	Reason      string
+	Description string
+}
+
 // EnsureELBv2Schema creates ELBv2 tables if missing.
 func EnsureELBv2Schema(db *sql.DB) error {
 	if db == nil {
@@ -377,11 +385,139 @@ func (s *Store) DeleteELBv2Listener(accountID, listenerARN string) error {
 	return nil
 }
 
+// GetELBv2LoadBalancerByName returns a load balancer by account and name.
+func (s *Store) GetELBv2LoadBalancerByName(accountID, name string) (ELBv2LoadBalancer, error) {
+	name = strings.TrimSpace(name)
+	var lb ELBv2LoadBalancer
+	err := s.db.QueryRow(
+		`SELECT name, arn, dns_name, type, scheme, created_at FROM elbv2_load_balancers
+		 WHERE account_id = ? AND name = ?`, accountID, name,
+	).Scan(&lb.Name, &lb.ARN, &lb.DNSName, &lb.Type, &lb.Scheme, &lb.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ELBv2LoadBalancer{}, ErrELBv2NotFound
+	}
+	if err != nil {
+		return ELBv2LoadBalancer{}, fmt.Errorf("get load balancer by name: %w", err)
+	}
+	return lb, nil
+}
+
+// GetELBv2ListenerByPort returns the listener on a load balancer for a port.
+func (s *Store) GetELBv2ListenerByPort(accountID, loadBalancerARN string, port int) (ELBv2Listener, error) {
+	var l ELBv2Listener
+	err := s.db.QueryRow(
+		`SELECT listener_arn, load_balancer_arn, port, protocol, target_group_arn, created_at
+		 FROM elbv2_listeners WHERE account_id = ? AND load_balancer_arn = ? AND port = ?`,
+		accountID, strings.TrimSpace(loadBalancerARN), port,
+	).Scan(&l.ListenerARN, &l.LoadBalancerARN, &l.Port, &l.Protocol, &l.TargetGroupARN, &l.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ELBv2Listener{}, ErrELBv2NotFound
+	}
+	if err != nil {
+		return ELBv2Listener{}, fmt.Errorf("get listener by port: %w", err)
+	}
+	return l, nil
+}
+
+// ELBv2TargetGroupHasListener reports whether any listener forwards to the target group.
+func (s *Store) ELBv2TargetGroupHasListener(accountID, targetGroupARN string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM elbv2_listeners WHERE account_id = ? AND target_group_arn = ?`,
+		accountID, strings.TrimSpace(targetGroupARN),
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("target group has listener: %w", err)
+	}
+	return n > 0, nil
+}
+
+// DescribeELBv2TargetHealth returns health reflecting lab-listener usefulness.
+// Lambda targets are healthy when a listener forwards to the group, the function
+// still resolves, and elasticloadbalancing.amazonaws.com is Allowed. Otherwise
+// unused (no listener) or unhealthy (stale registration). IP targets stay unused
+// (no IP dataplane).
+func (s *Store) DescribeELBv2TargetHealth(accountID, targetGroupARN string) ([]ELBv2TargetHealthDesc, error) {
+	targetGroupARN = strings.TrimSpace(targetGroupARN)
+	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
+	if err != nil {
+		return nil, err
+	}
+	if len(tgs) == 0 {
+		return nil, ErrELBv2TGNotFound
+	}
+	tg := tgs[0]
+	targets, err := s.ListELBv2Targets(accountID, targetGroupARN)
+	if err != nil {
+		return nil, err
+	}
+	inUse, err := s.ELBv2TargetGroupHasListener(accountID, targetGroupARN)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ELBv2TargetHealthDesc, 0, len(targets))
+	for _, t := range targets {
+		desc := ELBv2TargetHealthDesc{Target: t}
+		switch tg.TargetType {
+		case "lambda":
+			if !inUse {
+				desc.State = "unused"
+				desc.Reason = "Target.NotInUse"
+				desc.Description = "No listener forwards to this target group."
+				out = append(out, desc)
+				continue
+			}
+			fnAccount, fnName, ok := ParseLambdaARNFromSFNResource(t.ID)
+			if !ok || fnName == "" {
+				desc.State = "unhealthy"
+				desc.Reason = "Target.InvalidState"
+				desc.Description = "Lambda target Id is not a function ARN."
+				out = append(out, desc)
+				continue
+			}
+			fn, err := s.GetFunction(fnAccount, fnName)
+			if errors.Is(err, ErrNoSuchFunction) {
+				desc.State = "unhealthy"
+				desc.Reason = "Target.FailedHealthChecks"
+				desc.Description = "Lambda function not found."
+				out = append(out, desc)
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("describe target health: resolve function: %w", err)
+			}
+			if !s.deliveryTargetResourcePolicyAllows(
+				fnAccount, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalELB, targetGroupARN,
+			) {
+				desc.State = "unhealthy"
+				desc.Reason = "Target.FailedHealthChecks"
+				desc.Description = "Lambda resource policy does not Allow elasticloadbalancing.amazonaws.com."
+				out = append(out, desc)
+				continue
+			}
+			desc.State = "healthy"
+			desc.Description = "Lab listener can invoke this Lambda target."
+			out = append(out, desc)
+		case "ip":
+			desc.State = "unused"
+			desc.Reason = "Target.NotInUse"
+			desc.Description = "IP targets have no lab dataplane."
+			out = append(out, desc)
+		default:
+			desc.State = "unused"
+			desc.Reason = "Target.NotInUse"
+			desc.Description = "Unsupported target type."
+			out = append(out, desc)
+		}
+	}
+	return out, nil
+}
+
 // RegisterELBv2Targets registers Lambda ARN or lab IP targets.
 // Lambda targets must resolve to an existing function and Allow
 // elasticloadbalancing.amazonaws.com on the function resource policy
-// (SourceArn may be the target group ARN). Health remains unused until a
-// lab listener dataplane exists.
+// (SourceArn may be the target group ARN). DescribeTargetHealth reports
+// healthy when a lab listener forwards to the group and permission still Allows.
 func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets []ELBv2Target) error {
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})

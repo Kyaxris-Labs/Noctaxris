@@ -150,8 +150,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Real SQL via nested <code>psql</code> when instance is available; otherwise DatabaseUnavailableException (no canned SELECT). SELECT cells VARCHAR-only; <code>parameters</code> rejected until optional wire executor. Begin/Commit/Rollback return 501.</td>
-      <td>Wire-protocol <code>pgx</code> executor (buy-in), bind parameters, typed OID fields, BatchExecuteStatement, real SQL transactions.</td>
+      <td>ExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Otherwise DatabaseUnavailableException (no canned SELECT). Begin/Commit/Rollback return 501.</td>
+      <td>BatchExecuteStatement, full result type matrix, real SQL transactions, API process on DinD data network for default <code>pgx</code> dial.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
@@ -192,8 +192,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Amazon MQ</td>
-      <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. EngineType ActiveMQ or RabbitMQ. <strong>Control-plane stub</strong> with loopback <code>stub://</code> endpoint; BrokerState CREATION_FAILED; PubliclyAccessible=true rejected. No nested broker, no WAN ports.</td>
-      <td>Nested DinD broker, MSK/Kafka, full admin APIs, public broker endpoints.</td>
+      <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. RabbitMQ nested DinD when engine up (CREATION_IN_PROGRESS→RUNNING, Internal AMQP). ActiveMQ or no DinD → CREATION_FAILED + stub://. PubliclyAccessible=true rejected. No host/WAN broker ports.</td>
+      <td>Nested ActiveMQ, MSK/Kafka, full admin APIs, public broker endpoints.</td>
     </tr>
     <tr>
       <td>Transfer Family</td>
@@ -263,14 +263,14 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>ELB v2</td>
-      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/Describe*/Delete* <strong>control-plane stub</strong>. Type application only (network rejected). Target types lambda or ip. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission. DescribeTargetHealth returns unused. No EC2, no listener invoke.</td>
-      <td>ALB Cognito auth action, path routing depth, ELB lab listener invoke data path, NLB.</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/Describe*/Delete*. Type application only (network rejected). Target types lambda or ip. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission. Lab listener <code>/alb/{account}/{name}/{port}/...</code> invokes Lambda (loopback open dataplane gate). DescribeTargetHealth healthy when a listener forwards and permission Allows; IP stays unused. No EC2.</td>
+      <td>ALB Cognito auth action, path routing depth, IP target dataplane, NLB.</td>
     </tr>
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
       <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller, lab FilterCriteria (JSON body nest), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Kinesis/MQ ESM sources, full content-filtering operators beyond lab FilterCriteria, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless nested engine as packaged default (experimental restricted overlay exists), full SAR depth.</td>
+      <td>Kinesis/MQ ESM sources, full content-filtering operators beyond lab FilterCriteria, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -280,7 +280,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td>ECS</td>
       <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, rootless nested engine as packaged default (experimental restricted overlay exists), full SAR depth.</td>
+      <td>Load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>CodeBuild</td>
@@ -321,8 +321,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>OpenSearch</td>
-      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. <strong>Control-plane stub</strong> loopback <code>stub://</code> endpoint; DomainStatus CreateFailed (never Active without engine). No nested OpenSearch.</td>
-      <td>Nested DinD OpenSearch cluster, query-plane index/search, full query DSL proxy, fine-grained access control.</td>
+      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. Nested DinD when engine up (Creating→Active, Internal :9200). Else CreateFailed + stub:// (never Active on stub). No host search ports.</td>
+      <td>Query-plane index/search, full query DSL proxy, fine-grained access control, guaranteed start on all Docker Desktop hosts (vm.max_map_count).</td>
     </tr>
     <tr>
       <td>EMR</td>
@@ -377,11 +377,11 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Listen | `127.0.0.1:4566` only |
 | Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch, and nested data engines) |
 | Compute runtime | Nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Lambda/ECS compute needs healthy `noctaxris-engine`. Nested data engines use the same path |
-| Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of nested DataKind ports (Postgres, Redis/Valkey, Mongo). MQ/OpenSearch are stubs (no nested broker/search) |
+| Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of nested DataKind ports (Postgres, Redis/Valkey, Mongo, AMQP, OpenSearch) |
 | API replicas | **One process per data root.** Multi-replica against the same SQLite volume is unsupported and can corrupt state |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |
-| Authn | SigV4 on AWS API paths except documented open/alternate-auth routes (health, ready, JWKS, federation STS, Function URL NONE, HTTP API NONE, AppSync auth types) |
+| Authn | SigV4 on AWS API paths except documented open/alternate-auth routes (health, ready, JWKS, federation STS, Function URL NONE, HTTP API NONE, AppSync auth types, optional anonymous S3 GetObject behind `NOCTAXRIS_ALLOW_ANONYMOUS_S3`) |
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
 Backup, restore, upgrade, graceful shutdown, and CI matrix (PR `smoke-core` vs manual nested smoke): [docs/ops.md](docs/ops.md).

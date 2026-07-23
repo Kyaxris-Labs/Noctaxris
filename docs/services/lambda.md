@@ -227,4 +227,4 @@ aws lambda invoke \
 - Provisioned pollers / non-SQS-or-DynamoDB ESM sources (Kinesis, MQ)
 - Full AWS content-filtering operators beyond lab string/list equality and nested JSON object body match on SQS `body` / DynamoDB `eventName`
 - Function URL CORS beyond AllowOrigins allowlist (methods/headers/MaxAge depth). Prefer API Gateway HTTP API for JWT labs. CloudFront is a config stub only (see [cloudfront.md](cloudfront.md))
-- Rootless nested engine as the packaged default (default Compose stays privileged DinD; experimental `compose.engine-restricted.yaml` overlay — see [security-defaults.md](../security-defaults.md))
+- Fully rootless nested engine (default Compose already uses restricted DinD without `privileged: true`; privileged opt-in is `compose.engine-privileged.yaml` — see [security-defaults.md](../security-defaults.md))

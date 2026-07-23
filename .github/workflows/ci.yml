@@ -71,7 +71,11 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: govulncheck
-        run: govulncheck ./...
+        # Native govulncheck has no per-ID exclude. scripts/govulncheck-ci still
+        # fails on any non-allowlisted finding; allowlist is only daemon-side Docker
+        # Engine CVEs with Fixed in: N/A on github.com/docker/docker (see
+        # scripts/govulncheck-allowlist.txt and docs/security-defaults.md).
+        run: go run ./scripts/govulncheck-ci
 
   race:
     runs-on: ubuntu-latest

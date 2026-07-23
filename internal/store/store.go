@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS s3_objects (
   kms_key_id TEXT,
   sealed_dek BLOB,
   sse_kms_context TEXT NOT NULL DEFAULT '',
+  canned_acl TEXT NOT NULL DEFAULT 'private',
   storage_path TEXT NOT NULL,
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key)
@@ -764,6 +765,8 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE s3_objects ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_multipart_uploads ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_object_versions ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_objects ADD COLUMN canned_acl TEXT NOT NULL DEFAULT 'private'`,
+		`ALTER TABLE s3_object_versions ADD COLUMN canned_acl TEXT NOT NULL DEFAULT 'private'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_s3_buckets_name ON s3_buckets(name)`,
 	}
 	for _, stmt := range alters {

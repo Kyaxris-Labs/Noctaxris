@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -107,11 +108,6 @@ func (s *Server) rdsDataExecute(
 	if strings.TrimSpace(req.TransactionID) != "" {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"ExecuteStatement with transactionId is not implemented.", readOnly, eventID, verified)
-		return
-	}
-	if len(req.Parameters) > 0 && !rdsDataPgxEnabled() {
-		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
-			"parameters require the optional wire-protocol Data API executor (not enabled).", readOnly, eventID, verified)
 		return
 	}
 	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
@@ -245,9 +241,18 @@ func parseRDSDataParameters(raw any) []store.RDSDataSqlParameter {
 		if b, ok := val["booleanValue"].(bool); ok {
 			p.BooleanValue = &b
 		}
+		if s, ok := val["blobValue"].(string); ok && s != "" {
+			if raw, err := decodeRDSDataBlob(s); err == nil {
+				p.BlobValue = raw
+			}
+		}
 		out = append(out, p)
 	}
 	return out
+}
+
+func decodeRDSDataBlob(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.TrimSpace(s))
 }
 
 func asInt64(v any) (int64, bool) {

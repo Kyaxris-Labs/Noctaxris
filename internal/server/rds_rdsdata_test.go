@@ -142,8 +142,9 @@ func TestRDSDataExecuteStatementUnavailableAndStubOverride(t *testing.T) {
 			},
 		},
 	}, now)
-	if withParams.Code != http.StatusBadRequest || !strings.Contains(withParams.Body.String(), "parameters require") {
-		t.Fatalf("want parameters BadRequest, got status=%d body=%q", withParams.Code, withParams.Body.String())
+	// No nested container: parameters still fail closed as unavailable (pgx dial + psql).
+	if withParams.Code != http.StatusGatewayTimeout || !strings.Contains(withParams.Body.String(), "DatabaseUnavailableException") {
+		t.Fatalf("want DatabaseUnavailableException with parameters, got status=%d body=%q", withParams.Code, withParams.Body.String())
 	}
 
 	srv.SetRDSDataExecutor(&store.StubRDSDataExecutor{})

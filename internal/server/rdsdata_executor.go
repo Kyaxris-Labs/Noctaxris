@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,18 +14,19 @@ import (
 
 const nestedRDSDataExecutorMarker = `{"noctaxrisExecutor":"nested-psql"}`
 
-// EnvRDSDataPgx enables the optional wire-protocol Data API executor after
-// github.com/jackc/pgx is approved and linked. Without that dependency this
-// flag never activates a live path (rdsDataPgxEnabled stays false).
+// EnvRDSDataPgx controls the wire-protocol Data API executor.
+// Default (unset): prefer pgx when a nested data-plane DSN can be built; fall
+// back to nested-psql on dial failure. Set to 0/false/off to force nested-psql.
 const EnvRDSDataPgx = "NOCTAXRIS_RDS_DATA_PGX"
 
 // preferNestedRDSDataExecute selects a Data API executor:
 //  1. test override (SetRDSDataExecutor)
-//  2. optional pgx wire path when buy-in lands and rdsDataPgxEnabled()
-//  3. nested DinD psql when the instance has a container
+//  2. pgx wire path when enabled and nested DSN is available (typed fields + binds)
+//  3. nested DinD psql when the instance has a container (VARCHAR cells; literal params)
 //  4. DatabaseUnavailableException
 //
 // Production never fakes SELECT success without a nested Postgres container.
+// pgx dials only the nested data-plane hostname (never host-published ports).
 func (s *Server) preferNestedRDSDataExecute(
 	ctx context.Context,
 	accountID string,
@@ -34,8 +37,25 @@ func (s *Server) preferNestedRDSDataExecute(
 		return override.Execute(req)
 	}
 	if rdsDataPgxEnabled() {
-		return s.executeRDSDataPgx(ctx, accountID, inst, req)
+		res, err := s.executeRDSDataPgx(ctx, accountID, inst, req)
+		if err == nil {
+			return res, nil
+		}
+		// Dial / DSN-unavailable: fall back to nested-psql. SQL errors from a
+		// successful wire session are not dial failures and must surface.
+		if !isRDSDataPgxDialFailure(err) {
+			return store.RDSDataExecuteResult{}, err
+		}
 	}
+	return s.executeRDSDataNestedPsql(ctx, accountID, inst, req)
+}
+
+func (s *Server) executeRDSDataNestedPsql(
+	ctx context.Context,
+	accountID string,
+	inst store.RDSDBInstance,
+	req store.RDSDataExecuteRequest,
+) (store.RDSDataExecuteResult, error) {
 	if strings.TrimSpace(inst.ContainerID) == "" || inst.DBInstanceStatus != "available" {
 		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
@@ -54,6 +74,14 @@ func (s *Server) preferNestedRDSDataExecute(
 	if db == "" {
 		db = "postgres"
 	}
+	sqlText := req.SQL
+	if len(req.Parameters) > 0 {
+		rewritten, rewriteErr := applyRDSDataParametersAsLiterals(sqlText, req.Parameters)
+		if rewriteErr != nil {
+			return store.RDSDataExecuteResult{}, rewriteErr
+		}
+		sqlText = rewritten
+	}
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	pgRes, err := cli.ExecPostgresSQL(runCtx, compute.PostgresSQLOpts{
@@ -61,30 +89,12 @@ func (s *Server) preferNestedRDSDataExecute(
 		Username:    user,
 		Password:    password,
 		Database:    db,
-		SQL:         req.SQL,
+		SQL:         sqlText,
 	})
 	if err != nil {
 		return store.RDSDataExecuteResult{}, err
 	}
 	return mapPostgresSQLResult(pgRes), nil
-}
-
-// rdsDataPgxEnabled reports whether the optional wire-protocol executor should
-// run. Always false until pgx is approved in go.mod and a real implementation
-// replaces executeRDSDataPgx. EnvRDSDataPgx alone does not enable anything.
-func rdsDataPgxEnabled() bool {
-	return false
-}
-
-// executeRDSDataPgx is the reserved wire-protocol path. Without a linked pgx
-// driver this always fails closed so callers never see a fake typed result.
-func (s *Server) executeRDSDataPgx(
-	_ context.Context,
-	_ string,
-	_ store.RDSDBInstance,
-	_ store.RDSDataExecuteRequest,
-) (store.RDSDataExecuteResult, error) {
-	return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 }
 
 func (s *Server) rdsDataMasterCreds(accountID string, inst store.RDSDBInstance, secretARN string) (user, password string, err error) {
@@ -150,4 +160,70 @@ func mapPostgresSQLResult(pg compute.PostgresSQLResult) store.RDSDataExecuteResu
 		Records:          records,
 		FormattedRecords: nestedRDSDataExecutorMarker,
 	}
+}
+
+// applyRDSDataParametersAsLiterals rewrites :name placeholders to typed SQL
+// literals for the nested-psql fallback (no string-concatenated identifiers).
+func applyRDSDataParametersAsLiterals(sqlText string, params []store.RDSDataSqlParameter) (string, error) {
+	byName := make(map[string]store.RDSDataSqlParameter, len(params))
+	for _, p := range params {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			return "", fmt.Errorf("%w: parameter name is required", store.ErrRDSDataBadRequest)
+		}
+		byName[name] = p
+	}
+	var rewriteErr error
+	out := dataAPINamedParamRE.ReplaceAllStringFunc(sqlText, func(match string) string {
+		if rewriteErr != nil {
+			return match
+		}
+		parts := dataAPINamedParamRE.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		prefix, name := parts[1], parts[2]
+		p, ok := byName[name]
+		if !ok {
+			rewriteErr = fmt.Errorf("%w: missing value for parameter %q", store.ErrRDSDataBadRequest, name)
+			return match
+		}
+		lit, err := rdsDataParameterLiteral(p)
+		if err != nil {
+			rewriteErr = err
+			return match
+		}
+		return prefix + lit
+	})
+	if rewriteErr != nil {
+		return "", rewriteErr
+	}
+	return out, nil
+}
+
+func rdsDataParameterLiteral(p store.RDSDataSqlParameter) (string, error) {
+	if p.IsNull != nil && *p.IsNull {
+		return "NULL", nil
+	}
+	switch {
+	case p.StringValue != nil:
+		return quotePostgresStringLiteral(*p.StringValue), nil
+	case p.LongValue != nil:
+		return strconv.FormatInt(*p.LongValue, 10), nil
+	case p.DoubleValue != nil:
+		return strconv.FormatFloat(*p.DoubleValue, 'g', -1, 64), nil
+	case p.BooleanValue != nil:
+		if *p.BooleanValue {
+			return "TRUE", nil
+		}
+		return "FALSE", nil
+	case len(p.BlobValue) > 0:
+		return `'\x` + hex.EncodeToString(p.BlobValue) + `'::bytea`, nil
+	default:
+		return "", fmt.Errorf("%w: parameter %q has no supported value", store.ErrRDSDataBadRequest, p.Name)
+	}
+}
+
+func quotePostgresStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

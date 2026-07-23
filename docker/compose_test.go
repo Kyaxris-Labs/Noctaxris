@@ -20,6 +20,7 @@ func TestSmokeNestedScriptPresent(t *testing.T) {
 		"create-db-instance",
 		"execute-statement",
 		"nested-psql",
+		"parameters",
 		"lambda invoke",
 		"package-type",
 		"run-task",
@@ -101,6 +102,9 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 		}
 		if strings.Contains(trimmed, "NOCTAXRIS_ALLOW_OPEN_DATA_PLANE") {
 			t.Fatal("default Compose must not set NOCTAXRIS_ALLOW_OPEN_DATA_PLANE (opt-in for NONE labs only)")
+		}
+		if strings.Contains(trimmed, "NOCTAXRIS_ALLOW_ANONYMOUS_S3") {
+			t.Fatal("default Compose must not set NOCTAXRIS_ALLOW_ANONYMOUS_S3 (opt-in anonymous GetObject only)")
 		}
 	}
 	if !strings.Contains(noctaxris, "NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN") {
@@ -200,7 +204,7 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 		t.Fatal("noctaxris-engine noctaxris-compute mount must not be read-write")
 	}
 	if strings.Contains(engine, "noctaxris-data:") {
-		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose master.key to privileged DinD)")
+		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose master.key to the nested engine)")
 	}
 	if !strings.Contains(content, "noctaxris-compute:") {
 		t.Fatal("compose must declare noctaxris-compute volume")
@@ -218,27 +222,16 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	}
 }
 
-func TestComposeEngineDefaultStillPrivileged(t *testing.T) {
-	// Soft residual lock: default compose keeps privileged DinD until the
-	// restricted overlay is proven by nested smoke. When default drops
-	// privileged: true, flip this test to require the restricted path instead.
+func TestComposeEngineDefaultRestricted(t *testing.T) {
 	b, err := os.ReadFile("compose.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine := serviceBlock(string(b), "noctaxris-engine")
-	if !strings.Contains(engine, "privileged: true") {
-		t.Skip("default engine is no longer privileged; update residual docs and drop this skip")
+	if engine == "" {
+		t.Fatal("compose must define noctaxris-engine")
 	}
-	overlay, err := os.ReadFile("compose.engine-restricted.yaml")
-	if err != nil {
-		t.Fatal("compose.engine-restricted.yaml must exist for deprivilege experiments:", err)
-	}
-	ovEngine := serviceBlock(string(overlay), "noctaxris-engine")
-	if ovEngine == "" {
-		t.Fatal("compose.engine-restricted.yaml must override noctaxris-engine")
-	}
-	for _, line := range strings.Split(ovEngine, "\n") {
+	for _, line := range strings.Split(engine, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -247,14 +240,37 @@ func TestComposeEngineDefaultStillPrivileged(t *testing.T) {
 			trimmed = strings.TrimSpace(trimmed[:idx])
 		}
 		if trimmed == "privileged: true" {
-			t.Fatal("compose.engine-restricted.yaml must not set privileged: true")
+			t.Fatal("default noctaxris-engine must not set privileged: true (use compose.engine-privileged.yaml)")
 		}
 	}
-	if !strings.Contains(ovEngine, "privileged: false") {
-		t.Fatal("compose.engine-restricted.yaml must set privileged: false")
+	if !strings.Contains(engine, "privileged: false") {
+		t.Fatal("default noctaxris-engine must set privileged: false")
 	}
-	if !strings.Contains(ovEngine, "cap_add:") {
-		t.Fatal("compose.engine-restricted.yaml must declare cap_add for restricted DinD")
+	if !strings.Contains(engine, "cap_add:") {
+		t.Fatal("default noctaxris-engine must declare cap_add for restricted DinD")
+	}
+	if !strings.Contains(engine, "SYS_ADMIN") {
+		t.Fatal("default noctaxris-engine cap_add must include SYS_ADMIN")
+	}
+	if !strings.Contains(engine, "cgroup: host") {
+		t.Fatal("default noctaxris-engine must set cgroup: host for cgroup v2 nesting")
+	}
+	if !strings.Contains(engine, "/sys/fs/cgroup:/sys/fs/cgroup:rw") {
+		t.Fatal("default noctaxris-engine must mount /sys/fs/cgroup read-write")
+	}
+	if !strings.Contains(engine, "--ipv6=false") {
+		t.Fatal("default noctaxris-engine must pass dockerd --ipv6=false for non-privileged nesting")
+	}
+	overlay, err := os.ReadFile("compose.engine-privileged.yaml")
+	if err != nil {
+		t.Fatal("compose.engine-privileged.yaml must exist for broken-host opt-in:", err)
+	}
+	ovEngine := serviceBlock(string(overlay), "noctaxris-engine")
+	if ovEngine == "" {
+		t.Fatal("compose.engine-privileged.yaml must override noctaxris-engine")
+	}
+	if !strings.Contains(ovEngine, "privileged: true") {
+		t.Fatal("compose.engine-privileged.yaml must set privileged: true")
 	}
 }
 

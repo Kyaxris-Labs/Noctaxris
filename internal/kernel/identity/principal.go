@@ -10,6 +10,7 @@ const (
 	KindUser      Kind = "User"
 	KindRole      Kind = "Role"
 	KindFederated Kind = "Federated"
+	KindAnonymous Kind = "Anonymous"
 )
 
 // Principal is a verified IAM identity for request evaluation.
@@ -22,6 +23,16 @@ type Principal struct {
 	RoleName             string
 	SessionName          string
 	FederatedProviderARN string // OIDC/SAML provider ARN for trust Principal.Federated match
+}
+
+// AnonymousPrincipal is an unauthenticated caller for resource-policy evaluation
+// (for example S3 public GetObject). AccountID should be the resource-owner account
+// so same-account resource OR paths apply without inventing a cross-account identity.
+func AnonymousPrincipal(resourceAccountID string) Principal {
+	return Principal{
+		Kind:      KindAnonymous,
+		AccountID: resourceAccountID,
+	}
 }
 
 // RootPrincipal returns the account root principal for the given access key.
@@ -87,7 +98,11 @@ func RoleSessionPrincipal(accountID, roleName, sessionName, accessKeyID string) 
 // Federated: arn:aws:sts::ACCOUNT:federated-user/NAME
 // Role session: arn:aws:sts::ACCOUNT:assumed-role/ROLE/SESSION
 // Role without session: arn:aws:iam::ACCOUNT:role/NAME
+// Anonymous: empty (matches Principal "*" / {"AWS":"*"} only).
 func (p Principal) ARN() string {
+	if p.Kind == KindAnonymous {
+		return ""
+	}
 	if p.IsRoot || p.Kind == KindRoot {
 		return fmt.Sprintf("arn:aws:iam::%s:root", p.AccountID)
 	}

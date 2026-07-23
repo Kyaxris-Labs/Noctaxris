@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func TestWAFAssociateHTTPAPIAndRejectUnknown(t *testing.T) {
@@ -272,11 +274,8 @@ func TestELBv2CreateListenerAndRegisterLambda(t *testing.T) {
 	health := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.DescribeTargetHealth", "elasticloadbalancing", map[string]any{
 		"TargetGroupArn": tgARN,
 	}, now)
-	if health.Code != http.StatusOK || !strings.Contains(health.Body.String(), `"unused"`) {
-		t.Fatalf("DescribeTargetHealth want unused, status=%d body=%q", health.Code, health.Body.String())
-	}
-	if strings.Contains(health.Body.String(), `"healthy"`) {
-		t.Fatalf("must not claim healthy without listener dataplane: %q", health.Body.String())
+	if health.Code != http.StatusOK || !strings.Contains(health.Body.String(), `"healthy"`) {
+		t.Fatalf("DescribeTargetHealth want healthy with listener, status=%d body=%q", health.Code, health.Body.String())
 	}
 
 	reject := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateTargetGroup", "elasticloadbalancing", map[string]any{
@@ -294,7 +293,80 @@ func TestELBv2CreateListenerAndRegisterLambda(t *testing.T) {
 	}
 }
 
-func TestWAFAssociateRejectsELBWithoutEnforcePath(t *testing.T) {
+func TestELBv2LabListenerInvokesLambda(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	var gotEvent string
+	srv.SetLambdaInvokeHookForTest(func(_ context.Context, _, name string, _ store.LambdaFunction, _, eventJSON string) ([]byte, error) {
+		if name != "lab" {
+			t.Fatalf("function=%q", name)
+		}
+		gotEvent = eventJSON
+		return []byte(`{"statusCode":200,"headers":{"content-type":"text/plain"},"body":"alb-ok"}`), nil
+	})
+
+	lb := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateLoadBalancer", "elasticloadbalancing", map[string]any{
+		"Name": "invoke-alb",
+	}, now)
+	var lbOut map[string]any
+	_ = json.Unmarshal(lb.Body.Bytes(), &lbOut)
+	lbs, _ := lbOut["LoadBalancers"].([]any)
+	lbMap, _ := lbs[0].(map[string]any)
+	lbARN, _ := lbMap["LoadBalancerArn"].(string)
+
+	tg := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateTargetGroup", "elasticloadbalancing", map[string]any{
+		"Name": "invoke-tg", "TargetType": "lambda",
+	}, now)
+	var tgOut map[string]any
+	_ = json.Unmarshal(tg.Body.Bytes(), &tgOut)
+	tgs, _ := tgOut["TargetGroups"].([]any)
+	tgMap, _ := tgs[0].(map[string]any)
+	tgARN, _ := tgMap["TargetGroupArn"].(string)
+
+	mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateListener", "elasticloadbalancing", map[string]any{
+		"LoadBalancerArn": lbARN,
+		"Protocol":        "HTTP",
+		"Port":            80,
+		"DefaultActions":  []map[string]any{{"Type": "forward", "TargetGroupArn": tgARN}},
+	}, now)
+
+	mustCreateIAMRole(t, handler, "elb-invoke-exec", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/elb-invoke-exec"
+	createFn := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "lab",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if createFn.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createFn.Code, createFn.Body.String())
+	}
+	mustAddLambdaServicePermission(t, handler, "lab", "elasticloadbalancing.amazonaws.com", "elb-invoke", now)
+	fnARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:lab"
+	reg := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.RegisterTargets", "elasticloadbalancing", map[string]any{
+		"TargetGroupArn": tgARN,
+		"Targets":        []map[string]any{{"Id": fnARN}},
+	}, now)
+	if reg.Code != http.StatusOK {
+		t.Fatalf("RegisterTargets status=%d body=%q", reg.Code, reg.Body.String())
+	}
+
+	path := "/alb/" + testAccountID + "/invoke-alb/80/hello"
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566"+path, []byte(`{"ping":1}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "alb-ok" {
+		t.Fatalf("lab listener status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(gotEvent, `"path":"/hello"`) || !strings.Contains(gotEvent, tgARN) {
+		t.Fatalf("ALB event missing path/tg: %s", gotEvent)
+	}
+}
+
+func TestWAFAssociateAcceptsELBWithLabListener(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -315,8 +387,16 @@ func TestWAFAssociateRejectsELBWithoutEnforcePath(t *testing.T) {
 		"WebACLArn":   aclARN,
 		"ResourceArn": "arn:aws:elasticloadbalancing:us-east-1:" + testAccountID + ":loadbalancer/app/lab/abc",
 	}, now)
-	if alb.Code == http.StatusOK {
-		t.Fatalf("ALB AssociateWebACL must fail closed without enforce path: %q", alb.Body.String())
+	if alb.Code != http.StatusOK {
+		t.Fatalf("ALB AssociateWebACL should succeed with lab listener enforce path: %q", alb.Body.String())
+	}
+
+	cognito := mustJSONTarget(t, handler, "AWSWAF_20190729.AssociateWebACL", "wafv2", map[string]any{
+		"WebACLArn":   aclARN,
+		"ResourceArn": "arn:aws:cognito-idp:us-east-1:" + testAccountID + ":userpool/us-east-1_abc",
+	}, now)
+	if cognito.Code == http.StatusOK {
+		t.Fatalf("Cognito AssociateWebACL must still fail closed: %q", cognito.Body.String())
 	}
 }
 

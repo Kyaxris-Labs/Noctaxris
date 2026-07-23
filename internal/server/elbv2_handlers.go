@@ -422,13 +422,18 @@ func (s *Server) elbDescribeTargetHealth(
 			"User is not authorized to perform elasticloadbalancing:DescribeTargetHealth.", readOnly, eventID, verified)
 		return
 	}
-	targets, err := s.store.ListELBv2Targets(verified.AccountID, tgARN)
+	descs, err := s.store.DescribeELBv2TargetHealth(verified.AccountID, tgARN)
+	if errors.Is(err, store.ErrELBv2TGNotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "TargetGroupNotFound",
+			"Target group not found.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to describe target health.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := elbsvc.DescribeTargetHealthJSON(targets)
+	payload, _ := elbsvc.DescribeTargetHealthJSON(descs)
 	s.writeELBv2OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "DescribeTargetHealth", readOnly)
 }

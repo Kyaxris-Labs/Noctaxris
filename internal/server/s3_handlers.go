@@ -21,6 +21,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 	kmssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/kms"
 	s3crypto "github.com/Kyaxris-Labs/Noctaxris/internal/services/s3"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -36,6 +37,20 @@ const (
 	headerCopySource       = "x-amz-copy-source"
 	headerMetadataDir      = "x-amz-metadata-directive"
 )
+
+// parseS3CannedACLHeader accepts private, public-read, public-read-write (lab subset).
+func parseS3CannedACLHeader(raw string) (acl string, ok bool) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return "private", true
+	}
+	switch raw {
+	case "private", "public-read", "public-read-write":
+		return raw, true
+	default:
+		return "", false
+	}
+}
 
 type s3ErrorXML struct {
 	XMLName   xml.Name `xml:"Error"`
@@ -710,11 +725,18 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	cannedACL, aclOK := parseS3CannedACLHeader(r.Header.Get("x-amz-acl"))
+	if !aclOK {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
+			"Unsupported x-amz-acl value", "PutObject")
+		return
+	}
 
 	plainSum := md5.Sum(body)
 	etag := hex.EncodeToString(plainSum[:])
 	meta := store.PutObjectMeta{
 		ContentType: contentType,
+		CannedACL:   cannedACL,
 		Data:        body,
 		PlainSize:   int64(len(body)),
 		ETag:        etag,
@@ -874,12 +896,22 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 		return
 	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
+	versionID := r.URL.Query().Get("versionId")
+	if verified != nil && verified.Principal.Kind == identity.KindAnonymous {
+		objectACL := ""
+		if head, herr := s.store.HeadObject(ref.accountID, bucket, key); herr == nil {
+			objectACL = head.CannedACL
+		}
+		if !s.authorizeAnonymousS3Get(verified, resource, ref.policy, ref.accountID, objectACL) {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+				"Access Denied", "GetObject")
+			return
+		}
+	} else if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "GetObject")
 		return
 	}
-	versionID := r.URL.Query().Get("versionId")
 	meta, vid, data, err := s.store.GetObjectVersion(ref.accountID, bucket, key, versionID)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
@@ -926,12 +958,22 @@ func (s *Server) s3HeadObject(w http.ResponseWriter, r *http.Request, requestID,
 		return
 	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
+	meta, err := s.store.HeadObject(ref.accountID, bucket, key)
+	if verified != nil && verified.Principal.Kind == identity.KindAnonymous {
+		objectACL := ""
+		if err == nil {
+			objectACL = meta.CannedACL
+		}
+		if !s.authorizeAnonymousS3Get(verified, resource, ref.policy, ref.accountID, objectACL) {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+				"Access Denied", "HeadObject")
+			return
+		}
+	} else if !s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "HeadObject")
 		return
 	}
-	meta, err := s.store.HeadObject(ref.accountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusNotFound, "NoSuchKey",
 			"The specified key does not exist.", "HeadObject")

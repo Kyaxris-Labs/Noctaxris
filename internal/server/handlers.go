@@ -525,6 +525,8 @@ func principalTypeForCondition(p identity.Principal) string {
 		return "AssumedRole"
 	case p.Kind == identity.KindFederated:
 		return "FederatedUser"
+	case p.Kind == identity.KindAnonymous:
+		return "Anonymous"
 	default:
 		return "Unknown"
 	}
@@ -765,6 +767,9 @@ func (s *Server) authorizeDataplaneKMS(
 }
 
 func (s *Server) identityDocs(principal identity.Principal) []string {
+	if principal.Kind == identity.KindAnonymous {
+		return nil
+	}
 	if principal.Kind == identity.KindUser && principal.UserName != "" {
 		docs, err := s.store.IdentityPolicyDocsForUser(principal.AccountID, principal.UserName)
 		if err == nil {
@@ -823,7 +828,11 @@ func (s *Server) writeSuccessAudit(
 		"accessKeyId": verified.AccessKeyID,
 		"arn":         verified.Principal.ARN(),
 	}
-	if !verified.Principal.IsRoot {
+	if verified.Principal.Kind == identity.KindAnonymous {
+		uid["type"] = "Anonymous"
+		delete(uid, "accessKeyId")
+		delete(uid, "arn")
+	} else if !verified.Principal.IsRoot {
 		uid["type"] = "IAMUser"
 	}
 	if verified.Principal.Kind == identity.KindRole {

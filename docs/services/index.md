@@ -21,7 +21,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
 | [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS targets, in-process ticker, PassRole |
 | [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy |
-| [Amazon MQ](mq.md) | Shipped | Broker CRUD **control-plane stub** (ActiveMQ/RabbitMQ); loopback `stub://` endpoint; not a live broker |
+| [Amazon MQ](mq.md) | Shipped | Broker CRUD; nested RabbitMQ when DinD up (`RUNNING`); ActiveMQ / no-DinD → `CREATION_FAILED` stub |
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox; OFFLINE without EndpointType/VPC; PassRole on Role |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
@@ -48,7 +48,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, NONE/JWT/IAM authorizers, optional CredentialsArn PassRole |
 | [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD, USER_PASSWORD_AUTH, RS256 tokens, JWKS on loopback |
 | [CloudFront](cloudfront.md) | Shipped | Distribution CRUD **control-plane stub** (origins must exist; `InProgress`, no DomainName/PoP) |
-| [ELB v2](elbv2.md) | Shipped | Load balancer / target group / listener **control-plane stub** (lambda/ip; unused health; no listener invoke) |
+| [ELB v2](elbv2.md) | Shipped | ALB / target group / listener lite; Lambda lab listener on `/alb/...`; health healthy when listener + permission; IP unused; NLB rejected |
 | [S3 Vectors](s3vectors.md) | Shipped | Vector bucket/index CRUD, PutVectors/QueryVectors cosine or euclidean |
 | [Cloud Control](cloudcontrol.md) | Shipped | Create/Get/List/DeleteResource for S3 bucket and IAM role |
 | [BCM Data Exports](bcm-data-exports.md) | Shipped | Export definition CRUD plus sample file under data root |
@@ -56,11 +56,11 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
 | [CodeDeploy](codedeploy.md) | Shipped | Application / deployment group / deployment lite, optional ECS DesiredCount or Lambda PublishVersion hooks |
 | [RDS](rds.md) | Shipped | Postgres Create/Describe/Delete, nested DinD when engine up, nested-network endpoint |
-| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement; nested `psql` when DinD started Postgres else unavailable; VARCHAR SELECT cells; `parameters` rejected until pgx buy-in; secretArn fail-closed |
+| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement; prefer `pgx` on nested data-plane DSN else nested `psql`; typed OID fields on pgx; named `parameters`; secretArn fail-closed |
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
 | [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete; `creating` until nested Mongo-compatible starts |
 | [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; GetObject/OutputLocation fail closed |
-| [OpenSearch](opensearch.md) | Shipped | Domain CRUD **control-plane stub** (`stub://`; status `CreateFailed`; no nested search) |
+| [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://` |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |
 | [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument **canned** Blocks |
@@ -122,9 +122,9 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, `aws:username` / `aws:userid` / `aws:PrincipalType`, `aws:SecureTransport` (from TLS listen config), `aws:CurrentTime` / `aws:EpochTime`, MFA keys, and `aws:ResourceTag/*` (plus `ecr` / `ssm` / `secretsmanager` / `iam` / `ecs` ResourceTag prefixes) when tags exist via the Tagging API. Unrecognized Condition operators fail closed (same Deny class as catalog-unknown keys). Implemented operators: StringEquals/Like/NotEquals/NotLike (+IfExists), ArnEquals/ArnLike/ArnNotEquals/ArnNotLike (+IfExists), Null, Bool (+IfExists), IpAddress/NotIpAddress (+IfExists), Numeric* and Date* comparisons, and `ForAnyValue:` / `ForAllValues:` on String/Arn operators. Deferred: Binary*, StringEqualsIgnoreCase, full multivalued request-context sets beyond single-valued lab keys.
 
-**Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB). Live Invoke/RunTask need a healthy engine. Privilege reduction for the nested engine is planned. Athena runs in-process (no nested query engine).
+**Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB / MQ / OpenSearch). Live Invoke/RunTask need a healthy engine. Privilege reduction for the nested engine is planned. Athena runs in-process (no nested query engine).
 
-**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines today are RDS (Postgres), ElastiCache (Valkey/Redis), and DocumentDB (Mongo-compatible); those ports are never published on the host. MQ and OpenSearch remain control-plane stubs (no nested broker/search `DataKind`). Prefer RDS Data API on `:4566` for SQL labs.
+**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines are RDS (Postgres), ElastiCache (Valkey/Redis), DocumentDB (Mongo-compatible), MQ (RabbitMQ), and OpenSearch; those ports are never published on the host. Prefer RDS Data API on `:4566` for SQL labs.
 
 **In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS (and DynamoDB Streams when enabled) event source mappings use a continuous in-process poller. EventBridge Pipes use a continuous in-process ticker that calls `PollPipeOnce`. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
 

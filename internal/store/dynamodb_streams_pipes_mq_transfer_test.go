@@ -144,22 +144,60 @@ func TestMQBrokerStubCRUD(t *testing.T) {
 	if b.BrokerID == "" || b.StubEndpoint == "" || !stringsHasPrefix(b.StubEndpoint, "stub://127.0.0.1/") {
 		t.Fatalf("broker=%+v", b)
 	}
-	if b.BrokerState != "CREATION_FAILED" {
-		t.Fatalf("stub broker state=%q want CREATION_FAILED (no nested broker)", b.BrokerState)
+	if b.BrokerState != store.MQBrokerStateCreationFailed {
+		t.Fatalf("ActiveMQ stub state=%q want CREATION_FAILED (no nested ActiveMQ)", b.BrokerState)
 	}
 	got, err := st.DescribeMQBroker(account, b.BrokerID)
 	if err != nil || got.BrokerName != "lab-broker" {
 		t.Fatalf("describe=%+v err=%v", got, err)
 	}
-	if got.BrokerState != "CREATION_FAILED" {
+	if got.BrokerState != store.MQBrokerStateCreationFailed {
 		t.Fatalf("describe state=%q want CREATION_FAILED", got.BrokerState)
 	}
 	list, err := st.ListMQBrokers(account)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list=%v err=%v", list, err)
 	}
-	if err := st.DeleteMQBroker(account, b.BrokerID); err != nil {
+	if _, err := st.DeleteMQBroker(account, b.BrokerID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMQBrokerRabbitMQNestedStatusMachine(t *testing.T) {
+	st := openStreamCStore(t)
+	account := "000000000001"
+	b, err := st.CreateMQBroker(account, "us-east-1", "lab-rabbit", "RABBITMQ", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.BrokerState != store.MQBrokerStateCreationInProgress {
+		t.Fatalf("rabbit create state=%q want CREATION_IN_PROGRESS", b.BrokerState)
+	}
+	if stringsHasPrefix(b.StubEndpoint, "stub://") {
+		t.Fatalf("creating rabbit must use nested amqp endpoint, got %q", b.StubEndpoint)
+	}
+	if err := st.SetMQContainerID(account, b.BrokerID, "", store.MQBrokerStateRunning, "amqp://host:5672"); err == nil {
+		t.Fatal("RUNNING without container_id must fail")
+	}
+	if err := st.SetMQContainerID(account, b.BrokerID, "ctr-1", store.MQBrokerStateRunning, "stub://127.0.0.1/mq/x"); err == nil {
+		t.Fatal("RUNNING with stub:// must fail")
+	}
+	if err := st.SetMQContainerID(account, b.BrokerID, "ctr-1", store.MQBrokerStateRunning, "amqp://noctaxris-mq-x:5672"); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := st.DescribeMQBroker(account, b.BrokerID)
+	if err != nil || ready.BrokerState != store.MQBrokerStateRunning || ready.ContainerID != "ctr-1" {
+		t.Fatalf("ready=%+v err=%v", ready, err)
+	}
+	if err := st.SetMQContainerID(account, b.BrokerID, "", store.MQBrokerStateCreationFailed, "stub://127.0.0.1/mq/"+b.BrokerID); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := st.DescribeMQBroker(account, b.BrokerID)
+	if err != nil || failed.BrokerState != store.MQBrokerStateCreationFailed {
+		t.Fatalf("failed=%+v err=%v", failed, err)
+	}
+	if !stringsHasPrefix(failed.StubEndpoint, "stub://") {
+		t.Fatalf("failed endpoint=%q want stub://", failed.StubEndpoint)
 	}
 }
 

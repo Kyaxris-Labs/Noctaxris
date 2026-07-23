@@ -90,18 +90,20 @@ func DescribeListenersJSON(ls []store.ELBv2Listener) ([]byte, error) {
 // RegisterTargetsJSON is an empty OK body.
 func RegisterTargetsJSON() ([]byte, error) { return []byte(`{}`), nil }
 
-// DescribeTargetHealthJSON builds a lite target health list.
-// Without a lab listener dataplane, registered targets stay unused (not healthy).
-func DescribeTargetHealthJSON(targets []store.ELBv2Target) ([]byte, error) {
-	items := make([]map[string]any, 0, len(targets))
-	for _, t := range targets {
+// DescribeTargetHealthJSON builds a lite target health list from evaluated rows.
+func DescribeTargetHealthJSON(descs []store.ELBv2TargetHealthDesc) ([]byte, error) {
+	items := make([]map[string]any, 0, len(descs))
+	for _, d := range descs {
+		th := map[string]any{"State": d.State}
+		if d.Reason != "" {
+			th["Reason"] = d.Reason
+		}
+		if d.Description != "" {
+			th["Description"] = d.Description
+		}
 		items = append(items, map[string]any{
-			"Target": map[string]any{"Id": t.ID, "Port": t.Port},
-			"TargetHealth": map[string]any{
-				"State":       "unused",
-				"Reason":      "Target.NotInUse",
-				"Description": "Control-plane stub: no lab listener dataplane.",
-			},
+			"Target":        map[string]any{"Id": d.Target.ID, "Port": d.Target.Port},
+			"TargetHealth":  th,
 		})
 	}
 	return json.Marshal(map[string]any{"TargetHealthDescriptions": items})

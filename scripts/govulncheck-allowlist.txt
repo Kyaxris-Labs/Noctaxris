@@ -1,0 +1,8 @@
+# Allowlisted GO vuln IDs only (one ID per line; # comments and blanks ignored).
+# Daemon-side Docker Engine issues reported against github.com/docker/docker with
+# Fixed in: N/A (no client-module fix). See docs/security-defaults.md.
+GO-2026-4883
+GO-2026-4887
+GO-2026-5617
+GO-2026-5668
+GO-2026-5746

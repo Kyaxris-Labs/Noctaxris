@@ -81,28 +81,28 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 
 ## Compute path
 
-Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. Default Compose runs `noctaxris-engine` as privileged DinD so nested containers can start; see [security-defaults.md](security-defaults.md) for the experimental restricted-engine overlay. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
+Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. Default Compose runs `noctaxris-engine` as restricted DinD (`privileged: false`, explicit caps/devices, `cgroup: host`, writable `/sys/fs/cgroup`, dockerd `--ipv6=false`); see [security-defaults.md](security-defaults.md). Hosts that cannot start nested containers may opt in with `compose.engine-privileged.yaml`. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
 
 Lambda, ECS, CodeBuild, Batch, and nested data engines all use nested DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Unknown runtime values fail process start. Live zip/Image Invoke and ECS RunTask require a healthy `noctaxris-engine`. The API never falls through to host Docker.
 
 ## Nested data planes
 
-RDS, ElastiCache, and DocumentDB engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|docdb` identify them. Host Compose still publishes only `127.0.0.1:4566`.
+RDS, ElastiCache, DocumentDB, MQ (RabbitMQ), and OpenSearch engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|docdb|mq|opensearch` identify them. Host Compose still publishes only `127.0.0.1:4566`.
 
 ```mermaid
 flowchart TD
-  Create["CreateDBInstance / CreateCacheCluster / CreateDBCluster"]
+  Create["CreateDBInstance / CreateCacheCluster / CreateDBCluster / CreateBroker / CreateDomain"]
   Store["store row<br/>nested-network endpoint, secret ARN, status"]
   Helper["data-plane helper<br/>compute.Client DinD TLS"]
   Start["start labeled nested container<br/>no host port publish"]
   Describe["Describe* returns nested-network hostname:port"]
-  DataAPI["RDS Data API ExecuteStatement on :4566<br/>nested psql when available; else unavailable"]
+  DataAPI["RDS Data API ExecuteStatement on :4566<br/>pgx nested DSN or nested psql; else unavailable"]
 
   Create --> Store --> Helper --> Start --> Describe
   Helper -.-> DataAPI
 ```
 
-Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). OpenSearch domain CRUD is a control-plane stub: loopback `stub://` endpoint and `CreateFailed` status (same honesty class as MQ `CREATION_FAILED`). Nested OpenSearch is not implemented; do not host-publish search ports if a nested engine is added later.
+Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). Nested MQ and OpenSearch promote to `RUNNING` / `Active` only after a healthy nested container; without DinD or on start failure they fail closed (`CREATION_FAILED` / `CreateFailed` with `stub://`). Broker and search ports are never host-published.
 
 When DinD is unset, create paths keep control-plane rows and nested start is a no-op. Live engine start requires `noctaxris-engine`. Do not mount the operator host filesystem into nested data containers.
 
@@ -123,7 +123,7 @@ Noctaxris does not emulate Amazon VPC, ENIs, or PrivateLink. Nested compute and 
 - API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS (in-process; no remote JWKS by default). IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
 - AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM. Custom issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` and a public host allowlist.
 - Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust. Without CredentialsArn, HTTP API Lambda invoke requires a function resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require the same for `appsync.amazonaws.com`.
-- CloudFront and ELBv2 are config-shaped stubs (no real PoP, no EC2 targets). Gateway must not open HTTP_PROXY to arbitrary URLs.
+- CloudFront remains a config-shaped stub (no real PoP). ELBv2 has an ALB lab listener path that invokes Lambda targets (no EC2/IP dataplane, no NLB). Gateway must not open HTTP_PROXY to arbitrary URLs.
 
 ## Authz
 

@@ -68,6 +68,20 @@ func TestValidateDataPlaneOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts mq", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindMQ, Image: "rabbitmq:3.13-alpine",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("accepts opensearch", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindOpenSearch, Image: "opensearchproject/opensearch:2.11.1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestStartDataPlaneNilClient(t *testing.T) {
@@ -104,5 +118,17 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	}
 	if DefaultDataPlanePort(DataKindDocDB) != 27017 {
 		t.Fatalf("mongo port=%d", DefaultDataPlanePort(DataKindDocDB))
+	}
+	if DefaultDataPlanePort(DataKindMQ) != 5672 {
+		t.Fatalf("amqp port=%d", DefaultDataPlanePort(DataKindMQ))
+	}
+	if DefaultDataPlaneImage(DataKindMQ) != "rabbitmq:3.13-alpine" {
+		t.Fatalf("mq image=%q", DefaultDataPlaneImage(DataKindMQ))
+	}
+	if DefaultDataPlanePort(DataKindOpenSearch) != 9200 {
+		t.Fatalf("opensearch port=%d", DefaultDataPlanePort(DataKindOpenSearch))
+	}
+	if DefaultDataPlaneImage(DataKindOpenSearch) != "opensearchproject/opensearch:2.11.1" {
+		t.Fatalf("opensearch image=%q", DefaultDataPlaneImage(DataKindOpenSearch))
 	}
 }

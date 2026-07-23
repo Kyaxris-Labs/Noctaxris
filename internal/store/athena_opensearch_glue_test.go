@@ -211,18 +211,38 @@ func TestOpenSearchDomainCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(d.StubEndpoint, "stub://127.0.0.1/opensearch/") {
-		t.Fatalf("endpoint=%s", d.StubEndpoint)
+	if d.DomainStatus != store.OpenSearchDomainStatusCreating {
+		t.Fatalf("create status=%q want Creating", d.DomainStatus)
 	}
-	if d.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
-		t.Fatalf("stub domain status=%q want %q (never Active without nested engine)", d.DomainStatus, store.OpenSearchDomainStatusCreateFailed)
+	if strings.HasPrefix(d.StubEndpoint, "stub://") {
+		t.Fatalf("creating domain must use nested endpoint, got %q", d.StubEndpoint)
 	}
 	got, err := st.DescribeOpenSearchDomain(account, "lab-domain")
 	if err != nil || got.DomainName != "lab-domain" {
 		t.Fatalf("describe: %v %#v", err, got)
 	}
-	if got.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
-		t.Fatalf("describe status=%q want %q", got.DomainStatus, store.OpenSearchDomainStatusCreateFailed)
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusActive, "host:9200"); err == nil {
+		t.Fatal("Active without container_id must fail")
+	}
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "stub://127.0.0.1/opensearch/x"); err == nil {
+		t.Fatal("Active with stub:// must fail")
+	}
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "noctaxris-opensearch-lab-domain:9200"); err != nil {
+		t.Fatal(err)
+	}
+	active, err := st.DescribeOpenSearchDomain(account, "lab-domain")
+	if err != nil || active.DomainStatus != store.OpenSearchDomainStatusActive || active.ContainerID != "ctr-os" {
+		t.Fatalf("active=%+v err=%v", active, err)
+	}
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusCreateFailed, ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := st.DescribeOpenSearchDomain(account, "lab-domain")
+	if err != nil || failed.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
+		t.Fatalf("failed=%+v err=%v", failed, err)
+	}
+	if !strings.HasPrefix(failed.StubEndpoint, "stub://127.0.0.1/opensearch/") {
+		t.Fatalf("CreateFailed endpoint=%q want stub://", failed.StubEndpoint)
 	}
 	list, err := st.ListOpenSearchDomainNames(account)
 	if err != nil || len(list) != 1 {
@@ -231,7 +251,7 @@ func TestOpenSearchDomainCRUD(t *testing.T) {
 	if _, err := st.CreateOpenSearchDomain(account, "us-east-1", "lab-domain", ""); err != store.ErrOpenSearchDomainExists {
 		t.Fatalf("dup: %v", err)
 	}
-	if err := st.DeleteOpenSearchDomain(account, "lab-domain"); err != nil {
+	if _, err := st.DeleteOpenSearchDomain(account, "lab-domain"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DescribeOpenSearchDomain(account, "lab-domain"); err != store.ErrOpenSearchDomainNotFound {

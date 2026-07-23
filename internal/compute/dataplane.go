@@ -17,19 +17,23 @@ const (
 	// Containers on this network are not published to the operator host.
 	DataPlaneNetworkName = "noctaxris-data"
 
-	// LabelDataKind marks nested data containers (values: rds|elasticache|docdb).
+	// LabelDataKind marks nested data containers (values: rds|elasticache|docdb|mq|opensearch).
 	LabelDataKind = "noctaxris.data"
 
 	// LabelManaged marks Noctaxris-managed Docker objects.
 	LabelManaged = "noctaxris.managed"
 
-	defaultPostgresImage = "postgres:16-alpine"
-	defaultValkeyImage   = "valkey/valkey:8-alpine"
-	defaultMongoImage    = "mongo:7"
+	defaultPostgresImage   = "postgres:16-alpine"
+	defaultValkeyImage     = "valkey/valkey:8-alpine"
+	defaultMongoImage      = "mongo:7"
+	defaultRabbitMQImage   = "rabbitmq:3.13-alpine"
+	defaultOpenSearchImage = "opensearchproject/opensearch:2.11.1"
 
-	defaultPostgresPort = 5432
-	defaultRedisPort    = 6379
-	defaultMongoPort    = 27017
+	defaultPostgresPort   = 5432
+	defaultRedisPort      = 6379
+	defaultMongoPort      = 27017
+	defaultAMQPPort       = 5672
+	defaultOpenSearchPort = 9200
 )
 
 // DataKind identifies which nested data engine family a container belongs to.
@@ -39,6 +43,8 @@ const (
 	DataKindRDS         DataKind = "rds"
 	DataKindElastiCache DataKind = "elasticache"
 	DataKindDocDB       DataKind = "docdb"
+	DataKindMQ          DataKind = "mq"
+	DataKindOpenSearch  DataKind = "opensearch"
 )
 
 // DataPlaneOpts configures a nested data-engine container inside DinD.
@@ -56,7 +62,7 @@ type DataPlaneOpts struct {
 	// are always set and cannot be overridden away).
 	Labels map[string]string
 	// ContainerPort is the engine listen port inside the nested network.
-	// Zero selects the default for Kind (5432 / 6379 / 27017).
+	// Zero selects the default for Kind (5432 / 6379 / 27017 / 5672 / 9200).
 	ContainerPort int
 }
 
@@ -74,9 +80,9 @@ type DataPlaneInstance struct {
 // ValidateDataPlaneOpts checks required fields without talking to Docker.
 func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 	switch opts.Kind {
-	case DataKindRDS, DataKindElastiCache, DataKindDocDB:
+	case DataKindRDS, DataKindElastiCache, DataKindDocDB, DataKindMQ, DataKindOpenSearch:
 	default:
-		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, or docdb")
+		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, docdb, mq, or opensearch")
 	}
 	if strings.TrimSpace(opts.Image) == "" {
 		return fmt.Errorf("compute: data-plane Image is required")
@@ -97,6 +103,10 @@ func DefaultDataPlaneImage(kind DataKind) string {
 		return defaultValkeyImage
 	case DataKindDocDB:
 		return defaultMongoImage
+	case DataKindMQ:
+		return defaultRabbitMQImage
+	case DataKindOpenSearch:
+		return defaultOpenSearchImage
 	default:
 		return ""
 	}
@@ -111,6 +121,10 @@ func DefaultDataPlanePort(kind DataKind) int {
 		return defaultRedisPort
 	case DataKindDocDB:
 		return defaultMongoPort
+	case DataKindMQ:
+		return defaultAMQPPort
+	case DataKindOpenSearch:
+		return defaultOpenSearchPort
 	default:
 		return 0
 	}

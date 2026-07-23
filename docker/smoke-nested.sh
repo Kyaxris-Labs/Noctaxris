@@ -5,8 +5,8 @@
 # Privilege / compose-engine PRs: run this script (not smoke-core alone).
 # A green PR smoke-core proves STS/S3/KMS/DynamoDB only; it does not prove Invoke.
 #
-# Optional restricted engine overlay:
-#   COMPOSE_EXTRA_FILES="-f docker/compose.engine-restricted.yaml" bash docker/smoke-nested.sh
+# Optional privileged engine overlay (hosts where restricted DinD fails):
+#   COMPOSE_EXTRA_FILES="-f docker/compose.engine-privileged.yaml" bash docker/smoke-nested.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -113,7 +113,7 @@ if [[ "$STATUS" != "available" ]]; then
   exit 1
 fi
 
-echo "==> RDS Data API ExecuteStatement (require nested-psql when DinD started Postgres)"
+echo "==> RDS Data API ExecuteStatement (require pgx or nested-psql when DinD started Postgres)"
 EXEC_OUT="$(aws rds-data execute-statement \
   --resource-arn "$DB_ARN" \
   --secret-arn "$SECRET_ARN" \
@@ -127,9 +127,25 @@ if ! echo "$EXEC_OUT" | grep -q 'records'; then
   echo "$EXEC_OUT" >&2
   exit 1
 fi
-if ! echo "$EXEC_OUT" | grep -Fq 'nested-psql'; then
-  echo "ExecuteStatement must use nested-psql executor (stub is not enough for DinD smoke)" >&2
+if ! echo "$EXEC_OUT" | grep -Fq 'nested-psql' && ! echo "$EXEC_OUT" | grep -Fq '"pgx"'; then
+  echo "ExecuteStatement must use pgx or nested-psql executor (stub is not enough for DinD smoke)" >&2
   echo "$EXEC_OUT" >&2
+  exit 1
+fi
+
+echo "==> RDS Data API ExecuteStatement with parameters"
+PARAM_OUT="$(aws rds-data execute-statement \
+  --resource-arn "$DB_ARN" \
+  --secret-arn "$SECRET_ARN" \
+  --database postgres \
+  --sql 'SELECT :id::bigint AS n' \
+  --parameters '[{"name":"id","value":{"longValue":7}}]' \
+  --endpoint-url "$EP" \
+  --output json)"
+echo "$PARAM_OUT" | grep -E 'records|formattedRecords|noctaxrisExecutor' || true
+if ! echo "$PARAM_OUT" | grep -q 'records'; then
+  echo "ExecuteStatement with parameters missing records" >&2
+  echo "$PARAM_OUT" >&2
   exit 1
 fi
 

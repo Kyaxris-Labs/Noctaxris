@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS s3_object_versions (
   kms_key_id TEXT,
   sealed_dek BLOB,
   sse_kms_context TEXT NOT NULL DEFAULT '',
+  canned_acl TEXT NOT NULL DEFAULT 'private',
   storage_path TEXT NOT NULL,
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key, version_id)
@@ -144,6 +145,7 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
+	acl := normalizeCannedACL(meta.CannedACL)
 	modified := nowRFC3339()
 
 	tx, err := s.db.Begin()
@@ -162,8 +164,8 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO s3_object_versions
-		 (account_id, bucket, key, version_id, is_latest, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, version_id, is_latest, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key, version_id) DO UPDATE SET
 		   is_latest = 1,
 		   etag = excluded.etag,
@@ -173,17 +175,18 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
 		   sse_kms_context = excluded.sse_kms_context,
+		   canned_acl = excluded.canned_acl,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, versionID, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
+		accountID, bucket, key, versionID, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
 	); err != nil {
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version insert: %w", err)
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO s3_objects
-		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key) DO UPDATE SET
 		   etag = excluded.etag,
 		   size = excluded.size,
@@ -192,9 +195,10 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
 		   sse_kms_context = excluded.sse_kms_context,
+		   canned_acl = excluded.canned_acl,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
+		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
 	); err != nil {
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version current: %w", err)
@@ -211,7 +215,7 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		AccountID: accountID, Bucket: bucket, Key: key, ETag: etag, Size: size,
 		ContentType: ct, SSEAlgorithm: meta.SSEAlgorithm, KMSKeyID: meta.KMSKeyID,
 		SealedDEK: meta.SealedDEK, SSEKMSContextJSON: meta.SSEKMSContextJSON,
-		StoragePath: rel, LastModified: modified,
+		CannedACL: acl, StoragePath: rel, LastModified: modified,
 	}, versionID, nil
 }
 
@@ -245,14 +249,14 @@ func (s *Store) GetObjectVersion(accountID, bucket, key, versionID string) (Obje
 
 	var meta ObjectMeta
 	var sealedDEK []byte
-	var sseCtx string
+	var sseCtx, acl string
 	err = s.db.QueryRow(
 		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek,
-		        COALESCE(sse_kms_context, ''), storage_path, last_modified
+		        COALESCE(sse_kms_context, ''), COALESCE(canned_acl, 'private'), storage_path, last_modified
 		 FROM s3_object_versions WHERE account_id = ? AND bucket = ? AND key = ? AND version_id = ?`,
 		accountID, bucket, key, versionID,
 	).Scan(&meta.AccountID, &meta.Bucket, &meta.Key, &meta.ETag, &meta.Size, &meta.ContentType,
-		&meta.SSEAlgorithm, &meta.KMSKeyID, &sealedDEK, &sseCtx, &meta.StoragePath, &meta.LastModified)
+		&meta.SSEAlgorithm, &meta.KMSKeyID, &sealedDEK, &sseCtx, &acl, &meta.StoragePath, &meta.LastModified)
 	if err == sql.ErrNoRows {
 		return ObjectMeta{}, "", nil, ErrNoSuchKey
 	}
@@ -261,6 +265,7 @@ func (s *Store) GetObjectVersion(accountID, bucket, key, versionID string) (Obje
 	}
 	meta.SealedDEK = sealedDEK
 	meta.SSEKMSContextJSON = sseCtx
+	meta.CannedACL = normalizeCannedACL(acl)
 	data, err := os.ReadFile(filepath.Join(s.dataRoot, meta.StoragePath))
 	if err != nil {
 		return ObjectMeta{}, "", nil, fmt.Errorf("get object version read: %w", err)

@@ -6,7 +6,7 @@ Durable single-host lab ops for Noctaxris. This is not a multi-tenant HA guide.
 
 Run **one** Noctaxris API process against a given data root (Compose named volume or host path). Do not scale replicas against the same `state.db`. Multi-instance access is unsupported and can corrupt SQLite state. WAL is off by default; `busy_timeout=5000` applies on every connection. In-process workers (Scheduler, ESM pollers, Pipes ticker) assume a single API process.
 
-Compose already mounts API state (`noctaxris-data`) separately from Lambda code shared with DinD (`noctaxris-compute`). `noctaxris-compute-init` chowns the compute volume to UID `65532` before the API starts. The nested engine mounts compute `:ro` and never mounts `master.key` or `state.db`. Default engine is privileged DinD; experimental restricted engine: `docker compose -f docker/compose.yaml -f docker/compose.engine-restricted.yaml --env-file docker/.env up --build`.
+Compose already mounts API state (`noctaxris-data`) separately from Lambda code shared with DinD (`noctaxris-compute`). `noctaxris-compute-init` chowns the compute volume to UID `65532` before the API starts. The nested engine mounts compute `:ro` and never mounts `master.key` or `state.db`. Default engine is restricted DinD (`privileged: false` with explicit caps). If nested smoke fails on your host: `docker compose -f docker/compose.yaml -f docker/compose.engine-privileged.yaml --env-file docker/.env up --build`.
 
 ## Backup and restore
 
@@ -59,7 +59,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 | Job | When |
 |-----|------|
-| unit / compose-static / govulncheck | Every push and PR |
+| unit / compose-static / govulncheck | Every push and PR (`go run ./scripts/govulncheck-ci`; allowlists only documented daemon-side Docker GO IDs with Fixed in: N/A) |
 | race | Scoped `-race` on `internal/kernel` and `internal/store` |
 | image | `docker build -f docker/Dockerfile .` |
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
@@ -73,8 +73,8 @@ Operator shortcut (same script as the manual CI job):
 ```bash
 cp docker/.env.example docker/.env   # if needed
 bash docker/smoke-nested.sh
-# Restricted engine experiment:
-# COMPOSE_EXTRA_FILES="-f docker/compose.engine-restricted.yaml" bash docker/smoke-nested.sh
+# Privileged engine opt-in (broken hosts only):
+# COMPOSE_EXTRA_FILES="-f docker/compose.engine-privileged.yaml" bash docker/smoke-nested.sh
 ```
 
 Per-service CLI smoke remains documented on each `docs/services/` page for operator runs outside CI.

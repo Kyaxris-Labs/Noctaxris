@@ -96,8 +96,10 @@ type ObjectMeta struct {
 	// SSEKMSContextJSON is optional customer encryption-context pairs (JSON object),
 	// excluding the default aws:s3:arn entry which is rebuilt on decrypt.
 	SSEKMSContextJSON string
-	StoragePath       string
-	LastModified      string
+	// CannedACL is the lab canned ACL (private, public-read, public-read-write).
+	CannedACL    string
+	StoragePath  string
+	LastModified string
 }
 
 // ListObjectsResult is a minimal ListObjectsV2 response payload.
@@ -420,12 +422,26 @@ type PutObjectMeta struct {
 	SealedDEK    []byte
 	// SSEKMSContextJSON is optional customer encryption-context pairs (JSON object).
 	SSEKMSContextJSON string
+	// CannedACL is x-amz-acl (default private).
+	CannedACL string
 	// Data is the on-disk payload (ciphertext when SSE applies, else plaintext).
 	Data []byte
 	// PlainSize is the logical object size reported to clients.
 	PlainSize int64
 	// ETag overrides MD5 of Data when set (typically MD5 of plaintext).
 	ETag string
+}
+
+func normalizeCannedACL(acl string) string {
+	acl = strings.ToLower(strings.TrimSpace(acl))
+	switch acl {
+	case "", "private":
+		return "private"
+	case "public-read", "public-read-write":
+		return acl
+	default:
+		return "private"
+	}
 }
 
 // PutObject writes object bytes under dataRoot and upserts metadata.
@@ -468,12 +484,13 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
+	acl := normalizeCannedACL(meta.CannedACL)
 	modified := nowRFC3339()
 
 	_, err = s.db.Exec(
 		`INSERT INTO s3_objects
-		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key) DO UPDATE SET
 		   etag = excluded.etag,
 		   size = excluded.size,
@@ -482,9 +499,10 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
 		   sse_kms_context = excluded.sse_kms_context,
+		   canned_acl = excluded.canned_acl,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
+		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
 	)
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -505,6 +523,7 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		KMSKeyID:          meta.KMSKeyID,
 		SealedDEK:         meta.SealedDEK,
 		SSEKMSContextJSON: meta.SSEKMSContextJSON,
+		CannedACL:         acl,
 		StoragePath:       rel,
 		LastModified:      modified,
 	}, nil
@@ -530,14 +549,14 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 		return ObjectMeta{}, err
 	}
 	var m ObjectMeta
-	var ct, sse, kmsID, sseCtx sql.NullString
+	var ct, sse, kmsID, sseCtx, acl sql.NullString
 	var sealed []byte
 	err = s.db.QueryRow(
 		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek,
-		        COALESCE(sse_kms_context, ''), storage_path, last_modified
+		        COALESCE(sse_kms_context, ''), COALESCE(canned_acl, 'private'), storage_path, last_modified
 		 FROM s3_objects WHERE account_id = ? AND bucket = ? AND key = ?`,
 		accountID, bucket, key,
-	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &sseCtx, &m.StoragePath, &m.LastModified)
+	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &sseCtx, &acl, &m.StoragePath, &m.LastModified)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ObjectMeta{}, ErrNoSuchKey
 	}
@@ -555,6 +574,11 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 	}
 	if sseCtx.Valid {
 		m.SSEKMSContextJSON = sseCtx.String
+	}
+	if acl.Valid {
+		m.CannedACL = normalizeCannedACL(acl.String)
+	} else {
+		m.CannedACL = "private"
 	}
 	m.SealedDEK = sealed
 	return m, nil

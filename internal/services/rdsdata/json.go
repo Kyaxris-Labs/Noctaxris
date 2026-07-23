@@ -36,6 +36,9 @@ func ExecuteStatementJSON(res store.RDSDataExecuteResult) ([]byte, error) {
 			if cell.BooleanValue != nil {
 				m["booleanValue"] = *cell.BooleanValue
 			}
+			if cell.BlobValue != nil {
+				m["blobValue"] = *cell.BlobValue
+			}
 			outRow = append(outRow, m)
 		}
 		records = append(records, outRow)

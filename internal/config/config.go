@@ -39,6 +39,10 @@ type Config struct {
 	// FunctionURLCORSOrigins is a comma-separated allowlist for Function URL AuthType NONE
 	// (NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS). Empty keeps lab default Access-Control-Allow-Origin: *.
 	FunctionURLCORSOrigins []string
+	// AllowAnonymousS3 enables the unsigned GetObject/HeadObject gate
+	// (NOCTAXRIS_ALLOW_ANONYMOUS_S3=1). Still requires public bucket policy or
+	// object canned ACL public-read per object. Default false.
+	AllowAnonymousS3 bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -62,6 +66,8 @@ func LoadFromEnv() (Config, error) {
 		HTTPAPIAllowSetCookie:  strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "1") ||
 			strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "true"),
 		FunctionURLCORSOrigins: splitCSVEnv("NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS"),
+		AllowAnonymousS3: strings.EqualFold(os.Getenv(EnvAllowAnonymousS3), "1") ||
+			strings.EqualFold(os.Getenv(EnvAllowAnonymousS3), "true"),
 	}
 
 	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)

@@ -206,6 +206,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isELBv2LabListenerPath(r.URL.Path) {
+		s.handleELBv2LabListener(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
 	action := resolveAction(r, body)
 	var verified *authn.Verified
 	if isUnauthenticatedSTSAction(action) {
@@ -216,6 +221,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		verified, err = authn.Verify(r, body, s.now(), sigv4Skew, s.lookupKey)
 		if err != nil {
 			code := authn.Code(err)
+			// Narrow anonymous S3 GetObject/HeadObject gate: only MissingAuthenticationToken,
+			// only object GET/HEAD, and only when env + policy/ACL allow that object.
+			if code == authn.CodeMissingAuthenticationToken &&
+				s.tryAnonymousS3Object(w, r, body, requestID, eventID, readOnly) {
+				return
+			}
 			if code == "" {
 				code = authn.CodeInvalidClientTokenId
 			}

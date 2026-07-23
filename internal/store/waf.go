@@ -282,9 +282,9 @@ func wafRegionOrDefault(region string) string {
 //   - arn:aws:execute-api:REGION:ACCOUNT:APIID[/STAGE[/route]]
 //   - arn:aws:appsync:REGION:ACCOUNT:apis/APIID
 //   - arn:aws:lambda:REGION:ACCOUNT:function:NAME (lab Function URL associate)
+//   - arn:aws:elasticloadbalancing:REGION:ACCOUNT:loadbalancer/app/NAME/ID (ELB lab listener)
 //
-// Rejected (no enforce path yet): elasticloadbalancing load balancers,
-// apigateway restapis, cognito-idp user pools.
+// Rejected (no enforce path yet): apigateway restapis, cognito-idp user pools.
 func IsWAFAssociableResourceARN(resourceARN string) bool {
 	resourceARN = strings.TrimSpace(resourceARN)
 	if resourceARN == "" || !strings.HasPrefix(resourceARN, "arn:aws:") {
@@ -320,6 +320,14 @@ func IsWAFAssociableResourceARN(resourceARN string) bool {
 	case "lambda":
 		// Lab Function URL association: arn:aws:lambda:REGION:ACCOUNT:function:NAME
 		return strings.HasPrefix(resource, "function:") && len(strings.TrimPrefix(resource, "function:")) > 0
+	case "elasticloadbalancing":
+		// Application LB ARN only (NLB net/ rejected). Lab listener enforces on LB ARN.
+		if !strings.HasPrefix(resource, "loadbalancer/app/") {
+			return false
+		}
+		rest := strings.TrimPrefix(resource, "loadbalancer/app/")
+		segs := strings.Split(rest, "/")
+		return len(segs) == 2 && segs[0] != "" && segs[1] != ""
 	default:
 		return false
 	}

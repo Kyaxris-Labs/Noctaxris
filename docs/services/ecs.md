@@ -83,4 +83,4 @@ Expect `register-task-definition` to fail without both role ARNs. Expect `run-ta
 - Load balancers, `awsvpc` networking, capacity providers, ECS Exec, Service Connect
 - Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix
 - Cross-account or multi-cluster depth beyond same-account `default`
-- Rootless nested engine as the packaged default (default Compose stays privileged DinD; experimental `compose.engine-restricted.yaml` overlay — see [security-defaults.md](../security-defaults.md))
+- Fully rootless nested engine (default Compose already uses restricted DinD without `privileged: true`; privileged opt-in is `compose.engine-privileged.yaml` — see [security-defaults.md](../security-defaults.md))

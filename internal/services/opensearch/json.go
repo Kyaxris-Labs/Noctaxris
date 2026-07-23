@@ -2,6 +2,7 @@ package opensearch
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -11,9 +12,14 @@ func domainStatus(d store.OpenSearchDomain) map[string]any {
 	if status == "" {
 		status = store.OpenSearchDomainStatusCreateFailed
 	}
-	// Active means engine-ready on AWS. Stub domains stay CreateFailed (Created=false).
-	created := status == "Active"
-	processing := status == "Processing" || status == "Creating"
+	// Active only with a nested container. Never claim Active on stub://.
+	if status == store.OpenSearchDomainStatusActive {
+		if d.ContainerID == "" || strings.HasPrefix(d.StubEndpoint, "stub://") {
+			status = store.OpenSearchDomainStatusCreateFailed
+		}
+	}
+	created := status == store.OpenSearchDomainStatusActive
+	processing := status == "Processing" || status == store.OpenSearchDomainStatusCreating
 	return map[string]any{
 		"DomainId":          d.DomainID,
 		"DomainName":        d.DomainName,

@@ -45,14 +45,15 @@ CREATE TABLE IF NOT EXISTS rds_data_transactions (
 `
 
 // RDSDataSqlParameter is one ExecuteStatement bind parameter (lab subset).
-// Wire binding requires an optional pgx executor after dependency buy-in;
-// nested-psql rejects non-empty Parameters.
+// pgx binds these when the nested wire DSN is reachable; nested-psql falls back
+// to type-safe literal substitution for the same shapes.
 type RDSDataSqlParameter struct {
 	Name         string
 	StringValue  *string
 	LongValue    *int64
 	DoubleValue  *float64
 	BooleanValue *bool
+	BlobValue    []byte
 	IsNull       *bool
 }
 
@@ -72,7 +73,9 @@ type RDSDataField struct {
 	LongValue    *int64
 	DoubleValue  *float64
 	BooleanValue *bool
-	IsNull       *bool
+	// BlobValue is standard base64 (Data API blobValue).
+	BlobValue *string
+	IsNull    *bool
 }
 
 // RDSDataColumnMeta is column metadata returned by ExecuteStatement.
@@ -92,7 +95,7 @@ type RDSDataExecuteResult struct {
 
 // RDSDataExecutor runs SQL against a nested engine (or a stub).
 // Implementations return typed column metadata, records, and NumberOfRecordsUpdated
-// when they can; nested-psql maps SELECT cells as VARCHAR strings only.
+// when they can; nested-psql maps SELECT cells as VARCHAR strings only; pgx maps OIDs.
 type RDSDataExecutor interface {
 	Execute(req RDSDataExecuteRequest) (RDSDataExecuteResult, error)
 }
@@ -100,7 +103,7 @@ type RDSDataExecutor interface {
 // StubRDSDataExecutor records statements and returns canned SELECT-shaped results.
 // Only used when tests inject SetRDSDataExecutor. Production ExecuteStatement fails
 // closed with DatabaseUnavailableException when no nested Postgres container exists.
-// Live SQL against nested Postgres uses DinD exec + psql (no pgx until buy-in).
+// Live SQL prefers pgx against the nested data-plane DSN, else DinD exec + psql.
 type StubRDSDataExecutor struct {
 	mu         sync.Mutex
 	Statements []RDSDataExecuteRequest

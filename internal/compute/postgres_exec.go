@@ -9,7 +9,8 @@ import (
 )
 
 // PostgresSQLOpts runs SQL via psql inside a nested Postgres container.
-// No host port publish and no Go Postgres driver (pgx deferred without buy-in).
+// No host port publish. The Data API prefers in-process pgx against the nested
+// data-plane DSN when reachable; this DinD-exec path is the fallback.
 type PostgresSQLOpts struct {
 	ContainerID string
 	Username    string

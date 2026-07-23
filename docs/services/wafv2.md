@@ -10,13 +10,13 @@ Web ACL and rule group shape lite, AssociateWebACL with a lab resource ARN strin
 |------|---------|
 | Web ACL | `CreateWebACL`, `UpdateWebACL`, `GetWebACL`, `ListWebACLs` |
 | Rule group | `CreateRuleGroup` |
-| Association | `AssociateWebACL` (HTTP API / execute-api / AppSync / Lambda function ARNs with an invoke gate; Web ACL must exist in-account; fail closed on unknown or unenforced shapes) |
-| Invoke gate | Associated Web ACL DefaultAction on HTTP API, AppSync GraphQL, and Function URL invoke (evaluate errors fail closed with 403) |
+| Association | `AssociateWebACL` (HTTP API / execute-api / AppSync / Lambda function ARNs / ALB `loadbalancer/app/...` with an invoke gate; Web ACL must exist in-account; fail closed on unknown or unenforced shapes) |
+| Invoke gate | Associated Web ACL DefaultAction on HTTP API, AppSync GraphQL, Function URL, and ELB lab listener invoke (evaluate errors fail closed with 403) |
 | Lab helper | `Evaluate` (label match Allow/Block; invoke path does not supply request labels) |
 
 Rules use a `Label` string match on the Evaluate helper. Invoke enforcement uses DefaultAction only (empty request label). DefaultAction is Allow or Block.
 
-`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]`, `arn:aws:execute-api:...`, AppSync API ARNs, and Lambda function ARNs for Function URL labs. ALB, API Gateway REST (`restapis/...`), and Cognito user-pool ARNs are rejected until an enforce path exists. Unknown resource ARN services fail closed. Phantom Web ACL ARNs are rejected.
+`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]`, `arn:aws:execute-api:...`, AppSync API ARNs, Lambda function ARNs for Function URL labs, and Application LB ARNs (`arn:aws:elasticloadbalancing:...:loadbalancer/app/...`) for the ELB lab listener. API Gateway REST (`restapis/...`), NLB `loadbalancer/net/...`, and Cognito user-pool ARNs are rejected until an enforce path exists. Unknown resource ARN services fail closed. Phantom Web ACL ARNs are rejected.
 
 ### Authz notes
 

@@ -6,16 +6,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 )
 
-func TestRDSDataPgxDisabledWithoutBuyIn(t *testing.T) {
-	if rdsDataPgxEnabled() {
-		t.Fatal("pgx path must stay disabled until go.mod buy-in")
-	}
-	t.Setenv(EnvRDSDataPgx, "1")
-	if rdsDataPgxEnabled() {
-		t.Fatal("NOCTAXRIS_RDS_DATA_PGX alone must not enable pgx without a linked driver")
-	}
-}
-
 func TestMapPostgresSQLResultSelect(t *testing.T) {
 	res := mapPostgresSQLResult(compute.PostgresSQLResult{
 		Columns: []string{"?column?"},

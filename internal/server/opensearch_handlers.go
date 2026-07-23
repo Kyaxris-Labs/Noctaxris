@@ -94,6 +94,17 @@ func (s *Server) opensearchCreate(
 			"Unable to create domain.", readOnly, eventID, verified)
 		return
 	}
+	// Nested OpenSearch on Internal noctaxris-data; Active only after healthy wait (never Active on stub://).
+	_ = tryStartNestedDataEngine(s, verified.AccountID, "opensearch", d.DomainName, map[string]string{
+		"discovery.type":              "single-node",
+		"DISABLE_SECURITY_PLUGIN":     "true",
+		"DISABLE_INSTALL_DEMO_CONFIG": "true",
+		"bootstrap.memory_lock":       "false",
+		"OPENSEARCH_JAVA_OPTS":        "-Xms512m -Xmx512m",
+	})
+	if updated, err := s.store.DescribeOpenSearchDomain(verified.AccountID, d.DomainName); err == nil {
+		d = updated
+	}
 	payload, _ := ossvc.CreateDomainJSON(d)
 	s.writeOpenSearchOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, opensearchEventSource, "CreateDomain", readOnly)
@@ -177,11 +188,13 @@ func (s *Server) opensearchDelete(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.DeleteOpenSearchDomain(verified.AccountID, name); err != nil {
+	containerID, err := s.store.DeleteOpenSearchDomain(verified.AccountID, name)
+	if err != nil {
 		s.writeOpenSearchError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete domain.", readOnly, eventID, verified)
 		return
 	}
+	_ = tryStopNestedDataEngine(s, containerID)
 	payload, _ := ossvc.DeleteDomainJSON(d)
 	s.writeOpenSearchOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, opensearchEventSource, "DeleteDomain", readOnly)

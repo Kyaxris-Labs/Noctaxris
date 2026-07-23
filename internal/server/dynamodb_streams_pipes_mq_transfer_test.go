@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,14 @@ func TestMQBrokerHandlers(t *testing.T) {
 	desc := mustMQJSON(t, handler, "DescribeBroker", map[string]any{"BrokerId": id}, now)
 	if desc.Code != http.StatusOK {
 		t.Fatalf("DescribeBroker status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	// Unit test server has no DinD: RabbitMQ must fail closed, not invent RUNNING.
+	body := desc.Body.String()
+	if !strings.Contains(body, `"BrokerState":"CREATION_FAILED"`) && !strings.Contains(body, `"BrokerState": "CREATION_FAILED"`) {
+		t.Fatalf("want CREATION_FAILED without DinD; body=%q", body)
+	}
+	if strings.Contains(body, `"BrokerState":"RUNNING"`) {
+		t.Fatalf("must not claim RUNNING without nested broker; body=%q", body)
 	}
 	list := mustMQJSON(t, handler, "ListBrokers", map[string]any{}, now)
 	if list.Code != http.StatusOK {

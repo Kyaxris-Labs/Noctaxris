@@ -2,34 +2,41 @@
 
 ## Unreleased
 
+### CI / supply chain
+
+- `govulncheck` CI uses `go run ./scripts/govulncheck-ci` with an explicit allowlist for five Docker Engine CVEs reported against `github.com/docker/docker` with Fixed in: N/A (no client-module bump available). All other findings still fail the job. Residual risk and non-use of archive/`docker cp` APIs: [docs/security-defaults.md](docs/security-defaults.md)
+
 ### Storage and KMS custody
 
 - Secrets Manager / SSM SecureString / DynamoDB SSE bind AWS-shaped KMS EncryptionContext on seal/unseal and EvaluateKMS (`SecretARN`+`SecretVersionId`, `PARAMETER_ARN`, `aws:dynamodb:tableName`+`aws:dynamodb:subscriberId`)
 - DynamoDB `CreateTable` / `UpdateTable` SSE-KMS requires caller `kms:DescribeKey` and `kms:CreateGrant` with that table context
 - Resource-based policies (KMS key, S3 bucket, Secrets, DynamoDB, ECR) require `Principal` on put; missing Principal matches none at eval (identity policies unchanged)
 - S3 SSE-KMS persists customer `x-amz-server-side-encryption-context` pairs and rebuilds full context on Get/Copy/multipart
-- Anonymous S3 GetObject still deferred (secure-by-default SigV4)
+- Anonymous S3 GetObject / HeadObject opt-in: `NOCTAXRIS_ALLOW_ANONYMOUS_S3=1` plus bucket policy Principal `"*"` / `{"AWS":"*"}` Allow or object `x-amz-acl` `public-read` (default off; gate does not skip SigV4 for other S3 APIs)
 
 ### HTTP API Lambda authorizer
 
 - HTTP API `CreateAuthorizer` REQUEST (Lambda) with CUSTOM routes; Deny short-circuits before integration
 - Authorizer invoke uses CredentialsArn or `apigateway.amazonaws.com` resource-policy parity with AWS_PROXY
 - Proxy responses strip hop-by-hop headers and `Set-Cookie` (opt-in `NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE=1`)
-- Function URL CORS AllowOrigins allowlist; WAF Associate rejects ALB / REST / Cognito (no enforce path)
+- Function URL CORS AllowOrigins allowlist; WAF Associate rejects REST / Cognito (no enforce path); ALB associate allowed with lab listener enforce
 
 ### ELB / CloudFront dataplane honesty
 
-- ELBv2 **control-plane stub**: `Type=network` rejected; Lambda `RegisterTargets` requires function resolve and `elasticloadbalancing.amazonaws.com` Allow; `DescribeTargetHealth` returns `unused` until a lab listener exists
+- ELBv2: `Type=network` rejected; Lambda `RegisterTargets` requires function resolve and `elasticloadbalancing.amazonaws.com` Allow
+- ELB lab listener: `/alb/{account}/{name}/{port}/...` invokes registered Lambda (ALB event shape); open dataplane gate; WAF on LB ARN
+- `DescribeTargetHealth` returns `healthy` when a listener forwards and permission Allows; `unused` without a listener; IP stays `unused`
 - CloudFront **control-plane stub**: origins must exist (lab S3 / HTTP API); Status `InProgress` with DomainName omitted (not Deployed; no PoP)
 
 ### Compute path honesty
 
 - Removed opt-in microVM / Firecracker selection path. Nested DinD via Compose `noctaxris-engine` is the only packaged compute plane
 - `NOCTAXRIS_COMPUTE_RUNTIME` accepts only `dind` (or unset); `NOCTAXRIS_FIRECRACKER_BIN` removed
-- Docs and README describe DinD-only compute; default engine remains privileged DinD with experimental `compose.engine-restricted.yaml`
+- Docs and README describe DinD-only compute; default engine is restricted DinD (`privileged: false` + caps/devices); `compose.engine-privileged.yaml` opt-in for broken hosts
 
 ### Nested engine integrity
 
+- Default Compose engine is restricted DinD (`privileged: false` + `cap_add` / devices / security_opt + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`); opt-in `compose.engine-privileged.yaml` for hosts that cannot start nested containers
 - Engine mounts `noctaxris-compute` `:ro` (API still unpacks read-write); compose-static tests lock the mount
 - Nested Lambda/ECS/data-plane HostConfig: `Privileged=false`, empty CapAdd, CapDrop ALL, `no-new-privileges`
 - Digest pins for Compose `docker:27-dind` and `busybox` init images
@@ -59,8 +66,8 @@
 
 ### Platform depth
 
-- RDS Data API: ExecuteStatement runs real SQL via nested `psql` (DinD exec) when a Postgres container was started; stub marker when DinD is unset (still no `pgx`)
-- RDS Data API prep: parse `parameters` and reject them until optional wire-protocol executor buy-in; nested-psql remains the default path (VARCHAR SELECT cells)
+- RDS Data API: ExecuteStatement prefers `pgx` (`github.com/jackc/pgx/v5` v5.10.0) against the nested data-plane DSN only (typed OID fields + named `:name` parameters); falls back to nested `psql` (DinD exec, VARCHAR cells, literal parameter rewrite) when the wire dial fails; `DatabaseUnavailableException` without a nested container
+- `NOCTAXRIS_RDS_DATA_PGX=0` forces nested-psql; nested DSN rejects loopback/IP/host-published endpoints
 - Nested DinD smoke: `docker/smoke-nested.sh` (weekly schedule + Actions `workflow_dispatch` with `nested_smoke=true`, or run the script locally). Not on push/PR; a green PR proves `smoke-core` only. See [docs/ops.md](docs/ops.md).
 
 ### Security hardening (H1)
@@ -109,7 +116,7 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 - Textract stub: DetectDocumentText / AnalyzeDocument canned Blocks
 - Transcribe stub: Start/Get/List transcription jobs with canned transcript under the data root
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Wire-protocol `pgx` Data API executor, MemoryDB, Neptune, and real ML model runtimes remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). MemoryDB, Neptune, and real ML model runtimes remain deferred.
 
 ## Cognito, HTTP API, and edge stubs
 

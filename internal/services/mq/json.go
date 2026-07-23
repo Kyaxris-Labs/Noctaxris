@@ -16,6 +16,11 @@ func CreateBrokerJSON(b store.MQBroker) ([]byte, error) {
 
 // DescribeBrokerJSON builds a DescribeBroker success body.
 func DescribeBrokerJSON(b store.MQBroker) ([]byte, error) {
+	ip := "127.0.0.1"
+	if b.BrokerState == store.MQBrokerStateRunning && b.ContainerID != "" {
+		// Nested DinD hostname; not a host-published listener.
+		ip = ""
+	}
 	return json.Marshal(map[string]any{
 		"BrokerId":         b.BrokerID,
 		"BrokerName":       b.BrokerName,
@@ -29,7 +34,7 @@ func DescribeBrokerJSON(b store.MQBroker) ([]byte, error) {
 			{
 				"ConsoleURL": b.StubEndpoint,
 				"Endpoints":  []string{b.StubEndpoint},
-				"IpAddress":  "127.0.0.1",
+				"IpAddress":  ip,
 			},
 		},
 	})

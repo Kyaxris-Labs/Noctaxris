@@ -14,6 +14,10 @@ const (
 	// EnvAllowOpenDataPlane permits Function URL / HTTP API AuthorizationType NONE
 	// when listen is non-loopback. Loopback listen allows NONE without this env.
 	EnvAllowOpenDataPlane = "NOCTAXRIS_ALLOW_OPEN_DATA_PLANE"
+	// EnvAllowAnonymousS3 permits unsigned path-style GetObject/HeadObject when a
+	// bucket policy Principal "*" / {"AWS":"*"} Allow or object canned ACL
+	// public-read grants the object. Default off (PublicAccessBlock-shaped).
+	EnvAllowAnonymousS3 = "NOCTAXRIS_ALLOW_ANONYMOUS_S3"
 )
 
 // ListenIsLoopback reports whether addr binds only loopback (or is empty / port-only).
@@ -70,4 +74,15 @@ func (c Config) OpenDataPlaneAllowed() bool {
 		return true
 	}
 	return ListenIsLoopback(c.ListenAddr)
+}
+
+// AnonymousS3Allowed reports whether unsigned S3 GetObject/HeadObject may be
+// evaluated against public bucket policy / object ACL. Requires explicit env =1;
+// still default-deny per object without a Principal "*" Allow or public-read ACL.
+func (c Config) AnonymousS3Allowed() bool {
+	if c.AllowAnonymousS3 {
+		return true
+	}
+	v := strings.TrimSpace(os.Getenv(EnvAllowAnonymousS3))
+	return v == "1" || strings.EqualFold(v, "true")
 }

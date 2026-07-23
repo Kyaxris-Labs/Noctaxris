@@ -1,0 +1,16 @@
+# Opt-in full-privileged nested engine for hosts where restricted DinD cannot
+# start nested containers (some Docker Desktop / WSL2 kernels).
+# Default compose.yaml already runs a non-privileged engine with an explicit
+# capability and device set. Prefer that path; use this overlay only when
+# nested smoke fails without it.
+#
+# Usage (from docker/):
+#   docker compose -f compose.yaml -f compose.engine-privileged.yaml --env-file .env up --build
+#
+# Nested smoke against this overlay:
+#   COMPOSE_EXTRA_FILES="-f docker/compose.engine-privileged.yaml" bash docker/smoke-nested.sh
+#
+# Keep host publish on 127.0.0.1:4566. Never add host docker.sock on the API.
+services:
+  noctaxris-engine:
+    privileged: true

@@ -78,7 +78,7 @@ func (s *Server) mqCreate(
 	instance, _ := params["HostInstanceType"].(string)
 	if publiclyAccessibleTrue(params["PubliclyAccessible"]) {
 		s.writeMQError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
-			"PubliclyAccessible brokers are not supported (control-plane stub only).", readOnly, eventID, verified)
+			"PubliclyAccessible brokers are not supported (Internal nested network only).", readOnly, eventID, verified)
 		return
 	}
 	if !s.authorize(verified, catalog.ActionMQCreateBroker, "*") {
@@ -101,6 +101,16 @@ func (s *Server) mqCreate(
 		s.writeMQError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to create broker.", readOnly, eventID, verified)
 		return
+	}
+	if strings.EqualFold(b.EngineType, "RABBITMQ") {
+		// Nested RabbitMQ on Internal noctaxris-data; no host port publish.
+		_ = tryStartNestedDataEngine(s, verified.AccountID, "mq", b.BrokerID, map[string]string{
+			"RABBITMQ_DEFAULT_USER": "noctaxris",
+			"RABBITMQ_DEFAULT_PASS": "noctaxris-mq-lab",
+		})
+		if updated, err := s.store.DescribeMQBroker(verified.AccountID, b.BrokerID); err == nil {
+			b = updated
+		}
 	}
 	payload, _ := mqsvc.CreateBrokerJSON(b)
 	s.writeMQOK(w, requestID, payload)
@@ -164,7 +174,7 @@ func (s *Server) mqDelete(
 			"User is not authorized to perform mq:DeleteBroker.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.DeleteMQBroker(verified.AccountID, id)
+	containerID, err := s.store.DeleteMQBroker(verified.AccountID, id)
 	if errors.Is(err, store.ErrMQBrokerNotFound) {
 		s.writeMQError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 			"Broker not found.", readOnly, eventID, verified)
@@ -175,6 +185,7 @@ func (s *Server) mqDelete(
 			"Unable to delete broker.", readOnly, eventID, verified)
 		return
 	}
+	_ = tryStopNestedDataEngine(s, containerID)
 	w.Header().Set("Content-Type", mqJSONContentType)
 	w.Header().Set("x-amzn-RequestId", requestID)
 	w.WriteHeader(http.StatusOK)
