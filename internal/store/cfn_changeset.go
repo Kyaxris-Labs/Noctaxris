@@ -153,11 +153,6 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 	if cs.Status != "CREATE_COMPLETE" && cs.Status != "AVAILABLE" {
 		return CFNStack{}, fmt.Errorf("%w: change set status %s", ErrCFNChangeSetFailed, cs.Status)
 	}
-	for _, ch := range cs.Changes {
-		if ch.Action == "Modify" {
-			return CFNStack{}, fmt.Errorf("%w: Modify changes are not supported (fail-closed); logical id %s", ErrCFNBadTemplate, ch.LogicalResourceID)
-		}
-	}
 	stacks, err := s.DescribeCFNStacks(accountID, cs.StackID)
 	if err != nil {
 		return CFNStack{}, err
@@ -167,13 +162,25 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 	if err != nil {
 		return CFNStack{}, err
 	}
+	oldTpl, _ := parseCFNTemplate(st.TemplateBody)
 	region = cfnRegionOrDefault(region)
 	eval := newCFNEvalCtx(accountID, region, st.StackName)
+	physicalByLogical := map[string]string{}
+	typeByLogical := map[string]string{}
 	for _, res := range st.Resources {
+		physicalByLogical[res.LogicalID] = res.PhysicalID
+		typeByLogical[res.LogicalID] = res.ResourceType
 		eval.setResource(res.LogicalID, res.PhysicalID, map[string]string{"Ref": res.PhysicalID, "Arn": res.PhysicalID})
 	}
 
-	// Removals first (reverse dependency-ish: by name descending).
+	modifyIDs := map[string]struct{}{}
+	for _, ch := range cs.Changes {
+		if ch.Action == "Modify" {
+			modifyIDs[ch.LogicalResourceID] = struct{}{}
+		}
+	}
+
+	// Order: Removals, then Modify (dependency order), then Add.
 	for _, ch := range cs.Changes {
 		if ch.Action != "Remove" {
 			continue
@@ -182,25 +189,39 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 			LogicalID: ch.LogicalResourceID, ResourceType: ch.ResourceType, PhysicalID: ch.PhysicalResourceID,
 		})
 		_, _ = s.db.Exec(`DELETE FROM cfn_stack_resources WHERE stack_id = ? AND logical_id = ?`, st.StackID, ch.LogicalResourceID)
+		delete(physicalByLogical, ch.LogicalResourceID)
+		delete(typeByLogical, ch.LogicalResourceID)
 	}
 
 	order, err := cfnDependencyOrder(tpl.Resources)
 	if err != nil {
 		return CFNStack{}, err
 	}
-	existingIDs := map[string]struct{}{}
-	for _, r := range st.Resources {
-		existingIDs[r.LogicalID] = struct{}{}
+	for _, logicalID := range order {
+		if _, ok := modifyIDs[logicalID]; !ok {
+			continue
+		}
+		res := tpl.Resources[logicalID]
+		props, resolveErr := eval.resolveProps(res.Properties)
+		if resolveErr != nil {
+			return CFNStack{}, resolveErr
+		}
+		oldRes := oldTpl.Resources[logicalID]
+		oldProps, oldErr := eval.resolveProps(oldRes.Properties)
+		if oldErr != nil {
+			oldProps = oldRes.Properties
+		}
+		physicalID := physicalByLogical[logicalID]
+		if physicalID == "" {
+			return CFNStack{}, fmt.Errorf("%w: Modify missing physical id for %s", ErrCFNBadTemplate, logicalID)
+		}
+		if err := s.applyCFNModify(accountID, region, st.StackName, st.StackID, logicalID, res.Type, physicalID, oldProps, props); err != nil {
+			return CFNStack{}, err
+		}
+		eval.setResource(logicalID, physicalID, map[string]string{"Ref": physicalID, "Arn": physicalID})
 	}
 	for _, logicalID := range order {
-		if _, ok := existingIDs[logicalID]; ok {
-			// kept / modify rejected earlier
-			res := tpl.Resources[logicalID]
-			props, resolveErr := eval.resolveProps(res.Properties)
-			if resolveErr != nil {
-				return CFNStack{}, resolveErr
-			}
-			_ = props
+		if _, ok := physicalByLogical[logicalID]; ok {
 			continue
 		}
 		res := tpl.Resources[logicalID]

@@ -161,3 +161,60 @@ func TestCognitoSignUpConfirm(t *testing.T) {
 		t.Fatal("missing access token after confirm")
 	}
 }
+
+func TestCognitoRefreshAndRevoke(t *testing.T) {
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	const acct = "000000000001"
+	pool, err := st.CreateCognitoUserPool(acct, "us-east-1", "refresh-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(acct, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AdminCreateCognitoUser(acct, pool.PoolID, "alice", "Secret1!"); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := st.InitiateCognitoAuth(client.ClientID, "alice", "Secret1!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth.RefreshToken == "" {
+		t.Fatal("missing refresh token")
+	}
+
+	refreshed, err := st.RefreshCognitoTokens(acct, client.ClientID, auth.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.AccessToken == "" || refreshed.IDToken == "" {
+		t.Fatalf("missing tokens after refresh: %+v", refreshed)
+	}
+	if refreshed.RefreshToken == "" {
+		t.Fatal("lab refresh rotation must return a new refresh token")
+	}
+	if refreshed.RefreshToken == auth.RefreshToken {
+		t.Fatal("rotated refresh token must differ from the prior token")
+	}
+	if _, err := st.RefreshCognitoTokens(acct, client.ClientID, auth.RefreshToken); err == nil {
+		t.Fatal("want refresh fail after rotation of prior token")
+	}
+
+	if err := st.RevokeCognitoToken(client.ClientID, refreshed.RefreshToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RefreshCognitoTokens(acct, client.ClientID, refreshed.RefreshToken); err == nil {
+		t.Fatal("want refresh fail after revoke")
+	}
+}

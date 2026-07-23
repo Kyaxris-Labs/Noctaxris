@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Lab streams with a single shard, Put/Get records, and shard iterators. Persisted in SQLite. Identity authz only.
+Lab streams with a single shard, Put/Get records, shard iterators, and Lambda event source mapping. Persisted in SQLite. Identity authz only.
 
 ## Implemented
 
@@ -11,6 +11,7 @@ Lab streams with a single shard, Put/Get records, and shard iterators. Persisted
 | Stream CRUD | `CreateStream`, `DeleteStream`, `DescribeStream`, `ListStreams` |
 | Produce | `PutRecord`, `PutRecords` |
 | Consume | `GetShardIterator` (`TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER`), `GetRecords` |
+| Lambda ESM | Single-shard stream ARN as `CreateEventSourceMapping` source; in-process poller with optional `FilterCriteria` (see [lambda.md](lambda.md)) |
 
 Lab always uses shard id `shardId-000000000000` regardless of requested `ShardCount`. Stream ARN: `arn:aws:kinesis:REGION:ACCOUNT:stream/NAME`.
 
@@ -48,7 +49,7 @@ aws kinesis delete-stream --stream-name "$STREAM" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Multi-shard split/merge, enhanced fan-out, consumers
+- Multi-shard split/merge, enhanced fan-out, consumers, parallelization factor
 - On-Demand capacity mode billing fantasy
 - Server-side encryption depth beyond a cheap flag
 - Kinesis Data Analytics (Firehose is a separate lab service: [firehose.md](firehose.md))

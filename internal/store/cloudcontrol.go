@@ -283,7 +283,34 @@ func (s *Store) CloudControlDeleteResource(accountID, typeName, identifier strin
 	return token, nil
 }
 
+func cloudControlRejectUnknownPatchKeys(patch map[string]any, allowed ...string) error {
+	allow := make(map[string]struct{}, len(allowed))
+	for _, k := range allowed {
+		allow[k] = struct{}{}
+	}
+	for k := range patch {
+		if _, ok := allow[k]; !ok {
+			return fmt.Errorf("%w: unsupported patch property %q", ErrCloudControlBadRequest, k)
+		}
+	}
+	return nil
+}
+
+func (s *Store) cloudControlPersistUpdate(accountID, typeName, identifier string, propsJSON []byte) (CloudControlResource, string, error) {
+	token := CloudControlRequestToken()
+	res := CloudControlResource{TypeName: typeName, Identifier: identifier, Properties: string(propsJSON)}
+	s.recordCloudControlRequest(accountID, token, typeName, identifier, "UPDATE", "SUCCESS", string(propsJSON))
+	_, _ = s.db.Exec(
+		`INSERT INTO cloudcontrol_resources (account_id, type_name, identifier, properties, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(account_id, type_name, identifier) DO UPDATE SET properties = excluded.properties`,
+		accountID, typeName, identifier, string(propsJSON), time.Now().UTC().UnixMilli(),
+	)
+	return res, token, nil
+}
+
 // CloudControlUpdateResource updates a mutable property subset for allowlisted types.
+// PatchDocument is a lab JSON object of property keys (not RFC6902), matching CreateResource DesiredState shape.
 func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patchDocument string) (CloudControlResource, string, error) {
 	typeName = strings.TrimSpace(typeName)
 	identifier = strings.TrimSpace(identifier)
@@ -291,12 +318,18 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 	if !cloudControlTypeAllowed(typeName) {
 		return CloudControlResource{}, "", fmt.Errorf("%w: type %q is not supported", ErrCloudControlTypeUnsupported, typeName)
 	}
+	if identifier == "" {
+		return CloudControlResource{}, "", fmt.Errorf("%w: Identifier required", ErrCloudControlBadRequest)
+	}
 	var patch map[string]any
 	if err := json.Unmarshal([]byte(patchDocument), &patch); err != nil {
 		return CloudControlResource{}, "", fmt.Errorf("%w: PatchDocument must be JSON object", ErrCloudControlBadRequest)
 	}
 	switch typeName {
 	case "AWS::SSM::Parameter":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Value", "Type", "KeyId"); err != nil {
+			return CloudControlResource{}, "", err
+		}
 		value := cfnStringProp(patch, "Value")
 		ptype := cfnStringProp(patch, "Type")
 		if ptype == "" {
@@ -310,29 +343,26 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
 		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type, "Value": p.Value})
-		token := CloudControlRequestToken()
-		res := CloudControlResource{TypeName: typeName, Identifier: p.Name, Properties: string(props)}
-		s.recordCloudControlRequest(accountID, token, typeName, p.Name, "UPDATE", "SUCCESS", string(props))
-		_, _ = s.db.Exec(
-			`INSERT INTO cloudcontrol_resources (account_id, type_name, identifier, properties, created_at)
-			 VALUES (?, ?, ?, ?, ?)
-			 ON CONFLICT(account_id, type_name, identifier) DO UPDATE SET properties = excluded.properties`,
-			accountID, typeName, p.Name, string(props), time.Now().UTC().UnixMilli(),
-		)
-		return res, token, nil
+		return s.cloudControlPersistUpdate(accountID, typeName, p.Name, props)
 	case "AWS::S3::Bucket":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "BucketEncryption", "NotificationConfiguration"); err != nil {
+			return CloudControlResource{}, "", err
+		}
 		if err := s.applyCFNS3Encryption(accountID, identifier, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		if err := s.applyCFNS3NotificationConfiguration(accountID, identifier, patch); err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
 		props, _ := json.Marshal(patch)
 		if len(patch) == 0 {
 			props, _ = json.Marshal(map[string]any{"BucketName": identifier})
 		}
-		token := CloudControlRequestToken()
-		res := CloudControlResource{TypeName: typeName, Identifier: identifier, Properties: string(props)}
-		s.recordCloudControlRequest(accountID, token, typeName, identifier, "UPDATE", "SUCCESS", string(props))
-		return res, token, nil
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Events::Rule":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "EventPattern", "State", "Description", "EventBusName"); err != nil {
+			return CloudControlResource{}, "", err
+		}
 		bus, rule, ok := splitCFNEventRulePhysical(identifier)
 		if !ok {
 			bus = cfnStringProp(patch, "EventBusName")
@@ -361,10 +391,148 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		}
 		phys := bus + "|" + rule
 		props, _ := json.Marshal(map[string]any{"Name": rule, "EventBusName": bus, "Arn": r.ARN})
-		token := CloudControlRequestToken()
-		res := CloudControlResource{TypeName: typeName, Identifier: phys, Properties: string(props)}
-		s.recordCloudControlRequest(accountID, token, typeName, phys, "UPDATE", "SUCCESS", string(props))
-		return res, token, nil
+		return s.cloudControlPersistUpdate(accountID, typeName, phys, props)
+	case "AWS::IAM::Role":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "AssumeRolePolicyDocument", "Policies", "ManagedPolicyArns"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		role, err := s.GetRoleRecord(accountID, identifier)
+		if err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		if err := s.modifyCFNIAMRole(accountID, role.RoleARN, map[string]any{"RoleName": role.RoleName}, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"RoleName": role.RoleName, "Arn": role.RoleARN})
+		return s.cloudControlPersistUpdate(accountID, typeName, role.RoleName, props)
+	case "AWS::SQS::Queue":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "VisibilityTimeout", "MessageRetentionPeriod", "DelaySeconds", "ReceiveMessageWaitTimeSeconds"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		q, err := s.GetQueueByURL(identifier)
+		if err != nil {
+			q, err = s.GetQueue(accountID, identifier)
+			if err != nil {
+				return CloudControlResource{}, "", ErrCloudControlNotFound
+			}
+		}
+		attrs := cfnSQSQueueAttributes(patch)
+		if len(attrs) == 0 {
+			return CloudControlResource{}, "", fmt.Errorf("%w: no mutable queue attributes in patch", ErrCloudControlBadRequest)
+		}
+		if err := s.SetQueueAttributes(accountID, q.QueueName, attrs); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"QueueName": q.QueueName, "QueueUrl": q.QueueURL})
+		return s.cloudControlPersistUpdate(accountID, typeName, q.QueueURL, props)
+	case "AWS::SNS::Topic":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "DisplayName", "KmsMasterKeyId"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		topic, err := s.GetTopicByARN(identifier)
+		if err != nil {
+			topic, err = s.GetTopic(accountID, identifier)
+			if err != nil {
+				return CloudControlResource{}, "", ErrCloudControlNotFound
+			}
+		}
+		if err := s.modifyCFNSNSTopic(accountID, topic.TopicARN, map[string]any{}, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"TopicName": topic.TopicName, "TopicArn": topic.TopicARN})
+		return s.cloudControlPersistUpdate(accountID, typeName, topic.TopicARN, props)
+	case "AWS::SecretsManager::Secret":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Description", "KmsKeyId"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		if err := s.modifyCFNSecret(accountID, identifier, map[string]any{}, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{
+			"Name": identifier, "Description": cfnStringProp(patch, "Description"), "KmsKeyId": cfnStringProp(patch, "KmsKeyId"),
+		})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::DynamoDB::Table":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "SSESpecification"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		if _, ok := patch["SSESpecification"]; !ok {
+			return CloudControlResource{}, "", fmt.Errorf("%w: SSESpecification required", ErrCloudControlBadRequest)
+		}
+		if err := s.applyCFNDynamoSSE(accountID, identifier, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"TableName": identifier, "SSESpecification": patch["SSESpecification"]})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::Lambda::Function":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Timeout", "MemorySize", "Environment", "Handler", "Runtime"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		fn, err := s.GetFunction(accountID, identifier)
+		if err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		meta := UpdateFunctionConfigurationMeta{
+			RoleARN: fn.RoleARN, Timeout: fn.Timeout, Memory: fn.Memory, Handler: fn.Handler, Env: fn.Env, Runtime: fn.Runtime,
+		}
+		if _, ok := patch["Timeout"]; ok {
+			meta.Timeout = cfnIntProp(patch, "Timeout", fn.Timeout)
+		}
+		if _, ok := patch["MemorySize"]; ok {
+			meta.Memory = cfnIntProp(patch, "MemorySize", fn.Memory)
+		}
+		if h := cfnStringProp(patch, "Handler"); h != "" {
+			meta.Handler = h
+		}
+		if r := cfnStringProp(patch, "Runtime"); r != "" {
+			meta.Runtime = r
+		}
+		if env, ok := cfnLambdaEnvVars(patch); ok {
+			if env == nil {
+				return CloudControlResource{}, "", fmt.Errorf("%w: Environment must be an object", ErrCloudControlBadRequest)
+			}
+			meta.Env = env
+		}
+		updated, err := s.UpdateFunctionConfiguration(accountID, identifier, meta)
+		if err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{
+			"FunctionName": updated.FunctionName, "Timeout": updated.Timeout, "MemorySize": updated.Memory,
+		})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::KMS::Key":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Description", "KeyPolicy", "EnableKeyRotation"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		if err := s.modifyCFNKMSKey(identifier, map[string]any{}, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"KeyId": identifier})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::Events::EventBus":
+		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s (no mutable lab properties)", ErrCloudControlBadRequest, typeName)
+	case "AWS::KMS::Alias":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "TargetKeyId"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		target := cfnStringProp(patch, "TargetKeyId")
+		if target == "" {
+			return CloudControlResource{}, "", fmt.Errorf("%w: TargetKeyId required", ErrCloudControlBadRequest)
+		}
+		if err := s.UpdateAlias(accountID, identifier, target); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"AliasName": identifier, "TargetKeyId": target})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::Logs::LogGroup":
+		if err := cloudControlRejectUnknownPatchKeys(patch); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		props, _ := json.Marshal(map[string]any{"LogGroupName": identifier})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
+	case "AWS::IAM::User", "AWS::IAM::Group", "AWS::IAM::ManagedPolicy":
+		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s", ErrCloudControlBadRequest, typeName)
 	default:
 		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s", ErrCloudControlBadRequest, typeName)
 	}

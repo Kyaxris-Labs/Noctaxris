@@ -256,6 +256,9 @@ const (
 	ActionDynamoDBScan                 = "dynamodb:Scan"
 	ActionDynamoDBBatchGetItem         = "dynamodb:BatchGetItem"
 	ActionDynamoDBBatchWriteItem       = "dynamodb:BatchWriteItem"
+	ActionDynamoDBTransactGetItems     = "dynamodb:TransactGetItems"
+	ActionDynamoDBTransactWriteItems   = "dynamodb:TransactWriteItems"
+	ActionDynamoDBConditionCheckItem   = "dynamodb:ConditionCheckItem"
 	ActionDynamoDBPutResourcePolicy    = "dynamodb:PutResourcePolicy"
 	ActionDynamoDBGetResourcePolicy    = "dynamodb:GetResourcePolicy"
 	ActionDynamoDBDeleteResourcePolicy = "dynamodb:DeleteResourcePolicy"
@@ -300,10 +303,11 @@ const (
 
 // RDS Data API lab actions.
 const (
-	ActionRDSDataExecuteStatement    = "rds-data:ExecuteStatement"
-	ActionRDSDataBeginTransaction    = "rds-data:BeginTransaction"
-	ActionRDSDataCommitTransaction   = "rds-data:CommitTransaction"
-	ActionRDSDataRollbackTransaction = "rds-data:RollbackTransaction"
+	ActionRDSDataExecuteStatement      = "rds-data:ExecuteStatement"
+	ActionRDSDataBatchExecuteStatement = "rds-data:BatchExecuteStatement"
+	ActionRDSDataBeginTransaction      = "rds-data:BeginTransaction"
+	ActionRDSDataCommitTransaction     = "rds-data:CommitTransaction"
+	ActionRDSDataRollbackTransaction   = "rds-data:RollbackTransaction"
 )
 
 // ElastiCache lab actions.
@@ -477,6 +481,7 @@ const (
 	ActionLogsDescribeLogStreams = "logs:DescribeLogStreams"
 	ActionLogsPutLogEvents             = "logs:PutLogEvents"
 	ActionLogsGetLogEvents             = "logs:GetLogEvents"
+	ActionLogsFilterLogEvents          = "logs:FilterLogEvents"
 	ActionLogsDescribeLogGroups        = "logs:DescribeLogGroups"
 	ActionLogsPutSubscriptionFilter    = "logs:PutSubscriptionFilter"
 	ActionLogsDeleteSubscriptionFilter = "logs:DeleteSubscriptionFilter"
@@ -707,6 +712,7 @@ const (
 	ActionCognitoConfirmSignUp          = "cognito-idp:ConfirmSignUp"
 	ActionCognitoInitiateAuth           = "cognito-idp:InitiateAuth"
 	ActionCognitoAdminInitiateAuth      = "cognito-idp:AdminInitiateAuth"
+	ActionCognitoRevokeToken            = "cognito-idp:RevokeToken"
 )
 
 // Cloud Control API lab actions.
@@ -1036,6 +1042,9 @@ func KnownAction(action string) bool {
 		ActionDynamoDBScan,
 		ActionDynamoDBBatchGetItem,
 		ActionDynamoDBBatchWriteItem,
+		ActionDynamoDBTransactGetItems,
+		ActionDynamoDBTransactWriteItems,
+		ActionDynamoDBConditionCheckItem,
 		ActionDynamoDBPutResourcePolicy,
 		ActionDynamoDBGetResourcePolicy,
 		ActionDynamoDBDeleteResourcePolicy,
@@ -1061,6 +1070,7 @@ func KnownAction(action string) bool {
 		ActionRDSDescribeDBInstances,
 		ActionRDSDeleteDBInstance,
 		ActionRDSDataExecuteStatement,
+		ActionRDSDataBatchExecuteStatement,
 		ActionRDSDataBeginTransaction,
 		ActionRDSDataCommitTransaction,
 		ActionRDSDataRollbackTransaction,
@@ -1225,6 +1235,7 @@ func KnownAction(action string) bool {
 		ActionLogsDescribeLogStreams,
 		ActionLogsPutLogEvents,
 		ActionLogsGetLogEvents,
+		ActionLogsFilterLogEvents,
 		ActionLogsDescribeLogGroups,
 		ActionLogsPutSubscriptionFilter,
 		ActionLogsDeleteSubscriptionFilter,
@@ -1381,6 +1392,7 @@ func KnownAction(action string) bool {
 		ActionCognitoConfirmSignUp,
 		ActionCognitoInitiateAuth,
 		ActionCognitoAdminInitiateAuth,
+		ActionCognitoRevokeToken,
 		ActionCloudControlCreateResource,
 		ActionCloudControlGetResource,
 		ActionCloudControlListResources,

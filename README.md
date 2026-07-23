@@ -79,8 +79,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH (unsigned public IdP API; Admin* stay SigV4), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
-      <td>Identity Pools, Hosted UI, full SRP, MFA depth, refresh revoke APIs.</td>
+      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Identity Pools, Hosted UI, full SRP, MFA depth.</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
@@ -96,8 +96,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
-      <td>More than two GSIs, LSI, Transactions, PartiQL, global tables.</td>
+      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/ConditionCheck lab subset, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
+      <td>More than two GSIs, LSI, TransactWrite Update expressions, PartiQL, global tables, cross-account transact.</td>
     </tr>
     <tr>
       <td>DynamoDB Streams</td>
@@ -116,8 +116,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Secrets Manager</td>
-      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, lab RotateSecret (random replacement, no Lambda rotator).</td>
-      <td>Lambda-backed rotation, version stages, tags, replication.</td>
+      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then async Invoke finishSecret).</td>
+      <td>AWS four-step rotation staging versions, automatic RotationRules schedules, tags, replication.</td>
     </tr>
     <tr>
       <td>SNS</td>
@@ -151,8 +151,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Otherwise DatabaseUnavailableException (no canned SELECT). Begin/Commit/Rollback return 501.</td>
-      <td>BatchExecuteStatement, full result type matrix, real SQL transactions, API process on DinD data network for default <code>pgx</code> dial.</td>
+      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT).</td>
+      <td>Full result type matrix, <code>ExecuteSql</code> legacy, cross-process transaction resume, API process on DinD data network for default <code>pgx</code> dial.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
@@ -172,8 +172,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>CloudWatch Logs</td>
-      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutLogEvents/GetLogEvents, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
-      <td>Insights, FilterLogEvents, CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose destinations.</td>
+      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, substring filterPattern, lab page cap), Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
+      <td>Insights, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose destinations.</td>
     </tr>
     <tr>
       <td>Resource Groups Tagging API</td>
@@ -183,7 +183,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="7" align="center" valign="middle">Streams and delivery</td>
       <td>Kinesis Data Streams</td>
-      <td>Create/Delete/Describe/ListStreams, PutRecord/PutRecords, GetShardIterator/GetRecords on a single lab shard.</td>
+      <td>Create/Delete/Describe/ListStreams, PutRecord/PutRecords, GetShardIterator/GetRecords on a single lab shard. Lambda event source mapping for that shard: see Lambda row.</td>
       <td>Multi-shard split/merge, enhanced fan-out, encryption depth, Kinesis Data Analytics.</td>
     </tr>
     <tr>
@@ -219,13 +219,13 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
-      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet lite (Add/Remove; Modify fail-closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission), KMS Key/Alias, SNS(+TopicPolicy/Subscription), Logs LogGroup, Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
-      <td>ChangeSet Modify, nested drift depth, full intrinsic matrix, broader catalog.</td>
+      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet Add/Remove plus allowlisted in-place Modify (unknown Modify types or immutable props fail closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission), KMS Key/Alias, SNS(+TopicPolicy/Subscription), Logs LogGroup, Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
+      <td>Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog.</td>
     </tr>
     <tr>
       <td>Cloud Control</td>
-      <td>Create/Get/List/Update/Delete + GetResourceRequestStatus for CFN-aligned allowlist (no Stack/QueuePolicy). Sync ProgressEvent SUCCESS with recorded tokens. Unknown types fail closed.</td>
-      <td>Update depth for every type, async polling beyond recorded SUCCESS.</td>
+      <td>Create/Get/List/Update/Delete + GetResourceRequestStatus for CFN-aligned allowlist (no Stack/QueuePolicy). UpdateResource property-object PatchDocument for documented mutable subsets. Sync ProgressEvent SUCCESS with recorded tokens. Unknown types and unknown patch keys fail closed.</td>
+      <td>Update depth for every type, RFC6902 PatchDocument, async polling beyond recorded SUCCESS.</td>
     </tr>
     <tr>
       <td>Glue</td>
@@ -270,8 +270,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller, FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Kinesis/MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, and single-shard Kinesis event source mappings with in-process poller, FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Multi-shard / enhanced fan-out Kinesis ESM, MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>

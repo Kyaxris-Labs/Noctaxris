@@ -79,6 +79,22 @@ func TestLogsRoundTrip(t *testing.T) {
 		t.Fatalf("events=%v", getOut["events"])
 	}
 
+	filter := mustLogsJSON(t, handler, "FilterLogEvents", map[string]any{
+		"logGroupName":  "/lab/test",
+		"filterPattern": "line",
+	}, now)
+	if filter.Code != http.StatusOK {
+		t.Fatalf("FilterLogEvents status=%d body=%q", filter.Code, filter.Body.String())
+	}
+	var filterOut map[string]any
+	if err := json.Unmarshal(filter.Body.Bytes(), &filterOut); err != nil {
+		t.Fatal(err)
+	}
+	filtered, _ := filterOut["events"].([]any)
+	if len(filtered) != 1 {
+		t.Fatalf("filter events=%v", filterOut["events"])
+	}
+
 	desc := mustLogsJSON(t, handler, "DescribeLogGroups", map[string]any{
 		"logGroupNamePrefix": "/lab",
 	}, now)

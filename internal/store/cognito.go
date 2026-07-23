@@ -590,6 +590,11 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	return s.issueTokens(accountID, poolID, clientID, username, sub)
 }
 
+func hashRefreshToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (CognitoAuthResult, error) {
 	key, kid, region, err := s.loadPoolPrivateKey(accountID, poolID)
 	if err != nil {
@@ -631,8 +636,7 @@ func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (
 		return CognitoAuthResult{}, fmt.Errorf("sign access token: %w", err)
 	}
 	refreshRaw := uuid.NewString() + uuid.NewString()
-	sum := sha256.Sum256([]byte(refreshRaw))
-	tokenHash := hex.EncodeToString(sum[:])
+	tokenHash := hashRefreshToken(refreshRaw)
 	_, err = s.db.Exec(
 		`INSERT INTO cognito_refresh_tokens (token_hash, account_id, pool_id, client_id, username, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -648,4 +652,73 @@ func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (
 		ExpiresIn:    cognitoTokenTTLSeconds,
 		TokenType:    "Bearer",
 	}, nil
+}
+
+// RefreshCognitoTokens validates a stored refresh token hash + clientId, rotates the refresh
+// token, and issues new access/id tokens (lab: rotation always on).
+func (s *Store) RefreshCognitoTokens(accountID, clientID, refreshToken string) (CognitoAuthResult, error) {
+	clientID = strings.TrimSpace(clientID)
+	refreshToken = strings.TrimSpace(refreshToken)
+	if clientID == "" || refreshToken == "" {
+		return CognitoAuthResult{}, fmt.Errorf("%w: ClientId and REFRESH_TOKEN required", ErrCognitoBadRequest)
+	}
+	tokenHash := hashRefreshToken(refreshToken)
+	var acct, poolID, username string
+	var expiresAt int64
+	err := s.db.QueryRow(
+		`SELECT account_id, pool_id, username, expires_at FROM cognito_refresh_tokens
+		 WHERE token_hash = ? AND client_id = ?`,
+		tokenHash, clientID,
+	).Scan(&acct, &poolID, &username, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CognitoAuthResult{}, ErrCognitoUnauthorized
+	}
+	if err != nil {
+		return CognitoAuthResult{}, fmt.Errorf("lookup refresh token: %w", err)
+	}
+	if accountID != "" && accountID != acct {
+		return CognitoAuthResult{}, ErrCognitoUnauthorized
+	}
+	if time.Now().UTC().Unix() > expiresAt {
+		_, _ = s.db.Exec(`DELETE FROM cognito_refresh_tokens WHERE token_hash = ?`, tokenHash)
+		return CognitoAuthResult{}, ErrCognitoUnauthorized
+	}
+	sub, _, status, err := s.getUser(acct, poolID, username)
+	if err != nil {
+		if errors.Is(err, ErrCognitoUserNotFound) {
+			return CognitoAuthResult{}, ErrCognitoUnauthorized
+		}
+		return CognitoAuthResult{}, err
+	}
+	if status != "CONFIRMED" {
+		return CognitoAuthResult{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
+	}
+	// Rotate: invalidate presented refresh token before issuing a new one.
+	if _, err := s.db.Exec(`DELETE FROM cognito_refresh_tokens WHERE token_hash = ?`, tokenHash); err != nil {
+		return CognitoAuthResult{}, fmt.Errorf("rotate refresh token: %w", err)
+	}
+	return s.issueTokens(acct, poolID, clientID, username, sub)
+}
+
+// RevokeCognitoToken deletes the refresh token hash so subsequent refresh fails.
+// Public IdP shape: ClientId + Token (refresh token). Does not log the raw token.
+func (s *Store) RevokeCognitoToken(clientID, refreshToken string) error {
+	clientID = strings.TrimSpace(clientID)
+	refreshToken = strings.TrimSpace(refreshToken)
+	if clientID == "" || refreshToken == "" {
+		return fmt.Errorf("%w: ClientId and Token required", ErrCognitoBadRequest)
+	}
+	tokenHash := hashRefreshToken(refreshToken)
+	res, err := s.db.Exec(
+		`DELETE FROM cognito_refresh_tokens WHERE token_hash = ? AND client_id = ?`,
+		tokenHash, clientID,
+	)
+	if err != nil {
+		return fmt.Errorf("revoke refresh token: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrCognitoUnauthorized
+	}
+	return nil
 }

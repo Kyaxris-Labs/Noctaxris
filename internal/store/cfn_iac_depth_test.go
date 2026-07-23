@@ -75,7 +75,107 @@ func TestCFNChangeSetAddExecuteAndUpdateStack(t *testing.T) {
 	}
 }
 
-func TestCFNChangeSetModifyRejected(t *testing.T) {
+func TestCFNChangeSetModifySSMParameter(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	base := `{
+  "Resources": {
+    "LabParam": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "/lab/cfn-mod-param",
+        "Type": "String",
+        "Value": "v1"
+      }
+    }
+  }
+}`
+	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ssm-stack", base, ""); err != nil {
+		t.Fatal(err)
+	}
+	changed := `{
+  "Resources": {
+    "LabParam": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "/lab/cfn-mod-param",
+        "Type": "String",
+        "Value": "v2"
+      }
+    }
+  }
+}`
+	cs, err := st.CreateCFNChangeSet(account, "us-east-1", "mod-ssm-stack", "bump-value", changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Changes) != 1 || cs.Changes[0].Action != "Modify" {
+		t.Fatalf("changes=%+v", cs.Changes)
+	}
+	if _, err := st.ExecuteCFNChangeSet(account, "us-east-1", cs.ChangeSetID, "mod-ssm-stack"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.GetParameter(account, "/lab/cfn-mod-param", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Value != "v2" {
+		t.Fatalf("value=%q", p.Value)
+	}
+}
+
+func TestCFNChangeSetModifyUnsupportedFailsClosed(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	base := `{
+  "Resources": {
+    "LabTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "cfn-mod-ddb",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [{"AttributeName":"pk","AttributeType":"S"}],
+        "KeySchema": [{"AttributeName":"pk","KeyType":"HASH"}]
+      }
+    }
+  }
+}`
+	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ddb-stack", base, ""); err != nil {
+		t.Fatal(err)
+	}
+	changed := `{
+  "Resources": {
+    "LabTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "cfn-mod-ddb",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {"AttributeName":"pk","AttributeType":"S"},
+          {"AttributeName":"sk","AttributeType":"S"}
+        ],
+        "KeySchema": [
+          {"AttributeName":"pk","KeyType":"HASH"},
+          {"AttributeName":"sk","KeyType":"RANGE"}
+        ]
+      }
+    }
+  }
+}`
+	cs, err := st.CreateCFNChangeSet(account, "us-east-1", "mod-ddb-stack", "bad-key", changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Changes) != 1 || cs.Changes[0].Action != "Modify" {
+		t.Fatalf("changes=%+v", cs.Changes)
+	}
+	_, err = st.ExecuteCFNChangeSet(account, "us-east-1", cs.ChangeSetID, "mod-ddb-stack")
+	if err == nil || (!strings.Contains(err.Error(), "fail-closed") && !strings.Contains(err.Error(), "immutable")) {
+		t.Fatalf("expected fail-closed key schema reject, err=%v", err)
+	}
+}
+
+func TestCFNChangeSetModifyBucketRenameFailsClosed(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 	base := `{
@@ -105,8 +205,8 @@ func TestCFNChangeSetModifyRejected(t *testing.T) {
 		t.Fatalf("changes=%+v", cs.Changes)
 	}
 	_, err = st.ExecuteCFNChangeSet(account, "us-east-1", cs.ChangeSetID, "mod-stack")
-	if err == nil || !strings.Contains(err.Error(), "Modify") {
-		t.Fatalf("expected modify reject, err=%v", err)
+	if err == nil || (!strings.Contains(err.Error(), "fail-closed") && !strings.Contains(err.Error(), "cannot change")) {
+		t.Fatalf("expected bucket rename reject, err=%v", err)
 	}
 }
 

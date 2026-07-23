@@ -96,6 +96,9 @@ func DescribeSecretJSON(sec store.Secret) ([]byte, error) {
 		}
 		out["DeletionDate"] = deletion
 	}
+	if sec.RotationLambdaARN != "" {
+		out["RotationLambdaARN"] = sec.RotationLambdaARN
+	}
 	return json.Marshal(out)
 }
 

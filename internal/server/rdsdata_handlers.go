@@ -53,6 +53,8 @@ func (s *Server) handleRDSData(
 	switch action {
 	case catalog.ActionRDSDataExecuteStatement:
 		s.rdsDataExecute(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionRDSDataBatchExecuteStatement:
+		s.rdsDataBatchExecute(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionRDSDataBeginTransaction:
 		s.rdsDataBegin(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionRDSDataCommitTransaction:
@@ -72,6 +74,8 @@ func rdsDataAction(action string) string {
 	switch action {
 	case "ExecuteStatement":
 		return catalog.ActionRDSDataExecuteStatement
+	case "BatchExecuteStatement":
+		return catalog.ActionRDSDataBatchExecuteStatement
 	case "BeginTransaction":
 		return catalog.ActionRDSDataBeginTransaction
 	case "CommitTransaction":
@@ -105,19 +109,27 @@ func (s *Server) rdsDataExecute(
 			"sql is required.", readOnly, eventID, verified)
 		return
 	}
+	var (
+		res store.RDSDataExecuteResult
+		err error
+	)
 	if strings.TrimSpace(req.TransactionID) != "" {
-		s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
-			"ExecuteStatement with transactionId is not implemented.", readOnly, eventID, verified)
-		return
+		res, err = s.executeRDSDataOnTransaction(r.Context(), verified.AccountID, req)
+	} else {
+		inst, resolveErr := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
+		if resolveErr != nil {
+			s.writeRDSDataResolveError(w, r, body, requestID, resolveErr, readOnly, eventID, verified)
+			return
+		}
+		res, err = s.preferNestedRDSDataExecute(r.Context(), verified.AccountID, inst, req)
 	}
-	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
 	if err != nil {
-		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
-		return
-	}
-	res, err := s.preferNestedRDSDataExecute(r.Context(), verified.AccountID, inst, req)
-	if err != nil {
-		if errors.Is(err, store.ErrRDSDataUnavailable) {
+		if errors.Is(err, store.ErrRDSDataUnavailable) ||
+			errors.Is(err, store.ErrRDSDataTxnNotFound) ||
+			errors.Is(err, store.ErrRDSDataBadRequest) ||
+			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
+			errors.Is(err, store.ErrRDSDataSecretsError) ||
+			errors.Is(err, store.ErrRDSDataNotFound) {
 			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 			return
 		}
@@ -136,47 +148,189 @@ func (s *Server) rdsDataExecute(
 	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "ExecuteStatement", readOnly)
 }
 
+func (s *Server) rdsDataBatchExecute(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionRDSDataBatchExecuteStatement, "*") {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform rds-data:BatchExecuteStatement.", readOnly, eventID, verified)
+		return
+	}
+	req := store.RDSDataBatchExecuteRequest{
+		ResourceARN:   stringParam(params["resourceArn"]),
+		SecretARN:     stringParam(params["secretArn"]),
+		Database:      stringParam(params["database"]),
+		SQL:           stringParam(params["sql"]),
+		TransactionID: stringParam(params["transactionId"]),
+		ParameterSets: parseRDSDataParameterSets(params["parameterSets"]),
+	}
+	if req.SQL == "" {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"sql is required.", readOnly, eventID, verified)
+		return
+	}
+	if len(req.ParameterSets) == 0 {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"parameterSets is required.", readOnly, eventID, verified)
+		return
+	}
+	var (
+		results []store.RDSDataExecuteResult
+		err     error
+	)
+	if strings.TrimSpace(req.TransactionID) != "" {
+		results, err = s.preferNestedRDSDataBatch(r.Context(), verified.AccountID, store.RDSDBInstance{}, req)
+	} else {
+		inst, resolveErr := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
+		if resolveErr != nil {
+			s.writeRDSDataResolveError(w, r, body, requestID, resolveErr, readOnly, eventID, verified)
+			return
+		}
+		results, err = s.preferNestedRDSDataBatch(r.Context(), verified.AccountID, inst, req)
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrRDSDataUnavailable) ||
+			errors.Is(err, store.ErrRDSDataTxnNotFound) ||
+			errors.Is(err, store.ErrRDSDataBadRequest) ||
+			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
+			errors.Is(err, store.ErrRDSDataSecretsError) ||
+			errors.Is(err, store.ErrRDSDataNotFound) {
+			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+			return
+		}
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, err := rdsdatasvc.BatchExecuteStatementJSON(results)
+	if err != nil {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeRDSDataOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "BatchExecuteStatement", readOnly)
+}
+
 func (s *Server) rdsDataBegin(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataBeginTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:BeginTransaction.", readOnly, eventID, verified)
 		return
 	}
-	// Control-plane txn ids without nested SQL BEGIN are fake success; refuse until real txn exists.
-	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
-		"BeginTransaction is not implemented.", readOnly, eventID, verified)
+	resourceARN := stringParam(params["resourceArn"])
+	secretARN := stringParam(params["secretArn"])
+	database := stringParam(params["database"])
+	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, resourceARN, secretARN)
+	if err != nil {
+		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+		return
+	}
+	txnID, err := s.BeginRDSDataSQLTransaction(r.Context(), verified.AccountID, inst, secretARN, database)
+	if err != nil {
+		if errors.Is(err, store.ErrRDSDataUnavailable) ||
+			errors.Is(err, store.ErrRDSDataBadRequest) ||
+			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
+			errors.Is(err, store.ErrRDSDataSecretsError) {
+			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+			return
+		}
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, err := rdsdatasvc.BeginTransactionJSON(txnID)
+	if err != nil {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeRDSDataOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "BeginTransaction", readOnly)
 }
 
 func (s *Server) rdsDataCommit(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataCommitTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:CommitTransaction.", readOnly, eventID, verified)
 		return
 	}
-	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
-		"CommitTransaction is not implemented.", readOnly, eventID, verified)
+	resourceARN := stringParam(params["resourceArn"])
+	secretARN := stringParam(params["secretArn"])
+	txnID := stringParam(params["transactionId"])
+	if resourceARN == "" || secretARN == "" || txnID == "" {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"resourceArn, secretArn, and transactionId are required.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.ResolveRDSDataResource(verified.AccountID, resourceARN, secretARN); err != nil {
+		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+		return
+	}
+	if err := s.CommitRDSDataSQLTransaction(r.Context(), verified.AccountID, txnID, resourceARN, secretARN); err != nil {
+		if errors.Is(err, store.ErrRDSDataTxnNotFound) || errors.Is(err, store.ErrRDSDataBadRequest) {
+			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+			return
+		}
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, err := rdsdatasvc.CommitTransactionJSON()
+	if err != nil {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeRDSDataOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "CommitTransaction", readOnly)
 }
 
 func (s *Server) rdsDataRollback(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	_ = params
 	if !s.authorize(verified, catalog.ActionRDSDataRollbackTransaction, "*") {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform rds-data:RollbackTransaction.", readOnly, eventID, verified)
 		return
 	}
-	s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
-		"RollbackTransaction is not implemented.", readOnly, eventID, verified)
+	resourceARN := stringParam(params["resourceArn"])
+	secretARN := stringParam(params["secretArn"])
+	txnID := stringParam(params["transactionId"])
+	if resourceARN == "" || secretARN == "" || txnID == "" {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"resourceArn, secretArn, and transactionId are required.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.ResolveRDSDataResource(verified.AccountID, resourceARN, secretARN); err != nil {
+		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+		return
+	}
+	if err := s.RollbackRDSDataSQLTransaction(r.Context(), verified.AccountID, txnID, resourceARN, secretARN); err != nil {
+		if errors.Is(err, store.ErrRDSDataTxnNotFound) || errors.Is(err, store.ErrRDSDataBadRequest) {
+			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
+			return
+		}
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "DatabaseErrorException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, err := rdsdatasvc.RollbackTransactionJSON()
+	if err != nil {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeRDSDataOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, rdsDataEventSource, "RollbackTransaction", readOnly)
 }
 
 func (s *Server) writeRDSDataResolveError(
@@ -206,6 +360,18 @@ func (s *Server) writeRDSDataResolveError(
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
 			err.Error(), readOnly, eventID, verified)
 	}
+}
+
+func parseRDSDataParameterSets(raw any) [][]store.RDSDataSqlParameter {
+	list, ok := raw.([]any)
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	out := make([][]store.RDSDataSqlParameter, 0, len(list))
+	for _, item := range list {
+		out = append(out, parseRDSDataParameters(item))
+	}
+	return out
 }
 
 func parseRDSDataParameters(raw any) []store.RDSDataSqlParameter {

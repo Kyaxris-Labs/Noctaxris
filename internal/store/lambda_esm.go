@@ -35,7 +35,7 @@ var (
 	// ErrNoSuchEventSourceMapping is returned when a mapping UUID is unknown.
 	ErrNoSuchEventSourceMapping = errors.New("ResourceNotFoundException")
 	// ErrInvalidEventSourceARN is returned for unsupported or malformed ARNs.
-	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN or DynamoDB stream ARN")
+	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN, DynamoDB stream ARN, or Kinesis stream ARN")
 	// ErrInvalidESMBatchSize is returned when BatchSize is out of lab range.
 	ErrInvalidESMBatchSize = errors.New("InvalidParameterValueException: BatchSize out of range")
 	// ErrESMSourceAuthz is returned when the function role (or source resource policy) cannot access the event source.
@@ -48,7 +48,7 @@ const (
 	actionDynamoGetRecords  = "dynamodb:GetRecords"
 )
 
-// LambdaEventSourceMapping is a Lambda SQS or DynamoDB Streams event source mapping row.
+// LambdaEventSourceMapping is a Lambda SQS, DynamoDB Streams, or Kinesis event source mapping row.
 type LambdaEventSourceMapping struct {
 	UUID                     string
 	AccountID                string
@@ -121,7 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_lambda_esm_enabled ON lambda_event_source_mapping
 
 const lambdaESMSelectCols = `uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, COALESCE(filter_criteria_json, ''), COALESCE(function_response_types_json, ''), last_modified, created_at, COALESCE(function_qualifier, '$LATEST')`
 
-// EnsureLambdaESMSchema creates the SQS / DynamoDB Streams event source mapping table.
+// EnsureLambdaESMSchema creates the SQS / DynamoDB Streams / Kinesis event source mapping table.
 func EnsureLambdaESMSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure lambda esm schema: db is nil")
@@ -275,6 +275,15 @@ func (s *Store) validateEventSourceARN(accountID, arn string) error {
 		}
 		return nil
 	}
+	if acct, streamName, ok := parseKinesisStreamARN(arn); ok {
+		if acct != accountID {
+			return ErrInvalidEventSourceARN
+		}
+		if _, err := s.DescribeKinesisStream(acct, streamName); err != nil {
+			return ErrInvalidEventSourceARN
+		}
+		return nil
+	}
 	queueAccount, queueName, err := validateSQSEventSourceARN(arn)
 	if err != nil {
 		return err
@@ -288,7 +297,7 @@ func (s *Store) validateEventSourceARN(accountID, arn string) error {
 	return nil
 }
 
-// CreateEventSourceMapping inserts an SQS→Lambda or DynamoDB Streams→Lambda mapping.
+// CreateEventSourceMapping inserts an SQS→Lambda, DynamoDB Streams→Lambda, or Kinesis→Lambda mapping.
 func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (LambdaEventSourceMapping, error) {
 	fnName, qualifier := ParseFunctionQualifier(strings.TrimSpace(in.FunctionName))
 	if err := ValidateFunctionName(fnName); err != nil {
@@ -550,6 +559,10 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 	if isDynamoStreamEventSourceARN(eventSourceARN) {
 		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionDynamoGetRecords, eventSourceARN, session, DefaultLambdaRegion, sourceARN)
 	}
+	if isKinesisEventSourceARN(eventSourceARN) {
+		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionKinesisGetRecords, eventSourceARN, session, DefaultLambdaRegion, sourceARN) &&
+			s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionKinesisGetShardIterator, eventSourceARN, session, DefaultLambdaRegion, sourceARN)
+	}
 	if s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSReceiveMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) &&
 		s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSDeleteMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) {
 		return true
@@ -558,11 +571,11 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 		s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSDeleteMessage, authz.ServicePrincipalLambda, sourceARN)
 }
 
-// PollEventSourceMappingOnce receives up to BatchSize records from SQS or DynamoDB Streams,
+// PollEventSourceMappingOnce receives up to BatchSize records from SQS, DynamoDB Streams, or Kinesis,
 // invokes the callback synchronously with the Lambda event JSON, and advances the source on success.
-// On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB cursor is not advanced.
+// On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB/Kinesis cursor is not advanced.
 // With FunctionResponseTypes ReportBatchItemFailures, only non-failed SQS messages are deleted;
-// DynamoDB cursor advances only when batchItemFailures is empty.
+// DynamoDB/Kinesis cursor advances only when batchItemFailures is empty.
 func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeFunc) error {
 	row := s.db.QueryRow(
 		`SELECT `+lambdaESMSelectCols+`
@@ -589,6 +602,9 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeF
 	}
 	if isDynamoStreamEventSourceARN(m.EventSourceARN) {
 		return s.pollDynamoEventSourceMappingOnce(m, invoke)
+	}
+	if isKinesisEventSourceARN(m.EventSourceARN) {
+		return s.pollKinesisEventSourceMappingOnce(m, invoke)
 	}
 	queueName, err := queueNameFromARN(m.EventSourceARN)
 	if err != nil {

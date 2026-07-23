@@ -2,14 +2,14 @@
 
 **Status:** shipped (lab core)
 
-Create, describe, list, update, and delete stacks from a JSON or YAML template subset. ChangeSet lite (Add/Remove execute; Modify fail-closed). Nested stacks via `AWS::CloudFormation::Stack` with lab S3 `TemplateURL` only. Drift lite for allowlisted types. Identity authz. Optional PassRole for `RoleARN` with `cloudformation.amazonaws.com` trust.
+Create, describe, list, update, and delete stacks from a JSON or YAML template subset. ChangeSet execute supports Add, Remove, and allowlisted in-place Modify (Removals, then Modify in dependency order, then Add). Unknown Modify types or immutable property changes fail closed. Nested stacks via `AWS::CloudFormation::Stack` with lab S3 `TemplateURL` only. Drift lite for allowlisted types. Identity authz. Optional PassRole for `RoleARN` with `cloudformation.amazonaws.com` trust.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Stacks | `CreateStack`, `DescribeStacks`, `DeleteStack`, `ListStacks`, `UpdateStack` (implicit ChangeSet) |
-| ChangeSets | `CreateChangeSet`, `DescribeChangeSet`, `ExecuteChangeSet` (Add/Remove; Modify rejected) |
+| ChangeSets | `CreateChangeSet`, `DescribeChangeSet`, `ExecuteChangeSet` (Add/Remove/Modify for allowlisted in-place updates) |
 | Drift | `DetectStackDrift`, `DescribeStackDriftDetectionStatus`, `DescribeStackResourceDrifts` (`IN_SYNC` / `MODIFIED` / `NOT_CHECKED`; nested `NOT_CHECKED`) |
 | Resources | `AWS::S3::Bucket`, `AWS::S3::BucketPolicy`, `AWS::IAM::Role`, `AWS::IAM::User`, `AWS::IAM::Group`, `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::SQS::Queue`, `AWS::SQS::QueuePolicy`, `AWS::DynamoDB::Table`, `AWS::Lambda::Function`, `AWS::Lambda::Permission`, `AWS::KMS::Key`, `AWS::KMS::Alias`, `AWS::SNS::Topic`, `AWS::SNS::TopicPolicy`, `AWS::SNS::Subscription`, `AWS::Logs::LogGroup`, `AWS::Events::EventBus`, `AWS::Events::Rule`, `AWS::SSM::Parameter`, `AWS::SecretsManager::Secret`, `AWS::CloudFormation::Stack` |
 | Template forms | JSON and YAML `TemplateBody` |
@@ -36,6 +36,27 @@ Policy and permission notes:
 | `AWS::S3::Bucket` `NotificationConfiguration` | Optional. Maps CFN `LambdaConfigurations` / `QueueConfigurations` / `TopicConfigurations` (`Event` + destination ARN + optional `Filter.S3Key.Rules`) and `EventBridgeConfiguration` onto `PutBucketNotificationConfiguration`. Destinations and resource policies must already exist (use `DependsOn`); circular CreateStack graphs fail closed like AWS. |
 | `AWS::Events::Rule` | Event pattern rules with optional `Targets`. `ScheduleExpression` is rejected (use the Scheduler service). |
 
+ChangeSet Modify in-place subsets (fail closed otherwise):
+
+| Type | Mutable on Modify |
+|------|-------------------|
+| `AWS::SSM::Parameter` | `Value`, `Type`, `KeyId` (`Name` immutable) |
+| `AWS::S3::Bucket` | `BucketEncryption`, `NotificationConfiguration` (`BucketName` immutable) |
+| `AWS::S3::BucketPolicy` / `AWS::SQS::QueuePolicy` / `AWS::SNS::TopicPolicy` | Replace `PolicyDocument` |
+| `AWS::IAM::Role` | Trust + replace inline `Policies` / `ManagedPolicyArns` |
+| `AWS::IAM::ManagedPolicy` / `AWS::IAM::Policy` | Replace `PolicyDocument` (+ re-attach targets) |
+| `AWS::SQS::Queue` | Queue attributes (`VisibilityTimeout`, retention, delay, …); name/FIFO immutable |
+| `AWS::SNS::Topic` | `DisplayName`, `KmsMasterKeyId` |
+| `AWS::Lambda::Function` | Config + ZipFile `Code`; `FunctionName` immutable |
+| `AWS::Lambda::Permission` | Replace Sid permission |
+| `AWS::Events::Rule` | Pattern/state/targets (`Name` / bus immutable) |
+| `AWS::SecretsManager::Secret` | `Description`, `KmsKeyId` only (`SecretString` via Secrets APIs) |
+| `AWS::DynamoDB::Table` | `SSESpecification` only (key schema / table name fail closed) |
+| `AWS::KMS::Alias` | `TargetKeyId` |
+| `AWS::KMS::Key` | `KeyPolicy`, `EnableKeyRotation` (`Description` accepted/ignored) |
+| `AWS::Logs::LogGroup` | No-op when name unchanged |
+| `AWS::Events::EventBus` | Tags-only / name match; other props fail closed |
+
 ### Authz notes
 
 Identity `EvaluateFull` on `cloudformation:*`. When `RoleARN` is set on CreateStack, PassRole plus `cloudformation.amazonaws.com` trust is required.
@@ -60,8 +81,8 @@ CreateStack round-trip suite: [tests/cloudformation/](../../tests/cloudformation
 ## Not yet / deferred
 
 - Full intrinsic matrix (`Fn::If`, `Fn::Select`, mappings, conditions, transforms)
-- ChangeSet Modify / in-place property updates
 - Nested stack drift comparison beyond `NOT_CHECKED`
+- ChangeSet Modify for nested `AWS::CloudFormation::Stack` and other non-allowlisted type/property sets
 - Broader resource type catalog beyond the lab set above
 - `AWS::IAM::ManagedPolicy` / `AWS::IAM::User` / `AWS::IAM::Group` custom `Path` values other than `/`
 - `AWS::Lambda::Permission` function-URL and org-id properties (`FunctionUrlAuthType`, `PrincipalOrgID`, `InvokedViaFunctionUrl`, `EventSourceToken`)

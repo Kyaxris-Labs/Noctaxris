@@ -64,8 +64,19 @@ func EnsureLambdaAsyncSchema(db *sql.DB) error {
 	return nil
 }
 
-// EnqueueAsyncInvoke stores a pending async invocation job.
+// EnqueueAsyncInvoke stores a pending async invocation job and notifies the worker.
 func (s *Store) EnqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON string) (LambdaAsyncInvocation, error) {
+	return s.enqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON, true)
+}
+
+// EnqueueAsyncInvokeQuiet stores a pending async job without starting the worker.
+// Callers that process the job themselves (Secrets Manager finishSecret) use this
+// to avoid a double invoke race with SetOnAsyncEnqueue.
+func (s *Store) EnqueueAsyncInvokeQuiet(accountID, functionName, qualifier, eventJSON string) (LambdaAsyncInvocation, error) {
+	return s.enqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON, false)
+}
+
+func (s *Store) enqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON string, notify bool) (LambdaAsyncInvocation, error) {
 	if err := ValidateFunctionName(functionName); err != nil {
 		return LambdaAsyncInvocation{}, err
 	}
@@ -97,7 +108,9 @@ func (s *Store) EnqueueAsyncInvoke(accountID, functionName, qualifier, eventJSON
 		Status:       lambdaAsyncStatusPending,
 		CreatedAt:    created,
 	}
-	s.notifyAsyncEnqueue(job)
+	if notify {
+		s.notifyAsyncEnqueue(job)
+	}
 	return job, nil
 }
 

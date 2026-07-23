@@ -18,17 +18,22 @@ Identity `EvaluateFull` on `cloudcontrol:*`.
 
 | TypeName | Identifier | Notes |
 |----------|------------|-------|
-| `AWS::S3::Bucket` | Bucket name | Update: `BucketEncryption` |
-| `AWS::IAM::Role` | Role name | |
-| `AWS::SQS::Queue` | Queue URL | |
-| `AWS::DynamoDB::Table` | Table name | |
-| `AWS::Lambda::Function` | Function name | ZipFile create |
-| `AWS::KMS::Key` | Key id | |
-| `AWS::SNS::Topic` | Topic ARN | |
-| `AWS::Events::EventBus` | Bus name | |
-| `AWS::Events::Rule` | `bus\|rule` | Update: pattern/state |
-| `AWS::SSM::Parameter` | Parameter name | Update: Value/Type |
-| `AWS::SecretsManager::Secret` | Secret name | |
+| `AWS::S3::Bucket` | Bucket name | Update: `BucketEncryption`, `NotificationConfiguration` |
+| `AWS::IAM::Role` | Role name | Update: `AssumeRolePolicyDocument`, `Policies`, `ManagedPolicyArns` |
+| `AWS::SQS::Queue` | Queue URL | Update: `VisibilityTimeout`, `MessageRetentionPeriod`, delay/wait |
+| `AWS::DynamoDB::Table` | Table name | Update: `SSESpecification` only |
+| `AWS::Lambda::Function` | Function name | Create ZipFile; Update: `Timeout`, `MemorySize`, `Environment` (no `Role` patch) |
+| `AWS::KMS::Key` | Key id | Update: `KeyPolicy`, `EnableKeyRotation` (`Description` accepted/ignored) |
+| `AWS::KMS::Alias` | Alias name | Update: `TargetKeyId` |
+| `AWS::SNS::Topic` | Topic ARN | Update: `DisplayName`, `KmsMasterKeyId` |
+| `AWS::Events::EventBus` | Bus name | Update rejected (no mutable lab props) |
+| `AWS::Events::Rule` | `bus\|rule` | Update: `EventPattern`, `State`, `Description` |
+| `AWS::SSM::Parameter` | Parameter name | Update: `Value`, `Type`, `KeyId` |
+| `AWS::SecretsManager::Secret` | Secret name | Update: `Description`, `KmsKeyId` |
+| `AWS::Logs::LogGroup` | Log group name | Update: empty patch only (no-op) |
+| `AWS::IAM::User` / `AWS::IAM::Group` / `AWS::IAM::ManagedPolicy` | — | Create/Get/List/Delete; Update rejected |
+
+Lab `PatchDocument` is a JSON object of property keys (CreateResource DesiredState shape), not RFC6902. Unknown patch keys fail closed with `InvalidRequestException`.
 
 ## How to verify / CLI smoke
 
@@ -46,5 +51,6 @@ aws cloudcontrol delete-resource --type-name AWS::S3::Bucket --identifier lab-cc
 ## Not yet / deferred
 
 - Async ProgressEvent polling depth beyond recorded SUCCESS tokens
-- UpdateResource for every allowlisted type
+- RFC6902 JSON Patch `PatchDocument` parity (lab uses property-object patches)
+- UpdateResource for IAM User/Group/ManagedPolicy and EventBus mutable depth
 - Private registry types

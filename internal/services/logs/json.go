@@ -70,6 +70,25 @@ func GetLogEventsJSON(events []store.LogEvent) ([]byte, error) {
 	})
 }
 
+// FilterLogEventsJSON builds a FilterLogEvents response.
+func FilterLogEventsJSON(events []store.FilteredLogEvent, nextToken string) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(events))
+	for _, ev := range events {
+		entries = append(entries, map[string]any{
+			"logStreamName": ev.LogStreamName,
+			"timestamp":     ev.Timestamp,
+			"message":       ev.Message,
+			"ingestionTime": ev.IngestionTime,
+			"eventId":       ev.EventID,
+		})
+	}
+	out := map[string]any{"events": entries}
+	if nextToken != "" {
+		out["nextToken"] = nextToken
+	}
+	return json.Marshal(out)
+}
+
 // DescribeSubscriptionFiltersJSON builds DescribeSubscriptionFilters response.
 func DescribeSubscriptionFiltersJSON(filters []store.LogsSubscriptionFilter) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(filters))

@@ -60,6 +60,10 @@ func (s *Server) handleDynamoDB(
 		s.dynamoBatchGetItem(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBBatchWriteItem:
 		s.dynamoBatchWriteItem(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBTransactGetItems:
+		s.dynamoTransactGetItems(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBTransactWriteItems:
+		s.dynamoTransactWriteItems(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBPutResourcePolicy:
 		s.dynamoPutResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBGetResourcePolicy:
@@ -116,6 +120,10 @@ func dynamoAction(action string) string {
 		return catalog.ActionDynamoDBBatchGetItem
 	case "BatchWriteItem":
 		return catalog.ActionDynamoDBBatchWriteItem
+	case "TransactGetItems":
+		return catalog.ActionDynamoDBTransactGetItems
+	case "TransactWriteItems":
+		return catalog.ActionDynamoDBTransactWriteItems
 	case "PutResourcePolicy":
 		return catalog.ActionDynamoDBPutResourcePolicy
 	case "GetResourcePolicy":
@@ -1403,6 +1411,456 @@ func (s *Server) dynamoBatchWriteItem(
 	payload, _ := ddb.BatchWriteItemJSON(unprocessed)
 	s.writeDynamoOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "BatchWriteItem", readOnly)
+}
+
+func (s *Server) dynamoTransactWriteItems(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	rawItems, ok := params["TransactItems"].([]any)
+	if !ok || len(rawItems) == 0 {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactItems is required.", readOnly, eventID, verified)
+		return
+	}
+	if len(rawItems) > dynamoBatchLimit {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactItems exceeds lab limit of 25.", readOnly, eventID, verified)
+		return
+	}
+
+	actions := make([]store.TransactWriteAction, 0, len(rawItems))
+	for _, raw := range rawItems {
+		entry, ok := raw.(map[string]any)
+		if !ok || len(entry) != 1 {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Each TransactItems entry must contain exactly one of Put, Delete, ConditionCheck, or Update.", readOnly, eventID, verified)
+			return
+		}
+		if _, hasUpdate := entry["Update"]; hasUpdate {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"TransactWriteItems Update is not supported in this lab; use Put or Delete.", readOnly, eventID, verified)
+			return
+		}
+		if put, ok := entry["Put"].(map[string]any); ok {
+			action, ok := s.dynamoBuildTransactPut(w, r, body, requestID, eventID, verified, readOnly, put)
+			if !ok {
+				return
+			}
+			actions = append(actions, action)
+			continue
+		}
+		if del, ok := entry["Delete"].(map[string]any); ok {
+			action, ok := s.dynamoBuildTransactDelete(w, r, body, requestID, eventID, verified, readOnly, del)
+			if !ok {
+				return
+			}
+			actions = append(actions, action)
+			continue
+		}
+		if check, ok := entry["ConditionCheck"].(map[string]any); ok {
+			action, ok := s.dynamoBuildTransactConditionCheck(w, r, body, requestID, eventID, verified, readOnly, check)
+			if !ok {
+				return
+			}
+			actions = append(actions, action)
+			continue
+		}
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Unsupported TransactItems action.", readOnly, eventID, verified)
+		return
+	}
+
+	if err := s.store.TransactWriteItems(verified.AccountID, actions); err != nil {
+		var canceled *store.TransactionCanceledError
+		if errors.As(err, &canceled) {
+			s.writeDynamoTransactionCanceled(w, r, body, requestID, canceled, readOnly, eventID, verified)
+			return
+		}
+		if errors.Is(err, store.ErrDynamoTransactUnsupported) ||
+			errors.Is(err, store.ErrDynamoTransactLimit) ||
+			errors.Is(err, store.ErrDynamoTransactEmpty) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		if errors.Is(err, store.ErrNoSuchTable) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"Requested resource not found.", readOnly, eventID, verified)
+			return
+		}
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to execute TransactWriteItems.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.TransactWriteItemsJSON()
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "TransactWriteItems", readOnly)
+}
+
+func (s *Server) dynamoTransactGetItems(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	rawItems, ok := params["TransactItems"].([]any)
+	if !ok || len(rawItems) == 0 {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactItems is required.", readOnly, eventID, verified)
+		return
+	}
+	if len(rawItems) > dynamoBatchLimit {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactItems exceeds lab limit of 25.", readOnly, eventID, verified)
+		return
+	}
+
+	keys := make([]store.TransactGetKey, 0, len(rawItems))
+	tables := make([]store.DynamoTable, 0, len(rawItems))
+	for _, raw := range rawItems {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Invalid TransactItems entry.", readOnly, eventID, verified)
+			return
+		}
+		get, ok := entry["Get"].(map[string]any)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Get is required in each TransactItems entry.", readOnly, eventID, verified)
+			return
+		}
+		tableName, _ := get["TableName"].(string)
+		table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+		if !ok {
+			return
+		}
+		if table.AccountID != verified.AccountID {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"TransactGetItems supports same-account tables only.", readOnly, eventID, verified)
+			return
+		}
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBGetItem, table.TableARN, table.ResourcePolicy) &&
+			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTransactGetItems, table.TableARN, table.ResourcePolicy) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform dynamodb:TransactGetItems.", readOnly, eventID, verified)
+			return
+		}
+		key, err := ddb.ParseItemMap(get["Key"])
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, key)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		keys = append(keys, store.TransactGetKey{TableName: table.TableName, ItemPK: itemPK, ItemSK: itemSK})
+		tables = append(tables, table)
+	}
+
+	rawItemsJSON, err := s.store.TransactGetItems(verified.AccountID, keys)
+	if err != nil {
+		if errors.Is(err, store.ErrDynamoTransactLimit) || errors.Is(err, store.ErrDynamoTransactEmpty) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to execute TransactGetItems.", readOnly, eventID, verified)
+		return
+	}
+
+	responses := make([]ddb.ItemMap, len(rawItemsJSON))
+	for i, raw := range rawItemsJSON {
+		if raw == nil {
+			responses[i] = nil
+			continue
+		}
+		stored := store.DynamoStoredItem{ItemJSON: raw}
+		// Detect sealed flag via GetItemBytes path when needed.
+		full, err := s.store.GetItemBytes(verified.AccountID, keys[i].TableName, keys[i].ItemPK, keys[i].ItemSK)
+		if errors.Is(err, store.ErrNoSuchItem) {
+			responses[i] = nil
+			continue
+		}
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load item.", readOnly, eventID, verified)
+			return
+		}
+		stored = full
+		var materials [][]byte
+		if stored.Sealed {
+			_, materials, _, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, tables[i])
+			if err != nil {
+				return
+			}
+		}
+		plain, err := ddb.LoadItemJSONAny(tables[i], stored, materials)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to decrypt item.", readOnly, eventID, verified)
+			return
+		}
+		item, err := ddb.UnmarshalItemJSON(plain)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to decode item.", readOnly, eventID, verified)
+			return
+		}
+		if ddb.ItemExpired(tables[i], item, time.Now().Unix()) {
+			responses[i] = nil
+			continue
+		}
+		responses[i] = item
+	}
+
+	payload, err := ddb.TransactGetItemsJSON(responses)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "TransactGetItems", readOnly)
+}
+
+func (s *Server) dynamoBuildTransactPut(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	put map[string]any,
+) (store.TransactWriteAction, bool) {
+	tableName, _ := put["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return store.TransactWriteAction{}, false
+	}
+	if table.AccountID != verified.AccountID {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactWriteItems supports same-account tables only.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBPutItem, table.TableARN, table.ResourcePolicy) &&
+		!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTransactWriteItems, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:TransactWriteItems.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if cond, _ := put["ConditionExpression"].(string); strings.TrimSpace(cond) != "" {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ConditionExpression on TransactWriteItems Put is not supported in this lab.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	item, err := ddb.ParseItemMap(put["Item"])
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	plain, err := ddb.MarshalItemJSON(item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Unable to encode item.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	var cmk []byte
+	keyID := ""
+	if table.SSEType == store.SSETypeKMS {
+		cmk, _, keyID, err = s.dynamoUnsealTableCMK(w, r, body, requestID, eventID, verified, readOnly, table)
+		if err != nil {
+			return store.TransactWriteAction{}, false
+		}
+	}
+	data, sealed, sealedDEK, err := ddb.StoragePayload(table, plain, cmk, keyID)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to seal item.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	gsiPK, gsiSK, err := ddb.GSIKeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	gsi2PK, gsi2SK, err := ddb.GSI2KeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	return store.TransactWriteAction{
+		Kind: "Put", TableName: table.TableName,
+		ItemPK: itemPK, ItemSK: itemSK,
+		ItemJSON: data, Sealed: sealed, SealedDEK: sealedDEK,
+		GSIPK: gsiPK, GSISK: gsiSK, GSI2PK: gsi2PK, GSI2SK: gsi2SK,
+	}, true
+}
+
+func (s *Server) dynamoBuildTransactDelete(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	del map[string]any,
+) (store.TransactWriteAction, bool) {
+	tableName, _ := del["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return store.TransactWriteAction{}, false
+	}
+	if table.AccountID != verified.AccountID {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactWriteItems supports same-account tables only.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBDeleteItem, table.TableARN, table.ResourcePolicy) &&
+		!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTransactWriteItems, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:TransactWriteItems.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if cond, _ := del["ConditionExpression"].(string); strings.TrimSpace(cond) != "" {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ConditionExpression on TransactWriteItems Delete is not supported in this lab.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	key, err := ddb.ParseItemMap(del["Key"])
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, key)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	return store.TransactWriteAction{
+		Kind: "Delete", TableName: table.TableName,
+		ItemPK: itemPK, ItemSK: itemSK,
+	}, true
+}
+
+func (s *Server) dynamoBuildTransactConditionCheck(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	check map[string]any,
+) (store.TransactWriteAction, bool) {
+	tableName, _ := check["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return store.TransactWriteAction{}, false
+	}
+	if table.AccountID != verified.AccountID {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactWriteItems supports same-account tables only.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBConditionCheckItem, table.TableARN, table.ResourcePolicy) &&
+		!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTransactWriteItems, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:ConditionCheckItem.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	cond, _ := check["ConditionExpression"].(string)
+	cond = strings.TrimSpace(cond)
+	// Lab subset: empty expression or attribute_exists(...) → item must exist.
+	if cond != "" && !dynamoLabAttributeExistsOnly(cond) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ConditionCheck supports only existence (attribute_exists) in this lab.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	key, err := ddb.ParseItemMap(check["Key"])
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, key)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	return store.TransactWriteAction{
+		Kind: "ConditionCheck", TableName: table.TableName,
+		ItemPK: itemPK, ItemSK: itemSK, ConditionEmpty: true,
+	}, true
+}
+
+func dynamoLabAttributeExistsOnly(expr string) bool {
+	expr = strings.TrimSpace(expr)
+	lower := strings.ToLower(expr)
+	return strings.HasPrefix(lower, "attribute_exists(") && strings.HasSuffix(expr, ")")
+}
+
+func (s *Server) writeDynamoTransactionCanceled(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID string,
+	canceled *store.TransactionCanceledError,
+	readOnly bool,
+	eventID string,
+	verified *authn.Verified,
+) {
+	_ = body
+	payload, err := ddb.TransactionCanceledJSON("", canceled.Reasons)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	w.Header().Set(requestIDHeader, requestID)
+	w.Header().Set("Content-Type", dynamoJSONContentType)
+	w.WriteHeader(http.StatusBadRequest)
+	_, _ = w.Write(payload)
+
+	accessKeyID := ""
+	accountID := ""
+	if verified != nil {
+		accessKeyID = verified.AccessKeyID
+		accountID = verified.AccountID
+	}
+	s.auditAPIError(r, requestID, eventID, "TransactionCanceledException",
+		"Transaction cancelled, please refer cancellation reasons for specific reasons",
+		readOnly, accessKeyID, accountID, verified != nil)
 }
 
 func (s *Server) dynamoPutResourcePolicy(

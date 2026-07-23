@@ -67,6 +67,27 @@ type RDSDataExecuteRequest struct {
 	Parameters    []RDSDataSqlParameter
 }
 
+// RDSDataBatchExecuteRequest is the Data API BatchExecuteStatement input (lab subset).
+type RDSDataBatchExecuteRequest struct {
+	ResourceARN   string
+	SecretARN     string
+	Database      string
+	SQL           string
+	TransactionID string
+	ParameterSets [][]RDSDataSqlParameter
+}
+
+// RDSDataTransaction is metadata for a Data API transaction id (SQL session is process-local).
+type RDSDataTransaction struct {
+	AccountID     string
+	TransactionID string
+	ResourceARN   string
+	SecretARN     string
+	Database      string
+	Status        string
+	CreatedAt     int64
+}
+
 // RDSDataField is one cell in an AWS Data API records array.
 type RDSDataField struct {
 	StringValue  *string
@@ -218,7 +239,7 @@ func (s *Store) RecordRDSDataStatement(accountID string, req RDSDataExecuteReque
 	return nil
 }
 
-// BeginRDSDataTransaction creates an in-memory/sqlite transaction id.
+// BeginRDSDataTransaction records transaction metadata (held SQL session lives in the server).
 func (s *Store) BeginRDSDataTransaction(accountID, resourceARN, secretARN, database string) (string, error) {
 	if _, err := s.ResolveRDSDataResource(accountID, resourceARN, secretARN); err != nil {
 		return "", err
@@ -237,7 +258,28 @@ func (s *Store) BeginRDSDataTransaction(accountID, resourceARN, secretARN, datab
 	return txnID, nil
 }
 
-// FinishRDSDataTransaction commits or rolls back a lab transaction id.
+// GetRDSDataTransaction returns metadata for a Data API transaction id.
+func (s *Store) GetRDSDataTransaction(accountID, transactionID string) (RDSDataTransaction, error) {
+	transactionID = strings.TrimSpace(transactionID)
+	if transactionID == "" {
+		return RDSDataTransaction{}, fmt.Errorf("%w: transactionId is required", ErrRDSDataBadRequest)
+	}
+	var txn RDSDataTransaction
+	err := s.db.QueryRow(
+		`SELECT account_id, transaction_id, resource_arn, secret_arn, database_name, status, created_at
+		 FROM rds_data_transactions WHERE account_id = ? AND transaction_id = ?`,
+		accountID, transactionID,
+	).Scan(&txn.AccountID, &txn.TransactionID, &txn.ResourceARN, &txn.SecretARN, &txn.Database, &txn.Status, &txn.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RDSDataTransaction{}, ErrRDSDataTxnNotFound
+	}
+	if err != nil {
+		return RDSDataTransaction{}, fmt.Errorf("get rds-data txn: %w", err)
+	}
+	return txn, nil
+}
+
+// FinishRDSDataTransaction marks a lab transaction id committed, rolled_back, or failed.
 func (s *Store) FinishRDSDataTransaction(accountID, transactionID, status string) error {
 	transactionID = strings.TrimSpace(transactionID)
 	if transactionID == "" {

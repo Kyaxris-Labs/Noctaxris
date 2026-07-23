@@ -26,19 +26,21 @@ var (
 // Secret is a Secrets Manager secret metadata row. Value fields are populated
 // on create/get/put responses and omitted on describe/list.
 type Secret struct {
-	Name            string
-	ARN             string
-	SecretString    string
-	SecretBinary    []byte
-	Version         int
-	VersionID       string
-	KmsKeyID        string
-	Description     string
-	ResourcePolicy  string
-	CreatedDate     string
-	LastChangedDate string
-	DeletedDate     string
-	DeletionDate    string
+	Name              string
+	ARN               string
+	SecretString      string
+	SecretBinary      []byte
+	Version           int
+	VersionID         string
+	KmsKeyID          string
+	Description       string
+	ResourcePolicy    string
+	CreatedDate       string
+	LastChangedDate   string
+	DeletedDate       string
+	DeletionDate      string
+	RotationLambdaARN string
+	RotationRoleARN   string
 }
 
 const secretsSchema = `
@@ -193,6 +195,8 @@ type secretRow struct {
 	LastChangedDate    string
 	DeletedDate        string
 	DeletionDate       string
+	RotationLambdaARN  string
+	RotationRoleARN    string
 }
 
 func (s *Store) resolveSecretName(accountID, nameOrARN string) (string, error) {
@@ -224,13 +228,15 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 		`SELECT name, arn, arn_suffix, description, secret_string_plain, secret_string_sealed, string_sealed,
 		        secret_binary_plain, secret_binary_sealed, binary_sealed, kms_key_id, version, resource_policy,
 		        created_date, last_changed_date,
-		        COALESCE(deleted_date, ''), COALESCE(deletion_date, '')
+		        COALESCE(deleted_date, ''), COALESCE(deletion_date, ''),
+		        COALESCE(rotation_lambda_arn, ''), COALESCE(rotation_role_arn, '')
 		 FROM secretsmanager_secrets WHERE account_id = ? AND name = ?`,
 		accountID, name,
 	).Scan(
 		&row.Name, &row.ARN, &row.ARNSuffix, &row.Description, &row.SecretStringPlain, &stringSealed,
 		&stringSeal, &binaryPlain, &binarySealed, &binarySeal, &row.KMSKeyID, &row.Version, &row.ResourcePolicy,
 		&row.CreatedDate, &row.LastChangedDate, &row.DeletedDate, &row.DeletionDate,
+		&row.RotationLambdaARN, &row.RotationRoleARN,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -305,17 +311,19 @@ func (s *Store) storeSecretValues(
 
 func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 	out := Secret{
-		Name:            row.Name,
-		ARN:             row.ARN,
-		Version:         row.Version,
-		VersionID:       fmt.Sprintf("%d", row.Version),
-		KmsKeyID:        row.KMSKeyID,
-		Description:     row.Description,
-		ResourcePolicy:  row.ResourcePolicy,
-		CreatedDate:     row.CreatedDate,
-		LastChangedDate: row.LastChangedDate,
-		DeletedDate:     row.DeletedDate,
-		DeletionDate:    row.DeletionDate,
+		Name:              row.Name,
+		ARN:               row.ARN,
+		Version:           row.Version,
+		VersionID:         fmt.Sprintf("%d", row.Version),
+		KmsKeyID:          row.KMSKeyID,
+		Description:       row.Description,
+		ResourcePolicy:    row.ResourcePolicy,
+		CreatedDate:       row.CreatedDate,
+		LastChangedDate:   row.LastChangedDate,
+		DeletedDate:       row.DeletedDate,
+		DeletionDate:      row.DeletionDate,
+		RotationLambdaARN: row.RotationLambdaARN,
+		RotationRoleARN:   row.RotationRoleARN,
 	}
 	if !withValues {
 		return out, nil

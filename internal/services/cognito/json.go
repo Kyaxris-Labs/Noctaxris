@@ -95,14 +95,19 @@ func SignUpJSON(u store.CognitoUser) ([]byte, error) {
 func ConfirmSignUpJSON() ([]byte, error) { return []byte(`{}`), nil }
 
 // AuthResultJSON builds InitiateAuth / AdminInitiateAuth AuthenticationResult.
+// Omits RefreshToken when empty (AWS refresh without a rotated refresh token).
 func AuthResultJSON(a store.CognitoAuthResult) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"AuthenticationResult": map[string]any{
-			"AccessToken":  a.AccessToken,
-			"IdToken":      a.IDToken,
-			"RefreshToken": a.RefreshToken,
-			"ExpiresIn":    a.ExpiresIn,
-			"TokenType":    a.TokenType,
-		},
-	})
+	result := map[string]any{
+		"AccessToken": a.AccessToken,
+		"IdToken":     a.IDToken,
+		"ExpiresIn":   a.ExpiresIn,
+		"TokenType":   a.TokenType,
+	}
+	if a.RefreshToken != "" {
+		result["RefreshToken"] = a.RefreshToken
+	}
+	return json.Marshal(map[string]any{"AuthenticationResult": result})
 }
+
+// RevokeTokenJSON is an empty OK body.
+func RevokeTokenJSON() ([]byte, error) { return []byte(`{}`), nil }

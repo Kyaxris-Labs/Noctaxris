@@ -4,19 +4,29 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
 	defaultSecretRecoveryDays = 30
 	minSecretRecoveryDays     = 7
 	maxSecretRecoveryDays     = 30
+
+	// SecretRotationStepFinishSecret is the lab single-step rotation event Step.
+	// Full AWS createSecret/setSecret/testSecret/finishSecret staging is deferred.
+	SecretRotationStepFinishSecret = "finishSecret"
 )
 
 // ErrSecretScheduledDeletion is returned when a secret is pending recovery-window deletion.
 var ErrSecretScheduledDeletion = fmt.Errorf("InvalidRequestException: secret is scheduled for deletion")
+
+// ErrSecretRotationLambdaInvalid is returned when RotationLambdaARN does not resolve.
+var ErrSecretRotationLambdaInvalid = fmt.Errorf("InvalidRequestException: RotationLambdaARN is invalid or the function was not found")
 
 // EnsureSecretsRecoverySchema adds recovery-window columns.
 func EnsureSecretsRecoverySchema(db *sql.DB) error {
@@ -30,11 +40,29 @@ func EnsureSecretsRecoverySchema(db *sql.DB) error {
 			return fmt.Errorf("ensure secrets recovery schema: %w", err)
 		}
 	}
-	return nil
+	return EnsureSecretsRotationSchema(db)
 }
 
 func (s *Store) EnsureSecretsRecoverySchema() error {
 	return EnsureSecretsRecoverySchema(s.db)
+}
+
+// EnsureSecretsRotationSchema adds optional Lambda rotator columns.
+func EnsureSecretsRotationSchema(db *sql.DB) error {
+	alters := []string{
+		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_lambda_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_role_arn TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("ensure secrets rotation schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) EnsureSecretsRotationSchema() error {
+	return EnsureSecretsRotationSchema(s.db)
 }
 
 // DeleteSecretWithRecovery schedules deletion with a recovery window, or force-deletes immediately.
@@ -119,6 +147,115 @@ func (s *Store) SweepExpiredSecrets(now time.Time) (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// SetSecretRotationConfig persists optional Lambda rotator settings for a secret.
+// Empty lambdaARN clears the rotator (lab random RotateSecret path).
+func (s *Store) SetSecretRotationConfig(accountID, nameOrARN, lambdaARN, roleARN string) error {
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return err
+	}
+	if _, err := s.getSecretRow(accountID, name); err != nil {
+		return err
+	}
+	lambdaARN = strings.TrimSpace(lambdaARN)
+	roleARN = strings.TrimSpace(roleARN)
+	_, err = s.db.Exec(
+		`UPDATE secretsmanager_secrets
+		 SET rotation_lambda_arn = ?, rotation_role_arn = ?
+		 WHERE account_id = ? AND name = ?`,
+		lambdaARN, roleARN, accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("set secret rotation config: %w", err)
+	}
+	return nil
+}
+
+// SecretRotationEventJSON builds the lab single-step rotator payload.
+func SecretRotationEventJSON(secretID, clientRequestToken string) (string, error) {
+	token := strings.TrimSpace(clientRequestToken)
+	if token == "" {
+		token = uuid.NewString()
+	}
+	raw, err := json.Marshal(map[string]string{
+		"SecretId":           strings.TrimSpace(secretID),
+		"ClientRequestToken": token,
+		"Step":               SecretRotationStepFinishSecret,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// ResolveSecretRotationLambda returns the rotator function account/name/qualifier and
+// the role ARN that PassRole must cover (configured rotation role, else function role).
+func (s *Store) ResolveSecretRotationLambda(accountID, nameOrARN string) (fnAccount, functionName, qualifier, passRoleARN string, err error) {
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	row, err := s.getSecretRow(accountID, name)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	lambdaARN := strings.TrimSpace(row.RotationLambdaARN)
+	if lambdaARN == "" {
+		return "", "", "", "", nil
+	}
+	fnAccount = resourceOwnerAccountFromARN(lambdaARN)
+	if fnAccount == "" {
+		fnAccount = accountID
+	}
+	baseName, qualifier := ParseFunctionQualifier(lambdaARN)
+	if baseName == "" {
+		return "", "", "", "", ErrSecretRotationLambdaInvalid
+	}
+	fn, err := s.GetFunction(fnAccount, baseName)
+	if err != nil {
+		return "", "", "", "", ErrSecretRotationLambdaInvalid
+	}
+	passRoleARN = strings.TrimSpace(row.RotationRoleARN)
+	if passRoleARN == "" {
+		passRoleARN = strings.TrimSpace(fn.RoleARN)
+	}
+	return fnAccount, baseName, qualifier, passRoleARN, nil
+}
+
+// EnqueueSecretRotationInvoke records a quiet async Invoke for the configured rotator.
+// Callers must ProcessAsyncInvocation and only then call FinishSecretRotation on success.
+func (s *Store) EnqueueSecretRotationInvoke(accountID, nameOrARN, clientRequestToken string) (LambdaAsyncInvocation, error) {
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return LambdaAsyncInvocation{}, err
+	}
+	row, err := s.getSecretRow(accountID, name)
+	if err != nil {
+		return LambdaAsyncInvocation{}, err
+	}
+	if strings.TrimSpace(row.DeletionDate) != "" {
+		return LambdaAsyncInvocation{}, ErrSecretScheduledDeletion
+	}
+	fnAccount, functionName, qualifier, _, err := s.ResolveSecretRotationLambda(accountID, name)
+	if err != nil {
+		return LambdaAsyncInvocation{}, err
+	}
+	if functionName == "" {
+		return LambdaAsyncInvocation{}, ErrSecretRotationLambdaInvalid
+	}
+	eventJSON, err := SecretRotationEventJSON(row.ARN, clientRequestToken)
+	if err != nil {
+		return LambdaAsyncInvocation{}, err
+	}
+	return s.EnqueueAsyncInvokeQuiet(fnAccount, functionName, qualifier, eventJSON)
+}
+
+// FinishSecretRotation applies lab finishSecret: random secret string replacement.
+// Only call after a successful rotator Invoke.
+func (s *Store) FinishSecretRotation(accountID, nameOrARN string) (Secret, error) {
+	return s.RotateSecret(accountID, nameOrARN)
 }
 
 // RotateSecret lab-rotates the secret string to a new random value (no Lambda).

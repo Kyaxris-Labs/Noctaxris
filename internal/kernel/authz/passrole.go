@@ -76,6 +76,10 @@ const ServicePrincipalELB = "elasticloadbalancing.amazonaws.com"
 // (for example MonitoringRoleArn). Lab create paths do not expose RoleArn yet.
 const ServicePrincipalRDS = "rds.amazonaws.com"
 
+// ServicePrincipalSecretsManager is the Secrets Manager service principal used in
+// role trust when configuring Lambda-backed RotateSecret (PassRole on the rotator role).
+const ServicePrincipalSecretsManager = "secretsmanager.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

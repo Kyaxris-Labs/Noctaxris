@@ -96,6 +96,8 @@ func (s *Server) handleCognito(
 		s.cognitoInitiateAuth(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoAdminInitiateAuth:
 		s.cognitoAdminInitiateAuth(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoRevokeToken:
+		s.cognitoRevokeToken(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This Cognito action is not implemented.", readOnly, eventID, verified)
@@ -133,6 +135,8 @@ func cognitoAction(action string) string {
 		return catalog.ActionCognitoInitiateAuth
 	case "AdminInitiateAuth":
 		return catalog.ActionCognitoAdminInitiateAuth
+	case "RevokeToken":
+		return catalog.ActionCognitoRevokeToken
 	default:
 		return action
 	}
@@ -463,14 +467,20 @@ func (s *Server) cognitoConfirmSignUp(
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ConfirmSignUp", readOnly)
 }
 
-func cognitoAuthParams(params map[string]any) (username, password string) {
+func cognitoAuthParams(params map[string]any) (username, password, refreshToken string) {
 	raw, _ := params["AuthParameters"].(map[string]any)
 	if raw == nil {
-		return "", ""
+		return "", "", ""
 	}
 	username, _ = raw["USERNAME"].(string)
 	password, _ = raw["PASSWORD"].(string)
-	return username, password
+	refreshToken, _ = raw["REFRESH_TOKEN"].(string)
+	return username, password, refreshToken
+}
+
+func cognitoIsRefreshFlow(flow string) bool {
+	flow = strings.ToUpper(strings.TrimSpace(flow))
+	return flow == "REFRESH_TOKEN_AUTH" || flow == "REFRESH_TOKEN"
 }
 
 func (s *Server) cognitoInitiateAuth(
@@ -479,17 +489,28 @@ func (s *Server) cognitoInitiateAuth(
 ) {
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
-	username, password := cognitoAuthParams(params)
-	// InitiateAuth is a public Cognito IdP API (no IAM / SigV4 on AWS). Auth is ClientId + user password.
-	if !strings.EqualFold(strings.TrimSpace(flow), "USER_PASSWORD_AUTH") {
+	username, password, refreshToken := cognitoAuthParams(params)
+	// InitiateAuth is a public Cognito IdP API (no IAM / SigV4 on AWS).
+	flowNorm := strings.ToUpper(strings.TrimSpace(flow))
+	var result store.CognitoAuthResult
+	var err error
+	switch {
+	case flowNorm == "USER_PASSWORD_AUTH":
+		result, err = s.store.InitiateCognitoAuth(clientID, username, password)
+	case cognitoIsRefreshFlow(flow):
+		result, err = s.store.RefreshCognitoTokens("", clientID, refreshToken)
+	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only USER_PASSWORD_AUTH is supported.", readOnly, eventID, verified)
+			"Only USER_PASSWORD_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
 		return
 	}
-	result, err := s.store.InitiateCognitoAuth(clientID, username, password)
 	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		msg := "Incorrect username or password."
+		if cognitoIsRefreshFlow(flow) {
+			msg = "Invalid refresh token."
+		}
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
-			"Incorrect username or password.", readOnly, eventID, verified)
+			msg, readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoNotFound) {
@@ -519,23 +540,33 @@ func (s *Server) cognitoAdminInitiateAuth(
 	poolID, _ := params["UserPoolId"].(string)
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
-	username, password := cognitoAuthParams(params)
+	username, password, refreshToken := cognitoAuthParams(params)
 	if !s.authorize(verified, catalog.ActionCognitoAdminInitiateAuth, "*") {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminInitiateAuth.", readOnly, eventID, verified)
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(flow), "USER_PASSWORD_AUTH") &&
-		!strings.EqualFold(strings.TrimSpace(flow), "ADMIN_USER_PASSWORD_AUTH") &&
-		!strings.EqualFold(strings.TrimSpace(flow), "ADMIN_NO_SRP_AUTH") {
+	flowNorm := strings.ToUpper(strings.TrimSpace(flow))
+	var result store.CognitoAuthResult
+	var err error
+	switch {
+	case flowNorm == "USER_PASSWORD_AUTH" || flowNorm == "ADMIN_USER_PASSWORD_AUTH" || flowNorm == "ADMIN_NO_SRP_AUTH":
+		result, err = s.store.AdminInitiateCognitoAuth(verified.AccountID, poolID, clientID, username, password)
+	case cognitoIsRefreshFlow(flow):
+		result, err = s.store.RefreshCognitoTokens(verified.AccountID, clientID, refreshToken)
+	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only USER_PASSWORD_AUTH or ADMIN_USER_PASSWORD_AUTH is supported.", readOnly, eventID, verified)
+			"Only USER_PASSWORD_AUTH, ADMIN_USER_PASSWORD_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.",
+			readOnly, eventID, verified)
 		return
 	}
-	result, err := s.store.AdminInitiateCognitoAuth(verified.AccountID, poolID, clientID, username, password)
 	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		msg := "Incorrect username or password."
+		if cognitoIsRefreshFlow(flow) {
+			msg = "Invalid refresh token."
+		}
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
-			"Incorrect username or password.", readOnly, eventID, verified)
+			msg, readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoNotFound) {
@@ -556,6 +587,34 @@ func (s *Server) cognitoAdminInitiateAuth(
 	payload, _ := cognitosvc.AuthResultJSON(result)
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "AdminInitiateAuth", readOnly)
+}
+
+func (s *Server) cognitoRevokeToken(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	clientID, _ := params["ClientId"].(string)
+	token, _ := params["Token"].(string)
+	// RevokeToken is a public Cognito IdP API (no IAM evaluation on AWS).
+	err := s.store.RevokeCognitoToken(clientID, token)
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UnauthorizedException",
+			"Invalid refresh token.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to revoke token.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.RevokeTokenJSON()
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "RevokeToken", readOnly)
 }
 
 func (s *Server) writeCognitoOK(w http.ResponseWriter, payload []byte) {

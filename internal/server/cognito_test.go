@@ -108,3 +108,120 @@ func TestCognitoPoolJWKSAndInitiateAuth(t *testing.T) {
 		t.Fatalf("expected NotAuthorizedException: %s", bad.Body.String())
 	}
 }
+
+func TestCognitoRefreshTokenAuthAndRevokeToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createPool := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPool", "cognito-idp", map[string]any{
+		"PoolName": "refresh-http-pool",
+	}, now)
+	if createPool.Code != http.StatusOK {
+		t.Fatalf("CreateUserPool status=%d body=%q", createPool.Code, createPool.Body.String())
+	}
+	var poolResp map[string]any
+	_ = json.Unmarshal(createPool.Body.Bytes(), &poolResp)
+	up, _ := poolResp["UserPool"].(map[string]any)
+	poolID, _ := up["Id"].(string)
+
+	createClient := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPoolClient", "cognito-idp", map[string]any{
+		"UserPoolId": poolID,
+		"ClientName": "refresh-client",
+	}, now)
+	if createClient.Code != http.StatusOK {
+		t.Fatalf("CreateUserPoolClient status=%d body=%q", createClient.Code, createClient.Body.String())
+	}
+	var clientResp map[string]any
+	_ = json.Unmarshal(createClient.Body.Bytes(), &clientResp)
+	upc, _ := clientResp["UserPoolClient"].(map[string]any)
+	clientID, _ := upc["ClientId"].(string)
+
+	adminCreate := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.AdminCreateUser", "cognito-idp", map[string]any{
+		"UserPoolId":        poolID,
+		"Username":          "dave",
+		"TemporaryPassword": "Secret4!",
+	}, now)
+	if adminCreate.Code != http.StatusOK {
+		t.Fatalf("AdminCreateUser status=%d body=%q", adminCreate.Code, adminCreate.Body.String())
+	}
+
+	auth := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.InitiateAuth", "cognito-idp", map[string]any{
+		"ClientId": clientID,
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]any{
+			"USERNAME": "dave",
+			"PASSWORD": "Secret4!",
+		},
+	}, now)
+	if auth.Code != http.StatusOK {
+		t.Fatalf("InitiateAuth status=%d body=%q", auth.Code, auth.Body.String())
+	}
+	var authResp map[string]any
+	_ = json.Unmarshal(auth.Body.Bytes(), &authResp)
+	result, _ := authResp["AuthenticationResult"].(map[string]any)
+	refreshToken, _ := result["RefreshToken"].(string)
+	if refreshToken == "" {
+		t.Fatalf("missing refresh token: %s", auth.Body.String())
+	}
+
+	// Unsigned REFRESH_TOKEN_AUTH (public IdP).
+	refreshBody, _ := json.Marshal(map[string]any{
+		"ClientId": clientID,
+		"AuthFlow": "REFRESH_TOKEN_AUTH",
+		"AuthParameters": map[string]any{
+			"REFRESH_TOKEN": refreshToken,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4566/", strings.NewReader(string(refreshBody)))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AWSCognitoIdentityProviderService.InitiateAuth")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("REFRESH_TOKEN_AUTH status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var refreshResp map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &refreshResp)
+	refreshed, _ := refreshResp["AuthenticationResult"].(map[string]any)
+	newAccess, _ := refreshed["AccessToken"].(string)
+	newRefresh, _ := refreshed["RefreshToken"].(string)
+	if newAccess == "" {
+		t.Fatalf("missing access after refresh: %s", rec.Body.String())
+	}
+	if newRefresh == "" || newRefresh == refreshToken {
+		t.Fatalf("expected rotated refresh token: %s", rec.Body.String())
+	}
+
+	revokeBody, _ := json.Marshal(map[string]any{
+		"ClientId": clientID,
+		"Token":    newRefresh,
+	})
+	revokeReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4566/", strings.NewReader(string(revokeBody)))
+	revokeReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	revokeReq.Header.Set("X-Amz-Target", "AWSCognitoIdentityProviderService.RevokeToken")
+	revokeRec := httptest.NewRecorder()
+	handler.ServeHTTP(revokeRec, revokeReq)
+	if revokeRec.Code != http.StatusOK {
+		t.Fatalf("RevokeToken status=%d body=%q", revokeRec.Code, revokeRec.Body.String())
+	}
+
+	againBody, _ := json.Marshal(map[string]any{
+		"ClientId": clientID,
+		"AuthFlow": "REFRESH_TOKEN",
+		"AuthParameters": map[string]any{
+			"REFRESH_TOKEN": newRefresh,
+		},
+	})
+	againReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4566/", strings.NewReader(string(againBody)))
+	againReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	againReq.Header.Set("X-Amz-Target", "AWSCognitoIdentityProviderService.InitiateAuth")
+	againRec := httptest.NewRecorder()
+	handler.ServeHTTP(againRec, againReq)
+	if againRec.Code == http.StatusOK {
+		t.Fatal("refresh after revoke must fail")
+	}
+	if !strings.Contains(againRec.Body.String(), "NotAuthorizedException") {
+		t.Fatalf("expected NotAuthorizedException: %s", againRec.Body.String())
+	}
+}

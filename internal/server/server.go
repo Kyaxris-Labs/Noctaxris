@@ -225,7 +225,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		// AWS STS federation APIs authenticate via SAML/OIDC token, not SigV4.
 		verified = &authn.Verified{Region: federationRegion(r)}
 	} else if isUnauthenticatedCognitoAction(action) {
-		// Cognito InitiateAuth is a public IdP API; AWS CLI omits Authorization.
+		// Cognito InitiateAuth / RevokeToken are public IdP APIs; AWS CLI omits Authorization.
 		verified = &authn.Verified{Region: federationRegion(r), Service: "cognito-idp"}
 	} else {
 		var err error
@@ -629,6 +629,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionDynamoDBScan, "Scan",
 		catalog.ActionDynamoDBBatchGetItem, "BatchGetItem",
 		catalog.ActionDynamoDBBatchWriteItem, "BatchWriteItem",
+		catalog.ActionDynamoDBTransactGetItems, "TransactGetItems",
+		catalog.ActionDynamoDBTransactWriteItems, "TransactWriteItems",
 		catalog.ActionDynamoDBPutResourcePolicy, "PutResourcePolicy",
 		catalog.ActionDynamoDBGetResourcePolicy, "GetResourcePolicy",
 		catalog.ActionDynamoDBDeleteResourcePolicy, "DeleteResourcePolicy",
@@ -774,6 +776,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLogsDescribeLogStreams, "DescribeLogStreams",
 		catalog.ActionLogsPutLogEvents, "PutLogEvents",
 		catalog.ActionLogsGetLogEvents, "GetLogEvents",
+		catalog.ActionLogsFilterLogEvents, "FilterLogEvents",
 		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups",
 		catalog.ActionLogsPutSubscriptionFilter, "PutSubscriptionFilter",
 		catalog.ActionLogsDeleteSubscriptionFilter, "DeleteSubscriptionFilter",
@@ -900,6 +903,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionRDSDeleteDBInstance, "DeleteDBInstance":
 		s.handleRDS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionRDSDataExecuteStatement,
+		catalog.ActionRDSDataBatchExecuteStatement,
 		catalog.ActionRDSDataBeginTransaction,
 		catalog.ActionRDSDataCommitTransaction,
 		catalog.ActionRDSDataRollbackTransaction:
@@ -964,7 +968,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCognitoSignUp, "SignUp",
 		catalog.ActionCognitoConfirmSignUp, "ConfirmSignUp",
 		catalog.ActionCognitoInitiateAuth, "InitiateAuth",
-		catalog.ActionCognitoAdminInitiateAuth, "AdminInitiateAuth":
+		catalog.ActionCognitoAdminInitiateAuth, "AdminInitiateAuth",
+		catalog.ActionCognitoRevokeToken, "RevokeToken":
 		s.handleCognito(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudControlCreateResource,
 		catalog.ActionCloudControlGetResource,
@@ -1809,6 +1814,10 @@ func normalizeAction(action string) string {
 		return catalog.ActionDynamoDBBatchGetItem
 	case "BatchWriteItem":
 		return catalog.ActionDynamoDBBatchWriteItem
+	case "TransactGetItems":
+		return catalog.ActionDynamoDBTransactGetItems
+	case "TransactWriteItems":
+		return catalog.ActionDynamoDBTransactWriteItems
 	case "PutResourcePolicy":
 		return catalog.ActionDynamoDBPutResourcePolicy
 	case "GetResourcePolicy":
@@ -2027,6 +2036,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionLogsPutLogEvents
 	case "GetLogEvents":
 		return catalog.ActionLogsGetLogEvents
+	case "FilterLogEvents":
+		return catalog.ActionLogsFilterLogEvents
 	case "DescribeLogGroups":
 		return catalog.ActionLogsDescribeLogGroups
 	case "TagResources":
@@ -2108,7 +2119,8 @@ func isUnauthenticatedSTSAction(action string) bool {
 
 func isUnauthenticatedCognitoAction(action string) bool {
 	switch action {
-	case catalog.ActionCognitoInitiateAuth, "InitiateAuth":
+	case catalog.ActionCognitoInitiateAuth, "InitiateAuth",
+		catalog.ActionCognitoRevokeToken, "RevokeToken":
 		return true
 	default:
 		return false

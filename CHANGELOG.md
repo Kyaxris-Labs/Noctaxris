@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Cognito token lifecycle
+
+- Cognito `InitiateAuth` `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN` against hashed refresh tokens (lab rotation issues a new refresh token); `RevokeToken` public IdP; unsigned CLI/SDK shapes
+
+### RDS Data API transactions and batch
+
+- RDS Data API: real `BeginTransaction` / `CommitTransaction` / `RollbackTransaction` via held nested `pgx` sessions (fail closed with `DatabaseUnavailableException` when the instance is unavailable or dial fails); `ExecuteStatement` with `transactionId`; `BatchExecuteStatement` (auto-commit or txn-scoped)
+
+### CloudFormation ChangeSet Modify and Cloud Control UpdateResource
+
+- CloudFormation ChangeSet execute: allowlisted in-place `Modify` (Removals, then Modify in dependency order, then Add); unknown Modify types or immutable property changes fail closed
+- Cloud Control `UpdateResource`: property-object `PatchDocument` for CFN-aligned allowlist mutable subsets; unknown patch keys fail closed; sync `ProgressEvent` SUCCESS with recorded tokens
+
+### DynamoDB transactions, Kinesis Lambda ESM, Logs FilterLogEvents, Secrets Lambda rotate
+
+- DynamoDB `TransactWriteItems` (`Put` / `Delete` / `ConditionCheck` existence) and `TransactGetItems` (same-account; lab soft cap 25; duplicate keys cancel; SQLite all-or-nothing)
+- Lambda event source mapping for single-shard Kinesis stream ARNs; in-process poller with optional `FilterCriteria` on decoded `data` / `partitionKey`; function role needs `kinesis:GetRecords` / `GetShardIterator` / `DescribeStream`
+- CloudWatch Logs `FilterLogEvents` (optional stream names, time bounds, substring `filterPattern`, lab page cap)
+- Secrets Manager optional `RotationLambdaARN` on `RotateSecret`: PassRole for `secretsmanager.amazonaws.com`, async Invoke `finishSecret`, then server-side random `PutSecretValue` on invoke success (default random rotate unchanged)
+
 ### Interservice depth (S3 notifications, EventBridge patterns, CFN policies)
 
 - S3 bucket notifications: Put/Get configuration plus emit on PutObject / DeleteObject / CompleteMultipartUpload to Lambda (async), SQS, EventBridge (`aws.s3`), and SNS Publish (HTTP subscribers remain allowlist/catcher-only); destination authz re-checked on emit

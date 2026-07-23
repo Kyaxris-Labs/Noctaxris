@@ -68,3 +68,14 @@ func CommitTransactionJSON() ([]byte, error) {
 func RollbackTransactionJSON() ([]byte, error) {
 	return json.Marshal(map[string]any{"transactionStatus": "Rollback Complete"})
 }
+
+// BatchExecuteStatementJSON builds a BatchExecuteStatement response (AWS UpdateResult shape).
+func BatchExecuteStatementJSON(results []store.RDSDataExecuteResult) ([]byte, error) {
+	resps := make([]map[string]any, 0, len(results))
+	for range results {
+		resps = append(resps, map[string]any{
+			"generatedFields": []any{},
+		})
+	}
+	return json.Marshal(map[string]any{"updateResults": resps})
+}

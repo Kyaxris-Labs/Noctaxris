@@ -45,6 +45,8 @@ func (s *Server) handleLogs(
 		s.logsPutLogEvents(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsGetLogEvents:
 		s.logsGetLogEvents(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsFilterLogEvents:
+		s.logsFilterLogEvents(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsDescribeLogGroups:
 		s.logsDescribeLogGroups(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsPutSubscriptionFilter:
@@ -84,6 +86,8 @@ func logsAction(action string) string {
 		return catalog.ActionLogsPutLogEvents
 	case "GetLogEvents":
 		return catalog.ActionLogsGetLogEvents
+	case "FilterLogEvents":
+		return catalog.ActionLogsFilterLogEvents
 	case "DescribeLogGroups":
 		return catalog.ActionLogsDescribeLogGroups
 	case "PutSubscriptionFilter":
@@ -460,6 +464,74 @@ func (s *Server) logsGetLogEvents(
 	}
 	s.writeLogsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "GetLogEvents", readOnly)
+}
+
+func (s *Server) logsFilterLogEvents(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	if strings.TrimSpace(group) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsFilterLogEvents, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:FilterLogEvents.", readOnly, eventID, verified)
+		return
+	}
+
+	var streamNames []string
+	if raw, ok := params["logStreamNames"].([]any); ok {
+		for _, item := range raw {
+			if name, ok := item.(string); ok {
+				streamNames = append(streamNames, name)
+			}
+		}
+	}
+	pattern, _ := params["filterPattern"].(string)
+	nextToken, _ := params["nextToken"].(string)
+	in := store.FilterLogEventsInput{
+		LogGroupName:   group,
+		LogStreamNames: streamNames,
+		FilterPattern:  pattern,
+		StartTime:      logsInt64Param(params["startTime"]),
+		EndTime:        logsInt64Param(params["endTime"]),
+		Limit:          int(logsInt64Param(params["limit"])),
+		NextToken:      nextToken,
+	}
+
+	events, next, err := s.store.FilterLogEvents(verified.AccountID, in)
+	if errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"The specified log group does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid nextToken") || strings.Contains(err.Error(), "log group name is required") {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to filter log events.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := logssvc.FilterLogEventsJSON(events, next)
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "FilterLogEvents", readOnly)
 }
 
 func (s *Server) logsDescribeLogGroups(

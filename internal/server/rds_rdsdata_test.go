@@ -181,14 +181,26 @@ func TestRDSDataExecuteStatementUnavailableAndStubOverride(t *testing.T) {
 		"secretArn":   inst.MasterUserSecretARN,
 		"database":    "postgres",
 	}, now)
-	if begin.Code != http.StatusNotImplemented {
-		t.Fatalf("BeginTransaction status=%d want 501 body=%q", begin.Code, begin.Body.String())
+	if begin.Code == http.StatusNotImplemented {
+		t.Fatalf("Begin must not stay 501; got %d body=%s", begin.Code, begin.Body.String())
+	}
+	if begin.Code != http.StatusGatewayTimeout && begin.Code != http.StatusBadRequest {
+		t.Fatalf("BeginTransaction status=%d body=%s", begin.Code, begin.Body.String())
+	}
+	if !strings.Contains(begin.Body.String(), "DatabaseUnavailableException") &&
+		!strings.Contains(begin.Body.String(), "Unavailable") {
+		t.Fatalf("BeginTransaction body=%s", begin.Body.String())
 	}
 	commit := mustJSONTarget(t, handler, "AmazonRDSDataService.CommitTransaction", "rds-data", map[string]any{
+		"resourceArn":   inst.DBInstanceARN,
+		"secretArn":     inst.MasterUserSecretARN,
 		"transactionId": "txn-does-not-exist",
 	}, now)
-	if commit.Code != http.StatusNotImplemented {
-		t.Fatalf("CommitTransaction status=%d want 501 body=%q", commit.Code, commit.Body.String())
+	if commit.Code == http.StatusNotImplemented {
+		t.Fatalf("CommitTransaction must not stay 501; body=%q", commit.Body.String())
+	}
+	if commit.Code != http.StatusNotFound || !strings.Contains(commit.Body.String(), "TransactionNotFoundException") {
+		t.Fatalf("CommitTransaction status=%d body=%q", commit.Code, commit.Body.String())
 	}
 	withTxn := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
 		"resourceArn":   inst.DBInstanceARN,
@@ -196,7 +208,99 @@ func TestRDSDataExecuteStatementUnavailableAndStubOverride(t *testing.T) {
 		"sql":           "SELECT 1",
 		"transactionId": "txn-ignored",
 	}, now)
-	if withTxn.Code != http.StatusNotImplemented {
-		t.Fatalf("Execute with transactionId status=%d want 501 body=%q", withTxn.Code, withTxn.Body.String())
+	if withTxn.Code == http.StatusNotImplemented {
+		t.Fatalf("Execute with transactionId must not stay 501; body=%q", withTxn.Body.String())
+	}
+	if withTxn.Code != http.StatusNotFound || !strings.Contains(withTxn.Body.String(), "TransactionNotFoundException") {
+		t.Fatalf("Execute with transactionId status=%d body=%q", withTxn.Code, withTxn.Body.String())
+	}
+}
+
+func TestRDSDataBeginUnavailableNot501(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"dataapi-begin"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"postgres"},
+		"MasterUserPassword":   {"lab-password-1"},
+		"DBName":               {"postgres"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%q", create.Code, create.Body.String())
+	}
+	inst, err := st.DescribeRDSDBInstance(testAccountID, "dataapi-begin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	begin := mustJSONTarget(t, handler, "AmazonRDSDataService.BeginTransaction", "rds-data", map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "postgres",
+	}, now)
+	if begin.Code == http.StatusNotImplemented {
+		t.Fatalf("Begin must not stay 501; got %d body=%s", begin.Code, begin.Body.String())
+	}
+	if begin.Code != http.StatusGatewayTimeout && begin.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", begin.Code, begin.Body.String())
+	}
+	if !strings.Contains(begin.Body.String(), "DatabaseUnavailableException") &&
+		!strings.Contains(begin.Body.String(), "Unavailable") {
+		t.Fatalf("body=%s", begin.Body.String())
+	}
+}
+
+func TestRDSDataBatchExecuteUnavailable(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"dataapi-batch"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"postgres"},
+		"MasterUserPassword":   {"lab-password-1"},
+		"DBName":               {"postgres"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%q", create.Code, create.Body.String())
+	}
+	inst, err := st.DescribeRDSDBInstance(testAccountID, "dataapi-batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	batch := mustJSONTarget(t, handler, "AmazonRDSDataService.BatchExecuteStatement", "rds-data", map[string]any{
+		"resourceArn":   inst.DBInstanceARN,
+		"secretArn":     inst.MasterUserSecretARN,
+		"database":      "postgres",
+		"sql":           "SELECT 1",
+		"parameterSets": []any{[]any{}, []any{}},
+	}, now)
+	if batch.Code == http.StatusNotImplemented {
+		t.Fatal("BatchExecuteStatement must be wired")
+	}
+	if batch.Code != http.StatusGatewayTimeout || !strings.Contains(batch.Body.String(), "DatabaseUnavailableException") {
+		t.Fatalf("want DatabaseUnavailableException, got status=%d body=%q", batch.Code, batch.Body.String())
+	}
+
+	empty := mustJSONTarget(t, handler, "AmazonRDSDataService.BatchExecuteStatement", "rds-data", map[string]any{
+		"resourceArn":   inst.DBInstanceARN,
+		"secretArn":     inst.MasterUserSecretARN,
+		"database":      "postgres",
+		"sql":           "SELECT 1",
+		"parameterSets": []any{},
+	}, now)
+	if empty.Code != http.StatusBadRequest || !strings.Contains(empty.Body.String(), "BadRequestException") {
+		t.Fatalf("empty parameterSets status=%d body=%q", empty.Code, empty.Body.String())
 	}
 }

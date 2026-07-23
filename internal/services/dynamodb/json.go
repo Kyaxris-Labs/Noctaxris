@@ -216,6 +216,45 @@ func BatchWriteItemJSON(unprocessed map[string]any) ([]byte, error) {
 	return json.Marshal(map[string]any{"UnprocessedItems": unprocessed})
 }
 
+// TransactWriteItemsJSON builds a TransactWriteItems success body.
+func TransactWriteItemsJSON() ([]byte, error) {
+	return EmptyOKJSON()
+}
+
+// TransactGetItemsJSON builds a TransactGetItems success body.
+// responses[i] is the item map, or nil when the item was missing.
+func TransactGetItemsJSON(responses []ItemMap) ([]byte, error) {
+	out := make([]any, 0, len(responses))
+	for _, item := range responses {
+		if item == nil {
+			out = append(out, nil)
+			continue
+		}
+		out = append(out, map[string]any{"Item": item})
+	}
+	return json.Marshal(map[string]any{"Responses": out})
+}
+
+// TransactionCanceledJSON builds a TransactionCanceledException body.
+func TransactionCanceledJSON(message string, reasons []store.CancellationReason) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(reasons))
+	for _, r := range reasons {
+		entry := map[string]any{"Code": r.Code}
+		if r.Message != "" {
+			entry["Message"] = r.Message
+		}
+		entries = append(entries, entry)
+	}
+	if message == "" {
+		message = "Transaction cancelled, please refer cancellation reasons for specific reasons"
+	}
+	return json.Marshal(map[string]any{
+		"__type":              "TransactionCanceledException",
+		"message":             message,
+		"CancellationReasons": entries,
+	})
+}
+
 // GetResourcePolicyJSON builds a GetResourcePolicy success body.
 func GetResourcePolicyJSON(policy string) ([]byte, error) {
 	return json.Marshal(map[string]any{"Policy": policy})

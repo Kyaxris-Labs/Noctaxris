@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	sm "github.com/Kyaxris-Labs/Noctaxris/internal/services/secretsmanager"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -490,6 +492,44 @@ func (s *Server) secretsRestoreSecret(
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RestoreSecret", readOnly)
 }
 
+func (s *Server) checkSecretsManagerPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok {
+		return errors.New("rotation role must be a valid IAM role ARN")
+	}
+	if accountID != verified.AccountID {
+		return errors.New("rotation role must be in the same account")
+	}
+	storedARN, trust, err := s.store.GetRole(accountID, roleName)
+	if err != nil {
+		return errors.New("rotation role not found")
+	}
+	if storedARN != "" {
+		roleARN = storedARN
+	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to Secrets Manager")
+	}
+	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
+		EvalInputs:       in,
+		RoleARN:          roleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalSecretsManager,
+		SourceArn:        sourceARN,
+	})
+	if decision != authz.Allow {
+		return errors.New("not authorized to pass role to Secrets Manager")
+	}
+	return nil
+}
+
 func (s *Server) secretsRotateSecret(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -514,7 +554,41 @@ func (s *Server) secretsRotateSecret(
 	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt, encCtx) {
 		return
 	}
-	sec, err := s.store.RotateSecret(secretAccountID, secretID)
+
+	rotationLambdaARN, _ := params["RotationLambdaARN"].(string)
+	rotationLambdaARN = strings.TrimSpace(rotationLambdaARN)
+	rotationRoleARN, _ := params["RotationRoleARN"].(string)
+	rotationRoleARN = strings.TrimSpace(rotationRoleARN)
+	clientToken, _ := params["ClientRequestToken"].(string)
+	if rotationLambdaARN != "" || rotationRoleARN != "" {
+		persistLambda := rotationLambdaARN
+		if persistLambda == "" {
+			persistLambda = meta.RotationLambdaARN
+		}
+		persistRole := rotationRoleARN
+		if persistRole == "" {
+			persistRole = meta.RotationRoleARN
+		}
+		if err := s.store.SetSecretRotationConfig(secretAccountID, secretID, persistLambda, persistRole); err != nil {
+			s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to configure secret rotation.", readOnly, eventID, verified)
+			return
+		}
+	}
+
+	described, err := s.store.DescribeSecret(secretAccountID, secretID)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to rotate secret.", readOnly, eventID, verified)
+		return
+	}
+
+	var sec store.Secret
+	if strings.TrimSpace(described.RotationLambdaARN) == "" {
+		sec, err = s.store.RotateSecret(secretAccountID, secretID)
+	} else {
+		sec, err = s.secretsRotateViaLambda(r.Context(), verified, secretAccountID, secretID, described, clientToken)
+	}
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -525,7 +599,17 @@ func (s *Server) secretsRotateSecret(
 			"Secret is scheduled for deletion.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrSecretRotationLambdaInvalid) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"RotationLambdaARN is invalid or the function was not found.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
+		if strings.Contains(err.Error(), "not authorized to pass role") {
+			s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to rotate secret.", readOnly, eventID, verified)
 		return
@@ -538,6 +622,55 @@ func (s *Server) secretsRotateSecret(
 	}
 	s.writeSecretsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RotateSecret", readOnly)
+}
+
+// secretsRotateViaLambda enforces PassRole for secretsmanager.amazonaws.com, enqueues a
+// quiet async Invoke with Step=finishSecret, invokes the rotator, and only then applies
+// lab finishSecret (random PutSecretValue). Invoke failure leaves the secret unchanged.
+func (s *Server) secretsRotateViaLambda(
+	ctx context.Context,
+	verified *authn.Verified,
+	secretAccountID, secretID string,
+	meta store.Secret,
+	clientRequestToken string,
+) (store.Secret, error) {
+	fnAccount, functionName, qualifier, passRoleARN, err := s.store.ResolveSecretRotationLambda(secretAccountID, secretID)
+	if err != nil {
+		return store.Secret{}, err
+	}
+	if functionName == "" || passRoleARN == "" {
+		return store.Secret{}, store.ErrSecretRotationLambdaInvalid
+	}
+	if err := s.checkSecretsManagerPassRole(verified, passRoleARN, meta.ARN); err != nil {
+		return store.Secret{}, err
+	}
+	job, err := s.store.EnqueueSecretRotationInvoke(secretAccountID, secretID, clientRequestToken)
+	if err != nil {
+		return store.Secret{}, err
+	}
+	if err := s.store.ProcessAsyncInvocation(job.InvocationID, 0, func() error {
+		fn, resolvedVersion, resolveErr := s.store.ResolveFunction(fnAccount, functionName, qualifier)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		_, execErr := s.executeLambdaInvoke(ctx, fnAccount, functionName, fn, resolvedVersion, job.EventJSON)
+		return execErr
+	}); err != nil {
+		return store.Secret{}, fmt.Errorf("rotation lambda invoke failed: %w", err)
+	}
+	// ProcessAsyncInvocation records failures on the job without always returning them.
+	done, err := s.store.GetAsyncInvocation(job.InvocationID)
+	if err != nil {
+		return store.Secret{}, err
+	}
+	if done.Status != "succeeded" {
+		msg := strings.TrimSpace(done.LastError)
+		if msg == "" {
+			msg = "rotation lambda invoke failed"
+		}
+		return store.Secret{}, fmt.Errorf("%s", msg)
+	}
+	return s.store.FinishSecretRotation(secretAccountID, secretID)
 }
 
 func secretsBoolParam(v any, def bool) bool {

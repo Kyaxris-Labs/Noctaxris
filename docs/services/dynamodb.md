@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GSIs per table), BatchGet/BatchWrite, table resource policies, CMK encryption, and TTL with lazy expiry on read.
+Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GSIs per table), BatchGet/BatchWrite, TransactWrite/TransactGet (same-account lab subset), table resource policies, CMK encryption, and TTL with lazy expiry on read.
 
 ## Implemented
 
@@ -15,6 +15,7 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
 | Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`; optional `FilterExpression` with the same lab subset as `ConditionExpression`, fail-closed on unsupported operators) |
 | Batch | `BatchGetItem`, `BatchWriteItem` (lab soft cap 25; overflow returned in `UnprocessedKeys` / `UnprocessedItems`) |
+| Transactions | `TransactWriteItems` (`Put` / `Delete` / `ConditionCheck` existence), `TransactGetItems` (same-account tables; lab soft cap 25; duplicate item keys cancel the write) |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`; `Query`/`Scan` over-fetch until `Limit` live items) |
 | Encryption | Table SSE with AWS-owned or customer-managed KMS |
@@ -26,6 +27,10 @@ Table and item metadata live in SQLite. Item ciphertext uses table SSE. Expired 
 DynamoDB uses `EvaluateDynamoDB` via `authorizeDataplaneOR` with the table owner account from the table ARN. Same-account access: allow if identity **or** table resource policy Allows. Cross-account access: allow only when identity **and** table resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. A resource policy alone can grant access in the same account (unlike KMS). Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
 Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs. SSE-KMS tables resolve the CMK under the table owner account and require `kms:Decrypt` via EvaluateKMS (identity plus key policy), matching S3 SSE-KMS. Item DEK seal/unseal and KMS authz bind EncryptionContext `aws:dynamodb:tableName` and `aws:dynamodb:subscriberId` (table owner account id). `CreateTable` / `UpdateTable` that enable SSE-KMS also require caller `kms:DescribeKey` and `kms:CreateGrant` on that CMK with the same context (deny attach when the key policy lacks Allow). `PutResourcePolicy` requires every statement to name a `Principal`.
+
+### Transactions notes
+
+`TransactWriteItems` and `TransactGetItems` run against same-account lab tables only (cross-account table ARNs fail closed). Writes are all-or-nothing in a SQLite transaction; failed `ConditionCheck` or duplicate primary keys in one request return `TransactionCanceledException` with `CancellationReasons`. Lab cap is 25 actions (AWS allows 100). `ConditionCheck` supports item existence / `attribute_exists(...)` only. `Update` inside `TransactWriteItems`, `ConditionExpression` on `Put`/`Delete`, ClientRequestToken idempotency, and cross-account transact targets stay fail-closed.
 
 ## How to verify / CLI smoke
 
@@ -84,7 +89,30 @@ aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
   --endpoint-url "$EP" --profile account-a
 ```
 
+Transactions:
+
+```bash
+TABLE="noctaxris-txn-$RANDOM"
+aws dynamodb create-table \
+  --table-name "$TABLE" \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url "$EP"
+
+aws dynamodb transact-write-items --endpoint-url "$EP" --transact-items "[
+  {\"Put\":{\"TableName\":\"$TABLE\",\"Item\":{\"pk\":{\"S\":\"a\"},\"v\":{\"S\":\"1\"}}}},
+  {\"Put\":{\"TableName\":\"$TABLE\",\"Item\":{\"pk\":{\"S\":\"b\"},\"v\":{\"S\":\"2\"}}}}
+]"
+
+aws dynamodb transact-get-items --endpoint-url "$EP" --transact-items "[
+  {\"Get\":{\"TableName\":\"$TABLE\",\"Key\":{\"pk\":{\"S\":\"a\"}}}},
+  {\"Get\":{\"TableName\":\"$TABLE\",\"Key\":{\"pk\":{\"S\":\"b\"}}}}
+]"
+```
+
 ## Not yet / deferred
 
-- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Transactions, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity)
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity)
+- TransactWrite `Update` expressions, Put/Delete `ConditionExpression` beyond existence checks, ClientRequestToken idempotency, AWS 100-item limit, cross-account transact, stream append on transact writes
 - Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views; DynamoDB Streams Lambda ESM ships in [lambda.md](lambda.md))
