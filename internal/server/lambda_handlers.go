@@ -604,6 +604,7 @@ func (s *Server) lambdaCreateFunction(
 			"Unable to create function.", readOnly, eventID, verified)
 		return
 	}
+	s.store.EnrichFunctionLayerSizes(&fn)
 	payload, err := lambdasvc.CreateFunctionJSON(fn)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
@@ -656,6 +657,7 @@ func (s *Server) lambdaGetFunction(
 			"Unable to get function.", readOnly, eventID, verified)
 		return
 	}
+	s.store.EnrichFunctionLayerSizes(&qf.LambdaFunction)
 	payload, err := lambdasvc.GetFunctionQualifiedJSON(qf)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
@@ -731,6 +733,9 @@ func (s *Server) lambdaListFunctions(
 			"Unable to list functions.", readOnly, eventID, verified)
 		return
 	}
+	for i := range fns {
+		s.store.EnrichFunctionLayerSizes(&fns[i])
+	}
 	payload, err := lambdasvc.ListFunctionsJSON(fns)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
@@ -795,6 +800,7 @@ func (s *Server) lambdaUpdateFunctionCode(
 			"Unable to update function code.", readOnly, eventID, verified)
 		return
 	}
+	s.store.EnrichFunctionLayerSizes(&updated)
 	payload, err := lambdasvc.CreateFunctionJSON(updated)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
@@ -914,6 +920,7 @@ func (s *Server) lambdaUpdateFunctionConfiguration(
 			"Unable to update function configuration.", readOnly, eventID, verified)
 		return
 	}
+	s.store.EnrichFunctionLayerSizes(&updated)
 	payload, err := lambdasvc.CreateFunctionJSON(updated)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
@@ -1601,7 +1608,8 @@ func (s *Server) lambdaPublishLayerVersion(
 			"Unable to publish layer version.", readOnly, eventID, verified)
 		return
 	}
-	payload, err := lambdasvc.PublishLayerVersionJSON(layer)
+	codeSize := s.store.LayerCodeSizeBytes(layer.AccountID, layer.LayerARN)
+	payload, err := lambdasvc.PublishLayerVersionJSON(layer, codeSize)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -1648,7 +1656,8 @@ func (s *Server) lambdaGetLayerVersion(
 			"Unable to get layer version.", readOnly, eventID, verified)
 		return
 	}
-	payload, err := lambdasvc.GetLayerVersionJSON(layer)
+	codeSize := s.store.LayerCodeSizeBytes(layer.AccountID, layer.LayerARN)
+	payload, err := lambdasvc.GetLayerVersionJSON(layer, codeSize)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
 			"Unable to build response.", readOnly, eventID, verified)

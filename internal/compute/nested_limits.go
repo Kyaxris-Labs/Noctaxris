@@ -4,18 +4,35 @@ import (
 	"github.com/docker/docker/api/types/container"
 )
 
+// nestedTaskPidsLimit caps processes inside nested Lambda/ECS lab containers.
+const nestedTaskPidsLimit = int64(1024)
+
 // nestedTaskSecurity applies CapDrop ALL, no Privileged/CapAdd, no-new-privileges,
-// and an optional memory limit for nested lab tasks.
+// an optional memory limit, and a pids cgroup bound for nested lab tasks.
 func nestedTaskSecurity(memoryMB int) container.HostConfig {
+	pids := nestedTaskPidsLimit
 	hc := container.HostConfig{
 		Privileged:  false,
 		CapDrop:     []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges:true"},
+		Resources: container.Resources{
+			PidsLimit: &pids,
+		},
 	}
 	if memoryMB > 0 {
 		hc.Memory = int64(memoryMB) * 1024 * 1024
+		hc.Resources.Memory = hc.Memory
 	}
 	return hc
+}
+
+func nestedTaskResources(sec container.HostConfig) container.Resources {
+	res := container.Resources{Memory: sec.Memory}
+	if sec.Resources.PidsLimit != nil {
+		pids := *sec.Resources.PidsLimit
+		res.PidsLimit = &pids
+	}
+	return res
 }
 
 // zipInvokeHostConfig builds HostConfig for zip Lambda Invoke (code binds are :ro).
@@ -30,7 +47,7 @@ func zipInvokeHostConfig(binds []string, memoryMB int) *container.HostConfig {
 		Privileged:     false,
 		CapDrop:        append([]string(nil), sec.CapDrop...),
 		SecurityOpt:    append([]string(nil), sec.SecurityOpt...),
-		Resources:      container.Resources{Memory: sec.Memory},
+		Resources:      nestedTaskResources(sec),
 	}
 }
 
@@ -50,7 +67,7 @@ func ecsTaskHostConfig(memoryMB int) *container.HostConfig {
 		Privileged:  false,
 		CapDrop:     append([]string(nil), sec.CapDrop...),
 		SecurityOpt: append([]string(nil), sec.SecurityOpt...),
-		Resources:   container.Resources{Memory: sec.Memory},
+		Resources:   nestedTaskResources(sec),
 	}
 }
 

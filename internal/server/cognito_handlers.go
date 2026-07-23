@@ -480,11 +480,7 @@ func (s *Server) cognitoInitiateAuth(
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
 	username, password := cognitoAuthParams(params)
-	if !s.authorize(verified, catalog.ActionCognitoInitiateAuth, "*") {
-		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
-			"User is not authorized to perform cognito-idp:InitiateAuth.", readOnly, eventID, verified)
-		return
-	}
+	// InitiateAuth is a public Cognito IdP API (no IAM / SigV4 on AWS). Auth is ClientId + user password.
 	if !strings.EqualFold(strings.TrimSpace(flow), "USER_PASSWORD_AUTH") {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			"Only USER_PASSWORD_AUTH is supported.", readOnly, eventID, verified)

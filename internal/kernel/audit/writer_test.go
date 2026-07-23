@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,5 +54,15 @@ func TestWriteEvent(t *testing.T) {
 	}
 	if !strings.Contains(line, `"eventVersion":"1.11"`) {
 		t.Fatalf("expected eventVersion 1.11 in %q", line)
+	}
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Fatalf("events.jsonl mode=%o want 0644", perm)
+		}
 	}
 }

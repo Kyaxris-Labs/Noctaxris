@@ -103,3 +103,58 @@ func CreateStageJSON(st store.APIGatewayStage) ([]byte, error) {
 		"AutoDeploy": st.AutoDeploy,
 	})
 }
+
+// GetIntegrationsJSON builds GetIntegrations response.
+func GetIntegrationsJSON(items []store.APIGatewayIntegration) ([]byte, error) {
+	out := make([]map[string]any, 0, len(items))
+	for _, in := range items {
+		m := map[string]any{
+			"IntegrationId":        in.IntegrationID,
+			"IntegrationType":      in.IntegrationType,
+			"IntegrationUri":       in.IntegrationURI,
+			"PayloadFormatVersion": in.PayloadFormatVersion,
+			"ApiId":                in.APIID,
+		}
+		if in.CredentialsArn != "" {
+			m["CredentialsArn"] = in.CredentialsArn
+		}
+		out = append(out, m)
+	}
+	return json.Marshal(map[string]any{"Items": out})
+}
+
+// GetRoutesJSON builds GetRoutes response.
+func GetRoutesJSON(items []store.APIGatewayRoute) ([]byte, error) {
+	out := make([]map[string]any, 0, len(items))
+	for _, r := range items {
+		m := map[string]any{
+			"RouteId":           r.RouteID,
+			"RouteKey":          r.RouteKey,
+			"Target":            r.Target,
+			"AuthorizationType": r.AuthorizationType,
+			"ApiId":             r.APIID,
+		}
+		if r.AuthorizerID != "" {
+			m["AuthorizerId"] = r.AuthorizerID
+		}
+		out = append(out, m)
+	}
+	return json.Marshal(map[string]any{"Items": out})
+}
+
+// GetAuthorizersJSON builds GetAuthorizers response.
+func GetAuthorizersJSON(items []store.APIGatewayAuthorizer) ([]byte, error) {
+	out := make([]map[string]any, 0, len(items))
+	for _, a := range items {
+		raw, err := CreateAuthorizerJSON(a)
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return json.Marshal(map[string]any{"Items": out})
+}

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Stabilization (CLI fidelity + docs)
+
+- Lambda `FunctionConfiguration.Layers` returns AWS Layer objects (`Arn`, `CodeSize`) instead of bare ARN strings
+- API Gateway HTTP API REST `/v2/apis...` no longer stolen by lab ECR Registry V2; `GetIntegrations` / `GetRoutes` / `GetAuthorizers` list APIs
+- Lambda REST: `AddPermission` (`/policy`) and Function URL config (`/2021-10-31/.../url`)
+- Cognito `InitiateAuth` accepts unsigned AWS CLI requests (public IdP API)
+- Docs: restricted DinD is current default (not “planned”); OpenSearch nested honesty + `vm.max_map_count` / host-gateway overlays in ops
+- Nested task HostConfig adds pids limit (1024); audit `events.jsonl` chmod enforced to `0644`
+
 ## 1.0.0
 
 First public semver release. Docker Hub image: `kyaxris/noctaxris` (`1.0.0`, `latest`; nightlies via `nightly` / `nightly-YYYYMMDD`). Cut steps: [docs/release.md](docs/release.md).

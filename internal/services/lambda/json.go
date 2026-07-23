@@ -34,7 +34,18 @@ func functionConfiguration(fn store.LambdaFunction) map[string]any {
 		cfg["Environment"] = map[string]any{"Variables": fn.Env}
 	}
 	if len(fn.Layers) > 0 {
-		cfg["Layers"] = append([]string(nil), fn.Layers...)
+		// AWS Layer objects: { Arn, CodeSize } (CLI rejects bare ARN strings).
+		layers := make([]map[string]any, 0, len(fn.Layers))
+		for _, arn := range fn.Layers {
+			entry := map[string]any{"Arn": arn, "CodeSize": int64(0)}
+			if fn.LayerCodeSizes != nil {
+				if sz, ok := fn.LayerCodeSizes[arn]; ok {
+					entry["CodeSize"] = sz
+				}
+			}
+			layers = append(layers, entry)
+		}
+		cfg["Layers"] = layers
 	}
 	if strings.TrimSpace(fn.DeadLetterTargetArn) != "" {
 		cfg["DeadLetterConfig"] = map[string]any{"TargetArn": fn.DeadLetterTargetArn}
@@ -243,21 +254,24 @@ func layerVersionConfiguration(layer store.LambdaLayer) map[string]any {
 	}
 }
 
-// PublishLayerVersionJSON builds a PublishLayerVersion success body.
-func PublishLayerVersionJSON(layer store.LambdaLayer) ([]byte, error) {
-	cfg := layerVersionConfiguration(layer)
-	cfg["Content"] = map[string]any{
+func layerContent(layer store.LambdaLayer, codeSize int64) map[string]any {
+	return map[string]any{
 		"CodeSha256": codeSHA256AWS(layer.CodeSHA256),
+		"CodeSize":   codeSize,
 	}
+}
+
+// PublishLayerVersionJSON builds a PublishLayerVersion success body.
+func PublishLayerVersionJSON(layer store.LambdaLayer, codeSize int64) ([]byte, error) {
+	cfg := layerVersionConfiguration(layer)
+	cfg["Content"] = layerContent(layer, codeSize)
 	return json.Marshal(cfg)
 }
 
 // GetLayerVersionJSON builds a GetLayerVersion success body.
-func GetLayerVersionJSON(layer store.LambdaLayer) ([]byte, error) {
+func GetLayerVersionJSON(layer store.LambdaLayer, codeSize int64) ([]byte, error) {
 	cfg := layerVersionConfiguration(layer)
-	cfg["Content"] = map[string]any{
-		"CodeSha256": codeSHA256AWS(layer.CodeSHA256),
-	}
+	cfg["Content"] = layerContent(layer, codeSize)
 	return json.Marshal(cfg)
 }
 

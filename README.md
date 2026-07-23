@@ -20,7 +20,7 @@ Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kya
 |---|---|
 | Lab fidelity | Identity evaluation with boundaries, SCP/RCP filters, PassRole, and condition keys |
 | Secure defaults | Loopback publish only. No host `docker.sock`. Sealed secrets and CMK material at rest |
-| Nested compute | Nested Docker (DinD) via Compose `noctaxris-engine` over TLS. Live Invoke needs a healthy engine. Privilege reduction for the engine is planned |
+| Nested compute | Nested Docker (DinD) via Compose `noctaxris-engine` over TLS. Live Invoke needs a healthy engine. Default engine is restricted (`privileged: false` + caps/cgroup); opt in with `compose.engine-privileged.yaml` only if nested smoke fails on your host |
 | CLI-shaped | Latest AWS CLI v2 via `--endpoint-url` |
 
 ## Quick start

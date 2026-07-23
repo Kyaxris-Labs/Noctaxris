@@ -679,8 +679,11 @@ const (
 	ActionAPIGatewayV2DeleteApi         = "apigatewayv2:DeleteApi"
 	ActionAPIGatewayV2GetApis           = "apigatewayv2:GetApis"
 	ActionAPIGatewayV2CreateIntegration = "apigatewayv2:CreateIntegration"
+	ActionAPIGatewayV2GetIntegrations   = "apigatewayv2:GetIntegrations"
 	ActionAPIGatewayV2CreateAuthorizer  = "apigatewayv2:CreateAuthorizer"
+	ActionAPIGatewayV2GetAuthorizers    = "apigatewayv2:GetAuthorizers"
 	ActionAPIGatewayV2CreateRoute       = "apigatewayv2:CreateRoute"
+	ActionAPIGatewayV2GetRoutes         = "apigatewayv2:GetRoutes"
 	ActionAPIGatewayV2CreateStage       = "apigatewayv2:CreateStage"
 )
 
@@ -1354,8 +1357,11 @@ func KnownAction(action string) bool {
 		ActionAPIGatewayV2DeleteApi,
 		ActionAPIGatewayV2GetApis,
 		ActionAPIGatewayV2CreateIntegration,
+		ActionAPIGatewayV2GetIntegrations,
 		ActionAPIGatewayV2CreateAuthorizer,
+		ActionAPIGatewayV2GetAuthorizers,
 		ActionAPIGatewayV2CreateRoute,
+		ActionAPIGatewayV2GetRoutes,
 		ActionAPIGatewayV2CreateStage,
 		ActionExecuteAPIInvoke,
 		ActionCognitoCreateUserPool,

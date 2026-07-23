@@ -69,6 +69,8 @@ type LambdaFunction struct {
 	Description  string
 	LastModified            string
 	Layers                  []string
+	// LayerCodeSizes maps layer version ARN → zip bytes for AWS Layer objects (not persisted).
+	LayerCodeSizes          map[string]int64
 	DeadLetterTargetArn     string
 	DestinationOnFailureArn string
 	DestinationOnSuccessArn string
@@ -1503,6 +1505,34 @@ func (s *Store) DeleteLayerVersion(accountID, name string, version int) error {
 	}
 	_ = os.RemoveAll(filepath.Join(s.dataRoot, "lambda", accountID, "layers", name, "versions", fmt.Sprintf("%d", version)))
 	return nil
+}
+
+// LayerCodeSizeBytes returns the on-disk zip size for a layer version ARN (0 if unknown).
+func (s *Store) LayerCodeSizeBytes(accountID, layerVersionARN string) int64 {
+	layerAccount, _, name, version, ok := ParseLayerVersionARN(layerVersionARN)
+	if !ok || (accountID != "" && layerAccount != accountID) {
+		return 0
+	}
+	layer, err := s.GetLayerVersion(layerAccount, name, version)
+	if err != nil {
+		return 0
+	}
+	info, err := os.Stat(filepath.Join(s.dataRoot, layer.CodePath))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// EnrichFunctionLayerSizes fills LayerCodeSizes for AWS FunctionConfiguration Layers objects.
+func (s *Store) EnrichFunctionLayerSizes(fn *LambdaFunction) {
+	if fn == nil || len(fn.Layers) == 0 {
+		return
+	}
+	fn.LayerCodeSizes = make(map[string]int64, len(fn.Layers))
+	for _, arn := range fn.Layers {
+		fn.LayerCodeSizes[arn] = s.LayerCodeSizeBytes(fn.AccountID, arn)
+	}
 }
 
 // LayerCodeDir returns the absolute unpacked layer directory.

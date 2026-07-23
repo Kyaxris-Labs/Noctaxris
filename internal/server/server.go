@@ -224,6 +224,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if isUnauthenticatedSTSAction(action) {
 		// AWS STS federation APIs authenticate via SAML/OIDC token, not SigV4.
 		verified = &authn.Verified{Region: federationRegion(r)}
+	} else if isUnauthenticatedCognitoAction(action) {
+		// Cognito InitiateAuth is a public IdP API; AWS CLI omits Authorization.
+		verified = &authn.Verified{Region: federationRegion(r), Service: "cognito-idp"}
 	} else {
 		var err error
 		verified, err = authn.Verify(r, body, s.now(), sigv4Skew, s.lookupKey)
@@ -253,6 +256,16 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		restAction, body2 := resolveLambdaREST(r, body)
 		if restAction != "" {
 			s.handleLambda(w, r, body2, requestID, eventID, restAction, verified, readOnly)
+			return
+		}
+	}
+
+	if action == "" && isAPIGatewayV2RESTPath(r.URL.Path) &&
+		(strings.EqualFold(verified.Service, "apigateway") ||
+			strings.EqualFold(verified.Service, "apigatewayv2")) {
+		restAction, body2 := resolveAPIGatewayV2REST(r, body)
+		if restAction != "" {
+			s.handleAPIGatewayV2(w, r, body2, requestID, eventID, restAction, verified, readOnly)
 			return
 		}
 	}
@@ -1087,11 +1100,12 @@ func isLambdaRESTPath(path string) bool {
 	return strings.HasPrefix(path, "/2015-03-31/") ||
 		strings.HasPrefix(path, "/2017-03-31/") ||
 		strings.HasPrefix(path, "/2018-10-31/") ||
-		strings.HasPrefix(path, "/2020-06-30/")
+		strings.HasPrefix(path, "/2020-06-30/") ||
+		strings.HasPrefix(path, "/2021-10-31/")
 }
 
 func isLambdaRESTAPIVersion(v string) bool {
-	return v == "2015-03-31" || v == "2017-03-31" || v == "2018-10-31" || v == "2020-06-30"
+	return v == "2015-03-31" || v == "2017-03-31" || v == "2018-10-31" || v == "2020-06-30" || v == "2021-10-31"
 }
 
 // resolveLambdaREST maps AWS Lambda REST paths to catalog actions and injects
@@ -1139,6 +1153,14 @@ func resolveLambdaFunctionsREST(method string, parts []string, body []byte) (str
 		if len(parts) == 4 && parts[3] == "invocations" {
 			return catalog.ActionLambdaInvoke, invokeRESTBody(body, name)
 		}
+		// POST /2015-03-31/functions/{FunctionName}/policy → AddPermission
+		if len(parts) == 4 && parts[3] == "policy" {
+			return catalog.ActionLambdaAddPermission, injectFunctionNameJSON(body, name)
+		}
+		// POST /2021-10-31/functions/{FunctionName}/url → CreateFunctionUrlConfig
+		if len(parts) == 4 && parts[3] == "url" {
+			return catalog.ActionLambdaCreateFunctionUrlConfig, injectFunctionNameJSON(body, name)
+		}
 	case http.MethodGet:
 		if len(parts) == 2 {
 			return catalog.ActionLambdaListFunctions, body
@@ -1152,9 +1174,26 @@ func resolveLambdaFunctionsREST(method string, parts []string, body []byte) (str
 		if len(parts) == 4 && parts[3] == "code-signing-config" {
 			return catalog.ActionLambdaGetFunctionCodeSigningConfig, injectFunctionNameJSON(body, name)
 		}
+		if len(parts) == 4 && parts[3] == "policy" {
+			return catalog.ActionLambdaGetPolicy, injectFunctionNameJSON(body, name)
+		}
+		if len(parts) == 4 && parts[3] == "url" {
+			return catalog.ActionLambdaGetFunctionUrlConfig, injectFunctionNameJSON(body, name)
+		}
+		if len(parts) == 4 && parts[3] == "urls" {
+			return catalog.ActionLambdaListFunctionUrlConfigs, injectFunctionNameJSON(body, name)
+		}
 	case http.MethodDelete:
 		if len(parts) == 3 {
 			return catalog.ActionLambdaDeleteFunction, injectFunctionNameJSON(body, name)
+		}
+		// DELETE /2015-03-31/functions/{FunctionName}/policy/{StatementId}
+		if len(parts) == 5 && parts[3] == "policy" {
+			out := injectFunctionNameJSON(body, name)
+			return catalog.ActionLambdaRemovePermission, injectJSONStringField(out, "StatementId", parts[4])
+		}
+		if len(parts) == 4 && parts[3] == "url" {
+			return catalog.ActionLambdaDeleteFunctionUrlConfig, injectFunctionNameJSON(body, name)
 		}
 	case http.MethodPut:
 		if len(parts) == 4 && parts[3] == "code" {
@@ -2061,6 +2100,15 @@ func isUnauthenticatedSTSAction(action string) bool {
 	switch action {
 	case catalog.ActionSTSAssumeRoleWithSAML, "AssumeRoleWithSAML",
 		catalog.ActionSTSAssumeRoleWithWebIdentity, "AssumeRoleWithWebIdentity":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnauthenticatedCognitoAction(action string) bool {
+	switch action {
+	case catalog.ActionCognitoInitiateAuth, "InitiateAuth":
 		return true
 	default:
 		return false

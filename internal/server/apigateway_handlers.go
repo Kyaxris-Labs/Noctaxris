@@ -39,10 +39,16 @@ func (s *Server) handleAPIGatewayV2(
 		s.apigwGetApis(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2CreateIntegration:
 		s.apigwCreateIntegration(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayV2GetIntegrations:
+		s.apigwGetIntegrations(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2CreateAuthorizer:
 		s.apigwCreateAuthorizer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayV2GetAuthorizers:
+		s.apigwGetAuthorizers(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2CreateRoute:
 		s.apigwCreateRoute(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayV2GetRoutes:
+		s.apigwGetRoutes(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2CreateStage:
 		s.apigwCreateStage(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
@@ -66,15 +72,73 @@ func apiGatewayV2Action(action string) string {
 		return catalog.ActionAPIGatewayV2GetApis
 	case "CreateIntegration":
 		return catalog.ActionAPIGatewayV2CreateIntegration
+	case "GetIntegrations":
+		return catalog.ActionAPIGatewayV2GetIntegrations
 	case "CreateAuthorizer":
 		return catalog.ActionAPIGatewayV2CreateAuthorizer
+	case "GetAuthorizers":
+		return catalog.ActionAPIGatewayV2GetAuthorizers
 	case "CreateRoute":
 		return catalog.ActionAPIGatewayV2CreateRoute
+	case "GetRoutes":
+		return catalog.ActionAPIGatewayV2GetRoutes
 	case "CreateStage":
 		return catalog.ActionAPIGatewayV2CreateStage
 	default:
 		return action
 	}
+}
+
+// resolveAPIGatewayV2REST maps /v2/apis/... control-plane paths used by aws apigatewayv2.
+func resolveAPIGatewayV2REST(r *http.Request, body []byte) (action string, outBody []byte) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	// parts: ["v2", "apis"] or ["v2", "apis", apiId, ...]
+	if len(parts) < 2 || parts[0] != "v2" || parts[1] != "apis" {
+		return "", body
+	}
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayV2CreateApi, body
+		}
+		if len(parts) == 4 {
+			apiID := parts[2]
+			switch parts[3] {
+			case "integrations":
+				return catalog.ActionAPIGatewayV2CreateIntegration, injectJSONStringField(body, "ApiId", apiID)
+			case "routes":
+				return catalog.ActionAPIGatewayV2CreateRoute, injectJSONStringField(body, "ApiId", apiID)
+			case "authorizers":
+				return catalog.ActionAPIGatewayV2CreateAuthorizer, injectJSONStringField(body, "ApiId", apiID)
+			case "stages":
+				return catalog.ActionAPIGatewayV2CreateStage, injectJSONStringField(body, "ApiId", apiID)
+			}
+		}
+	case http.MethodGet:
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayV2GetApis, body
+		}
+		if len(parts) == 3 {
+			return catalog.ActionAPIGatewayV2GetApi, injectJSONStringField(body, "ApiId", parts[2])
+		}
+		if len(parts) == 4 {
+			apiID := parts[2]
+			switch parts[3] {
+			case "integrations":
+				return catalog.ActionAPIGatewayV2GetIntegrations, injectJSONStringField(body, "ApiId", apiID)
+			case "routes":
+				return catalog.ActionAPIGatewayV2GetRoutes, injectJSONStringField(body, "ApiId", apiID)
+			case "authorizers":
+				return catalog.ActionAPIGatewayV2GetAuthorizers, injectJSONStringField(body, "ApiId", apiID)
+			}
+		}
+	case http.MethodDelete:
+		if len(parts) == 3 {
+			return catalog.ActionAPIGatewayV2DeleteApi, injectJSONStringField(body, "ApiId", parts[2])
+		}
+	}
+	return "", body
 }
 
 func (s *Server) apigwCreateApi(
@@ -191,6 +255,93 @@ func (s *Server) apigwGetApis(
 	payload, _ := apigwv2.GetApisJSON(apis)
 	s.writeAPIGatewayOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "GetApis", readOnly)
+}
+
+func (s *Server) apigwGetIntegrations(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAPIGatewayV2GetIntegrations, "*") {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform apigatewayv2:GetIntegrations.", readOnly, eventID, verified)
+		return
+	}
+	items, err := s.store.ListAPIGatewayIntegrations(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAPIGatewayNotFound) {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list integrations.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := apigwv2.GetIntegrationsJSON(items)
+	s.writeAPIGatewayOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "GetIntegrations", readOnly)
+}
+
+func (s *Server) apigwGetRoutes(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAPIGatewayV2GetRoutes, "*") {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform apigatewayv2:GetRoutes.", readOnly, eventID, verified)
+		return
+	}
+	items, err := s.store.ListAPIGatewayRoutes(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAPIGatewayNotFound) {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list routes.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := apigwv2.GetRoutesJSON(items)
+	s.writeAPIGatewayOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "GetRoutes", readOnly)
+}
+
+func (s *Server) apigwGetAuthorizers(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAPIGatewayV2GetAuthorizers, "*") {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform apigatewayv2:GetAuthorizers.", readOnly, eventID, verified)
+		return
+	}
+	items, err := s.store.ListAPIGatewayAuthorizers(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAPIGatewayNotFound) {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list authorizers.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := apigwv2.GetAuthorizersJSON(items)
+	s.writeAPIGatewayOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "GetAuthorizers", readOnly)
 }
 
 func (s *Server) apigwCreateIntegration(

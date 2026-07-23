@@ -9,7 +9,18 @@ Domain CRUD for Amazon OpenSearch Service. Nested DinD uses `opensearchproject/o
 | Healthy nested container | `Active` (`Created=true`) | Nested `noctaxris-opensearch-<name>:9200` |
 | DinD unset / start or wait failure | `CreateFailed` (`Created=false`) | `stub://127.0.0.1/opensearch/...` |
 
-Create inserts `Creating`, then the data-plane helper promotes or fail-closes. Never treat `Active` as available on `stub://`. Residual: OpenSearch may fail inside DinD when the host lacks adequate `vm.max_map_count`; that path stays `CreateFailed`.
+Create inserts `Creating`, then the data-plane helper promotes or fail-closes. Never treat `Active` as available on `stub://`.
+
+### Host `vm.max_map_count` (fail-closed)
+
+Nested OpenSearch needs a high enough host `vm.max_map_count` (OpenSearch typically wants `262144`). When the nested process cannot start for that reason (common on Docker Desktop / WSL2), CreateDomain stays **fail-closed**: `CreateFailed` with a `stub://` endpoint. There is no silent Active-on-stub promotion.
+
+| Host | Guidance |
+|------|----------|
+| Linux | `sysctl -w vm.max_map_count=262144` (persist via `/etc/sysctl.d/` if you run nested OpenSearch often) |
+| Docker Desktop / WSL2 | Raise `vm.max_map_count` inside the Desktop/WSL VM (not only on the Windows host). If you cannot change it, expect `CreateFailed` and use labs that do not require nested search |
+
+See also [ops.md](../ops.md) for Compose overlays and nested smoke.
 
 ## Implemented
 
@@ -45,4 +56,4 @@ With DinD healthy and the nested process accepting connections, DescribeDomain s
 - Query-plane index/search subset and full query DSL proxy
 - Fine-grained access control
 - VPC options, custom endpoints, and Autotune parity
-- Guaranteed OpenSearch start on every Docker Desktop / WSL host (`vm.max_map_count`)
+- Automatic host sysctl tuning for Desktop/WSL (operator must set `vm.max_map_count` when nested Active is required)

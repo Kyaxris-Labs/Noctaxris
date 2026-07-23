@@ -94,6 +94,28 @@ bash docker/smoke-nested.sh
 
 Per-service CLI smoke remains documented on each `docs/services/` page for operator runs outside CI.
 
+## Compose overlays (lab opt-in)
+
+Default `docker/compose.yaml` stays loopback-published and host-gateway off. Use overlays only for the labs that need them; do not make them the default stack.
+
+| Overlay | When |
+|---------|------|
+| `docker/compose.engine-privileged.yaml` | Nested `docker info` / Invoke / nested data engines fail on restricted DinD (Desktop/WSL edge cases). Privileged DinD is a host workaround, not the secure default |
+| `docker/compose.lab-host-gateway.yaml` | In-function SDK labs that call the published API via `host.docker.internal` (sets `NOCTAXRIS_INJECT_HOST_GATEWAY=1`). Keep code/default Compose off |
+| `docker/compose.lab-open.yaml` | Open data-plane labs that need `AuthType NONE` / HTTP API `NONE` on the Compose non-loopback bind |
+
+Desktop + nested DinD often cannot reach a loopback-only publish from function containers. For that layout only, with the host-gateway overlay, set session `NOCTAXRIS_PUBLISH_ADDR=0.0.0.0` (prefer TLS if the host is reachable beyond your lab machine). Restore `127.0.0.1` publish for all other work.
+
+```bash
+docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
+# Desktop DinD if connection refused from functions:
+# NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
+```
+
+## Nested OpenSearch host map count
+
+OpenSearch nested create is fail-closed when the DinD host lacks adequate `vm.max_map_count` (`CreateFailed` + `stub://`). Operators on Linux or Docker Desktop/WSL who need `Active` domains should raise the VM sysctl before CreateDomain. Details: [services/opensearch.md](services/opensearch.md).
+
 ## Related
 
 - Env vars and data layout: [configuration.md](configuration.md)

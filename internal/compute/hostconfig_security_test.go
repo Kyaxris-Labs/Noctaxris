@@ -13,6 +13,9 @@ func TestZipInvokeHostConfigSecurity(t *testing.T) {
 	if hc.Memory != 256*1024*1024 {
 		t.Fatalf("Memory=%d", hc.Memory)
 	}
+	if hc.Resources.PidsLimit == nil || *hc.Resources.PidsLimit != nestedTaskPidsLimit {
+		t.Fatalf("PidsLimit=%v want %d", hc.Resources.PidsLimit, nestedTaskPidsLimit)
+	}
 	if len(hc.Binds) != 1 || hc.Binds[0] != "/code:/var/task:ro" {
 		t.Fatalf("Binds=%#v", hc.Binds)
 	}

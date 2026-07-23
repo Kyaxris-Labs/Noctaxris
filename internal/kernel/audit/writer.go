@@ -27,6 +27,11 @@ func NewWriter(dir string) (*Writer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("audit: open events file: %w", err)
 	}
+	// Enforce mode on existing files (OpenFile mode applies only at create).
+	if err := f.Chmod(0o644); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("audit: chmod events file: %w", err)
+	}
 
 	return &Writer{path: path, file: f}, nil
 }

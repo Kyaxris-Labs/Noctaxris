@@ -365,8 +365,19 @@ func TestLambdaPublishLayerAttachAndGet(t *testing.T) {
 		t.Fatal(err)
 	}
 	layers, ok := created["Layers"].([]any)
-	if !ok || len(layers) != 1 || layers[0] != layerARN {
-		t.Fatalf("Layers=%v want [%s]", created["Layers"], layerARN)
+	if !ok || len(layers) != 1 {
+		t.Fatalf("Layers=%v want one Layer object for %s", created["Layers"], layerARN)
+	}
+	layerObj, ok := layers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("Layers[0]=%T want object with Arn/CodeSize", layers[0])
+	}
+	if layerObj["Arn"] != layerARN {
+		t.Fatalf("Layers[0].Arn=%v want %s", layerObj["Arn"], layerARN)
+	}
+	codeSize, ok := layerObj["CodeSize"].(float64)
+	if !ok || codeSize <= 0 {
+		t.Fatalf("Layers[0].CodeSize=%v want positive int", layerObj["CodeSize"])
 	}
 
 	getRec := mustLambdaJSON(t, handler, "GetLayerVersion", map[string]any{

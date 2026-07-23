@@ -364,6 +364,31 @@ func (s *Store) GetAPIGatewayIntegration(accountID, apiID, integrationID string)
 	return in, nil
 }
 
+// ListAPIGatewayIntegrations lists integrations for an API.
+func (s *Store) ListAPIGatewayIntegrations(accountID, apiID string) ([]APIGatewayIntegration, error) {
+	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT integration_id, api_id, integration_type, integration_uri, payload_format_version, COALESCE(credentials_arn, '')
+		 FROM apigwv2_integrations WHERE account_id = ? AND api_id = ? ORDER BY integration_id`,
+		accountID, apiID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list integrations: %w", err)
+	}
+	defer rows.Close()
+	var out []APIGatewayIntegration
+	for rows.Next() {
+		var in APIGatewayIntegration
+		if err := rows.Scan(&in.IntegrationID, &in.APIID, &in.IntegrationType, &in.IntegrationURI, &in.PayloadFormatVersion, &in.CredentialsArn); err != nil {
+			return nil, fmt.Errorf("list integrations scan: %w", err)
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
 // CreateAPIGatewayAuthorizer creates a JWT or REQUEST (Lambda) authorizer.
 // TOKEN (REST-style) authorizers are rejected; HTTP API lab supports REQUEST only.
 func (s *Store) CreateAPIGatewayAuthorizer(in CreateAPIGatewayAuthorizerInput) (APIGatewayAuthorizer, error) {
@@ -543,6 +568,65 @@ func (s *Store) GetAPIGatewayAuthorizer(accountID, apiID, authorizerID string) (
 	_ = json.Unmarshal([]byte(audJSON), &a.JWTAudience)
 	a.EnableSimpleResponses = simpleInt != 0
 	return a, nil
+}
+
+// ListAPIGatewayAuthorizers lists authorizers for an API.
+func (s *Store) ListAPIGatewayAuthorizers(accountID, apiID string) ([]APIGatewayAuthorizer, error) {
+	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT authorizer_id, api_id, name, authorizer_type, identity_source, jwt_issuer, jwt_audience_json,
+		        COALESCE(authorizer_uri, ''), COALESCE(authorizer_credentials_arn, ''),
+		        COALESCE(authorizer_payload_format_version, ''), COALESCE(enable_simple_responses, 1)
+		 FROM apigwv2_authorizers WHERE account_id = ? AND api_id = ? ORDER BY name`,
+		accountID, apiID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list authorizers: %w", err)
+	}
+	defer rows.Close()
+	var out []APIGatewayAuthorizer
+	for rows.Next() {
+		var a APIGatewayAuthorizer
+		var audJSON string
+		var simpleInt int
+		if err := rows.Scan(
+			&a.AuthorizerID, &a.APIID, &a.Name, &a.AuthorizerType, &a.IdentitySource, &a.JWTIssuer, &audJSON,
+			&a.AuthorizerURI, &a.AuthorizerCredentialsArn, &a.AuthorizerPayloadFormatVersion, &simpleInt,
+		); err != nil {
+			return nil, fmt.Errorf("list authorizers scan: %w", err)
+		}
+		_ = json.Unmarshal([]byte(audJSON), &a.JWTAudience)
+		a.EnableSimpleResponses = simpleInt != 0
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListAPIGatewayRoutes lists routes for an API.
+func (s *Store) ListAPIGatewayRoutes(accountID, apiID string) ([]APIGatewayRoute, error) {
+	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT route_id, api_id, route_key, target, authorization_type, authorizer_id
+		 FROM apigwv2_routes WHERE account_id = ? AND api_id = ? ORDER BY route_key`,
+		accountID, apiID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list routes: %w", err)
+	}
+	defer rows.Close()
+	var out []APIGatewayRoute
+	for rows.Next() {
+		var r APIGatewayRoute
+		if err := rows.Scan(&r.RouteID, &r.APIID, &r.RouteKey, &r.Target, &r.AuthorizationType, &r.AuthorizerID); err != nil {
+			return nil, fmt.Errorf("list routes scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // CreateAPIGatewayRoute creates a route.

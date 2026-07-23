@@ -38,7 +38,18 @@ type registryRoute struct {
 }
 
 func isRegistryV2Path(path string) bool {
+	// API Gateway HTTP API control plane uses /v2/apis/... (SigV4 service apigateway).
+	// Do not steal those paths for OCI Registry V2.
+	if isAPIGatewayV2RESTPath(path) {
+		return false
+	}
 	return path == "/v2" || path == "/v2/" || strings.HasPrefix(path, registryV2Prefix)
+}
+
+// isAPIGatewayV2RESTPath reports AWS API Gateway v2 control-plane REST paths.
+func isAPIGatewayV2RESTPath(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	return path == "/v2/apis" || strings.HasPrefix(path, "/v2/apis/")
 }
 
 func (s *Server) handleRegistryV2(w http.ResponseWriter, r *http.Request) {
