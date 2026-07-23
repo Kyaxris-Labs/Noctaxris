@@ -177,7 +177,7 @@ func (s *Store) CreateRDSDBInstance(accountID, region string, in CreateRDSDBInst
 		if err != nil {
 			return RDSDBInstance{}, err
 		}
-		sec, err := s.CreateSecret(accountID, region, secretName, secretString, nil, "", "Noctaxris RDS master user")
+		sec, err := s.CreateSecret(accountID, region, secretName, secretString, nil, "", "Noctaxris RDS master user", "")
 		if err != nil {
 			if errors.Is(err, ErrSecretAlreadyExists) {
 				if _, putErr := s.PutSecretValue(accountID, secretName, secretString, nil); putErr != nil {

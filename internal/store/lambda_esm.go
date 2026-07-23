@@ -22,7 +22,14 @@ const (
 
 	lambdaESMStateEnabled  = "Enabled"
 	lambdaESMStateDisabled = "Disabled"
+
+	// LambdaESMReportBatchItemFailures is the FunctionResponseTypes value for partial batch failure.
+	LambdaESMReportBatchItemFailures = "ReportBatchItemFailures"
 )
+
+// ErrESMBatchItemFailures is returned when ReportBatchItemFailures response is malformed
+// or contains unknown itemIdentifiers (AWS fail-closed for the batch).
+var ErrESMBatchItemFailures = errors.New("InvalidFunctionResponse: batchItemFailures")
 
 var (
 	// ErrNoSuchEventSourceMapping is returned when a mapping UUID is unknown.
@@ -43,39 +50,56 @@ const (
 
 // LambdaEventSourceMapping is a Lambda SQS or DynamoDB Streams event source mapping row.
 type LambdaEventSourceMapping struct {
-	UUID               string
-	AccountID          string
-	FunctionName       string
-	FunctionARN        string
-	EventSourceARN     string
-	BatchSize          int
-	Enabled            bool
-	State              string
-	SourceCursor       string
-	FilterCriteriaJSON string
-	LastModified       string
-	CreatedAt          string
+	UUID                     string
+	AccountID                string
+	FunctionName             string
+	FunctionARN              string
+	Qualifier                 string
+	EventSourceARN           string
+	BatchSize                int
+	Enabled                  bool
+	State                    string
+	SourceCursor             string
+	FilterCriteriaJSON       string
+	FunctionResponseTypesJSON string
+	LastModified             string
+	CreatedAt                string
 }
 
 // CreateEventSourceMappingInput holds CreateEventSourceMapping fields.
 type CreateEventSourceMappingInput struct {
-	AccountID          string
-	FunctionName       string
-	EventSourceARN     string
-	BatchSize          int
-	Enabled            *bool
-	FilterCriteriaJSON string
+	AccountID                 string
+	FunctionName              string
+	EventSourceARN            string
+	BatchSize                 int
+	Enabled                   *bool
+	FilterCriteriaJSON        string
+	FunctionResponseTypesJSON string
 }
 
 // UpdateEventSourceMappingInput holds UpdateEventSourceMapping fields.
 type UpdateEventSourceMappingInput struct {
-	AccountID          string
-	UUID               string
-	BatchSize          *int
-	Enabled            *bool
-	Function           string // optional FunctionName update
-	FilterCriteriaJSON *string
+	AccountID                 string
+	UUID                      string
+	BatchSize                 *int
+	Enabled                   *bool
+	Function                  string // optional FunctionName update
+	FilterCriteriaJSON        *string
+	FunctionResponseTypesJSON *string
 }
+
+// ESMInvokeFunc is the sync invoke callback for ESM poll. responseJSON is the function payload.
+// qualifier is the Create-time version/alias (or $LATEST).
+type ESMInvokeFunc func(accountID, functionName, qualifier, eventJSON string) (responseJSON string, err error)
+
+func esmMappingQualifier(m LambdaEventSourceMapping) string {
+	q := strings.TrimSpace(m.Qualifier)
+	if q == "" {
+		return "$LATEST"
+	}
+	return q
+}
+
 
 const lambdaESMSchema = `
 CREATE TABLE IF NOT EXISTS lambda_event_source_mappings (
@@ -95,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_lambda_esm_account ON lambda_event_source_mapping
 CREATE INDEX IF NOT EXISTS idx_lambda_esm_enabled ON lambda_event_source_mappings(enabled);
 `
 
-const lambdaESMSelectCols = `uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, COALESCE(filter_criteria_json, ''), last_modified, created_at`
+const lambdaESMSelectCols = `uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, COALESCE(filter_criteria_json, ''), COALESCE(function_response_types_json, ''), last_modified, created_at, COALESCE(function_qualifier, '$LATEST')`
 
 // EnsureLambdaESMSchema creates the SQS / DynamoDB Streams event source mapping table.
 func EnsureLambdaESMSchema(db *sql.DB) error {
@@ -105,19 +129,105 @@ func EnsureLambdaESMSchema(db *sql.DB) error {
 	if _, err := db.Exec(lambdaESMSchema); err != nil {
 		return fmt.Errorf("ensure lambda esm schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE lambda_event_source_mappings ADD COLUMN source_cursor TEXT NOT NULL DEFAULT ''`); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure lambda esm schema: source_cursor: %w", err)
-		}
-	}
-	if _, err := db.Exec(`ALTER TABLE lambda_event_source_mappings ADD COLUMN filter_criteria_json TEXT NOT NULL DEFAULT ''`); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure lambda esm schema: filter_criteria_json: %w", err)
+	for _, col := range []struct {
+		stmt string
+		name string
+	}{
+		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN source_cursor TEXT NOT NULL DEFAULT ''`, "source_cursor"},
+		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN filter_criteria_json TEXT NOT NULL DEFAULT ''`, "filter_criteria_json"},
+		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_response_types_json TEXT NOT NULL DEFAULT ''`, "function_response_types_json"},
+		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_qualifier TEXT NOT NULL DEFAULT '$LATEST'`, "function_qualifier"},
+	} {
+		if _, err := db.Exec(col.stmt); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+				return fmt.Errorf("ensure lambda esm schema: %s: %w", col.name, err)
+			}
 		}
 	}
 	return nil
+}
+
+func normalizeFunctionResponseTypesJSON(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	var types []string
+	if err := json.Unmarshal([]byte(raw), &types); err != nil {
+		return "", fmt.Errorf("FunctionResponseTypes must be a JSON array of strings")
+	}
+	for _, t := range types {
+		if strings.TrimSpace(t) != LambdaESMReportBatchItemFailures {
+			return "", fmt.Errorf("FunctionResponseTypes: unsupported value %q", t)
+		}
+	}
+	out, err := json.Marshal(types)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func esmReportsBatchItemFailures(typesJSON string) bool {
+	typesJSON = strings.TrimSpace(typesJSON)
+	if typesJSON == "" {
+		return false
+	}
+	var types []string
+	if err := json.Unmarshal([]byte(typesJSON), &types); err != nil {
+		return false
+	}
+	for _, t := range types {
+		if t == LambdaESMReportBatchItemFailures {
+			return true
+		}
+	}
+	return false
+}
+
+// parseBatchItemFailureIDs returns failed itemIdentifiers from an invoke response.
+// Empty batchItemFailures (or omitted) means all succeeded. Malformed JSON / non-array /
+// unknown identifiers return ErrESMBatchItemFailures (fail closed for the batch).
+func parseBatchItemFailureIDs(responseJSON string, validIDs map[string]struct{}) ([]string, error) {
+	responseJSON = strings.TrimSpace(responseJSON)
+	if responseJSON == "" {
+		return nil, nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(responseJSON), &payload); err != nil {
+		return nil, ErrESMBatchItemFailures
+	}
+	raw, ok := payload["batchItemFailures"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, ErrESMBatchItemFailures
+	}
+	out := make([]string, 0, len(list))
+	seen := map[string]struct{}{}
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, ErrESMBatchItemFailures
+		}
+		id, _ := m["itemIdentifier"].(string)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil, ErrESMBatchItemFailures
+		}
+		if _, known := validIDs[id]; !known {
+			return nil, ErrESMBatchItemFailures
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 // EnsureLambdaESMSchema ensures ESM tables on an open store.
@@ -184,6 +294,10 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 	if err := ValidateFunctionName(fnName); err != nil {
 		return LambdaEventSourceMapping{}, err
 	}
+	qualifier = strings.TrimSpace(qualifier)
+	if qualifier == "" {
+		qualifier = "$LATEST"
+	}
 	fn, _, err := s.ResolveFunction(in.AccountID, fnName, qualifier)
 	if err != nil {
 		return LambdaEventSourceMapping{}, err
@@ -219,28 +333,44 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 			return LambdaEventSourceMapping{}, err
 		}
 	}
+	respTypesJSON, err := normalizeFunctionResponseTypesJSON(in.FunctionResponseTypesJSON)
+	if err != nil {
+		return LambdaEventSourceMapping{}, err
+	}
+	functionARN := fn.FunctionARN
+	if qualifier != "$LATEST" {
+		if isNumericVersion(qualifier) {
+			var ver int
+			_, _ = fmt.Sscanf(qualifier, "%d", &ver)
+			functionARN = LambdaVersionARN(in.AccountID, DefaultLambdaRegion, fnName, ver)
+		} else {
+			functionARN = LambdaAliasARN(in.AccountID, DefaultLambdaRegion, fnName, qualifier)
+		}
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO lambda_event_source_mappings
-		 (uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, filter_criteria_json, last_modified, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
-		id, in.AccountID, fn.FunctionName, fn.FunctionARN, arn,
-		batchSize, enabledInt, state, filterJSON, now, now,
+		 (uuid, account_id, function_name, function_arn, event_source_arn, batch_size, enabled, state, source_cursor, filter_criteria_json, function_response_types_json, last_modified, created_at, function_qualifier)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
+		id, in.AccountID, fn.FunctionName, functionARN, arn,
+		batchSize, enabledInt, state, filterJSON, respTypesJSON, now, now, qualifier,
 	)
 	if err != nil {
 		return LambdaEventSourceMapping{}, fmt.Errorf("create event source mapping: %w", err)
 	}
 	return LambdaEventSourceMapping{
-		UUID:               id,
-		AccountID:          in.AccountID,
-		FunctionName:       fn.FunctionName,
-		FunctionARN:        fn.FunctionARN,
-		EventSourceARN:     arn,
-		BatchSize:          batchSize,
-		Enabled:            enabled,
-		State:              state,
-		FilterCriteriaJSON: filterJSON,
-		LastModified:       now,
-		CreatedAt:          now,
+		UUID:                      id,
+		AccountID:                 in.AccountID,
+		FunctionName:              fn.FunctionName,
+		FunctionARN:               functionARN,
+		Qualifier:                 qualifier,
+		EventSourceARN:            arn,
+		BatchSize:                 batchSize,
+		Enabled:                   enabled,
+		State:                     state,
+		FilterCriteriaJSON:        filterJSON,
+		FunctionResponseTypesJSON: respTypesJSON,
+		LastModified:              now,
+		CreatedAt:                 now,
 	}, nil
 }
 
@@ -357,12 +487,20 @@ func (s *Store) UpdateEventSourceMapping(in UpdateEventSourceMappingInput) (Lamb
 			}
 		}
 	}
+	respTypesJSON := cur.FunctionResponseTypesJSON
+	if in.FunctionResponseTypesJSON != nil {
+		normalized, nerr := normalizeFunctionResponseTypesJSON(*in.FunctionResponseTypesJSON)
+		if nerr != nil {
+			return LambdaEventSourceMapping{}, nerr
+		}
+		respTypesJSON = normalized
+	}
 	now := nowRFC3339()
 	_, err = s.db.Exec(
 		`UPDATE lambda_event_source_mappings
-		 SET function_name = ?, function_arn = ?, batch_size = ?, enabled = ?, state = ?, filter_criteria_json = ?, last_modified = ?
+		 SET function_name = ?, function_arn = ?, batch_size = ?, enabled = ?, state = ?, filter_criteria_json = ?, function_response_types_json = ?, last_modified = ?
 		 WHERE account_id = ? AND uuid = ?`,
-		fnName, fnARN, batchSize, enabledInt, state, filterJSON, now, in.AccountID, in.UUID,
+		fnName, fnARN, batchSize, enabledInt, state, filterJSON, respTypesJSON, now, in.AccountID, in.UUID,
 	)
 	if err != nil {
 		return LambdaEventSourceMapping{}, fmt.Errorf("update event source mapping: %w", err)
@@ -373,6 +511,7 @@ func (s *Store) UpdateEventSourceMapping(in UpdateEventSourceMappingInput) (Lamb
 	cur.Enabled = enabled
 	cur.State = state
 	cur.FilterCriteriaJSON = filterJSON
+	cur.FunctionResponseTypesJSON = respTypesJSON
 	cur.LastModified = now
 	return cur, nil
 }
@@ -399,14 +538,14 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 		return false
 	}
 	session := "esm-" + fn.FunctionName
+	sourceARN := fn.FunctionARN
 	if isDynamoStreamEventSourceARN(eventSourceARN) {
-		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionDynamoGetRecords, eventSourceARN, session, DefaultLambdaRegion)
+		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionDynamoGetRecords, eventSourceARN, session, DefaultLambdaRegion, sourceARN)
 	}
-	if s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSReceiveMessage, eventSourceARN, session, DefaultLambdaRegion) &&
-		s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSDeleteMessage, eventSourceARN, session, DefaultLambdaRegion) {
+	if s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSReceiveMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) &&
+		s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSDeleteMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) {
 		return true
 	}
-	sourceARN := fn.FunctionARN
 	return s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSReceiveMessage, authz.ServicePrincipalLambda, sourceARN) &&
 		s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSDeleteMessage, authz.ServicePrincipalLambda, sourceARN)
 }
@@ -414,7 +553,9 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 // PollEventSourceMappingOnce receives up to BatchSize records from SQS or DynamoDB Streams,
 // invokes the callback synchronously with the Lambda event JSON, and advances the source on success.
 // On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB cursor is not advanced.
-func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accountID, functionName, eventJSON string) error) error {
+// With FunctionResponseTypes ReportBatchItemFailures, only non-failed SQS messages are deleted;
+// DynamoDB cursor advances only when batchItemFailures is empty.
+func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeFunc) error {
 	row := s.db.QueryRow(
 		`SELECT `+lambdaESMSelectCols+`
 		 FROM lambda_event_source_mappings WHERE uuid = ?`,
@@ -427,7 +568,11 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accou
 	if !m.Enabled {
 		return nil
 	}
-	fn, _, err := s.ResolveFunction(m.AccountID, m.FunctionName, "$LATEST")
+	qualifier := strings.TrimSpace(m.Qualifier)
+	if qualifier == "" {
+		qualifier = "$LATEST"
+	}
+	fn, _, err := s.ResolveFunction(m.AccountID, m.FunctionName, qualifier)
 	if err != nil {
 		return err
 	}
@@ -470,10 +615,32 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accou
 	if err != nil {
 		return err
 	}
-	if err := invoke(m.AccountID, m.FunctionName, eventJSON); err != nil {
-		return err
+	respJSON, invErr := invoke(m.AccountID, m.FunctionName, esmMappingQualifier(m), eventJSON)
+	if invErr != nil {
+		return invErr
 	}
-	for _, msg := range matched {
+	toDelete := matched
+	if esmReportsBatchItemFailures(m.FunctionResponseTypesJSON) {
+		valid := make(map[string]struct{}, len(matched))
+		for _, msg := range matched {
+			valid[msg.MessageID] = struct{}{}
+		}
+		failedIDs, perr := parseBatchItemFailureIDs(respJSON, valid)
+		if perr != nil {
+			return perr
+		}
+		failed := make(map[string]struct{}, len(failedIDs))
+		for _, id := range failedIDs {
+			failed[id] = struct{}{}
+		}
+		toDelete = toDelete[:0]
+		for _, msg := range matched {
+			if _, bad := failed[msg.MessageID]; !bad {
+				toDelete = append(toDelete, msg)
+			}
+		}
+	}
+	for _, msg := range toDelete {
 		if delErr := s.DeleteMessage(m.AccountID, queueName, msg.ReceiptHandle); delErr != nil {
 			return delErr
 		}
@@ -481,7 +648,7 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke func(accou
 	return nil
 }
 
-func (s *Store) pollDynamoEventSourceMappingOnce(m LambdaEventSourceMapping, invoke func(accountID, functionName, eventJSON string) error) error {
+func (s *Store) pollDynamoEventSourceMappingOnce(m LambdaEventSourceMapping, invoke ESMInvokeFunc) error {
 	acct, tableName, label, ok := ParseDynamoStreamARN(m.EventSourceARN)
 	if !ok || acct != m.AccountID {
 		return ErrInvalidEventSourceARN
@@ -516,8 +683,23 @@ func (s *Store) pollDynamoEventSourceMappingOnce(m LambdaEventSourceMapping, inv
 	if err != nil {
 		return err
 	}
-	if err := invoke(m.AccountID, m.FunctionName, eventJSON); err != nil {
+	respJSON, err := invoke(m.AccountID, m.FunctionName, esmMappingQualifier(m), eventJSON)
+	if err != nil {
 		return err
+	}
+	if esmReportsBatchItemFailures(m.FunctionResponseTypesJSON) {
+		valid := make(map[string]struct{}, len(matched))
+		for _, rec := range matched {
+			valid[rec.SequenceNumber] = struct{}{}
+		}
+		failedIDs, perr := parseBatchItemFailureIDs(respJSON, valid)
+		if perr != nil {
+			return perr
+		}
+		// Lab: any reported failure keeps the cursor (retry whole matched set).
+		if len(failedIDs) > 0 {
+			return nil
+		}
 	}
 	return s.setESMSourceCursor(m.UUID, next)
 }
@@ -610,7 +792,8 @@ func (s *Store) scanEventSourceMapping(row *sql.Row) (LambdaEventSourceMapping, 
 	var enabledInt int
 	err := row.Scan(
 		&m.UUID, &m.AccountID, &m.FunctionName, &m.FunctionARN, &m.EventSourceARN,
-		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.FilterCriteriaJSON, &m.LastModified, &m.CreatedAt,
+		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.FilterCriteriaJSON, &m.FunctionResponseTypesJSON,
+		&m.LastModified, &m.CreatedAt, &m.Qualifier,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LambdaEventSourceMapping{}, ErrNoSuchEventSourceMapping
@@ -619,6 +802,9 @@ func (s *Store) scanEventSourceMapping(row *sql.Row) (LambdaEventSourceMapping, 
 		return LambdaEventSourceMapping{}, fmt.Errorf("get event source mapping: %w", err)
 	}
 	m.Enabled = enabledInt == 1
+	if strings.TrimSpace(m.Qualifier) == "" {
+		m.Qualifier = "$LATEST"
+	}
 	return m, nil
 }
 
@@ -627,10 +813,14 @@ func scanEventSourceMappingRow(rows *sql.Rows) (LambdaEventSourceMapping, error)
 	var enabledInt int
 	if err := rows.Scan(
 		&m.UUID, &m.AccountID, &m.FunctionName, &m.FunctionARN, &m.EventSourceARN,
-		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.FilterCriteriaJSON, &m.LastModified, &m.CreatedAt,
+		&m.BatchSize, &enabledInt, &m.State, &m.SourceCursor, &m.FilterCriteriaJSON, &m.FunctionResponseTypesJSON,
+		&m.LastModified, &m.CreatedAt, &m.Qualifier,
 	); err != nil {
 		return LambdaEventSourceMapping{}, fmt.Errorf("scan event source mapping: %w", err)
 	}
 	m.Enabled = enabledInt == 1
+	if strings.TrimSpace(m.Qualifier) == "" {
+		m.Qualifier = "$LATEST"
+	}
 	return m, nil
 }

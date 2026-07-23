@@ -30,6 +30,7 @@ const (
 	defaultAssumeRoleDuration = time.Hour
 	minAssumeRoleSeconds      = 900
 	maxAssumeRoleSeconds      = 43200
+	maxRoleChainSeconds       = 3600
 )
 
 func (s *Server) lookupKey(accessKeyID string) (authn.ResolvedKey, error) {
@@ -368,6 +369,19 @@ func (s *Server) handleAssumeRole(
 		sessionPolicy = p.Document
 	}
 
+	roleRec, roleErr := s.store.GetRoleRecord(accountID, roleName)
+	maxRoleSecs := int64(3600)
+	if roleErr == nil && roleRec.MaxSessionDuration > 0 {
+		maxRoleSecs = int64(roleRec.MaxSessionDuration)
+	}
+	maxAllowed := maxRoleSecs
+	if maxAllowed > maxAssumeRoleSeconds {
+		maxAllowed = maxAssumeRoleSeconds
+	}
+	if s.isRoleChainingCaller(verified) && maxAllowed > maxRoleChainSeconds {
+		maxAllowed = maxRoleChainSeconds
+	}
+
 	duration := defaultAssumeRoleDuration
 	if raw := strings.TrimSpace(params.Get("DurationSeconds")); raw != "" {
 		secs, err := strconv.ParseInt(raw, 10, 64)
@@ -377,7 +391,19 @@ func (s *Server) handleAssumeRole(
 				verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
+		if secs > maxAllowed {
+			msg := fmt.Sprintf("The requested DurationSeconds exceeds the %d second session limit for this role.", maxAllowed)
+			if s.isRoleChainingCaller(verified) && secs > maxRoleChainSeconds {
+				msg = "The requested DurationSeconds exceeds the 1 hour session limit for roles assumed by role chaining."
+			}
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+				msg, readOnly, r, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
 		duration = time.Duration(secs) * time.Second
+	} else if int64(duration/time.Second) > maxAllowed {
+		duration = time.Duration(maxAllowed) * time.Second
 	}
 	expires := s.now().UTC().Add(duration)
 	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
@@ -421,13 +447,50 @@ func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string
 	return s.authorize(verified, action, resource)
 }
 
+// isRoleChainingCaller reports whether AssumeRole is called with temporary
+// credentials (role session, federated session, or any SessionToken).
+func (s *Server) isRoleChainingCaller(verified *authn.Verified) bool {
+	if verified == nil {
+		return false
+	}
+	if strings.TrimSpace(verified.SessionToken) != "" {
+		return true
+	}
+	switch verified.Principal.Kind {
+	case identity.KindRole, identity.KindFederated:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
+	now := s.now().UTC()
 	keys := map[string]string{
 		"aws:PrincipalAccount": verified.AccountID,
 		"aws:RequestedRegion":  verified.Region,
+		"aws:CurrentTime":      now.Format(time.RFC3339),
+		"aws:EpochTime":        fmt.Sprintf("%d", now.Unix()),
+		"aws:SecureTransport":  s.secureTransportValue(),
+		"aws:PrincipalType":    principalTypeForCondition(verified.Principal),
 	}
 	if arn := principalArnForCondition(verified.Principal); arn != "" {
 		keys["aws:PrincipalArn"] = arn
+	}
+	if verified.Principal.Kind == identity.KindUser && verified.Principal.UserName != "" {
+		keys["aws:username"] = verified.Principal.UserName
+		if u, err := s.store.GetUser(verified.AccountID, verified.Principal.UserName); err == nil && u.UserID != "" {
+			keys["aws:userid"] = u.UserID
+		}
+	}
+	if verified.Principal.Kind == identity.KindRole && verified.Principal.RoleName != "" {
+		if r, err := s.store.GetRoleRecord(verified.AccountID, verified.Principal.RoleName); err == nil && r.RoleID != "" {
+			if verified.Principal.SessionName != "" {
+				keys["aws:userid"] = r.RoleID + ":" + verified.Principal.SessionName
+			} else {
+				keys["aws:userid"] = r.RoleID
+			}
+		}
 	}
 	if ip := strings.TrimSpace(verified.SourceIP); ip != "" {
 		keys["aws:SourceIp"] = ip
@@ -443,6 +506,28 @@ func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
 		}
 	}
 	return keys
+}
+
+func (s *Server) secureTransportValue() string {
+	if strings.TrimSpace(s.cfg.TLSCertFile) != "" && strings.TrimSpace(s.cfg.TLSKeyFile) != "" {
+		return "true"
+	}
+	return "false"
+}
+
+func principalTypeForCondition(p identity.Principal) string {
+	switch {
+	case p.IsRoot || p.Kind == identity.KindRoot:
+		return "Account"
+	case p.Kind == identity.KindUser:
+		return "User"
+	case p.Kind == identity.KindRole:
+		return "AssumedRole"
+	case p.Kind == identity.KindFederated:
+		return "FederatedUser"
+	default:
+		return "Unknown"
+	}
 }
 
 // principalArnForCondition returns aws:PrincipalArn. For IAM roles AWS documents
@@ -484,7 +569,7 @@ func (s *Server) mergeResourceTagConditionKeys(keys map[string]string, accountID
 }
 
 // serviceResourceTagKeyPrefix returns a service-specific ResourceTag key prefix
-// for cataloged templates (ecr:ResourceTag/, ssm:resourceTag/). Empty when none.
+// for cataloged templates. Empty when none.
 func serviceResourceTagKeyPrefix(arn string) string {
 	parts := strings.Split(arn, ":")
 	if len(parts) < 3 {
@@ -495,6 +580,12 @@ func serviceResourceTagKeyPrefix(arn string) string {
 		return "ecr:ResourceTag/"
 	case "ssm":
 		return "ssm:resourceTag/"
+	case "secretsmanager":
+		return "secretsmanager:ResourceTag/"
+	case "iam":
+		return "iam:ResourceTag/"
+	case "ecs":
+		return "ecs:ResourceTag/"
 	default:
 		return ""
 	}

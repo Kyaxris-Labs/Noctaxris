@@ -61,6 +61,16 @@ func esmPatternMatches(pattern, record map[string]any) bool {
 		if !ok {
 			return false
 		}
+		if expMap, ok := expected.(map[string]any); ok {
+			actMap, ok := actual.(map[string]any)
+			if !ok {
+				return false
+			}
+			if !esmPatternMatches(expMap, actMap) {
+				return false
+			}
+			continue
+		}
 		if !patternValueMatches(expected, actual) {
 			return false
 		}
@@ -74,12 +84,26 @@ func filterSQSMessages(fc LambdaESMFilterCriteria, msgs []Message) []Message {
 	}
 	out := make([]Message, 0, len(msgs))
 	for _, msg := range msgs {
-		rec := map[string]any{"body": string(msg.Body)}
+		rec := map[string]any{"body": esmSQSBodyForFilter(msg.Body)}
 		if esmRecordMatchesFilters(fc, rec) {
 			out = append(out, msg)
 		}
 	}
 	return out
+}
+
+// esmSQSBodyForFilter nests JSON object bodies under body for FilterCriteria
+// (AWS content filtering). Non-object payloads stay as a string.
+func esmSQSBodyForFilter(body []byte) any {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err == nil {
+		return obj
+	}
+	return string(body)
 }
 
 func filterDynamoStreamRecords(fc LambdaESMFilterCriteria, records []DynamoStreamRecord) []DynamoStreamRecord {

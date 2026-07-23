@@ -71,6 +71,7 @@ type LambdaFunction struct {
 	Layers                  []string
 	DeadLetterTargetArn     string
 	DestinationOnFailureArn string
+	DestinationOnSuccessArn string
 	ResourcePolicy          string
 }
 
@@ -92,6 +93,7 @@ type CreateFunctionMeta struct {
 	Layers                  []string
 	DeadLetterTargetArn     string
 	DestinationOnFailureArn string
+	DestinationOnSuccessArn string
 }
 
 // UpdateFunctionConfigurationMeta holds UpdateFunctionConfiguration fields.
@@ -105,6 +107,7 @@ type UpdateFunctionConfigurationMeta struct {
 	Layers                  *[]string
 	DeadLetterTargetArn     *string
 	DestinationOnFailureArn *string
+	DestinationOnSuccessArn *string
 }
 
 // LambdaFunctionVersion is an immutable published function version.
@@ -418,7 +421,7 @@ func scanLambdaFunction(scan func(dest ...any) error) (LambdaFunction, error) {
 		&fn.AccountID, &fn.FunctionName, &fn.FunctionARN, &fn.RoleARN, &fn.Runtime, &fn.Handler,
 		&fn.Timeout, &fn.Memory, &envJSON, &fn.CodeSHA256, &fn.CodePath, &fn.PackageType, &fn.ImageURI,
 		&fn.State, &fn.Description, &fn.LastModified,
-		&layersJSON, &fn.DeadLetterTargetArn, &fn.DestinationOnFailureArn, &fn.ResourcePolicy,
+		&layersJSON, &fn.DeadLetterTargetArn, &fn.DestinationOnFailureArn, &fn.DestinationOnSuccessArn, &fn.ResourcePolicy,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LambdaFunction{}, ErrNoSuchFunction
@@ -442,7 +445,7 @@ func scanLambdaFunction(scan func(dest ...any) error) (LambdaFunction, error) {
 
 const lambdaSelectCols = `account_id, function_name, function_arn, role_arn, runtime, handler,
 		 timeout, memory, env_json, code_sha256, code_path, package_type, image_uri, state, description, last_modified, layers_json,
-		 dead_letter_target_arn, destination_on_failure_arn, resource_policy`
+		 dead_letter_target_arn, destination_on_failure_arn, COALESCE(destination_on_success_arn, ''), resource_policy`
 
 // EnsureLambdaImageSchema adds package_type and image_uri columns for container images.
 func EnsureLambdaImageSchema(db *sql.DB) error {
@@ -509,11 +512,12 @@ func (s *Store) CreateFunction(meta CreateFunctionMeta) (LambdaFunction, error) 
 		`INSERT INTO lambda_functions
 		 (account_id, function_name, function_arn, role_arn, runtime, handler,
 		  timeout, memory, env_json, code_sha256, code_path, package_type, image_uri, state, description, last_modified, layers_json,
-		  dead_letter_target_arn, destination_on_failure_arn)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  dead_letter_target_arn, destination_on_failure_arn, destination_on_success_arn)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		meta.AccountID, meta.FunctionName, arn, meta.RoleARN, meta.Runtime, meta.Handler,
 		meta.Timeout, meta.Memory, envJSON, shaHex, codePath, packageType, imageURI, LambdaStateActive, meta.Description, modified, layersJSON,
 		strings.TrimSpace(meta.DeadLetterTargetArn), strings.TrimSpace(meta.DestinationOnFailureArn),
+		strings.TrimSpace(meta.DestinationOnSuccessArn),
 	)
 	if err != nil {
 		_ = os.RemoveAll(filepath.Join(s.dataRoot, "lambda", meta.AccountID, meta.FunctionName))
@@ -546,6 +550,7 @@ func (s *Store) CreateFunction(meta CreateFunctionMeta) (LambdaFunction, error) 
 		Layers:                  append([]string(nil), layers...),
 		DeadLetterTargetArn:     strings.TrimSpace(meta.DeadLetterTargetArn),
 		DestinationOnFailureArn: strings.TrimSpace(meta.DestinationOnFailureArn),
+		DestinationOnSuccessArn: strings.TrimSpace(meta.DestinationOnSuccessArn),
 	}, nil
 }
 
@@ -708,19 +713,65 @@ func (s *Store) UpdateFunctionConfiguration(accountID, name string, meta UpdateF
 	if meta.DestinationOnFailureArn != nil {
 		onFailure = strings.TrimSpace(*meta.DestinationOnFailureArn)
 	}
+	onSuccess := current.DestinationOnSuccessArn
+	if meta.DestinationOnSuccessArn != nil {
+		onSuccess = strings.TrimSpace(*meta.DestinationOnSuccessArn)
+	}
 	modified := nowRFC3339()
 	_, err = s.db.Exec(
 		`UPDATE lambda_functions
 		 SET role_arn = ?, timeout = ?, memory = ?, handler = ?, env_json = ?, runtime = ?, last_modified = ?, layers_json = ?,
-		     dead_letter_target_arn = ?, destination_on_failure_arn = ?
+		     dead_letter_target_arn = ?, destination_on_failure_arn = ?, destination_on_success_arn = ?
 		 WHERE account_id = ? AND function_name = ?`,
 		meta.RoleARN, meta.Timeout, meta.Memory, meta.Handler, envJSON, meta.Runtime, modified, layersJSON,
-		deadLetter, onFailure, accountID, name,
+		deadLetter, onFailure, onSuccess, accountID, name,
 	)
 	if err != nil {
 		return LambdaFunction{}, fmt.Errorf("update function configuration: %w", err)
 	}
 	return s.GetFunction(accountID, name)
+}
+
+// PutFunctionEventInvokeConfig sets DestinationConfig OnFailure/OnSuccess for $LATEST.
+func (s *Store) PutFunctionEventInvokeConfig(accountID, name, onFailure, onSuccess string) (LambdaFunction, error) {
+	if err := ValidateFunctionName(name); err != nil {
+		return LambdaFunction{}, err
+	}
+	if _, err := s.GetFunction(accountID, name); err != nil {
+		return LambdaFunction{}, err
+	}
+	modified := nowRFC3339()
+	_, err := s.db.Exec(
+		`UPDATE lambda_functions
+		 SET destination_on_failure_arn = ?, destination_on_success_arn = ?, last_modified = ?
+		 WHERE account_id = ? AND function_name = ?`,
+		strings.TrimSpace(onFailure), strings.TrimSpace(onSuccess), modified, accountID, name,
+	)
+	if err != nil {
+		return LambdaFunction{}, fmt.Errorf("put event invoke config: %w", err)
+	}
+	return s.GetFunction(accountID, name)
+}
+
+// DeleteFunctionEventInvokeConfig clears DestinationConfig destinations for $LATEST.
+func (s *Store) DeleteFunctionEventInvokeConfig(accountID, name string) error {
+	if err := ValidateFunctionName(name); err != nil {
+		return err
+	}
+	if _, err := s.GetFunction(accountID, name); err != nil {
+		return err
+	}
+	modified := nowRFC3339()
+	_, err := s.db.Exec(
+		`UPDATE lambda_functions
+		 SET destination_on_failure_arn = '', destination_on_success_arn = '', last_modified = ?
+		 WHERE account_id = ? AND function_name = ?`,
+		modified, accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("delete event invoke config: %w", err)
+	}
+	return nil
 }
 
 // EnsureLambdaVersionSchema creates lambda_versions and lambda_aliases tables.
@@ -812,6 +863,7 @@ func scanLambdaVersion(scan func(dest ...any) error) (LambdaFunctionVersion, err
 		&v.Timeout, &v.Memory, &envJSON, &v.CodeSHA256, &v.CodePath, &v.PackageType, &v.ImageURI,
 		&v.State, &v.Description,
 		&v.LastModified, &v.PublishedAt, &layersJSON, &v.DeadLetterTargetArn, &v.DestinationOnFailureArn,
+		&v.DestinationOnSuccessArn,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LambdaFunctionVersion{}, ErrNoSuchVersion
@@ -836,7 +888,7 @@ func scanLambdaVersion(scan func(dest ...any) error) (LambdaFunctionVersion, err
 
 const lambdaVersionSelectCols = `account_id, function_name, version, function_version_arn, role_arn, runtime, handler,
 		 timeout, memory, env_json, code_sha256, code_path, package_type, image_uri, state, description, last_modified, published_at, layers_json,
-		 dead_letter_target_arn, destination_on_failure_arn`
+		 dead_letter_target_arn, destination_on_failure_arn, COALESCE(destination_on_success_arn, '')`
 
 // PublishVersion freezes the current $LATEST code and configuration into the next version number.
 func (s *Store) PublishVersion(accountID, name string) (LambdaFunctionVersion, error) {
@@ -885,11 +937,12 @@ func (s *Store) PublishVersion(accountID, name string) (LambdaFunctionVersion, e
 		`INSERT INTO lambda_versions
 		 (account_id, function_name, version, function_version_arn, role_arn, runtime, handler,
 		  timeout, memory, env_json, code_sha256, code_path, package_type, image_uri, state, description, last_modified, published_at, layers_json,
-		  dead_letter_target_arn, destination_on_failure_arn)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  dead_letter_target_arn, destination_on_failure_arn, destination_on_success_arn)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		accountID, name, next, versionARN, latest.RoleARN, latest.Runtime, latest.Handler,
 		latest.Timeout, latest.Memory, envJSON, shaHex, codePath, packageType, imageURI, latest.State, latest.Description,
 		latest.LastModified, published, layersJSON, latest.DeadLetterTargetArn, latest.DestinationOnFailureArn,
+		latest.DestinationOnSuccessArn,
 	)
 	if err != nil {
 		_ = os.RemoveAll(filepath.Join(s.dataRoot, "lambda", accountID, name, "versions", fmt.Sprintf("%d", next)))
@@ -916,6 +969,7 @@ func (s *Store) PublishVersion(accountID, name string) (LambdaFunctionVersion, e
 			Layers:                  append([]string(nil), latest.Layers...),
 			DeadLetterTargetArn:     latest.DeadLetterTargetArn,
 			DestinationOnFailureArn: latest.DestinationOnFailureArn,
+			DestinationOnSuccessArn: latest.DestinationOnSuccessArn,
 		},
 		Version:     next,
 		VersionARN:  versionARN,

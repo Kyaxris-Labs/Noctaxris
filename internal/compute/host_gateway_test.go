@@ -6,13 +6,17 @@ import (
 
 func TestHostGatewayExtraHosts(t *testing.T) {
 	t.Setenv(EnvInjectHostGateway, "")
-	got := hostGatewayExtraHosts()
-	if len(got) != 1 || got[0] != "host.docker.internal:host-gateway" {
-		t.Fatalf("default ExtraHosts = %#v", got)
+	if got := hostGatewayExtraHosts(); got != nil {
+		t.Fatalf("default ExtraHosts = %#v want nil", got)
 	}
 	t.Setenv(EnvInjectHostGateway, "0")
 	if got := hostGatewayExtraHosts(); got != nil {
 		t.Fatalf("disabled ExtraHosts = %#v want nil", got)
+	}
+	t.Setenv(EnvInjectHostGateway, "1")
+	got := hostGatewayExtraHosts()
+	if len(got) != 1 || got[0] != "host.docker.internal:host-gateway" {
+		t.Fatalf("opt-in ExtraHosts = %#v", got)
 	}
 }
 
@@ -36,6 +40,9 @@ func TestNestedTaskSecurity(t *testing.T) {
 	hc := nestedTaskSecurity(256)
 	if len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" {
 		t.Fatalf("CapDrop=%#v", hc.CapDrop)
+	}
+	if hc.Privileged {
+		t.Fatal("Privileged must be false")
 	}
 	wantMem := int64(256) * 1024 * 1024
 	if hc.Memory != wantMem {

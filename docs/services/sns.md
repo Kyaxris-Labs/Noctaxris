@@ -13,7 +13,7 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
 | Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
-| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolve to public hosts (private/loopback/metadata rejected; no redirect follow). Arbitrary loopback ports are rejected |
+| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolve to public hosts (private/loopback/metadata rejected; no redirect follow; outbound dial uses a pinned safe DialContext). Arbitrary loopback ports are rejected |
 | Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
@@ -25,7 +25,7 @@ SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account f
 
 Subscription delivery to SQS or Lambda also requires the destination resource policy to Allow `sns.amazonaws.com` (EventBridge-style service principal check). Missing policy skips that subscription (logged).
 
-Cross-account `Publish` uses `TopicArn` of the owner account. Cross-account `Subscribe` to a foreign topic ARN is allowed when topic-policy dual-eval Allows `sns:Subscribe`. SQS subscription endpoints may be foreign queue ARNs; delivery uses the queue owner account and requires the queue policy to Allow `sns.amazonaws.com`.
+Cross-account `Publish` uses `TopicArn` of the owner account. Cross-account `Subscribe` to a foreign topic ARN is allowed when topic-policy dual-eval Allows `sns:Subscribe`. SQS subscription endpoints may be foreign queue ARNs; delivery uses the queue owner account and requires the queue policy to Allow `sns.amazonaws.com`. Lambda subscription endpoints resolve the function account from the endpoint ARN (policy + async invoke under the function owner). Subscribe rejects a Lambda ARN whose account differs from the subscriber (AWS-shaped: function owners subscribe their own functions to a topic).
 
 ## How to verify / CLI smoke
 
@@ -87,5 +87,4 @@ aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP"
 - Full SNS SAR beyond the lab set (SMS, email, filter policy depth, raw message delivery edge cases)
 - Open internet HTTP webhooks (egress remains deny-by-default outside loopback)
 - Exact AWS retry and jitter timing for delivery failures
-- Foreign Lambda subscription endpoints (SQS foreign delivery is shipped)
 - High-throughput FIFO quotas

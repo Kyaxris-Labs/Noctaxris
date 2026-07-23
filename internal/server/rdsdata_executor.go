@@ -12,10 +12,18 @@ import (
 
 const nestedRDSDataExecutorMarker = `{"noctaxrisExecutor":"nested-psql"}`
 
-// preferNestedRDSDataExecute runs SQL via psql in the nested Postgres container
-// when DinD is configured and the instance has a ContainerID. Without an injected
-// test executor override, missing engine or compute client fails closed
-// (DatabaseUnavailableException). No pgx dependency.
+// EnvRDSDataPgx enables the optional wire-protocol Data API executor after
+// github.com/jackc/pgx is approved and linked. Without that dependency this
+// flag never activates a live path (rdsDataPgxEnabled stays false).
+const EnvRDSDataPgx = "NOCTAXRIS_RDS_DATA_PGX"
+
+// preferNestedRDSDataExecute selects a Data API executor:
+//  1. test override (SetRDSDataExecutor)
+//  2. optional pgx wire path when buy-in lands and rdsDataPgxEnabled()
+//  3. nested DinD psql when the instance has a container
+//  4. DatabaseUnavailableException
+//
+// Production never fakes SELECT success without a nested Postgres container.
 func (s *Server) preferNestedRDSDataExecute(
 	ctx context.Context,
 	accountID string,
@@ -24,6 +32,9 @@ func (s *Server) preferNestedRDSDataExecute(
 ) (store.RDSDataExecuteResult, error) {
 	if override := getRDSDataExecutorOverride(); override != nil {
 		return override.Execute(req)
+	}
+	if rdsDataPgxEnabled() {
+		return s.executeRDSDataPgx(ctx, accountID, inst, req)
 	}
 	if strings.TrimSpace(inst.ContainerID) == "" || inst.DBInstanceStatus != "available" {
 		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
@@ -56,6 +67,24 @@ func (s *Server) preferNestedRDSDataExecute(
 		return store.RDSDataExecuteResult{}, err
 	}
 	return mapPostgresSQLResult(pgRes), nil
+}
+
+// rdsDataPgxEnabled reports whether the optional wire-protocol executor should
+// run. Always false until pgx is approved in go.mod and a real implementation
+// replaces executeRDSDataPgx. EnvRDSDataPgx alone does not enable anything.
+func rdsDataPgxEnabled() bool {
+	return false
+}
+
+// executeRDSDataPgx is the reserved wire-protocol path. Without a linked pgx
+// driver this always fails closed so callers never see a fake typed result.
+func (s *Server) executeRDSDataPgx(
+	_ context.Context,
+	_ string,
+	_ store.RDSDBInstance,
+	_ store.RDSDataExecuteRequest,
+) (store.RDSDataExecuteResult, error) {
+	return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 }
 
 func (s *Server) rdsDataMasterCreds(accountID string, inst store.RDSDBInstance, secretARN string) (user, password string, err error) {

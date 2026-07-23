@@ -34,8 +34,11 @@ func TestParsePostgresCommandTagUpdated(t *testing.T) {
 	if parsePostgresCommandTagUpdated("UPDATE 3") != 3 {
 		t.Fatal("update")
 	}
-	if parsePostgresCommandTagUpdated("") != 1 {
-		t.Fatal("empty default")
+	if parsePostgresCommandTagUpdated("") != 0 {
+		t.Fatal("empty must be 0 (not invent updated=1)")
+	}
+	if parsePostgresCommandTagUpdated("CREATE TABLE t (id int)") != 0 {
+		t.Fatal("unparseable tag must be 0")
 	}
 }
 

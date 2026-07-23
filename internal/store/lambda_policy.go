@@ -237,7 +237,9 @@ func isLabServicePrincipal(principal string) bool {
 		"apigateway.amazonaws.com",
 		"appsync.amazonaws.com",
 		"states.amazonaws.com",
-		"lambda.amazonaws.com":
+		"elasticloadbalancing.amazonaws.com",
+		"lambda.amazonaws.com",
+		"logs.amazonaws.com":
 		return true
 	default:
 		return false

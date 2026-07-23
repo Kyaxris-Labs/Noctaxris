@@ -38,18 +38,30 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		_ = markNestedDataFailed(s, accountID, dk, name)
 		return err
 	}
-	_ = cli.WaitDataPlaneHealthy(ctx, inst.ContainerID)
+	waitErr := cli.WaitDataPlaneHealthy(ctx, inst.ContainerID)
 	host := inst.Name
 	if ep := strings.TrimSpace(inst.Endpoint); ep != "" {
 		if i := strings.LastIndex(ep, ":"); i > 0 {
 			host = ep[:i]
 		}
 	}
+	return promoteNestedDataAfterWait(s, accountID, dk, name, inst.ContainerID, host, waitErr)
+}
+
+// promoteNestedDataAfterWait promotes ElastiCache/DocDB to available only when wait succeeded.
+// Wait errors mark failed (do not claim available).
+func promoteNestedDataAfterWait(
+	s *Server, accountID string, dk compute.DataKind, name, containerID, host string, waitErr error,
+) error {
+	if waitErr != nil {
+		_ = markNestedDataFailed(s, accountID, dk, name)
+		return waitErr
+	}
 	switch dk {
 	case compute.DataKindElastiCache:
-		return s.store.SetElastiCacheContainerID(accountID, name, inst.ContainerID, "available", host)
+		return s.store.SetElastiCacheContainerID(accountID, name, containerID, "available", host)
 	case compute.DataKindDocDB:
-		return s.store.SetDocDBContainerID(accountID, name, inst.ContainerID, "available", host)
+		return s.store.SetDocDBContainerID(accountID, name, containerID, "available", host)
 	default:
 		return nil
 	}

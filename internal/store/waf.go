@@ -247,7 +247,7 @@ func (s *Store) CreateWAFRuleGroup(accountID, region, name, scope string, capaci
 	rulesJSON, _ := json.Marshal(rules)
 	id := uuid.NewString()
 	lock := uuid.NewString()
-	arn := fmt.Sprintf("arn:aws:wafv2:%s:%s:%s/rulegroup/%s/%s", regionOrDefault(region), accountID, strings.ToLower(scope), name, id)
+	arn := fmt.Sprintf("arn:aws:wafv2:%s:%s:%s/rulegroup/%s/%s", wafRegionOrDefault(region), accountID, strings.ToLower(scope), name, id)
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
 		`INSERT INTO wafv2_rule_groups (account_id, name, id, scope, arn, capacity, rules_json, lock_token, created_at)
@@ -266,7 +266,7 @@ func (s *Store) CreateWAFRuleGroup(accountID, region, name, scope string, capaci
 	}, nil
 }
 
-func regionOrDefault(region string) string {
+func wafRegionOrDefault(region string) string {
 	if region == "" {
 		return DefaultWAFRegion
 	}
@@ -276,14 +276,15 @@ func regionOrDefault(region string) string {
 // IsWAFAssociableResourceARN reports whether ResourceArn is a lab-accepted
 // association target. Unknown shapes fail closed.
 //
-// Accepted (AWS WAFv2 AssociateWebACL shapes plus lab HTTP API):
+// Accepted (AWS WAFv2 AssociateWebACL shapes plus lab HTTP API) when an invoke
+// enforce path exists:
 //   - arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE] (HTTP API lab)
-//   - arn:aws:apigateway:REGION::/restapis/APIID/stages/STAGE
 //   - arn:aws:execute-api:REGION:ACCOUNT:APIID[/STAGE[/route]]
-//   - arn:aws:elasticloadbalancing:REGION:ACCOUNT:loadbalancer/...
 //   - arn:aws:appsync:REGION:ACCOUNT:apis/APIID
-//   - arn:aws:cognito-idp:REGION:ACCOUNT:userpool/POOLID
 //   - arn:aws:lambda:REGION:ACCOUNT:function:NAME (lab Function URL associate)
+//
+// Rejected (no enforce path yet): elasticloadbalancing load balancers,
+// apigateway restapis, cognito-idp user pools.
 func IsWAFAssociableResourceARN(resourceARN string) bool {
 	resourceARN = strings.TrimSpace(resourceARN)
 	if resourceARN == "" || !strings.HasPrefix(resourceARN, "arn:aws:") {
@@ -297,7 +298,8 @@ func IsWAFAssociableResourceARN(resourceARN string) bool {
 	resource := parts[5]
 	switch service {
 	case "apigateway":
-		// parts[5] is like "/apis/xxx" or "/restapis/xxx/stages/yyy" (leading slash in resource).
+		// parts[5] is like "/apis/xxx" (leading slash in resource).
+		// restapis are rejected until a REST enforce path exists.
 		r := resource
 		if strings.HasPrefix(r, "/") {
 			r = r[1:]
@@ -309,20 +311,12 @@ func IsWAFAssociableResourceARN(resourceARN string) bool {
 			}
 			return true
 		}
-		if strings.HasPrefix(r, "restapis/") {
-			segs := strings.Split(strings.TrimPrefix(r, "restapis/"), "/")
-			return len(segs) >= 3 && segs[0] != "" && segs[1] == "stages" && segs[2] != ""
-		}
 		return false
 	case "execute-api":
 		segs := strings.Split(resource, "/")
 		return len(segs) >= 1 && segs[0] != ""
-	case "elasticloadbalancing":
-		return strings.HasPrefix(resource, "loadbalancer/")
 	case "appsync":
 		return strings.HasPrefix(resource, "apis/") && len(strings.TrimPrefix(resource, "apis/")) > 0
-	case "cognito-idp":
-		return strings.HasPrefix(resource, "userpool/") && len(strings.TrimPrefix(resource, "userpool/")) > 0
 	case "lambda":
 		// Lab Function URL association: arn:aws:lambda:REGION:ACCOUNT:function:NAME
 		return strings.HasPrefix(resource, "function:") && len(strings.TrimPrefix(resource, "function:")) > 0

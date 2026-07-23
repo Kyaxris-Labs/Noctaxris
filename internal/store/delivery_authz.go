@@ -17,12 +17,46 @@ const actionS3PutObject = "s3:PutObject"
 // RoleSessionAllows mints a temporary session for roleARN and evaluates whether
 // the role identity policies Allow action on targetARN (Gateway CredentialsArn, etc.).
 func (s *Store) RoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region string) bool {
-	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region)
+	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region, "")
+}
+
+// deliveryAuthorizedRoleAndResource authorizes RoleArn delivery.
+// Same-account (or targets without a resource-policy surface): RoleArn session Allow alone
+// remains the lab path. Foreign SQS/Lambda/SNS/S3 targets require session Allow AND
+// destination resource-policy Allow (AWS XA service-target shape), with SourceArn keys.
+func (s *Store) deliveryAuthorizedRoleAndResource(
+	delivererAccount, roleARN, action, targetARN, servicePrincipal, sourceARN, sessionName, region string,
+) bool {
+	roleARN = strings.TrimSpace(roleARN)
+	if roleARN == "" {
+		return s.deliveryTargetResourcePolicyAllows(delivererAccount, targetARN, action, servicePrincipal, sourceARN)
+	}
+	if !s.deliveryRoleSessionAllows(delivererAccount, roleARN, action, targetARN, sessionName, region, sourceARN) {
+		return false
+	}
+	owner := resourceOwnerAccountFromARN(targetARN)
+	if owner == "" || owner == delivererAccount || !deliveryTargetSupportsResourcePolicy(targetARN) {
+		return true
+	}
+	return s.deliveryTargetResourcePolicyAllows(delivererAccount, targetARN, action, servicePrincipal, sourceARN)
+}
+
+func deliveryTargetSupportsResourcePolicy(targetARN string) bool {
+	switch {
+	case strings.HasPrefix(targetARN, "arn:aws:sqs:"),
+		strings.HasPrefix(targetARN, "arn:aws:lambda:"),
+		strings.HasPrefix(targetARN, "arn:aws:sns:"),
+		strings.HasPrefix(targetARN, "arn:aws:s3:::"):
+		return true
+	default:
+		return false
+	}
 }
 
 // deliveryRoleSessionAllows mints a temporary session for roleARN and evaluates
 // whether the role identity policies Allow action on targetARN.
-func (s *Store) deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region string) bool {
+// sourceARN populates aws:SourceArn / aws:SourceAccount ConditionKeys when set.
+func (s *Store) deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region, sourceARN string) bool {
 	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok || roleAccountID != accountID {
 		return false
@@ -74,11 +108,16 @@ func (s *Store) deliveryRoleSessionAllows(accountID, roleARN, action, targetARN,
 		region = DefaultEventsRegion
 	}
 	principal := identity.RoleSessionPrincipal(accountID, roleName, sessionName, accessKeyID)
+	keys := s.deliveryRoleSessionConditionKeys(accountID, roleName, targetARN, region)
+	for k, v := range authz.DeliverySourceConditionKeys(sourceARN, "") {
+		keys[k] = v
+	}
 	ctx := authz.RequestContext{
-		Principal: principal,
-		Action:    action,
-		Resource:  targetARN,
-		Region:    region,
+		Principal:     principal,
+		Action:        action,
+		Resource:      targetARN,
+		Region:        region,
+		ConditionKeys: keys,
 	}
 	in := authz.EvalInputs{
 		IdentityDocs:        docs,

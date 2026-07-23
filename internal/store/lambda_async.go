@@ -37,8 +37,10 @@ func EnsureLambdaAsyncSchema(db *sql.DB) error {
 	stmts := []string{
 		`ALTER TABLE lambda_functions ADD COLUMN dead_letter_target_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_functions ADD COLUMN destination_on_failure_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE lambda_functions ADD COLUMN destination_on_success_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_versions ADD COLUMN dead_letter_target_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_versions ADD COLUMN destination_on_failure_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE lambda_versions ADD COLUMN destination_on_success_arn TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS lambda_async_invocations (
 		  invocation_id TEXT PRIMARY KEY,
 		  account_id TEXT NOT NULL,

@@ -541,7 +541,14 @@ type getOpenIDConnectProviderResponse struct {
 func GetOpenIDConnectProviderXML(p store.OIDCProvider, requestID string) ([]byte, error) {
 	resp := getOpenIDConnectProviderResponse{XMLNS: iamXMLNS}
 	resp.GetOpenIDConnectProviderResult.Url = p.URL
-	resp.GetOpenIDConnectProviderResult.ClientIDList = []string{p.ClientID}
+	clientIDs := p.ClientIDs
+	if len(clientIDs) == 0 && p.ClientID != "" {
+		clientIDs = []string{p.ClientID}
+	}
+	resp.GetOpenIDConnectProviderResult.ClientIDList = clientIDs
+	if len(p.Thumbprints) > 0 {
+		resp.GetOpenIDConnectProviderResult.ThumbprintList = p.Thumbprints
+	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
 }

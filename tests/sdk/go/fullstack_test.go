@@ -147,7 +147,7 @@ func TestFullstackLabOrderPipeline(t *testing.T) {
 	})
 	t.Run("authz_denies", func(st *testing.T) {
 		requireEventBridgeWired(st, lab)
-		authzDenies(st, ctx, lab, ebClient, sqsClient)
+		authzDenies(st, t, ctx, lab, ebClient, sqsClient, kmsClient, ssmClient)
 	})
 }
 
@@ -704,7 +704,16 @@ func dataPlaneReads(
 	}
 }
 
-func authzDenies(t *testing.T, ctx context.Context, lab *labOrderPipeline, ebClient *eventbridge.Client, sqsClient *sqs.Client) {
+func authzDenies(
+	t *testing.T,
+	parent *testing.T,
+	ctx context.Context,
+	lab *labOrderPipeline,
+	ebClient *eventbridge.Client,
+	sqsClient *sqs.Client,
+	kmsClient *kms.Client,
+	ssmClient *ssm.Client,
+) {
 	t.Helper()
 
 	// deny-q has no events.amazonaws.com queue policy → delivery skipped.
@@ -739,6 +748,68 @@ func authzDenies(t *testing.T, ctx context.Context, lab *labOrderPipeline, ebCli
 	}
 	if msg := receiveOptionalBody(t, ctx, sqsClient, lab.ebQueueURL, 2*time.Second); msg != "" {
 		t.Fatalf("eb-q received mismatched-source event: %s", msg)
+	}
+
+	// SecureString decrypt denied when CMK policy omits kms:Decrypt (parity with Node/Python).
+	denyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	denyKey, err := kmsClient.CreateKey(denyCtx, &kms.CreateKeyInput{
+		Description: aws.String(lab.prefix + "-deny-cmk"),
+	})
+	if err != nil {
+		t.Fatalf("CreateKey deny CMK: %v", err)
+	}
+	denyKeyID := aws.ToString(denyKey.KeyMetadata.KeyId)
+	parent.Cleanup(func() {
+		_, _ = kmsClient.ScheduleKeyDeletion(ctx, &kms.ScheduleKeyDeletionInput{
+			KeyId:               aws.String(denyKeyID),
+			PendingWindowInDays: aws.Int32(7),
+		})
+	})
+	denyParam := "/lab/" + lab.prefix + "/kms-deny"
+	_, err = ssmClient.PutParameter(denyCtx, &ssm.PutParameterInput{
+		Name:  aws.String(denyParam),
+		Type:  ssmtypes.ParameterTypeSecureString,
+		Value: aws.String("locked"),
+		KeyId: aws.String(denyKeyID),
+	})
+	if err != nil {
+		t.Fatalf("PutParameter deny SecureString: %v", err)
+	}
+	parent.Cleanup(func() {
+		_, _ = ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{Name: aws.String(denyParam)})
+	})
+	encryptOnly := fmt.Sprintf(`{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Sid":"EncryptOnly",
+			"Effect":"Allow",
+			"Principal":{"AWS":"arn:aws:iam::%s:root"},
+			"Action":["kms:Encrypt","kms:GenerateDataKey*","kms:DescribeKey"],
+			"Resource":"*"
+		}]
+	}`, lab.accountID)
+	_, err = kmsClient.PutKeyPolicy(denyCtx, &kms.PutKeyPolicyInput{
+		KeyId:      aws.String(denyKeyID),
+		PolicyName: aws.String("default"),
+		Policy:     aws.String(encryptOnly),
+	})
+	if err != nil {
+		t.Fatalf("PutKeyPolicy encrypt-only: %v", err)
+	}
+	_, err = ssmClient.GetParameter(denyCtx, &ssm.GetParameterInput{
+		Name:           aws.String(denyParam),
+		WithDecryption: aws.Bool(true),
+	})
+	if err == nil {
+		t.Fatal("expected SecureString decrypt deny when CMK omits kms:Decrypt")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "AccessDenied") &&
+		!strings.Contains(msg, "AccessDeniedException") &&
+		!strings.Contains(strings.ToLower(msg), "not authorized") &&
+		!strings.Contains(msg, "KMS") {
+		t.Fatalf("unexpected deny error: %v", err)
 	}
 }
 

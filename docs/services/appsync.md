@@ -24,7 +24,7 @@ GraphQL API CRUD lite, schema store, Lambda data source and one Query field reso
 
 ### Authz notes
 
-Identity `EvaluateFull` on management `appsync:*`. GraphQL IAM path requires SigV4 service `appsync` and `appsync:GraphQL` on the API ARN. Lambda data-source invoke requires a function resource policy Allow for `appsync.amazonaws.com` (`lambda:AddPermission`).
+Identity `EvaluateFull` on management `appsync:*`. GraphQL IAM path requires SigV4 service `appsync` and `appsync:GraphQL` on the API ARN. Lambda data-source invoke is resource-policy-only: a function resource policy Allow for `appsync.amazonaws.com` (`lambda:AddPermission`) is required. Lab `CreateDataSource` does not accept `serviceRoleArn` / PassRole; use Lambda resource policies.
 
 ## How to verify / CLI smoke
 
@@ -57,3 +57,4 @@ GraphQL Invoke requires a registered Lambda function and DinD compute. Document 
 - Amplify, subscriptions/MQTT, full GraphQL spec
 - AppSync JS/VTL runtimes beyond Lambda Invoke for one Query field
 - OIDC providers beyond Cognito User Pools, Lambda authorizer
+- Data-source `serviceRoleArn` / PassRole (resource-policy-only today)

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Run SDK, Terraform, and CloudFormation integration suites against Noctaxris.
+#
+# Optional env (default suite stays fast):
+#   NOCTAXRIS_ADVANCED=1  — SDK fullstack + Terraform STACK=lab-fullstack
+#   NOCTAXRIS_NESTED=1    — SDK Lambda Invoke (needs healthy noctaxris-engine)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,8 +21,13 @@ if ! curl -fsS "$EP/_noctaxris/ready" | grep -q ready; then
   exit 1
 fi
 
-echo "==> SDK (Go)"
-(cd tests/sdk/go && go test ./... -count=1 -timeout 10m)
+SDK_TIMEOUT="10m"
+if [[ "${NOCTAXRIS_ADVANCED:-}" == "1" || "${NOCTAXRIS_NESTED:-}" == "1" ]]; then
+  SDK_TIMEOUT="20m"
+fi
+
+echo "==> SDK (Go) [ADVANCED=${NOCTAXRIS_ADVANCED:-0} NESTED=${NOCTAXRIS_NESTED:-0}]"
+(cd tests/sdk/go && go test ./... -count=1 -timeout "$SDK_TIMEOUT")
 
 echo "==> SDK (Node.js)"
 (cd tests/sdk/nodejs && npm install --no-fund --no-audit && npm test)
@@ -26,8 +35,13 @@ echo "==> SDK (Node.js)"
 echo "==> SDK (Python)"
 (cd tests/sdk/python && python -m pip install -q -r requirements.txt && python -m pytest)
 
-echo "==> Terraform"
+echo "==> Terraform (lab-core)"
 bash tests/terraform/run.sh
+
+if [[ "${TF_FULLSTACK:-}" == "1" || "${NOCTAXRIS_ADVANCED:-}" == "1" ]]; then
+  echo "==> Terraform (lab-fullstack) [TF_FULLSTACK=${TF_FULLSTACK:-0} ADVANCED=${NOCTAXRIS_ADVANCED:-0}]"
+  STACK=lab-fullstack bash tests/terraform/run.sh
+fi
 
 echo "==> CloudFormation"
 (cd tests/cloudformation/go && go test ./... -count=1 -timeout 5m)

@@ -128,6 +128,24 @@ func TestRDSDataExecuteStatementUnavailableAndStubOverride(t *testing.T) {
 		t.Fatalf("want DatabaseUnavailableException, got status=%d body=%q", unavailable.Code, unavailable.Body.String())
 	}
 
+	withParams := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "postgres",
+		"sql":         "SELECT :id",
+		"parameters": []any{
+			map[string]any{
+				"name": "id",
+				"value": map[string]any{
+					"longValue": float64(1),
+				},
+			},
+		},
+	}, now)
+	if withParams.Code != http.StatusBadRequest || !strings.Contains(withParams.Body.String(), "parameters require") {
+		t.Fatalf("want parameters BadRequest, got status=%d body=%q", withParams.Code, withParams.Body.String())
+	}
+
 	srv.SetRDSDataExecutor(&store.StubRDSDataExecutor{})
 	t.Cleanup(func() { srv.SetRDSDataExecutor(nil) })
 

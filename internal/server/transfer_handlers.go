@@ -7,6 +7,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	transfersvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/transfer"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -75,6 +77,43 @@ func (s *Server) transferRegion(verified *authn.Verified) string {
 	return store.DefaultTransferRegion
 }
 
+func (s *Server) checkTransferPassRole(verified *authn.Verified, roleARN string) error {
+	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok {
+		return errors.New("Role must be a valid IAM role ARN")
+	}
+	if accountID != verified.AccountID {
+		return errors.New("Role must be in the same account")
+	}
+	storedARN, trust, err := s.store.GetRole(accountID, roleName)
+	if err != nil {
+		return errors.New("Role not found")
+	}
+	if storedARN != "" {
+		roleARN = storedARN
+	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to Transfer")
+	}
+	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
+		EvalInputs:       in,
+		RoleARN:          roleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalTransfer,
+	})
+	if decision != authz.Allow {
+		return errors.New("not authorized to pass role to Transfer")
+	}
+	return nil
+}
+
 func (s *Server) transferCreateServer(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -82,6 +121,18 @@ func (s *Server) transferCreateServer(
 	if !s.authorize(verified, catalog.ActionTransferCreateServer, "*") {
 		s.writeTransferError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform transfer:CreateServer.", readOnly, eventID, verified)
+		return
+	}
+	if details, ok := params["EndpointDetails"]; ok && details != nil {
+		if m, ok := details.(map[string]any); ok && len(m) > 0 {
+			s.writeTransferError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+				"EndpointDetails is not supported; lab Transfer has no VPC or listener.", readOnly, eventID, verified)
+			return
+		}
+	}
+	if et, ok := params["EndpointType"].(string); ok && strings.TrimSpace(et) != "" {
+		s.writeTransferError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"EndpointType is not supported; lab Transfer servers stay OFFLINE with no listener.", readOnly, eventID, verified)
 		return
 	}
 	var protocols []string
@@ -198,6 +249,13 @@ func (s *Server) transferCreateUser(
 		s.writeTransferError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform transfer:CreateUser.", readOnly, eventID, verified)
 		return
+	}
+	if strings.TrimSpace(roleARN) != "" {
+		if err := s.checkTransferPassRole(verified, roleARN); err != nil {
+			s.writeTransferError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 	}
 	u, err := s.store.CreateTransferUser(verified.AccountID, serverID, userName, home, roleARN)
 	if errors.Is(err, store.ErrTransferServerNotFound) {

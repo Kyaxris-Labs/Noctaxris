@@ -30,7 +30,9 @@ Most STS control-plane actions use `EvaluateFull` (identity, boundary, session, 
 
 Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus role trust). `ExternalId` / `SourceIdentity` request params populate `sts:ExternalId` and `sts:SourceIdentity` / `aws:SourceIdentity` for trust Conditions. Assumed-role sessions load identity policies from the IAM role ARN (not the STS session ARN), so role attachments apply to SigV4 calls that use temporary credentials.
 
-`AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` match trust `Principal.Federated` against the IdP ARN (account-root `AWS` principals do not over-allow federation callers). SAML verify is a lab subset: SignedInfo RSA, Reference DigestValue over the Assertion with Signature removed, Conditions time window, and Audience matching metadata `entityID` (not exclusive C14N).
+Role chaining: callers with a session token (or Role/Federated principal) cannot request `DurationSeconds` greater than 3600. Role `MaxSessionDuration` (CreateRole, default 3600, max 43200) caps all AssumeRole mints.
+
+`AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` match trust `Principal.Federated` against the IdP ARN (account-root `AWS` principals do not over-allow federation callers). SAML verify is a lab subset: SignedInfo RSA, Reference DigestValue over the Assertion with Signature removed, Conditions time window, and Audience matching metadata `entityID` (not exclusive C14N). Web identity trusts can Condition on `{issuer-host}:sub` / `:aud` and, for GitHub Actions issuers, `token.actions.githubusercontent.com:*` claim keys populated from the verified JWT. OIDC providers store the full `ClientIDList` (and thumbprints for honesty; JWKS verify does not check thumbprints).
 
 ## How to verify / CLI smoke
 

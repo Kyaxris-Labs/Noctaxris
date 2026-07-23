@@ -77,11 +77,11 @@ HTTP request
        └─ unknown → 501 NotImplemented
 ```
 
-Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume (API-only `noctaxris-data` holds `master.key` / `state.db` and is not mounted on the privileged engine). Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
+Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume (API-only `noctaxris-data` holds `master.key` / `state.db` and is not mounted on the engine; the engine mounts compute `:ro`). Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
 
 ## Compute path
 
-Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
+Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. Default Compose runs `noctaxris-engine` as privileged DinD so nested containers can start; see [security-defaults.md](security-defaults.md) for the experimental restricted-engine overlay. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
 
 Lambda, ECS, CodeBuild, Batch, and nested data engines all use nested DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Unknown runtime values fail process start. Live zip/Image Invoke and ECS RunTask require a healthy `noctaxris-engine`. The API never falls through to host Docker.
 
@@ -102,16 +102,20 @@ flowchart TD
   Helper -.-> DataAPI
 ```
 
-Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). OpenSearch domain CRUD returns a loopback stub endpoint (MQ-style). Live nested OpenSearch is optional and must not publish search ports on the host.
+Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). OpenSearch domain CRUD is a control-plane stub: loopback `stub://` endpoint and `CreateFailed` status (same honesty class as MQ `CREATION_FAILED`). Nested OpenSearch is not implemented; do not host-publish search ports if a nested engine is added later.
 
 When DinD is unset, create paths keep control-plane rows and nested start is a no-op. Live engine start requires `noctaxris-engine`. Do not mount the operator host filesystem into nested data containers.
+
+## Networking vocabulary
+
+Noctaxris does not emulate Amazon VPC, ENIs, or PrivateLink. Nested compute and data engines use **DinD Internal** Docker networks (`noctaxris-fn`, `noctaxris-ecs`, `noctaxris-data`). Those are not AWS VPC private connectivity. Transfer omits `EndpointType=VPC`. Cloud Map private DNS stores a lab-opaque `Vpc` string only. Lambda `VpcConfig` and ECS `awsvpcConfiguration` fail closed.
 
 ## In-process delivery workers
 
 - EventBridge Scheduler advances due schedules inside the API process and delivers via existing Lambda async enqueue, SQS SendMessage, and SNS Publish helpers.
 - Lambda SQS event source mappings poll continuously with ReceiveMessage, synchronously Invoke, and DeleteMessage on success.
 - EventBridge Pipes expose poll helpers for SQS, DynamoDB Streams, and EventBridge bus sources, with optional Lambda enrichment. An in-process ticker calls `PollPipeOnce` for RUNNING pipes.
-- SNS HTTP(S) subscriptions deliver only to allowlisted loopback endpoints (lab catcher). Non-allowlisted URLs fail closed.
+- SNS HTTP(S) subscriptions deliver only to the lab catcher or exact allowlisted public URLs, with a pinned dialer (no redirects; private/loopback/metadata hosts rejected on allowlist paths).
 
 ## Edge identity
 

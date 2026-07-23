@@ -267,12 +267,49 @@ func (s *Server) apigwCreateAuthorizer(
 			audience = aud
 		}
 	}
+	authorizerURI, _ := params["AuthorizerUri"].(string)
+	if authorizerURI == "" {
+		authorizerURI, _ = params["authorizerUri"].(string)
+	}
+	credARN, _ := params["AuthorizerCredentialsArn"].(string)
+	if credARN == "" {
+		credARN, _ = params["authorizerCredentialsArn"].(string)
+	}
+	payloadVer, _ := params["AuthorizerPayloadFormatVersion"].(string)
+	if payloadVer == "" {
+		payloadVer, _ = params["authorizerPayloadFormatVersion"].(string)
+	}
+	var enableSimple *bool
+	if v, ok := params["EnableSimpleResponses"].(bool); ok {
+		enableSimple = &v
+	} else if v, ok := params["enableSimpleResponses"].(bool); ok {
+		enableSimple = &v
+	}
 	if !s.authorize(verified, catalog.ActionAPIGatewayV2CreateAuthorizer, "*") {
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform apigatewayv2:CreateAuthorizer.", readOnly, eventID, verified)
 		return
 	}
-	a, err := s.store.CreateAPIGatewayAuthorizer(verified.AccountID, apiID, name, authType, identitySource, issuer, audience)
+	if credARN != "" {
+		if err := s.checkAPIGatewayPassRole(verified, credARN); err != nil {
+			s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	a, err := s.store.CreateAPIGatewayAuthorizer(store.CreateAPIGatewayAuthorizerInput{
+		AccountID:                      verified.AccountID,
+		APIID:                          apiID,
+		Name:                           name,
+		AuthorizerType:                 authType,
+		IdentitySource:                 identitySource,
+		JWTIssuer:                      issuer,
+		JWTAudience:                    audience,
+		AuthorizerURI:                  authorizerURI,
+		AuthorizerCredentialsArn:       credARN,
+		AuthorizerPayloadFormatVersion: payloadVer,
+		EnableSimpleResponses:          enableSimple,
+	})
 	if errors.Is(err, store.ErrAPIGatewayNotFound) {
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
 			"API not found.", readOnly, eventID, verified)

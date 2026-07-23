@@ -128,14 +128,18 @@ func NestedDataEndpoint(containerName string, port int) string {
 	return fmt.Sprintf("%s:%d", containerName, port)
 }
 
-// dataPlaneHostConfig returns HostConfig with no host port publish.
+// dataPlaneHostConfig returns HostConfig with no host port publish and CapDrop ALL.
 // Exported via tests in this package to lock the secure-default invariant.
 func dataPlaneHostConfig() *container.HostConfig {
+	sec := nestedTaskSecurity(0)
 	return &container.HostConfig{
 		AutoRemove:      false,
 		NetworkMode:     container.NetworkMode(DataPlaneNetworkName),
 		PublishAllPorts: false,
 		// PortBindings intentionally nil/empty: never map DB ports to the host.
+		Privileged:  false,
+		CapDrop:     append([]string(nil), sec.CapDrop...),
+		SecurityOpt: append([]string(nil), sec.SecurityOpt...),
 	}
 }
 

@@ -17,7 +17,7 @@ func TestEvaluateSNSIdentityAllowEmptyTopic(t *testing.T) {
 		Action:   "sns:Publish",
 		Resource: "arn:aws:sns:us-east-1:000000000001:lab",
 	}
-	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sns:Publish","Resource":"*"}]}`
+	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sns:Publish","Resource":"*"}]}`
 	got := authz.EvaluateSNS(authz.SNSRequest{
 		Caller:         ctx,
 		IdentityDocs:   []string{identityAllow},
@@ -39,7 +39,7 @@ func TestEvaluateSNSIdentityDenyTopicAllow(t *testing.T) {
 		Resource: "arn:aws:sns:us-east-1:000000000001:lab",
 	}
 	identityDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"sns:Publish","Resource":"*"}]}`
-	topicAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sns:Publish","Resource":"*"}]}`
+	topicAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sns:Publish","Resource":"*"}]}`
 	got := authz.EvaluateSNS(authz.SNSRequest{
 		Caller:         ctx,
 		IdentityDocs:   []string{identityDeny},
@@ -60,7 +60,7 @@ func TestEvaluateSNSIdentityEmptyTopicAllow(t *testing.T) {
 		Action:   "sns:Publish",
 		Resource: "arn:aws:sns:us-east-1:000000000001:lab",
 	}
-	topicAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sns:Publish","Resource":"*"}]}`
+	topicAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sns:Publish","Resource":"*"}]}`
 	got := authz.EvaluateSNS(authz.SNSRequest{
 		Caller:         ctx,
 		IdentityDocs:   nil,

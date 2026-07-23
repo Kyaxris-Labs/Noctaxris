@@ -126,7 +126,7 @@ func TestEventBusPutPermissionXA(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal := "arn:aws:iam::" + caller + ":root"
-	if err := st.PutEventBusPermission(owner, "shared", "allow-caller", principal, []string{"events:PutEvents"}); err != nil {
+	if err := st.PutEventBusPermission(owner, "shared", "allow-caller", principal, []string{"events:PutEvents"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	bus, err = st.DescribeEventBus(owner, "shared")
@@ -149,6 +149,14 @@ func TestSFNTaskSQSAndEventBridge(t *testing.T) {
 	if err := st.SetQueueAttributes(account, q.QueueName, map[string]string{"Policy": policy}); err != nil {
 		t.Fatal(err)
 	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "sfn-sqs-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "task", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"`+q.QueueARN+`"}]}`); err != nil {
+		t.Fatal(err)
+	}
 	def := `{
   "StartAt": "Send",
   "States": {
@@ -159,7 +167,7 @@ func TestSFNTaskSQSAndEventBridge(t *testing.T) {
     }
   }
 }`
-	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "sfn-sqs", def, "")
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "sfn-sqs", def, roleARN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +199,10 @@ func TestPipesEventBusSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutInlinePolicy(roleARN, "deliver", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`); err != nil {
+	if err := st.PutInlinePolicy(roleARN, "deliver", `{"Version":"2012-10-17","Statement":[
+		{"Effect":"Allow","Action":"events:PutEvents","Resource":"`+bus.ARN+`"},
+		{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}
+	]}`); err != nil {
 		t.Fatal(err)
 	}
 	p, err := st.CreatePipe(account, "us-east-1", "bus-pipe", "", bus.ARN, dst.QueueARN, roleARN, "RUNNING")
@@ -244,7 +255,7 @@ func TestESMFilterCriteriaSQS(t *testing.T) {
 		t.Fatal(err)
 	}
 	invoked := 0
-	if err := st.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, eventJSON string) error {
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, _, eventJSON string) (string, error) {
 		invoked++
 		var payload map[string]any
 		_ = json.Unmarshal([]byte(eventJSON), &payload)
@@ -252,7 +263,7 @@ func TestESMFilterCriteriaSQS(t *testing.T) {
 		if len(recs) != 1 {
 			t.Fatalf("want 1 record got %d body=%s", len(recs), eventJSON)
 		}
-		return nil
+		return "", nil
 	}); err != nil {
 		t.Fatal(err)
 	}

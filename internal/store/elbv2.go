@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/google/uuid"
 )
 
@@ -377,6 +378,10 @@ func (s *Store) DeleteELBv2Listener(accountID, listenerARN string) error {
 }
 
 // RegisterELBv2Targets registers Lambda ARN or lab IP targets.
+// Lambda targets must resolve to an existing function and Allow
+// elasticloadbalancing.amazonaws.com on the function resource policy
+// (SourceArn may be the target group ARN). Health remains unused until a
+// lab listener dataplane exists.
 func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets []ELBv2Target) error {
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
@@ -396,6 +401,22 @@ func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets [
 		case "lambda":
 			if !strings.HasPrefix(id, "arn:aws:lambda:") {
 				return fmt.Errorf("%w: lambda target Id must be a Lambda function ARN", ErrELBv2BadRequest)
+			}
+			fnAccount, fnName, ok := ParseLambdaARNFromSFNResource(id)
+			if !ok || fnName == "" {
+				return fmt.Errorf("%w: lambda target Id must be a Lambda function ARN", ErrELBv2BadRequest)
+			}
+			fn, err := s.GetFunction(fnAccount, fnName)
+			if errors.Is(err, ErrNoSuchFunction) {
+				return fmt.Errorf("%w: Lambda function not found for target", ErrELBv2BadRequest)
+			}
+			if err != nil {
+				return fmt.Errorf("register targets: resolve function: %w", err)
+			}
+			if !s.deliveryTargetResourcePolicyAllows(
+				fnAccount, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalELB, targetGroupARN,
+			) {
+				return fmt.Errorf("%w: Lambda resource policy must Allow elasticloadbalancing.amazonaws.com to invoke the function", ErrELBv2BadRequest)
 			}
 		case "ip":
 			ip := id

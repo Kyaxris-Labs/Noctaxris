@@ -539,7 +539,12 @@ func (s *Server) handleAssumeRoleWithWebIdentity(
 			return
 		}
 	}
-	if _, err := federation.VerifyWebIdentityJWT(token, idp.URL, idp.ClientID, nil); err != nil {
+	clientIDs := idp.ClientIDs
+	if len(clientIDs) == 0 && idp.ClientID != "" {
+		clientIDs = []string{idp.ClientID}
+	}
+	claims, err := federation.VerifyWebIdentityJWTClients(token, idp.URL, clientIDs, nil)
+	if err != nil {
 		code := federation.CodeInvalidIdentityToken
 		if fe, ok := err.(*federation.Error); ok {
 			code = fe.Code()
@@ -563,17 +568,21 @@ func (s *Server) handleAssumeRoleWithWebIdentity(
 		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRoleWithWebIdentity","Resource":"%s"}]}`,
 		roleARN,
 	)}
+	trustKeys := map[string]string{
+		"aws:PrincipalAccount":  accountID,
+		"aws:RequestedRegion":   verified.Region,
+		"aws:FederatedProvider": idp.ProviderARN,
+	}
+	for k, v := range federation.WebIdentityConditionKeys(claims) {
+		trustKeys[k] = v
+	}
 	decision := authz.EvaluateCrossAccount(authz.CrossAccountRequest{
 		Caller: authz.RequestContext{
-			Principal: fedPrincipal,
-			Action:    catalog.ActionSTSAssumeRoleWithWebIdentity,
-			Resource:  roleARN,
-			Region:    verified.Region,
-			ConditionKeys: map[string]string{
-				"aws:PrincipalAccount":  accountID,
-				"aws:RequestedRegion":   verified.Region,
-				"aws:FederatedProvider": idp.ProviderARN,
-			},
+			Principal:     fedPrincipal,
+			Action:        catalog.ActionSTSAssumeRoleWithWebIdentity,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: trustKeys,
 		},
 		CallerIdentityDocs: callerDocs,
 		TrustPolicyDoc:     trust,

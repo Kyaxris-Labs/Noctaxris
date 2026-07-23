@@ -51,6 +51,9 @@ type Server struct {
 	invoker     compute.FunctionInvoker
 	invokerErr  error
 
+	// Optional unit-test hook replacing nested DinD invoke.
+	lambdaInvokeHook func(ctx context.Context, accountID, name string, fn store.LambdaFunction, executedVersion, eventJSON string) ([]byte, error)
+
 	// In-process EventBridge Scheduler ticker (ADR-0007).
 	schedulerTickerOnce   sync.Once
 	schedulerTickerCancel context.CancelFunc
@@ -86,6 +89,14 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 		s.startAsyncInvoke(job, job.AccountID, job.FunctionName, "")
 	})
 	return s
+}
+
+// SetLambdaInvokeHookForTest replaces nested DinD invoke for unit tests.
+// Pass nil to clear. Not for production use.
+func (s *Server) SetLambdaInvokeHookForTest(
+	hook func(ctx context.Context, accountID, name string, fn store.LambdaFunction, executedVersion, eventJSON string) ([]byte, error),
+) {
+	s.lambdaInvokeHook = hook
 }
 
 func (s *Server) Handler() http.Handler {
@@ -701,7 +712,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLambdaDeleteFunctionUrlConfig, "DeleteFunctionUrlConfig",
 		catalog.ActionLambdaListFunctionUrlConfigs, "ListFunctionUrlConfigs",
 		catalog.ActionLambdaListTags, "ListTags",
-		catalog.ActionLambdaGetFunctionCodeSigningConfig, "GetFunctionCodeSigningConfig":
+		catalog.ActionLambdaGetFunctionCodeSigningConfig, "GetFunctionCodeSigningConfig",
+		catalog.ActionLambdaPutFunctionEventInvokeConfig, "PutFunctionEventInvokeConfig",
+		catalog.ActionLambdaGetFunctionEventInvokeConfig, "GetFunctionEventInvokeConfig",
+		catalog.ActionLambdaDeleteFunctionEventInvokeConfig, "DeleteFunctionEventInvokeConfig":
 		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionECSRegisterTaskDefinition, "RegisterTaskDefinition",
 		catalog.ActionECSDescribeTaskDefinition, "DescribeTaskDefinition",
@@ -731,7 +745,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLogsDescribeLogGroups, "DescribeLogGroups",
 		catalog.ActionLogsPutSubscriptionFilter, "PutSubscriptionFilter",
 		catalog.ActionLogsDeleteSubscriptionFilter, "DeleteSubscriptionFilter",
-		catalog.ActionLogsDescribeSubscriptionFilters, "DescribeSubscriptionFilters":
+		catalog.ActionLogsDescribeSubscriptionFilters, "DescribeSubscriptionFilters",
+		catalog.ActionLogsPutMetricFilter, "PutMetricFilter",
+		catalog.ActionLogsDeleteMetricFilter, "DeleteMetricFilter",
+		catalog.ActionLogsDescribeMetricFilters, "DescribeMetricFilters":
 		s.handleLogs(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionTaggingTagResources, "TagResources",
 		catalog.ActionTaggingUntagResources, "UntagResources",
@@ -779,7 +796,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionCFNCreateStack, "CreateStack",
 		catalog.ActionCFNDescribeStacks, "DescribeStacks",
 		catalog.ActionCFNDeleteStack, "DeleteStack",
-		catalog.ActionCFNListStacks, "ListStacks":
+		catalog.ActionCFNListStacks, "ListStacks",
+		catalog.ActionCFNUpdateStack, "UpdateStack",
+		catalog.ActionCFNCreateChangeSet, "CreateChangeSet",
+		catalog.ActionCFNDescribeChangeSet, "DescribeChangeSet",
+		catalog.ActionCFNExecuteChangeSet, "ExecuteChangeSet",
+		catalog.ActionCFNDetectStackDrift, "DetectStackDrift",
+		catalog.ActionCFNDescribeStackDriftDetectionStatus, "DescribeStackDriftDetectionStatus",
+		catalog.ActionCFNDescribeStackResourceDrifts, "DescribeStackResourceDrifts":
 		s.handleCloudFormation(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCodePipelineCreatePipeline, "CreatePipeline",
 		catalog.ActionCodePipelineGetPipeline, "GetPipeline",
@@ -913,7 +937,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionCloudControlCreateResource,
 		catalog.ActionCloudControlGetResource,
 		catalog.ActionCloudControlListResources,
-		catalog.ActionCloudControlDeleteResource:
+		catalog.ActionCloudControlDeleteResource,
+		catalog.ActionCloudControlUpdateResource,
+		catalog.ActionCloudControlGetResourceRequestStatus:
 		s.handleCloudControl(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionBCMCreateExport,
 		catalog.ActionBCMGetExport,

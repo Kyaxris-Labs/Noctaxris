@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -628,22 +629,26 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 }
 
 func (s *Store) deliverSNSToLambda(sub Subscription, msg PublishedMessage) error {
-	functionName, qualifier := ParseFunctionQualifier(sub.Endpoint)
-	if functionName == "" {
+	fnAccount, functionName, ok := ParseLambdaARNFromSFNResource(sub.Endpoint)
+	if !ok || functionName == "" {
 		return fmt.Errorf("sns lambda delivery: empty function endpoint")
 	}
-	fn, err := s.GetFunction(sub.Owner, functionName)
+	if fnAccount == "" {
+		fnAccount = sub.Owner
+	}
+	_, qualifier := ParseFunctionQualifier(sub.Endpoint)
+	fn, err := s.GetFunction(fnAccount, functionName)
 	if err != nil {
 		return fmt.Errorf("sns lambda delivery: %w", err)
 	}
-	if !s.deliveryTargetResourcePolicyAllows(sub.Owner, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalSNS, sub.TopicARN) {
+	if !s.deliveryTargetResourcePolicyAllows(fnAccount, fn.FunctionARN, actionLambdaInvokeFunction, authz.ServicePrincipalSNS, sub.TopicARN) {
 		return fmt.Errorf("sns lambda delivery: function policy does not Allow sns.amazonaws.com")
 	}
 	eventJSON, err := snsLambdaEventJSON(sub, msg)
 	if err != nil {
 		return err
 	}
-	if _, err := s.EnqueueAsyncInvoke(sub.Owner, functionName, qualifier, eventJSON); err != nil {
+	if _, err := s.EnqueueAsyncInvoke(fnAccount, functionName, qualifier, eventJSON); err != nil {
 		return fmt.Errorf("sns lambda delivery: %w", err)
 	}
 	return nil
@@ -786,6 +791,12 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 	if protoLower == "http" || protoLower == "https" {
 		if err := validateSNSHTTPEndpoint(endpoint); err != nil {
 			return Subscription{}, err
+		}
+	}
+	if protoLower == "lambda" {
+		fnAccount, _, ok := ParseLambdaARNFromSFNResource(endpoint)
+		if ok && fnAccount != "" && fnAccount != accountID {
+			return Subscription{}, fmt.Errorf("%w: Lambda endpoint account must match subscriber account", ErrSNSInvalidParameter)
 		}
 	}
 	if topicIsFIFO(topic.Attributes, topic.TopicName) && protoLower == "sqs" {
@@ -1238,12 +1249,7 @@ func (s *Store) postSNSHTTP(endpoint, subARN, topicARN, msgType string, body []b
 	if isSNSHTTPCatcherEndpoint(u, strings.ToLower(u.Scheme)) {
 		return s.RecordSNSHTTPCatcher(subARN, topicARN, msgType, string(body))
 	}
-	client := &http.Client{
-		Timeout: 3 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return fmt.Errorf("sns http: redirects are not allowed")
-		},
-	}
+	client := snsHTTPClient()
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -1260,6 +1266,68 @@ func (s *Store) postSNSHTTP(endpoint, subARN, topicARN, msgType string, body []b
 		return fmt.Errorf("sns http delivery status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// snsHTTPClient builds an HTTP client with a JWKS-style pinned dialer (resolve then
+// connect only to validated public IPs) and redirect denial.
+func snsHTTPClient() *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	var transport *http.Transport
+	if ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = pinnedSNSHTTPDialContext
+	return &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("sns http: redirects are not allowed")
+		},
+	}
+}
+
+// PinnedSNSHTTPDialContext is exported for dialer unit tests.
+func PinnedSNSHTTPDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return pinnedSNSHTTPDialContext(ctx, network, addr)
+}
+
+// pinnedSNSHTTPDialContext resolves addr, rejects unsafe IPs at dial time, and
+// connects only to a validated address (mitigates DNS rebinding between check and connect).
+func pinnedSNSHTTPDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("sns http: dial addr: %w", err)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		if ip := net.ParseIP(host); ip != nil {
+			ips = []net.IP{ip}
+		} else {
+			return nil, fmt.Errorf("sns http: resolve dial host: %w", err)
+		}
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("sns http: dial host resolved to no addresses")
+	}
+	var dialer net.Dialer
+	var lastErr error
+	for _, ip := range ips {
+		if err := rejectSNSHTTPUnsafeIP(ip); err != nil {
+			lastErr = err
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("sns http: no safe dial target")
 }
 
 // RecordSNSHTTPCatcher stores a lab catcher payload.

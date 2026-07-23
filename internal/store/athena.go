@@ -183,7 +183,14 @@ func (s *Store) StartAthenaQueryExecution(accountID string, in AthenaStartInput)
 	exec.CompletionMS = time.Now().UTC().UnixMilli()
 
 	if exec.OutputLocation != "" {
-		_ = s.writeAthenaResultObject(accountID, exec)
+		if err := s.writeAthenaResultObject(accountID, exec); err != nil {
+			exec.State = "FAILED"
+			exec.StateChangeReason = fmt.Sprintf("OutputLocation write failed: %v", err)
+			exec.ErrorMessage = exec.StateChangeReason
+			exec.ResultColumns = nil
+			exec.ResultRows = nil
+			exec.CompletionMS = time.Now().UTC().UnixMilli()
+		}
 	}
 	if err := s.saveAthenaExecution(accountID, exec); err != nil {
 		return AthenaQueryExecution{}, err
@@ -291,7 +298,7 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 	for _, obj := range listed.Contents {
 		_, data, err := s.GetObject(accountID, bucket, obj.Key)
 		if err != nil {
-			continue
+			return nil, nil, fmt.Errorf("%w: GetObject failed for s3://%s/%s: %v", ErrAthenaBadRequest, bucket, obj.Key, err)
 		}
 		if jsonMode {
 			rows, err := parseJSONLines(data, selected)

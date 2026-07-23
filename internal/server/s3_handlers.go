@@ -173,10 +173,11 @@ type s3CopyObjectResult struct {
 }
 
 type s3SSECreateMeta struct {
-	ContentType  string
-	SSEAlgorithm string
-	KMSKeyID     string
-	SealedDEK    []byte
+	ContentType       string
+	SSEAlgorithm      string
+	KMSKeyID          string
+	SealedDEK         []byte
+	SSEKMSContextJSON string
 }
 
 func (s *Server) handleS3(
@@ -447,6 +448,11 @@ func (s *Server) s3PutBucketPolicy(w http.ResponseWriter, r *http.Request, body 
 	if !s.authorizeS3(verified, catalog.ActionS3PutBucketPolicy, store.BucketARN(bucket), ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "PutBucketPolicy")
+		return
+	}
+	if err := authz.ValidateResourcePolicyDocument(string(body)); err != nil {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "MalformedPolicy",
+			err.Error(), "PutBucketPolicy")
 		return
 	}
 	if err := s.store.PutBucketPolicy(ref.accountID, bucket, string(body)); err != nil {
@@ -1001,10 +1007,11 @@ func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request,
 	}
 	sseMeta.ContentType = contentType
 	upload, err := s.store.CreateMultipartUpload(ref.accountID, bucket, key, store.CreateMultipartUploadMeta{
-		ContentType:  sseMeta.ContentType,
-		SSEAlgorithm: sseMeta.SSEAlgorithm,
-		KMSKeyID:     sseMeta.KMSKeyID,
-		SealedDEK:    sseMeta.SealedDEK,
+		ContentType:       sseMeta.ContentType,
+		SSEAlgorithm:      sseMeta.SSEAlgorithm,
+		KMSKeyID:          sseMeta.KMSKeyID,
+		SealedDEK:         sseMeta.SealedDEK,
+		SSEKMSContextJSON: sseMeta.SSEKMSContextJSON,
 	})
 	if mapErr := s.mapS3StoreError(w, r, requestID, eventID, verified, readOnly, err, "CreateMultipartUpload"); mapErr {
 		return
@@ -1104,16 +1111,17 @@ func (s *Server) s3CompleteMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	putMeta := store.PutObjectMeta{
-		ContentType:  result.Upload.ContentType,
-		Data:         result.Data,
-		PlainSize:    int64(len(result.Data)),
-		ETag:         result.ETag,
-		SSEAlgorithm: result.Upload.SSEAlgorithm,
-		KMSKeyID:     result.Upload.KMSKeyID,
-		SealedDEK:    result.Upload.SealedDEK,
+		ContentType:       result.Upload.ContentType,
+		Data:              result.Data,
+		PlainSize:         int64(len(result.Data)),
+		ETag:              result.ETag,
+		SSEAlgorithm:      result.Upload.SSEAlgorithm,
+		KMSKeyID:          result.Upload.KMSKeyID,
+		SealedDEK:         result.Upload.SealedDEK,
+		SSEKMSContextJSON: result.Upload.SSEKMSContextJSON,
 	}
 	if putMeta.SSEAlgorithm != "" {
-		encrypted, encErr := s.s3EncryptObjectPayload(verified, putMeta.SSEAlgorithm, putMeta.KMSKeyID, resource, putMeta.SealedDEK, result.Data)
+		encrypted, encErr := s.s3EncryptObjectPayload(verified, putMeta.SSEAlgorithm, putMeta.KMSKeyID, resource, putMeta.SSEKMSContextJSON, putMeta.SealedDEK, result.Data)
 		if encErr != nil {
 			code, msg := "InternalError", "Internal error"
 			status := http.StatusInternalServerError
@@ -1274,9 +1282,10 @@ func (s *Server) s3BuildSSECreateMeta(
 		return s3SSECreateMeta{}, false
 	}
 	return s3SSECreateMeta{
-		SSEAlgorithm: prepared.Algorithm,
-		KMSKeyID:     prepared.KMSKeyID,
-		SealedDEK:    prepared.SealedDEK,
+		SSEAlgorithm:      prepared.Algorithm,
+		KMSKeyID:          prepared.KMSKeyID,
+		SealedDEK:         prepared.SealedDEK,
+		SSEKMSContextJSON: prepared.SSEKMSContextJSON,
 	}, true
 }
 
@@ -1294,10 +1303,11 @@ func (s *Server) s3EffectiveSSE(r *http.Request, accountID, bucket string) (sse,
 }
 
 type s3SSEPrepared struct {
-	Algorithm string
-	KMSKeyID  string
-	SealedDEK []byte
-	dek       []byte
+	Algorithm         string
+	KMSKeyID          string
+	SealedDEK         []byte
+	SSEKMSContextJSON string
+	dek               []byte
 }
 
 func (s *Server) s3PrepareSSE(
@@ -1378,7 +1388,16 @@ func (s *Server) s3PrepareSSE(
 				"Internal error", eventName)
 			return s3SSEPrepared{}, false
 		}
-		return s3SSEPrepared{Algorithm: sseAWSKMS, KMSKeyID: kmsKey.ARN, SealedDEK: sealedDEK, dek: dek}, true
+		ctxJSON, jsonErr := encodeS3CustomerEncryptionContext(customerCtx)
+		if jsonErr != nil {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusInternalServerError, "InternalError",
+				"Internal error", eventName)
+			return s3SSEPrepared{}, false
+		}
+		return s3SSEPrepared{
+			Algorithm: sseAWSKMS, KMSKeyID: kmsKey.ARN, SealedDEK: sealedDEK,
+			SSEKMSContextJSON: ctxJSON, dek: dek,
+		}, true
 	default:
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
 			"Unsupported server-side encryption", eventName)
@@ -1397,6 +1416,29 @@ func parseS3EncryptionContextHeader(raw string) (map[string]string, error) {
 	}
 	var m map[string]string
 	if err := json.Unmarshal(decoded, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func encodeS3CustomerEncryptionContext(customerCtx map[string]string) (string, error) {
+	if len(customerCtx) == 0 {
+		return "", nil
+	}
+	b, err := json.Marshal(customerCtx)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func parseStoredS3CustomerEncryptionContext(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -1427,11 +1469,12 @@ func (s *Server) s3EncryptPutMeta(
 	meta.SSEAlgorithm = prepared.Algorithm
 	meta.KMSKeyID = prepared.KMSKeyID
 	meta.SealedDEK = prepared.SealedDEK
+	meta.SSEKMSContextJSON = prepared.SSEKMSContextJSON
 	meta.Data = ct
 	return true
 }
 
-func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, kmsKeyID, objectARN string, sealedDEK, plain []byte) ([]byte, error) {
+func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, kmsKeyID, objectARN, sseKMSContextJSON string, sealedDEK, plain []byte) ([]byte, error) {
 	switch sseAlgorithm {
 	case sseAES256:
 		dek, err := s.store.UnsealWithMaster(sealedDEK)
@@ -1448,7 +1491,11 @@ func (s *Server) s3EncryptObjectPayload(verified *authn.Verified, sseAlgorithm, 
 		if err != nil {
 			return nil, err
 		}
-		encCtx := s3SSEKMSEncryptionContext(objectARN, nil)
+		customerCtx, err := parseStoredS3CustomerEncryptionContext(sseKMSContextJSON)
+		if err != nil {
+			return nil, err
+		}
+		encCtx := s3SSEKMSEncryptionContext(objectARN, customerCtx)
 		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey, encCtx) {
 			return nil, errS3AccessDenied
 		}
@@ -1510,7 +1557,11 @@ func (s *Server) decryptObjectPayload(verified *authn.Verified, meta store.Objec
 			return nil, err
 		}
 		objectARN := store.ObjectARN(meta.Bucket, meta.Key)
-		encCtx := s3SSEKMSEncryptionContext(objectARN, nil)
+		customerCtx, err := parseStoredS3CustomerEncryptionContext(meta.SSEKMSContextJSON)
+		if err != nil {
+			return nil, err
+		}
+		encCtx := s3SSEKMSEncryptionContext(objectARN, customerCtx)
 		if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, kmsKey, encCtx) {
 			return nil, errS3AccessDenied
 		}

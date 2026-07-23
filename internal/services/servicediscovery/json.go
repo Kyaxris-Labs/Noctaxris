@@ -8,14 +8,18 @@ import (
 
 // CreatePrivateDnsNamespaceJSON builds CreatePrivateDnsNamespace / CreateHttpNamespace response.
 func CreatePrivateDnsNamespaceJSON(n store.SDNamespace) ([]byte, error) {
+	ns := map[string]any{
+		"Id":   n.ID,
+		"Arn":  n.ARN,
+		"Name": n.Name,
+		"Type": n.Type,
+	}
+	if n.Vpc != "" {
+		ns["Vpc"] = n.Vpc
+	}
 	return json.Marshal(map[string]any{
 		"OperationId": "op-" + n.ID,
-		"Namespace": map[string]any{
-			"Id":   n.ID,
-			"Arn":  n.ARN,
-			"Name": n.Name,
-			"Type": n.Type,
-		},
+		"Namespace":   ns,
 	})
 }
 

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS transfer_servers (
   server_id TEXT NOT NULL,
   server_arn TEXT NOT NULL,
   protocols TEXT NOT NULL,
-  endpoint_type TEXT NOT NULL DEFAULT 'VPC',
+  endpoint_type TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL,
   identity_provider_type TEXT NOT NULL DEFAULT 'SERVICE_MANAGED',
   created_at INTEGER NOT NULL,
@@ -109,7 +109,7 @@ func (s *Store) CreateTransferServer(accountID, region string, protocols []strin
 	_, err := s.db.Exec(
 		`INSERT INTO transfer_servers
 		 (account_id, server_id, server_arn, protocols, endpoint_type, state, identity_provider_type, created_at)
-		VALUES (?, ?, ?, 'SFTP', 'VPC', 'OFFLINE', 'SERVICE_MANAGED', ?)`,
+		VALUES (?, ?, ?, 'SFTP', '', 'OFFLINE', 'SERVICE_MANAGED', ?)`,
 		accountID, id, arn, now,
 	)
 	if err != nil {
@@ -117,7 +117,7 @@ func (s *Store) CreateTransferServer(accountID, region string, protocols []strin
 	}
 	return TransferServer{
 		ServerID: id, ServerARN: arn, Protocols: "SFTP",
-		EndpointType: "VPC", State: "OFFLINE", IdentityProviderType: "SERVICE_MANAGED", CreatedAt: now,
+		EndpointType: "", State: "OFFLINE", IdentityProviderType: "SERVICE_MANAGED", CreatedAt: now,
 	}, nil
 }
 

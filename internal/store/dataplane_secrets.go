@@ -38,7 +38,7 @@ func (s *Store) EnsureDataPlaneMasterSecret(
 	if err != nil {
 		return "", err
 	}
-	sec, err := s.CreateSecret(accountID, region, name, secretString, nil, "", "Noctaxris nested data-plane master user")
+	sec, err := s.CreateSecret(accountID, region, name, secretString, nil, "", "Noctaxris nested data-plane master user", "")
 	if err == nil {
 		return sec.ARN, nil
 	}

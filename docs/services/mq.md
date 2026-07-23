@@ -38,6 +38,7 @@ DescribeBroker shows the stub endpoint and `CREATION_FAILED`. Do not expect a li
 
 ## Not yet / deferred
 
-- Nested DinD ActiveMQ or RabbitMQ broker
+- Nested DinD RabbitMQ (preferred) or ActiveMQ broker with CREATING→RUNNING status machine
+- Minimal AMQP lab smoke from a nested peer
 - Full broker admin APIs and public endpoints
 - MSK / Kafka (deferred product line)

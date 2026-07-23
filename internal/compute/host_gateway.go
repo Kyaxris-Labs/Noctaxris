@@ -6,8 +6,8 @@ import (
 )
 
 // EnvInjectHostGateway controls ExtraHosts host.docker.internal:host-gateway
-// injection into nested Lambda function containers. Set to "0" to omit (labs that
-// do not need in-function SDK calls to the host-published API).
+// injection into nested Lambda function containers. Default is off; set to "1" for
+// in-function SDK labs that call the host-published API.
 const EnvInjectHostGateway = "NOCTAXRIS_INJECT_HOST_GATEWAY"
 
 // EnvInjectECSHostGateway controls ExtraHosts injection for nested ECS / CodeBuild /
@@ -16,12 +16,13 @@ const EnvInjectHostGateway = "NOCTAXRIS_INJECT_HOST_GATEWAY"
 const EnvInjectECSHostGateway = "NOCTAXRIS_INJECT_ECS_HOST_GATEWAY"
 
 // hostGatewayExtraHosts returns ExtraHosts for Lambda DinD children, or nil when disabled.
+// Default is nil; opt in with NOCTAXRIS_INJECT_HOST_GATEWAY=1.
 func hostGatewayExtraHosts() []string {
 	v := strings.TrimSpace(os.Getenv(EnvInjectHostGateway))
-	if v == "0" || strings.EqualFold(v, "false") {
-		return nil
+	if v == "1" || strings.EqualFold(v, "true") {
+		return []string{"host.docker.internal:host-gateway"}
 	}
-	return []string{"host.docker.internal:host-gateway"}
+	return nil
 }
 
 // ecsHostGatewayExtraHosts returns ExtraHosts for ECS-path DinD children.

@@ -535,7 +535,7 @@ func TestKMSKeyPolicyDeny(t *testing.T) {
 	meta, _ := createOut["KeyMetadata"].(map[string]any)
 	keyID, _ := meta["KeyId"].(string)
 
-	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"kms:Encrypt","Resource":"*"}]}`
+	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"kms:Encrypt","Resource":"*"}]}`
 	putRec := mustKMSJSON(t, handler, "PutKeyPolicy", map[string]any{
 		"KeyId":      keyID,
 		"PolicyName": "default",
@@ -622,7 +622,7 @@ func TestS3BucketPolicyDenyGet(t *testing.T) {
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket", nil, "s3", now, nil)
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket/secret.txt", []byte("nope"), "s3", now, nil)
 
-	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`)
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"s3:GetObject","Resource":"*"}]}`)
 	polRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/deny-bucket?policy", policy, "s3", now, map[string]string{
 		"Content-Type": "application/json",
 	})

@@ -151,6 +151,11 @@ func (s *Server) sfnCreateStateMachine(
 			"State machine already exists.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrSFNRoleArnRequired) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrSFNInvalidDefinition) || (err != nil && strings.Contains(err.Error(), "InvalidDefinition")) {
 		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidDefinition",
 			err.Error(), readOnly, eventID, verified)

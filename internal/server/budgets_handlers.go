@@ -61,6 +61,17 @@ func budgetsAction(action string) string {
 	}
 }
 
+// budgetsBoundAccountID returns verified.AccountID and rejects foreign AccountId body overrides.
+func budgetsBoundAccountID(verified *authn.Verified, params map[string]any) (string, error) {
+	accountID := verified.AccountID
+	if aid, ok := params["AccountId"].(string); ok && strings.TrimSpace(aid) != "" {
+		if strings.TrimSpace(aid) != verified.AccountID {
+			return "", errors.New("AccountId must match the caller account")
+		}
+	}
+	return accountID, nil
+}
+
 func (s *Server) budgetsCreate(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -70,9 +81,11 @@ func (s *Server) budgetsCreate(
 			"User is not authorized to perform budgets:CreateBudget.", readOnly, eventID, verified)
 		return
 	}
-	accountID := verified.AccountID
-	if aid, ok := params["AccountId"].(string); ok && strings.TrimSpace(aid) != "" {
-		accountID = strings.TrimSpace(aid)
+	accountID, err := budgetsBoundAccountID(verified, params)
+	if err != nil {
+		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 	name, budgetType, timeUnit, amount, unit := "", "COST", "MONTHLY", "", "USD"
 	var notifications any
@@ -94,7 +107,7 @@ func (s *Server) budgetsCreate(
 	if n, ok := params["NotificationsWithSubscribers"]; ok {
 		notifications = n
 	}
-	_, err := s.store.CreateBudget(accountID, name, budgetType, timeUnit, amount, unit, notifications)
+	_, err = s.store.CreateBudget(accountID, name, budgetType, timeUnit, amount, unit, notifications)
 	if errors.Is(err, store.ErrBudgetExists) {
 		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "DuplicateRecordException",
 			"Budget already exists.", readOnly, eventID, verified)
@@ -119,9 +132,11 @@ func (s *Server) budgetsDescribe(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	accountID := verified.AccountID
-	if aid, ok := params["AccountId"].(string); ok && strings.TrimSpace(aid) != "" {
-		accountID = strings.TrimSpace(aid)
+	accountID, err := budgetsBoundAccountID(verified, params)
+	if err != nil {
+		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 	name, _ := params["BudgetName"].(string)
 	if !s.authorize(verified, catalog.ActionBudgetsDescribeBudget, "*") {
@@ -149,9 +164,11 @@ func (s *Server) budgetsDescribeMany(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	accountID := verified.AccountID
-	if aid, ok := params["AccountId"].(string); ok && strings.TrimSpace(aid) != "" {
-		accountID = strings.TrimSpace(aid)
+	accountID, err := budgetsBoundAccountID(verified, params)
+	if err != nil {
+		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 	if !s.authorize(verified, catalog.ActionBudgetsDescribeBudgets, "*") {
 		s.writeBudgetsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
@@ -173,9 +190,11 @@ func (s *Server) budgetsDelete(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	accountID := verified.AccountID
-	if aid, ok := params["AccountId"].(string); ok && strings.TrimSpace(aid) != "" {
-		accountID = strings.TrimSpace(aid)
+	accountID, err := budgetsBoundAccountID(verified, params)
+	if err != nil {
+		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 	name, _ := params["BudgetName"].(string)
 	if !s.authorize(verified, catalog.ActionBudgetsDeleteBudget, "*") {
@@ -183,7 +202,7 @@ func (s *Server) budgetsDelete(
 			"User is not authorized to perform budgets:DeleteBudget.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.DeleteBudget(accountID, name)
+	err = s.store.DeleteBudget(accountID, name)
 	if errors.Is(err, store.ErrBudgetNotFound) {
 		s.writeBudgetsError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 			"Budget not found.", readOnly, eventID, verified)

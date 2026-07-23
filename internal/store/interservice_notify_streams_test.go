@@ -71,7 +71,7 @@ func TestDynamoStreamsEventSourceMappingPoll(t *testing.T) {
 		t.Fatal(err)
 	}
 	invoked := false
-	if err := st.PollEventSourceMappingOnce(m.UUID, func(acct, name, eventJSON string) error {
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(acct, name, _, eventJSON string) (string, error) {
 		invoked = true
 		if acct != account || name != fn.FunctionName {
 			t.Fatalf("invoke acct=%s name=%s", acct, name)
@@ -82,7 +82,7 @@ func TestDynamoStreamsEventSourceMappingPoll(t *testing.T) {
 		if !strings.Contains(eventJSON, streamARN) || !strings.Contains(eventJSON, "INSERT") {
 			t.Fatalf("event=%s", eventJSON)
 		}
-		return nil
+		return "", nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,9 +91,9 @@ func TestDynamoStreamsEventSourceMappingPoll(t *testing.T) {
 	}
 	// Second poll should not redeliver (cursor advanced).
 	invoked = false
-	if err := st.PollEventSourceMappingOnce(m.UUID, func(string, string, string) error {
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
 		invoked = true
-		return nil
+		return "", nil
 	}); err != nil {
 		t.Fatal(err)
 	}

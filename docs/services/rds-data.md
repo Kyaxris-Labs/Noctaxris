@@ -12,15 +12,19 @@ HTTPS Data API on `:4566` for `ExecuteStatement`. Requires `resourceArn` (RDS DB
 | Authz | Identity `EvaluateFull` on `rds-data:*` |
 | Secrets | Rejects missing or mismatched `secretArn` (fail closed) |
 | Unavailable | No nested Postgres → `DatabaseUnavailableException` (no canned SELECT success) |
+| Result shape | SELECT cells as `stringValue` / `VARCHAR`; DML uses parsed command-tag update counts when present |
+| Parameters | Request field parsed; rejected until optional wire-protocol executor is enabled |
 
-### Nested SQL
+### Nested SQL (default path)
 
 | Condition | Result | Marker in `formattedRecords` |
 |-----------|--------|------------------------------|
 | DinD up and CreateDBInstance started nested Postgres (`available` + container) | Real SQL via `psql` **inside** the nested container (Docker exec; no host DB port) | `noctaxrisExecutor=nested-psql` |
 | No DinD / instance still `creating` / empty container | `DatabaseUnavailableException` | n/a |
 
-There is no `pgx` (or other Postgres wire driver) in `go.mod`. Nested SQL reuses the existing DinD TLS client. Unit tests may inject a stub executor; production paths do not fake SELECT success.
+Default executor is nested `psql`. There is no `pgx` (or other Postgres wire driver) in `go.mod`. Nested SQL reuses the existing DinD TLS client. Unit tests may inject a stub executor; production paths do not fake SELECT success.
+
+`parameters` / bind variables need a wire-protocol executor. Until that optional dependency is approved and linked, ExecuteStatement with a non-empty `parameters` array returns `BadRequestException`. Nested-psql remains VARCHAR-only for SELECT cells.
 
 ## How to verify / CLI smoke
 
@@ -40,7 +44,7 @@ When Compose includes `noctaxris-engine` and the instance reaches `available` wi
 
 ## Not yet / deferred
 
-- Wire-protocol `pgx` executor (needs explicit dependency buy-in)
+- Wire-protocol `pgx` executor (typed OID field mapping + bind parameters; needs explicit dependency buy-in; reserved flag `NOCTAXRIS_RDS_DATA_PGX` does nothing until then)
 - `BatchExecuteStatement`, `ExecuteSql` legacy
 - Full result type matrix and `formatRecordsAs=JSON`
 - Real SQL transactions (`BeginTransaction` / `CommitTransaction` / `RollbackTransaction` return 501)

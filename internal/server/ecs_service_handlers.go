@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,17 +79,29 @@ func (s *Server) reconcileECSService(accountID, region string, svc store.ECSServ
 		if err != nil {
 			return
 		}
+		// Fail closed when task-def roles diverge from roles PassRole'd at Create/Update.
+		if !ecsServiceRolesPassRoleMatch(svc, td) {
+			return
+		}
 		task, err := s.store.RunServiceTask(accountID, region, svc.ClusterName, svc.ServiceName, td.ARN)
 		if err != nil {
 			return
 		}
-		if err := s.executeECSTask(context.Background(), accountID, region, svc.ClusterName, td, td.TaskRoleARN, task.TaskARN); err != nil {
+		if err := s.executeECSTask(context.Background(), accountID, region, svc.ClusterName, td, td.TaskRoleARN, td.ExecutionRoleARN, task.TaskARN); err != nil {
 			_ = s.store.DeleteTask(accountID, task.TaskARN)
 			// Without DinD, leave runningCount below desired (lab-safe).
 			return
 		}
 		running++
 	}
+}
+
+func ecsServiceRolesPassRoleMatch(svc store.ECSService, td store.ECSTaskDefinition) bool {
+	if strings.TrimSpace(svc.PassedTaskRoleARN) == "" || strings.TrimSpace(svc.PassedExecutionRoleARN) == "" {
+		return false
+	}
+	return strings.TrimSpace(svc.PassedTaskRoleARN) == strings.TrimSpace(td.TaskRoleARN) &&
+		strings.TrimSpace(svc.PassedExecutionRoleARN) == strings.TrimSpace(td.ExecutionRoleARN)
 }
 
 func (s *Server) ecsCreateService(
@@ -118,11 +131,34 @@ func (s *Server) ecsCreateService(
 			"User is not authorized to perform ecs:CreateService.", readOnly, eventID, verified)
 		return
 	}
+	td, err := s.resolveTaskDefinition(verified.AccountID, taskDef)
+	if errors.Is(err, store.ErrECSTaskDefinitionNotFound) {
+		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "ClientException",
+			"task definition not found", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to resolve task definition.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.checkECSPassRole(verified, td.TaskRoleARN, ""); err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err := s.checkECSPassRole(verified, td.ExecutionRoleARN, ""); err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	svc, err := s.store.CreateService(verified.AccountID, region, store.CreateServiceInput{
-		Cluster:        cluster,
-		ServiceName:    serviceName,
-		TaskDefinition: taskDef,
-		DesiredCount:   desired,
+		Cluster:               cluster,
+		ServiceName:           serviceName,
+		TaskDefinition:        taskDef,
+		DesiredCount:          desired,
+		PassedTaskRoleARN:     td.TaskRoleARN,
+		PassedExecutionRoleARN: td.ExecutionRoleARN,
 	})
 	if errors.Is(err, store.ErrECSServiceAlreadyExists) {
 		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
@@ -178,8 +214,8 @@ func (s *Server) ecsUpdateService(
 		Cluster: cluster,
 		Service: serviceName,
 	}
-	if td, ok := params["taskDefinition"].(string); ok {
-		in.TaskDefinition = td
+	if tdRef, ok := params["taskDefinition"].(string); ok {
+		in.TaskDefinition = tdRef
 	}
 	if raw, ok := params["desiredCount"]; ok {
 		switch v := raw.(type) {
@@ -189,6 +225,48 @@ func (s *Server) ecsUpdateService(
 		case int:
 			in.DesiredCount = &v
 		}
+	}
+	cur, err := s.store.GetService(verified.AccountID, cluster, serviceName)
+	if errors.Is(err, store.ErrECSServiceNotFound) {
+		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "ServiceNotFoundException",
+			"Service not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load service.", readOnly, eventID, verified)
+		return
+	}
+	targetTDRef := cur.TaskDefinition
+	if strings.TrimSpace(in.TaskDefinition) != "" {
+		targetTDRef = in.TaskDefinition
+	}
+	needPassRole := strings.TrimSpace(in.TaskDefinition) != "" ||
+		(in.DesiredCount != nil && *in.DesiredCount > 0)
+	if needPassRole {
+		td, resolveErr := s.resolveTaskDefinition(verified.AccountID, targetTDRef)
+		if errors.Is(resolveErr, store.ErrECSTaskDefinitionNotFound) {
+			s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "ClientException",
+				"task definition not found", readOnly, eventID, verified)
+			return
+		}
+		if resolveErr != nil {
+			s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to resolve task definition.", readOnly, eventID, verified)
+			return
+		}
+		if err := s.checkECSPassRole(verified, td.TaskRoleARN, ""); err != nil {
+			s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		if err := s.checkECSPassRole(verified, td.ExecutionRoleARN, ""); err != nil {
+			s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		in.PassedTaskRoleARN = td.TaskRoleARN
+		in.PassedExecutionRoleARN = td.ExecutionRoleARN
 	}
 	svc, err := s.store.UpdateService(verified.AccountID, region, in)
 	if errors.Is(err, store.ErrECSServiceNotFound) {

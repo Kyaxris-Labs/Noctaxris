@@ -66,7 +66,8 @@ func (s *Store) PutEventBusPolicy(accountID, busName, policyJSON string) error {
 }
 
 // PutEventBusPermission appends an Allow statement for events:PutEvents (lab PutPermission).
-func (s *Store) PutEventBusPermission(accountID, busName, statementID, principal string, actions []string) error {
+// Optional condition is an IAM Condition object (e.g. StringEquals aws:SourceAccount).
+func (s *Store) PutEventBusPermission(accountID, busName, statementID, principal string, actions []string, condition map[string]any) error {
 	bus, err := s.DescribeEventBus(accountID, busName)
 	if err != nil {
 		return err
@@ -80,7 +81,7 @@ func (s *Store) PutEventBusPermission(accountID, busName, statementID, principal
 		actions = []string{"events:PutEvents"}
 	}
 	doc := map[string]any{
-		"Version": "2012-10-17",
+		"Version":   "2012-10-17",
 		"Statement": []any{},
 	}
 	if strings.TrimSpace(bus.Policy) != "" {
@@ -108,13 +109,17 @@ func (s *Store) PutEventBusPermission(accountID, busName, statementID, principal
 	if len(actions) == 1 {
 		actionVal = actions[0]
 	}
-	stmts = append(stmts, map[string]any{
+	stmt := map[string]any{
 		"Sid":       statementID,
 		"Effect":    "Allow",
 		"Principal": principalObj,
 		"Action":    actionVal,
 		"Resource":  bus.ARN,
-	})
+	}
+	if len(condition) > 0 {
+		stmt["Condition"] = condition
+	}
+	stmts = append(stmts, stmt)
 	doc["Statement"] = stmts
 	raw, err := json.Marshal(doc)
 	if err != nil {

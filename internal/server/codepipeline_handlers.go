@@ -244,7 +244,7 @@ func (s *Server) cpStartExecution(
 			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
 			return b.ID, store.CodeBuildStatusFailed, errors.New("compute unavailable")
 		}
-		if err := s.executeCodeBuild(r.Context(), verified.AccountID, b); err != nil {
+		if err := s.startCodeBuildContainer(r.Context(), verified.AccountID, b); err != nil {
 			end := time.Now().UTC().Format(time.RFC3339)
 			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
 			return b.ID, store.CodeBuildStatusFailed, err

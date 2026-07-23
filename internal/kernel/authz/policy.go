@@ -180,7 +180,7 @@ func statementMatches(st statement, ctx RequestContext) (matches bool, catalogUn
 	if !effect {
 		return false, false
 	}
-	// Resource-based statements include Principal. Identity statements omit it.
+	// Identity statements omit Principal. Resource-based docs use resourceStatementMatches.
 	if st.Principal != nil && !principalMatches(*st.Principal, ctx.Principal) {
 		return false, false
 	}
@@ -193,6 +193,59 @@ func statementMatches(st statement, ctx RequestContext) (matches bool, catalogUn
 	switch conditionApplies(st.Condition, keys) {
 	case condMatch:
 		return true, false
+	case condCatalogUnknown:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// ValidateResourcePolicyDocument requires every statement to name a Principal.
+// Identity policies must not use this helper (Principal remains optional there).
+func ValidateResourcePolicyDocument(raw string) error {
+	doc, err := parsePolicyDocument(raw)
+	if err != nil {
+		return fmt.Errorf("malformed policy document: %w", err)
+	}
+	if len(doc.Statement) == 0 {
+		return fmt.Errorf("policy document must include at least one Statement")
+	}
+	for i, st := range doc.Statement {
+		if st.Principal == nil {
+			return fmt.Errorf("statement %d: Principal is required on resource-based policies", i)
+		}
+	}
+	return nil
+}
+
+// resourceStatementMatches evaluates a resource-based policy statement
+// (KMS key policy, S3/Secrets/DynamoDB/ECR). Missing Principal is match-none.
+func resourceStatementMatches(st statement, ctx RequestContext) (matches bool, catalogUnknown bool) {
+	keys := ctx.ConditionKeys
+	if keys == nil {
+		keys = map[string]string{}
+	}
+	if conditionCatalogUnknown(st.Condition) {
+		return false, true
+	}
+	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
+	if !effect {
+		return false, false
+	}
+	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
+		return false, false
+	}
+	if !actionsMatch(st.Action, ctx.Action) {
+		return false, false
+	}
+	if !resourcesMatch(st.Resource, ctx.Resource) {
+		return false, false
+	}
+	switch conditionApplies(st.Condition, keys) {
+	case condMatch:
+		return true, false
+	case condCatalogUnknown:
+		return false, true
 	default:
 		return false, false
 	}
@@ -225,6 +278,8 @@ func trustStatementMatches(st statement, ctx RequestContext) (matches bool, cata
 	switch conditionApplies(st.Condition, keys) {
 	case condMatch:
 		return true, false
+	case condCatalogUnknown:
+		return false, true
 	default:
 		return false, false
 	}

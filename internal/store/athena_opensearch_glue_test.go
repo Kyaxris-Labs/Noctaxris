@@ -78,6 +78,78 @@ func TestAthenaUnsupportedSQLFails(t *testing.T) {
 	}
 }
 
+func TestAthenaOutputLocationWriteFails(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "athena-src"); err != nil {
+		t.Fatal(err)
+	}
+	csv := "id\n1\n"
+	if _, err := st.PutObject(account, "athena-src", "data/t.csv", store.PutObjectMeta{
+		Data: []byte(csv), PlainSize: int64(len(csv)), ContentType: "text/csv",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateGlueDatabase(account, "odb", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateGlueTable(account, store.GlueTableCreate{
+		DatabaseName: "odb", Name: "t", StorageLocation: "s3://athena-src/data/",
+		Columns: []store.GlueColumn{{Name: "id", Type: "string"}},
+		SerDeInfo: store.GlueSerDeInfo{
+			SerializationLibrary: "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+			Parameters:           map[string]string{"field.delim": ","},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString:    "SELECT id FROM odb.t LIMIT 10",
+		Database:       "odb",
+		OutputLocation: "s3://missing-results-bucket/out/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "FAILED" || !strings.Contains(exec.StateChangeReason, "OutputLocation") {
+		t.Fatalf("want OutputLocation FAILED, got %#v", exec)
+	}
+}
+
+func TestAthenaEmptyPrefixHeaderOnlySucceeded(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "athena-empty"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateGlueDatabase(account, "edb", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateGlueTable(account, store.GlueTableCreate{
+		DatabaseName: "edb", Name: "empty", StorageLocation: "s3://athena-empty/no-objects/",
+		Columns: []store.GlueColumn{{Name: "id", Type: "string"}},
+		SerDeInfo: store.GlueSerDeInfo{
+			SerializationLibrary: "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+			Parameters:           map[string]string{"field.delim": ","},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT id FROM edb.empty LIMIT 10",
+		Database:    "edb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("empty prefix should SUCCEEDED header-only, got %#v", exec)
+	}
+	if len(exec.ResultRows) != 1 || exec.ResultRows[0][0] != "id" {
+		t.Fatalf("want header-only rows, got %#v", exec.ResultRows)
+	}
+}
+
 func TestAthenaMissingTableFails(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
@@ -142,9 +214,15 @@ func TestOpenSearchDomainCRUD(t *testing.T) {
 	if !strings.HasPrefix(d.StubEndpoint, "stub://127.0.0.1/opensearch/") {
 		t.Fatalf("endpoint=%s", d.StubEndpoint)
 	}
+	if d.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
+		t.Fatalf("stub domain status=%q want %q (never Active without nested engine)", d.DomainStatus, store.OpenSearchDomainStatusCreateFailed)
+	}
 	got, err := st.DescribeOpenSearchDomain(account, "lab-domain")
 	if err != nil || got.DomainName != "lab-domain" {
 		t.Fatalf("describe: %v %#v", err, got)
+	}
+	if got.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
+		t.Fatalf("describe status=%q want %q", got.DomainStatus, store.OpenSearchDomainStatusCreateFailed)
 	}
 	list, err := st.ListOpenSearchDomainNames(account)
 	if err != nil || len(list) != 1 {

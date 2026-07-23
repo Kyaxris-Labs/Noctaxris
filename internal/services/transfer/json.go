@@ -13,16 +13,18 @@ func CreateServerJSON(sv store.TransferServer) ([]byte, error) {
 
 // DescribeServerJSON builds a DescribeServer success body.
 func DescribeServerJSON(sv store.TransferServer) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"Server": map[string]any{
-			"Arn":                  sv.ServerARN,
-			"ServerId":             sv.ServerID,
-			"State":                sv.State,
-			"EndpointType":         sv.EndpointType,
-			"IdentityProviderType": sv.IdentityProviderType,
-			"Protocols":            []string{"SFTP"},
-		},
-	})
+	server := map[string]any{
+		"Arn":                  sv.ServerARN,
+		"ServerId":             sv.ServerID,
+		"State":                sv.State,
+		"IdentityProviderType": sv.IdentityProviderType,
+		"Protocols":            []string{"SFTP"},
+	}
+	// Omit EndpointType until a real listener exists (no VPC theatre).
+	if sv.EndpointType != "" {
+		server["EndpointType"] = sv.EndpointType
+	}
+	return json.Marshal(map[string]any{"Server": server})
 }
 
 // ListServersJSON builds a ListServers success body.

@@ -14,7 +14,7 @@ func TestAllowImagePullLabAndPinned(t *testing.T) {
 		store.LabRegistryHost + "/000000000001/repo:tag",
 		"host.docker.internal:4566/000000000001/repo:tag",
 		"public.ecr.aws/lambda/python:3.12",
-		"public.ecr.aws/lambda/python:3.12-v2",
+		"public.ecr.aws/lambda/python@sha256:" + strings.Repeat("a", 64),
 		"alpine:3.20",
 		"postgres:16-alpine",
 	}
@@ -56,5 +56,13 @@ func TestValidateECSRunOptsRejectsForeignImage(t *testing.T) {
 	err := compute.ValidateECSRunOpts(compute.ECSRunOpts{ImageURI: "attacker.example/x:1"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestAllowImagePullRejectsUnpinnedLambdaTagVariant(t *testing.T) {
+	t.Parallel()
+	err := compute.AllowImagePull("public.ecr.aws/lambda/python:3.12-v2")
+	if err == nil {
+		t.Fatal("expected reject for unpinned tag variant")
 	}
 }

@@ -24,6 +24,13 @@ type ECSRunOpts struct {
 	EndpointURL string
 	// MemoryMB is the optional Docker memory limit in megabytes (0 = engine default).
 	MemoryMB int
+	// LabRegistryPull requests an authenticated pull via PullLabRegistryImage (lab ECR).
+	// When true, RunECSTask does not fall back to an unauthenticated pullImage.
+	LabRegistryPull bool
+	// RegistryUsername is the Docker registry username (lab: "AWS").
+	RegistryUsername string
+	// RegistryPassword is the lab ECR authorization token password.
+	RegistryPassword string
 }
 
 // ValidateECSRunOpts checks required fields without talking to Docker.
@@ -31,7 +38,13 @@ func ValidateECSRunOpts(opts ECSRunOpts) error {
 	if strings.TrimSpace(opts.ImageURI) == "" {
 		return fmt.Errorf("compute: ImageURI is required")
 	}
-	return AllowImagePull(opts.ImageURI)
+	if err := AllowImagePull(opts.ImageURI); err != nil {
+		return err
+	}
+	return RequireLabRegistryCreds(opts.LabRegistryPull, LabRegistryPullCreds{
+		Username: opts.RegistryUsername,
+		Password: opts.RegistryPassword,
+	})
 }
 
 // EnsureECSNetwork creates (or reuses) an Internal Docker network for ECS tasks.
@@ -53,7 +66,11 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	if _, err := c.EnsureECSNetwork(ctx); err != nil {
 		return "", err
 	}
-	if err := c.pullImage(ctx, opts.ImageURI); err != nil {
+	if opts.LabRegistryPull {
+		if err := c.PullLabRegistryImage(ctx, opts.ImageURI, opts.RegistryUsername, opts.RegistryPassword); err != nil {
+			return "", fmt.Errorf("compute: pull lab registry image %s: %w", opts.ImageURI, err)
+		}
+	} else if err := c.pullImage(ctx, opts.ImageURI); err != nil {
 		return "", fmt.Errorf("compute: pull image %s: %w", opts.ImageURI, err)
 	}
 
@@ -78,14 +95,7 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	}
 
 	name := "noctaxris-ecs-" + uuid.NewString()
-	sec := nestedTaskSecurity(opts.MemoryMB)
-	hostConfig := &container.HostConfig{
-		AutoRemove:  false,
-		NetworkMode: container.NetworkMode(ECSNetworkName),
-		ExtraHosts:  ecsHostGatewayExtraHosts(),
-		CapDrop:     sec.CapDrop,
-		Resources:   container.Resources{Memory: sec.Memory},
-	}
+	hostConfig := ecsTaskHostConfig(opts.MemoryMB)
 	cfg := &container.Config{
 		Image: opts.ImageURI,
 		Env:   env,

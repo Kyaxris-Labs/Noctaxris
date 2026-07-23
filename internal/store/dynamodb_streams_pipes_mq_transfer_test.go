@@ -144,9 +144,15 @@ func TestMQBrokerStubCRUD(t *testing.T) {
 	if b.BrokerID == "" || b.StubEndpoint == "" || !stringsHasPrefix(b.StubEndpoint, "stub://127.0.0.1/") {
 		t.Fatalf("broker=%+v", b)
 	}
+	if b.BrokerState != "CREATION_FAILED" {
+		t.Fatalf("stub broker state=%q want CREATION_FAILED (no nested broker)", b.BrokerState)
+	}
 	got, err := st.DescribeMQBroker(account, b.BrokerID)
 	if err != nil || got.BrokerName != "lab-broker" {
 		t.Fatalf("describe=%+v err=%v", got, err)
+	}
+	if got.BrokerState != "CREATION_FAILED" {
+		t.Fatalf("describe state=%q want CREATION_FAILED", got.BrokerState)
 	}
 	list, err := st.ListMQBrokers(account)
 	if err != nil || len(list) != 1 {
@@ -164,8 +170,8 @@ func TestTransferServerUserSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sv.EndpointType != "VPC" || sv.State != "OFFLINE" {
-		t.Fatalf("want VPC/OFFLINE without listener, got EndpointType=%q State=%q", sv.EndpointType, sv.State)
+	if sv.EndpointType != "" || sv.State != "OFFLINE" {
+		t.Fatalf("want empty EndpointType/OFFLINE without listener, got EndpointType=%q State=%q", sv.EndpointType, sv.State)
 	}
 	u, err := st.CreateTransferUser(account, sv.ServerID, "alice", "/alice", "")
 	if err != nil || u.UserName != "alice" {

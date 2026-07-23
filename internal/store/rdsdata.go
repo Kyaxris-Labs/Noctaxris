@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS rds_data_transactions (
 );
 `
 
+// RDSDataSqlParameter is one ExecuteStatement bind parameter (lab subset).
+// Wire binding requires an optional pgx executor after dependency buy-in;
+// nested-psql rejects non-empty Parameters.
+type RDSDataSqlParameter struct {
+	Name         string
+	StringValue  *string
+	LongValue    *int64
+	DoubleValue  *float64
+	BooleanValue *bool
+	IsNull       *bool
+}
+
 // RDSDataExecuteRequest is the Data API ExecuteStatement input (lab subset).
 type RDSDataExecuteRequest struct {
 	ResourceARN   string
@@ -51,6 +63,7 @@ type RDSDataExecuteRequest struct {
 	Database      string
 	SQL           string
 	TransactionID string
+	Parameters    []RDSDataSqlParameter
 }
 
 // RDSDataField is one cell in an AWS Data API records array.
@@ -78,6 +91,8 @@ type RDSDataExecuteResult struct {
 }
 
 // RDSDataExecutor runs SQL against a nested engine (or a stub).
+// Implementations return typed column metadata, records, and NumberOfRecordsUpdated
+// when they can; nested-psql maps SELECT cells as VARCHAR strings only.
 type RDSDataExecutor interface {
 	Execute(req RDSDataExecuteRequest) (RDSDataExecuteResult, error)
 }
@@ -85,7 +100,7 @@ type RDSDataExecutor interface {
 // StubRDSDataExecutor records statements and returns canned SELECT-shaped results.
 // Only used when tests inject SetRDSDataExecutor. Production ExecuteStatement fails
 // closed with DatabaseUnavailableException when no nested Postgres container exists.
-// Live SQL against nested Postgres uses DinD exec + psql (no pgx / go.mod driver).
+// Live SQL against nested Postgres uses DinD exec + psql (no pgx until buy-in).
 type StubRDSDataExecutor struct {
 	mu         sync.Mutex
 	Statements []RDSDataExecuteRequest

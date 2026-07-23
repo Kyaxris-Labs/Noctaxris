@@ -21,6 +21,8 @@ func TestSmokeNestedScriptPresent(t *testing.T) {
 		"execute-statement",
 		"nested-psql",
 		"lambda invoke",
+		"package-type",
+		"run-task",
 	} {
 		if !strings.Contains(strings.ToLower(content), strings.ToLower(needle)) {
 			t.Fatalf("smoke-nested.sh missing %q", needle)
@@ -48,8 +50,12 @@ func TestComposePublishesLocalhostOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "127.0.0.1:4566") {
-		t.Fatal("compose must publish 127.0.0.1:4566")
+	// Default bind is loopback; NOCTAXRIS_PUBLISH_ADDR may override for host-gateway labs.
+	if !strings.Contains(string(b), "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566") {
+		t.Fatal("compose must default-publish 127.0.0.1:4566 via NOCTAXRIS_PUBLISH_ADDR")
+	}
+	if strings.Contains(string(b), `"0.0.0.0:4566:4566"`) || strings.Contains(string(b), `- "4566:4566"`) {
+		t.Fatal("default compose must not hardcode non-loopback host publish")
 	}
 }
 
@@ -106,6 +112,16 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 	}
 	if !strings.Contains(string(overlay), `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"`) {
 		t.Fatal("compose.lab-open.yaml must opt in NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1")
+	}
+	hg, err := os.ReadFile("compose.lab-host-gateway.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(hg), `NOCTAXRIS_INJECT_HOST_GATEWAY: "1"`) {
+		t.Fatal("compose.lab-host-gateway.yaml must opt in NOCTAXRIS_INJECT_HOST_GATEWAY=1")
+	}
+	if strings.Contains(noctaxris, `NOCTAXRIS_INJECT_HOST_GATEWAY: "1"`) {
+		t.Fatal("default Compose must not hardcode NOCTAXRIS_INJECT_HOST_GATEWAY=1")
 	}
 }
 
@@ -177,8 +193,11 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	if !strings.Contains(noctaxris, "noctaxris-compute:/var/lib/noctaxris/lambda") {
 		t.Fatal("noctaxris must mount noctaxris-compute for Lambda code shared with DinD")
 	}
-	if !strings.Contains(engine, "noctaxris-compute:/var/lib/noctaxris/lambda") {
-		t.Fatal("noctaxris-engine must mount noctaxris-compute for task code")
+	if !strings.Contains(engine, "noctaxris-compute:/var/lib/noctaxris/lambda:ro") {
+		t.Fatal("noctaxris-engine must mount noctaxris-compute read-only for code integrity")
+	}
+	if engineMountIsReadWrite(engine, "noctaxris-compute:/var/lib/noctaxris/lambda") {
+		t.Fatal("noctaxris-engine noctaxris-compute mount must not be read-write")
 	}
 	if strings.Contains(engine, "noctaxris-data:") {
 		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose master.key to privileged DinD)")
@@ -192,6 +211,64 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	if !strings.Contains(noctaxris, "noctaxris-compute-init:") ||
 		!strings.Contains(noctaxris, "service_completed_successfully") {
 		t.Fatal("noctaxris must wait for noctaxris-compute-init to finish before start")
+	}
+	if !strings.Contains(engine, "noctaxris-compute-init:") ||
+		!strings.Contains(engine, "service_completed_successfully") {
+		t.Fatal("noctaxris-engine must wait for noctaxris-compute-init before start")
+	}
+}
+
+func TestComposeEngineDefaultStillPrivileged(t *testing.T) {
+	// Soft residual lock: default compose keeps privileged DinD until the
+	// restricted overlay is proven by nested smoke. When default drops
+	// privileged: true, flip this test to require the restricted path instead.
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := serviceBlock(string(b), "noctaxris-engine")
+	if !strings.Contains(engine, "privileged: true") {
+		t.Skip("default engine is no longer privileged; update residual docs and drop this skip")
+	}
+	overlay, err := os.ReadFile("compose.engine-restricted.yaml")
+	if err != nil {
+		t.Fatal("compose.engine-restricted.yaml must exist for deprivilege experiments:", err)
+	}
+	ovEngine := serviceBlock(string(overlay), "noctaxris-engine")
+	if ovEngine == "" {
+		t.Fatal("compose.engine-restricted.yaml must override noctaxris-engine")
+	}
+	for _, line := range strings.Split(ovEngine, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if idx := strings.Index(trimmed, " #"); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if trimmed == "privileged: true" {
+			t.Fatal("compose.engine-restricted.yaml must not set privileged: true")
+		}
+	}
+	if !strings.Contains(ovEngine, "privileged: false") {
+		t.Fatal("compose.engine-restricted.yaml must set privileged: false")
+	}
+	if !strings.Contains(ovEngine, "cap_add:") {
+		t.Fatal("compose.engine-restricted.yaml must declare cap_add for restricted DinD")
+	}
+}
+
+func TestComposePinsEngineAndInitImages(t *testing.T) {
+	b, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(b)
+	if !strings.Contains(content, "docker:27-dind@sha256:") {
+		t.Fatal("noctaxris-engine image must be pinned by digest")
+	}
+	if !strings.Contains(content, "busybox:1.36@sha256:") {
+		t.Fatal("noctaxris-compute-init image must be pinned by digest")
 	}
 }
 
@@ -214,6 +291,34 @@ func TestComposeDependsOnEngineHealthy(t *testing.T) {
 	if !strings.Contains(engine, "healthcheck:") {
 		t.Fatal("noctaxris-engine must define a healthcheck")
 	}
+}
+
+// engineMountIsReadWrite reports a non-comment volume list item that mounts
+// the given source:dest path without a :ro (or :ro,) suffix.
+func engineMountIsReadWrite(engineBlock, sourceDest string) bool {
+	for _, line := range strings.Split(engineBlock, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if idx := strings.Index(trimmed, " #"); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if !strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if rest == sourceDest {
+			return true
+		}
+		if strings.HasPrefix(rest, sourceDest+":") {
+			mode := strings.TrimPrefix(rest, sourceDest+":")
+			if mode == "" || mode == "rw" || strings.HasPrefix(mode, "rw,") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasDockerSockVolumeEntry reports a non-comment YAML volume list item that

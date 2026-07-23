@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -136,6 +137,7 @@ func (s *Server) secretsAuthorizeKMS(
 	verified *authn.Verified,
 	readOnly bool,
 	accountID, keyIDOrAlias, kmsAction string,
+	encCtx map[string]string,
 ) bool {
 	keyID, err := s.store.ResolveSecretsManagerKeyID(accountID, keyIDOrAlias)
 	if err != nil {
@@ -149,7 +151,7 @@ func (s *Server) secretsAuthorizeKMS(
 			"Invalid KmsKeyId.", readOnly, eventID, verified)
 		return false
 	}
-	if !s.authorizeKMSOp(verified, kmsAction, key, nil) {
+	if !s.authorizeKMSOp(verified, kmsAction, key, encCtx) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+kmsAction+" on the secret KMS key.", readOnly, eventID, verified)
 		return false
@@ -238,20 +240,27 @@ func (s *Server) secretsCreateSecret(
 	description, _ := params["Description"].(string)
 	hasValue := secretString != "" || len(secretBinary) > 0
 
-	arn := store.SecretARN(s.secretsRegion(verified), verified.AccountID, name, "000000")
+	suffix, err := store.NewSecretARNSuffix()
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to create secret.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.SecretARN(s.secretsRegion(verified), verified.AccountID, name, suffix)
 	if !s.authorize(verified, catalog.ActionSecretsCreateSecret, arn) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
 		return
 	}
 	if hasValue {
-		if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, verified.AccountID, keyID, catalog.ActionKMSEncrypt) {
+		encCtx := store.SecretsEncryptionContext(arn, "1")
+		if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, verified.AccountID, keyID, catalog.ActionKMSEncrypt, encCtx) {
 			return
 		}
 	}
 
 	sec, err := s.store.CreateSecret(
-		verified.AccountID, s.secretsRegion(verified), name, secretString, secretBinary, keyID, description,
+		verified.AccountID, s.secretsRegion(verified), name, secretString, secretBinary, keyID, description, suffix,
 	)
 	if errors.Is(err, store.ErrSecretAlreadyExists) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceExistsException",
@@ -293,7 +302,8 @@ func (s *Server) secretsGetSecretValue(
 			"User is not authorized to perform secretsmanager:GetSecretValue.", readOnly, eventID, verified)
 		return
 	}
-	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSDecrypt) {
+	encCtx := store.SecretsEncryptionContext(meta.ARN, meta.VersionID)
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSDecrypt, encCtx) {
 		return
 	}
 
@@ -343,7 +353,9 @@ func (s *Server) secretsPutSecretValue(
 			"User is not authorized to perform secretsmanager:PutSecretValue.", readOnly, eventID, verified)
 		return
 	}
-	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt) {
+	nextVersionID := fmt.Sprintf("%d", meta.Version+1)
+	encCtx := store.SecretsEncryptionContext(meta.ARN, nextVersionID)
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt, encCtx) {
 		return
 	}
 
@@ -497,7 +509,9 @@ func (s *Server) secretsRotateSecret(
 			"User is not authorized to perform secretsmanager:RotateSecret.", readOnly, eventID, verified)
 		return
 	}
-	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt) {
+	nextVersionID := fmt.Sprintf("%d", meta.Version+1)
+	encCtx := store.SecretsEncryptionContext(meta.ARN, nextVersionID)
+	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt, encCtx) {
 		return
 	}
 	sec, err := s.store.RotateSecret(secretAccountID, secretID)
@@ -619,6 +633,11 @@ func (s *Server) secretsPutResourcePolicy(
 	if strings.TrimSpace(policy) == "" {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"ResourcePolicy is required.", readOnly, eventID, verified)
+		return
+	}
+	if err := authz.ValidateResourcePolicyDocument(policy); err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "MalformedPolicyDocumentException",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if err := s.store.PutSecretResourcePolicy(secretAccountID, secretID, policy); err != nil {

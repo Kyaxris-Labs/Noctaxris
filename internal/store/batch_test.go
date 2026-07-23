@@ -67,7 +67,7 @@ func TestBatchComputeQueueDefinitionJobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Status != store.BatchJobStatusRunning || gotJD.ARN != jd.ARN {
+	if job.Status != store.BatchJobStatusSubmitted || gotJD.ARN != jd.ARN {
 		t.Fatalf("job=%+v jd=%+v", job, gotJD)
 	}
 	if err := st.SetBatchJobRuntime(account, job.JobID, "cid", store.BatchJobStatusSucceeded, "2026-01-01T00:00:00Z"); err != nil {

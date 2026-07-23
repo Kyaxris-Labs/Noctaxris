@@ -6,7 +6,7 @@ Durable single-host lab ops for Noctaxris. This is not a multi-tenant HA guide.
 
 Run **one** Noctaxris API process against a given data root (Compose named volume or host path). Do not scale replicas against the same `state.db`. Multi-instance access is unsupported and can corrupt SQLite state. WAL is off by default; `busy_timeout=5000` applies on every connection. In-process workers (Scheduler, ESM pollers, Pipes ticker) assume a single API process.
 
-Compose already mounts API state (`noctaxris-data`) separately from Lambda code shared with DinD (`noctaxris-compute`). `noctaxris-compute-init` chowns the compute volume to UID `65532` before the API starts. Privileged nested engine never mounts `master.key` or `state.db`.
+Compose already mounts API state (`noctaxris-data`) separately from Lambda code shared with DinD (`noctaxris-compute`). `noctaxris-compute-init` chowns the compute volume to UID `65532` before the API starts. The nested engine mounts compute `:ro` and never mounts `master.key` or `state.db`. Default engine is privileged DinD; experimental restricted engine: `docker compose -f docker/compose.yaml -f docker/compose.engine-restricted.yaml --env-file docker/.env up --build`.
 
 ## Backup and restore
 
@@ -51,7 +51,7 @@ On `SIGTERM` or interrupt, the API stops in-process workers (Scheduler ticker, L
 | Liveness | `GET /_noctaxris/health` | Process accepts HTTP |
 | Readiness | `GET /_noctaxris/ready` | SQLite reachable; when `NOCTAXRIS_DOCKER_HOST` is set, engine TLS dial succeeds |
 
-Compose `healthcheck` calls `/noctaxris healthcheck` (distroless, no curl) against readiness. The API waits on `noctaxris-compute-init` (`service_completed_successfully`) and `noctaxris-engine` (`service_healthy`).
+Compose `healthcheck` calls `/noctaxris healthcheck` (distroless, no curl) against readiness over the container's plain HTTP listener. Optional TLS (`NOCTAXRIS_TLS_CERT` / `NOCTAXRIS_TLS_KEY`) does not automatically switch Compose probes or client `http://` endpoint URLs; keep healthchecks and lab clients on HTTP unless you rewire both. The API waits on `noctaxris-compute-init` (`service_completed_successfully`) and `noctaxris-engine` (`service_healthy`).
 
 ## CI matrix
 
@@ -63,16 +63,18 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | race | Scoped `-race` on `internal/kernel` and `internal/store` |
 | image | `docker build -f docker/Dockerfile .` |
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
-| smoke-nested | **Manual only:** Actions `workflow_dispatch` with input `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, optional Lambda Invoke). Skips cleanly if Docker is unavailable. **Not** on push/PR |
-| integration-suites | Optional: `workflow_dispatch` with `integration_suites=true`, or pull requests that touch `tests/**`. Compose up → `tests/run-all.sh` (Go/Node/Python SDK, Terraform S3+IAM, CloudFormation). **Not** a required PR gate |
+| smoke-nested | Weekly schedule on `main` plus Actions `workflow_dispatch` with `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, Lambda zip/Image Invoke, short ECS RunTask). Skips cleanly if Docker is unavailable. **Not** on push/PR |
+| integration-suites | Optional: `workflow_dispatch` with `integration_suites=true`, or pull requests that touch `tests/**`. Compose up → `tests/run-all.sh` (Go/Node/Python SDK, Terraform lab-core, CloudFormation). Dispatch inputs `advanced_suites` (`NOCTAXRIS_ADVANCED=1`) and `nested_sdk` (`NOCTAXRIS_NESTED=1`) opt into longer paths. **Not** a required PR gate |
 
-A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via Actions `workflow_dispatch` or the script below before relying on those paths.
+A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via the weekly schedule, Actions `workflow_dispatch`, or the script below before relying on those paths. Any Compose change that touches `noctaxris-engine` privilege, devices, seccomp, or compute mounts must pass `docker/smoke-nested.sh` before merge; green `smoke-core` is not enough.
 
 Operator shortcut (same script as the manual CI job):
 
 ```bash
 cp docker/.env.example docker/.env   # if needed
 bash docker/smoke-nested.sh
+# Restricted engine experiment:
+# COMPOSE_EXTRA_FILES="-f docker/compose.engine-restricted.yaml" bash docker/smoke-nested.sh
 ```
 
 Per-service CLI smoke remains documented on each `docs/services/` page for operator runs outside CI.

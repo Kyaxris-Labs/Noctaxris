@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
 var (
@@ -480,8 +479,8 @@ func (s *Store) pipeSourceAuthorized(accountID string, p Pipe, sourceARN string)
 	switch {
 	case strings.Contains(sourceARN, ":sqs:"):
 		if roleARN != "" {
-			if s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSReceiveMessage, sourceARN, "pipes-source", DefaultPipesRegion) &&
-				s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSDeleteMessage, sourceARN, "pipes-source", DefaultPipesRegion) {
+			if s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSReceiveMessage, sourceARN, "pipes-source", DefaultPipesRegion, p.ARN) &&
+				s.deliveryRoleSessionAllows(accountID, roleARN, actionSQSDeleteMessage, sourceARN, "pipes-source", DefaultPipesRegion, p.ARN) {
 				return true
 			}
 		}
@@ -491,19 +490,14 @@ func (s *Store) pipeSourceAuthorized(accountID string, p Pipe, sourceARN string)
 		if roleARN == "" {
 			return false
 		}
-		return s.deliveryRoleSessionAllows(accountID, roleARN, actionDynamoGetRecords, sourceARN, "pipes-source", DefaultPipesRegion)
+		return s.deliveryRoleSessionAllows(accountID, roleARN, actionDynamoGetRecords, sourceARN, "pipes-source", DefaultPipesRegion, p.ARN)
 	case strings.Contains(sourceARN, ":events:") && strings.Contains(sourceARN, ":event-bus/"):
-		// Lab bus sources require a RoleArn that exists in-account (full events:Retrieve*
-		// surface is not modeled). Resource-policy-only bus drain is rejected.
+		// Lab bus sources require RoleArn session Allow on events:PutEvents (stand-in for
+		// retrieve; full events:Retrieve* is not modeled). Resource-policy-only bus drain is rejected.
 		if roleARN == "" {
 			return false
 		}
-		roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
-		if !ok || roleAccountID != accountID {
-			return false
-		}
-		_, _, err := s.GetRole(accountID, roleName)
-		return err == nil
+		return s.deliveryRoleSessionAllows(accountID, roleARN, actionEventsPutEvents, sourceARN, "pipes-source", DefaultPipesRegion, p.ARN)
 	default:
 		return false
 	}
@@ -516,20 +510,19 @@ func (s *Store) pipeEnrichmentAuthorized(accountID string, p Pipe, enrichARN str
 	if roleARN == "" {
 		return false
 	}
-	return s.deliveryRoleSessionAllows(accountID, roleARN, actionLambdaInvokeFunction, enrichARN, "pipes-enrichment", DefaultPipesRegion)
+	return s.deliveryRoleSessionAllows(accountID, roleARN, actionLambdaInvokeFunction, enrichARN, "pipes-enrichment", DefaultPipesRegion, p.ARN)
 }
 
 // pipeDeliveryAuthorized mirrors Scheduler: RoleArn session EvaluateFull, or
 // target resource policy Allow for pipes.amazonaws.com / account root.
+// Foreign targets require RoleArn session Allow AND destination resource policy.
 func (s *Store) pipeDeliveryAuthorized(accountID string, p Pipe, targetARN string) bool {
 	arn := strings.TrimSpace(targetARN)
 	action, ok := deliveryActionForARN(arn)
 	if !ok {
 		return false
 	}
-	roleARN := strings.TrimSpace(p.RoleARN)
-	if roleARN == "" {
-		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalPipes, p.ARN)
-	}
-	return s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "pipes-delivery", DefaultPipesRegion)
+	return s.deliveryAuthorizedRoleAndResource(
+		accountID, p.RoleARN, action, arn, authz.ServicePrincipalPipes, p.ARN, "pipes-delivery", DefaultPipesRegion,
+	)
 }

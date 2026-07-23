@@ -75,6 +75,7 @@ func (s *Server) sdCreateNamespace(
 ) {
 	name, _ := params["Name"].(string)
 	desc, _ := params["Description"].(string)
+	vpc, _ := params["Vpc"].(string)
 	action := catalog.ActionSDCreatePrivateDnsNamespace
 	if nsType == "HTTP" {
 		action = catalog.ActionSDCreateHttpNamespace
@@ -88,7 +89,7 @@ func (s *Server) sdCreateNamespace(
 	if region == "" {
 		region = store.DefaultServiceDiscoveryRegion
 	}
-	ns, err := s.store.CreateSDNamespace(verified.AccountID, region, name, nsType, desc)
+	ns, err := s.store.CreateSDNamespace(verified.AccountID, region, name, nsType, desc, vpc)
 	if errors.Is(err, store.ErrServiceDiscoveryExists) {
 		s.writeSDError(w, r, body, requestID, http.StatusBadRequest, "NamespaceAlreadyExists",
 			"Namespace already exists.", readOnly, eventID, verified)
@@ -213,12 +214,21 @@ func (s *Server) sdDiscoverInstances(
 ) {
 	nsName, _ := params["NamespaceName"].(string)
 	svcName, _ := params["ServiceName"].(string)
+	vpc, _ := params["Vpc"].(string)
+	if vpc == "" {
+		vpc, _ = params["VpcId"].(string)
+	}
 	if !s.authorize(verified, catalog.ActionSDDiscoverInstances, "*") {
 		s.writeSDError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform servicediscovery:DiscoverInstances.", readOnly, eventID, verified)
 		return
 	}
-	instances, err := s.store.DiscoverSDInstances(verified.AccountID, nsName, svcName)
+	instances, err := s.store.DiscoverSDInstances(verified.AccountID, nsName, svcName, vpc)
+	if errors.Is(err, store.ErrServiceDiscoveryNotFound) {
+		s.writeSDError(w, r, body, requestID, http.StatusBadRequest, "NamespaceNotFound",
+			"Namespace not found.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		s.writeSDError(w, r, body, requestID, http.StatusBadRequest, "InvalidInput",
 			err.Error(), readOnly, eventID, verified)

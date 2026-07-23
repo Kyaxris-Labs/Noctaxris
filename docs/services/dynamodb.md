@@ -25,7 +25,7 @@ Table and item metadata live in SQLite. Item ciphertext uses table SSE. Expired 
 
 DynamoDB uses `EvaluateDynamoDB` via `authorizeDataplaneOR` with the table owner account from the table ARN. Same-account access: allow if identity **or** table resource policy Allows. Cross-account access: allow only when identity **and** table resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. A resource policy alone can grant access in the same account (unlike KMS). Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs. SSE-KMS tables resolve the CMK under the table owner account and require `kms:Decrypt` via EvaluateKMS (identity plus key policy), matching S3 SSE-KMS.
+Pass a full table ARN as `TableName` for cross-account `GetItem` and similar item APIs. SSE-KMS tables resolve the CMK under the table owner account and require `kms:Decrypt` via EvaluateKMS (identity plus key policy), matching S3 SSE-KMS. Item DEK seal/unseal and KMS authz bind EncryptionContext `aws:dynamodb:tableName` and `aws:dynamodb:subscriberId` (table owner account id). `CreateTable` / `UpdateTable` that enable SSE-KMS also require caller `kms:DescribeKey` and `kms:CreateGrant` on that CMK with the same context (deny attach when the key policy lacks Allow). `PutResourcePolicy` requires every statement to name a `Principal`.
 
 ## How to verify / CLI smoke
 

@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS roles (
   path TEXT NOT NULL DEFAULT '/',
   create_date TEXT,
   description TEXT,
+  max_session_duration INTEGER NOT NULL DEFAULT 3600,
   PRIMARY KEY (account_id, role_name)
 );
 CREATE TABLE IF NOT EXISTS users (
@@ -93,7 +94,9 @@ CREATE TABLE IF NOT EXISTS oidc_providers (
   provider_arn TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
   url TEXT NOT NULL,
-  client_id TEXT NOT NULL
+  client_id TEXT NOT NULL,
+  client_ids TEXT NOT NULL DEFAULT '',
+  thumbprints TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS saml_providers (
   provider_arn TEXT PRIMARY KEY,
@@ -145,6 +148,7 @@ CREATE TABLE IF NOT EXISTS s3_objects (
   sse_algorithm TEXT,
   kms_key_id TEXT,
   sealed_dek BLOB,
+  sse_kms_context TEXT NOT NULL DEFAULT '',
   storage_path TEXT NOT NULL,
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key)
@@ -158,6 +162,7 @@ CREATE TABLE IF NOT EXISTS s3_multipart_uploads (
   sse_algorithm TEXT,
   kms_key_id TEXT,
   sealed_dek BLOB,
+  sse_kms_context TEXT NOT NULL DEFAULT '',
   initiated TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS s3_multipart_parts (
@@ -454,6 +459,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureLogsMetricFilterSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureTaggingSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -720,6 +729,9 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE roles ADD COLUMN path TEXT NOT NULL DEFAULT '/'`,
 		`ALTER TABLE roles ADD COLUMN create_date TEXT`,
 		`ALTER TABLE roles ADD COLUMN description TEXT`,
+		`ALTER TABLE roles ADD COLUMN max_session_duration INTEGER NOT NULL DEFAULT 3600`,
+		`ALTER TABLE oidc_providers ADD COLUMN client_ids TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE oidc_providers ADD COLUMN thumbprints TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN create_date TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
@@ -749,10 +761,13 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE sqs_messages ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_algorithm TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_buckets ADD COLUMN default_encryption_kms_key_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_objects ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_multipart_uploads ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE s3_object_versions ADD COLUMN sse_kms_context TEXT NOT NULL DEFAULT ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_s3_buckets_name ON s3_buckets(name)`,
 	}
 	for _, stmt := range alters {
-		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
+		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) && !isNoSuchTableErr(err) {
 			return fmt.Errorf("migrate schema: %w", err)
 		}
 	}
@@ -766,6 +781,14 @@ func isDuplicateColumnErr(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate column") ||
 		strings.Contains(msg, "already exists")
+}
+
+func isNoSuchTableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such table")
 }
 
 func (s *Store) Close() error {

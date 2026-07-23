@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
@@ -32,6 +33,12 @@ type Config struct {
 	SAMLIdPName         string
 	OIDCIssuerURL       string
 	OIDCClientID        string
+	// HTTPAPIAllowSetCookie permits Set-Cookie on HTTP API Lambda proxy responses
+	// (NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE=1). Default strips Set-Cookie.
+	HTTPAPIAllowSetCookie bool
+	// FunctionURLCORSOrigins is a comma-separated allowlist for Function URL AuthType NONE
+	// (NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS). Empty keeps lab default Access-Control-Allow-Origin: *.
+	FunctionURLCORSOrigins []string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -50,8 +57,11 @@ func LoadFromEnv() (Config, error) {
 		LambdaEndpointURL:   getenv("NOCTAXRIS_LAMBDA_ENDPOINT_URL", ""),
 		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
 		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),
-		OIDCIssuerURL:       getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),
-		OIDCClientID:        getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
+		OIDCIssuerURL:          getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),
+		OIDCClientID:           getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
+		HTTPAPIAllowSetCookie:  strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "1") ||
+			strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "true"),
+		FunctionURLCORSOrigins: splitCSVEnv("NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS"),
 	}
 
 	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)
@@ -96,4 +106,20 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func splitCSVEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

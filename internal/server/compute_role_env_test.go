@@ -71,9 +71,10 @@ func TestIssueLabRegistryPullForBatchPrincipal(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	accountID := "000000000001"
+	roleARN := "arn:aws:iam::" + accountID + ":role/batch-exec"
 	labURI := store.LabRegistryHost + "/" + accountID + "/batch-img:v1"
 	pullRef, useAuth, user, pass, err := compute.IssueLabRegistryPull(
-		st, "127.0.0.1:4566", accountID, labURI, "ecs-tasks.amazonaws.com",
+		st, "127.0.0.1:4566", accountID, labURI, roleARN,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,9 +85,16 @@ func TestIssueLabRegistryPullForBatchPrincipal(t *testing.T) {
 	if pullRef != "host.docker.internal:4566/"+accountID+"/batch-img:v1" {
 		t.Fatalf("pullRef=%q", pullRef)
 	}
+	_, gotPrincipal, _, err := st.ValidateAuthorizationToken(pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrincipal != roleARN {
+		t.Fatalf("principal=%q want %q", gotPrincipal, roleARN)
+	}
 	public := "alpine:3.20"
 	pullRef, useAuth, _, _, err = compute.IssueLabRegistryPull(
-		st, "127.0.0.1:4566", accountID, public, "codebuild.amazonaws.com",
+		st, "127.0.0.1:4566", accountID, public, roleARN,
 	)
 	if err != nil {
 		t.Fatal(err)

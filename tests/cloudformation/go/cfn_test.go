@@ -77,37 +77,32 @@ func templatesDir(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "templates"))
 }
 
-func renderTemplate(t *testing.T, name, bucket, role string) string {
+type templateVars struct {
+	Bucket   string
+	Role     string
+	Queue    string
+	Table    string
+	Function string
+}
+
+func renderTemplate(t *testing.T, name string, vars templateVars) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(templatesDir(t), name))
 	if err != nil {
 		t.Fatalf("read template: %v", err)
 	}
 	body := string(raw)
-	body = strings.ReplaceAll(body, "REPLACE_BUCKET_NAME", bucket)
-	body = strings.ReplaceAll(body, "REPLACE_ROLE_NAME", role)
+	body = strings.ReplaceAll(body, "REPLACE_BUCKET_NAME", vars.Bucket)
+	body = strings.ReplaceAll(body, "REPLACE_ROLE_NAME", vars.Role)
+	body = strings.ReplaceAll(body, "REPLACE_QUEUE_NAME", vars.Queue)
+	body = strings.ReplaceAll(body, "REPLACE_TABLE_NAME", vars.Table)
+	body = strings.ReplaceAll(body, "REPLACE_FUNCTION_NAME", vars.Function)
 	return body
 }
 
-func TestCloudFormationS3AndIAMStack(t *testing.T) {
-	requireReady(t)
-	cfg := loadCFG(t)
-	cfn := newCFN(t, cfg)
-	s3c := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(endpoint())
-		o.UsePathStyle = true
-	})
+func createDescribeDeleteStack(t *testing.T, cfn *cloudformation.Client, stackName, body string) {
+	t.Helper()
 	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	bucket := fmt.Sprintf("cfn-it-%s", suffix)
-	if len(bucket) > 63 {
-		bucket = bucket[:63]
-	}
-	role := fmt.Sprintf("CfnItRole%s", suffix[:8])
-	stackName := fmt.Sprintf("cfn-it-%s", suffix[:12])
-	body := renderTemplate(t, "s3-and-iam.json", bucket, role)
-
 	_, err := cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
 		StackName:    aws.String(stackName),
 		TemplateBody: aws.String(body),
@@ -130,10 +125,55 @@ func TestCloudFormationS3AndIAMStack(t *testing.T) {
 	}
 	st := desc.Stacks[0]
 	if st.StackStatus != types.StackStatusCreateComplete && string(st.StackStatus) != "CREATE_COMPLETE" {
-		// Lab returns CREATE_COMPLETE; accept either typed or string form.
 		if st.StackStatus == "" {
 			t.Fatalf("unexpected empty StackStatus")
 		}
+	}
+
+	_, err = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
+	if err != nil {
+		t.Fatalf("DeleteStack: %v", err)
+	}
+}
+
+func TestCloudFormationS3AndIAMStack(t *testing.T) {
+	requireReady(t)
+	cfg := loadCFG(t)
+	cfn := newCFN(t, cfg)
+	s3c := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint())
+		o.UsePathStyle = true
+	})
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	bucket := fmt.Sprintf("cfn-it-%s", suffix)
+	if len(bucket) > 63 {
+		bucket = bucket[:63]
+	}
+	role := fmt.Sprintf("CfnItRole%s", suffix[:8])
+	stackName := fmt.Sprintf("cfn-it-%s", suffix[:12])
+	body := renderTemplate(t, "s3-and-iam.json", templateVars{Bucket: bucket, Role: role})
+
+	_, err := cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
+		StackName:    aws.String(stackName),
+		TemplateBody: aws.String(body),
+	})
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
+	})
+
+	desc, err := cfn.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{
+		StackName: aws.String(stackName),
+	})
+	if err != nil {
+		t.Fatalf("DescribeStacks: %v", err)
+	}
+	if len(desc.Stacks) != 1 {
+		t.Fatalf("DescribeStacks got %d stacks", len(desc.Stacks))
 	}
 
 	list, err := cfn.ListStacks(ctx, &cloudformation.ListStacksInput{})
@@ -169,6 +209,65 @@ func TestCloudFormationS3AndIAMStack(t *testing.T) {
 	}
 }
 
+func TestCloudFormationYAMLStack(t *testing.T) {
+	requireReady(t)
+	cfg := loadCFG(t)
+	cfn := newCFN(t, cfg)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	short := suffix
+	if len(short) > 12 {
+		short = short[:12]
+	}
+
+	cases := []struct {
+		name     string
+		template string
+		vars     templateVars
+	}{
+		{
+			name:     "sqs",
+			template: "sqs-queue.yaml",
+			vars:     templateVars{Queue: "cfn-q-" + short},
+		},
+		{
+			name:     "dynamodb",
+			template: "dynamodb-table.yaml",
+			vars:     templateVars{Table: "cfn-ddb-" + short},
+		},
+		{
+			name:     "lambda-zipfile",
+			template: "lambda-zipfile.yaml",
+			vars: templateVars{
+				Role:     "CfnLamRole" + short[:8],
+				Function: "cfn-fn-" + short,
+			},
+		},
+		{
+			name:     "multi-resource",
+			template: "multi-resource.yaml",
+			vars: templateVars{
+				Bucket:   "cfn-yml-" + short,
+				Role:     "CfnYmlRole" + short[:8],
+				Table:    "cfn-yml-ddb-" + short,
+				Function: "cfn-yml-fn-" + short,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.vars.Bucket != "" && len(tc.vars.Bucket) > 63 {
+				tc.vars.Bucket = tc.vars.Bucket[:63]
+			}
+			stackName := fmt.Sprintf("cfn-yaml-%s-%s", tc.name, short)
+			body := renderTemplate(t, tc.template, tc.vars)
+			createDescribeDeleteStack(t, cfn, stackName, body)
+		})
+	}
+}
+
 func TestCloudFormationRejectsUnsupportedType(t *testing.T) {
 	requireReady(t)
 	cfg := loadCFG(t)
@@ -186,25 +285,5 @@ func TestCloudFormationRejectsUnsupportedType(t *testing.T) {
 			_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
 		})
 		t.Fatal("expected CreateStack with unsupported type to fail")
-	}
-}
-
-func TestCloudFormationRejectsYAML(t *testing.T) {
-	requireReady(t)
-	cfg := loadCFG(t)
-	cfn := newCFN(t, cfg)
-	ctx := context.Background()
-
-	stackName := fmt.Sprintf("cfn-yaml-%d", time.Now().UnixNano())
-	body := "AWSTemplateFormatVersion: '2010-09-09'\nResources:\n  B:\n    Type: AWS::S3::Bucket\n"
-	_, err := cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
-		StackName:    aws.String(stackName),
-		TemplateBody: aws.String(body),
-	})
-	if err == nil {
-		t.Cleanup(func() {
-			_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
-		})
-		t.Fatal("expected YAML TemplateBody to fail (JSON only)")
 	}
 }

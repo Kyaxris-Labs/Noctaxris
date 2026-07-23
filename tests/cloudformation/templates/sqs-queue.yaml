@@ -1,0 +1,7 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Noctaxris CFN lab: SQS queue (YAML)"
+Resources:
+  LabQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: REPLACE_QUEUE_NAME

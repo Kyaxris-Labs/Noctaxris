@@ -60,6 +60,18 @@ const ServicePrincipalAppSync = "appsync.amazonaws.com"
 // role trust when Cognito configure APIs take RoleArn.
 const ServicePrincipalCognitoIDP = "cognito-idp.amazonaws.com"
 
+// ServicePrincipalLogs is the CloudWatch Logs service principal used in role trust
+// for subscription filter roleArn (stream destinations / lab SQS).
+const ServicePrincipalLogs = "logs.amazonaws.com"
+
+// ServicePrincipalTransfer is the AWS Transfer Family service principal used in
+// role trust for CreateUser Role.
+const ServicePrincipalTransfer = "transfer.amazonaws.com"
+
+// ServicePrincipalELB is the Elastic Load Balancing service principal used for
+// Lambda target resource-policy invoke (ALB RegisterTargets).
+const ServicePrincipalELB = "elasticloadbalancing.amazonaws.com"
+
 // ServicePrincipalRDS is reserved for future RDS configure APIs that accept RoleArn
 // (for example MonitoringRoleArn). Lab create paths do not expose RoleArn yet.
 const ServicePrincipalRDS = "rds.amazonaws.com"
@@ -75,6 +87,7 @@ type PassRoleRequest struct {
 	RoleARN          string
 	TrustPolicyDoc   string
 	ServicePrincipal string // e.g. ServicePrincipalLambda
+	SourceArn        string // optional configure-time aws:SourceArn for trust Conditions
 }
 
 // CheckPassRole applies configure-time PassRole dual evaluation:
@@ -115,7 +128,7 @@ func CheckPassRole(req PassRoleRequest) Decision {
 }
 
 // passRoleTrustConditionKeys builds trust-evaluation keys for configure-time
-// PassRole (aws:SourceAccount from caller; SourceArn when already present).
+// PassRole (aws:SourceAccount from caller; aws:SourceArn when provided).
 func passRoleTrustConditionKeys(req PassRoleRequest) map[string]string {
 	keys := map[string]string{}
 	if req.Caller.ConditionKeys != nil {
@@ -125,6 +138,9 @@ func passRoleTrustConditionKeys(req PassRoleRequest) map[string]string {
 	}
 	if accountID := strings.TrimSpace(req.Caller.Principal.AccountID); accountID != "" {
 		keys["aws:SourceAccount"] = accountID
+	}
+	if src := strings.TrimSpace(req.SourceArn); src != "" {
+		keys["aws:SourceArn"] = src
 	}
 	return keys
 }

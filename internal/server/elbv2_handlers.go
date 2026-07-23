@@ -106,6 +106,16 @@ func (s *Server) elbCreateLB(
 ) {
 	name, _ := params["Name"].(string)
 	scheme, _ := params["Scheme"].(string)
+	lbType, _ := params["Type"].(string)
+	lbType = strings.ToLower(strings.TrimSpace(lbType))
+	if lbType == "" {
+		lbType = "application"
+	}
+	if lbType != "application" {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"Type must be application (network load balancers are not implemented).", readOnly, eventID, verified)
+		return
+	}
 	if !s.authorize(verified, catalog.ActionELBv2CreateLoadBalancer, "*") {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform elasticloadbalancing:CreateLoadBalancer.", readOnly, eventID, verified)

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS s3_object_versions (
   sse_algorithm TEXT,
   kms_key_id TEXT,
   sealed_dek BLOB,
+  sse_kms_context TEXT NOT NULL DEFAULT '',
   storage_path TEXT NOT NULL,
   last_modified TEXT NOT NULL,
   PRIMARY KEY (account_id, bucket, key, version_id)
@@ -161,8 +162,8 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO s3_object_versions
-		 (account_id, bucket, key, version_id, is_latest, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, version_id, is_latest, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key, version_id) DO UPDATE SET
 		   is_latest = 1,
 		   etag = excluded.etag,
@@ -171,17 +172,18 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   sse_algorithm = excluded.sse_algorithm,
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
+		   sse_kms_context = excluded.sse_kms_context,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, versionID, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
+		accountID, bucket, key, versionID, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
 	); err != nil {
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version insert: %w", err)
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO s3_objects
-		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key) DO UPDATE SET
 		   etag = excluded.etag,
 		   size = excluded.size,
@@ -189,9 +191,10 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		   sse_algorithm = excluded.sse_algorithm,
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
+		   sse_kms_context = excluded.sse_kms_context,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
+		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
 	); err != nil {
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, "", fmt.Errorf("put object version current: %w", err)
@@ -207,7 +210,8 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	return ObjectMeta{
 		AccountID: accountID, Bucket: bucket, Key: key, ETag: etag, Size: size,
 		ContentType: ct, SSEAlgorithm: meta.SSEAlgorithm, KMSKeyID: meta.KMSKeyID,
-		SealedDEK: meta.SealedDEK, StoragePath: rel, LastModified: modified,
+		SealedDEK: meta.SealedDEK, SSEKMSContextJSON: meta.SSEKMSContextJSON,
+		StoragePath: rel, LastModified: modified,
 	}, versionID, nil
 }
 
@@ -241,12 +245,14 @@ func (s *Store) GetObjectVersion(accountID, bucket, key, versionID string) (Obje
 
 	var meta ObjectMeta
 	var sealedDEK []byte
+	var sseCtx string
 	err = s.db.QueryRow(
-		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, storage_path, last_modified
+		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek,
+		        COALESCE(sse_kms_context, ''), storage_path, last_modified
 		 FROM s3_object_versions WHERE account_id = ? AND bucket = ? AND key = ? AND version_id = ?`,
 		accountID, bucket, key, versionID,
 	).Scan(&meta.AccountID, &meta.Bucket, &meta.Key, &meta.ETag, &meta.Size, &meta.ContentType,
-		&meta.SSEAlgorithm, &meta.KMSKeyID, &sealedDEK, &meta.StoragePath, &meta.LastModified)
+		&meta.SSEAlgorithm, &meta.KMSKeyID, &sealedDEK, &sseCtx, &meta.StoragePath, &meta.LastModified)
 	if err == sql.ErrNoRows {
 		return ObjectMeta{}, "", nil, ErrNoSuchKey
 	}
@@ -254,6 +260,7 @@ func (s *Store) GetObjectVersion(accountID, bucket, key, versionID string) (Obje
 		return ObjectMeta{}, "", nil, fmt.Errorf("get object version: %w", err)
 	}
 	meta.SealedDEK = sealedDEK
+	meta.SSEKMSContextJSON = sseCtx
 	data, err := os.ReadFile(filepath.Join(s.dataRoot, meta.StoragePath))
 	if err != nil {
 		return ObjectMeta{}, "", nil, fmt.Errorf("get object version read: %w", err)

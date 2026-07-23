@@ -8,8 +8,8 @@
 //   - EndpointURL for invokes should be http://host.docker.internal:4566 under
 //     Docker Desktop (host publishes 127.0.0.1:4566). Override with
 //     NOCTAXRIS_LAMBDA_ENDPOINT_URL when host.docker.internal is wrong (e.g. some
-//     Linux setups). Function containers get ExtraHosts host.docker.internal:host-gateway
-//     unless NOCTAXRIS_INJECT_HOST_GATEWAY=0. ECS/CodeBuild/Batch (Internal noctaxris-ecs)
+//     Linux setups). Function ExtraHosts host.docker.internal:host-gateway is opt-in
+//     (NOCTAXRIS_INJECT_HOST_GATEWAY=1). ECS/CodeBuild/Batch (Internal noctaxris-ecs)
 //     omit ExtraHosts by default; set NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1 to opt in.
 //
 // Egress deny + lab API allow:

@@ -368,14 +368,21 @@ type OIDCClaims struct {
 	Issuer   string
 	Subject  string
 	Audience []string
+	// Raw string claims from the JWT (sub, aud, repository, ref, …) for Condition keys.
+	StringClaims map[string]string
 }
 
 // VerifyWebIdentityJWT validates a JWT against JWKS fetched from issuer.
 // Requires matching iss and aud (clientID). Fail-closed on any error.
 // Remote JWKS requires NOCTAXRIS_ALLOW_REMOTE_JWKS with a public host allowlist (SSRF fail-closed).
 func VerifyWebIdentityJWT(token, issuerURL, clientID string, httpClient *http.Client) (OIDCClaims, error) {
+	return VerifyWebIdentityJWTClients(token, issuerURL, []string{clientID}, httpClient)
+}
+
+// VerifyWebIdentityJWTClients is VerifyWebIdentityJWT with a ClientIDList (any aud match).
+func VerifyWebIdentityJWTClients(token, issuerURL string, clientIDs []string, httpClient *http.Client) (OIDCClaims, error) {
 	issuerURL = strings.TrimRight(issuerURL, "/")
-	if issuerURL == "" || clientID == "" || token == "" {
+	if issuerURL == "" || token == "" || len(clientIDs) == 0 {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "OIDC token validation inputs incomplete")
 	}
 	if jwksfetch.IsLabCognitoIssuer(issuerURL) {
@@ -390,17 +397,21 @@ func VerifyWebIdentityJWT(token, issuerURL, clientID string, httpClient *http.Cl
 	if err != nil {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT signature verification failed")
 	}
-	return validateWebIdentityClaims(claimsMap, issuerURL, clientID, time.Now().UTC())
+	return validateWebIdentityClaimsClients(claimsMap, issuerURL, clientIDs, time.Now().UTC())
 }
 
 func validateWebIdentityClaims(claimsMap map[string]any, issuerURL, clientID string, now time.Time) (OIDCClaims, error) {
+	return validateWebIdentityClaimsClients(claimsMap, issuerURL, []string{clientID}, now)
+}
+
+func validateWebIdentityClaimsClients(claimsMap map[string]any, issuerURL string, clientIDs []string, now time.Time) (OIDCClaims, error) {
 	iss := jwtutil.ClaimString(claimsMap, "iss")
 	sub := jwtutil.ClaimString(claimsMap, "sub")
 	if !issuerMatches(iss, issuerURL) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT iss mismatch")
 	}
 	auds := normalizeAud(claimsMap["aud"])
-	if !containsString(auds, clientID) {
+	if !audMatchesAnyClient(auds, clientIDs) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT aud mismatch")
 	}
 	if jwtutil.ClaimExpired(claimsMap, now) {
@@ -409,7 +420,92 @@ func validateWebIdentityClaims(claimsMap map[string]any, issuerURL, clientID str
 	if jwtutil.ClaimNotYetValid(claimsMap, now) {
 		return OIDCClaims{}, newError(CodeInvalidIdentityToken, "JWT nbf not yet valid")
 	}
-	return OIDCClaims{Issuer: iss, Subject: sub, Audience: auds}, nil
+	return OIDCClaims{
+		Issuer:       iss,
+		Subject:      sub,
+		Audience:     auds,
+		StringClaims: extractOIDCStringClaims(claimsMap),
+	}, nil
+}
+
+func audMatchesAnyClient(auds, clientIDs []string) bool {
+	for _, id := range clientIDs {
+		id = strings.TrimSpace(id)
+		if id != "" && containsString(auds, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractOIDCStringClaims(claimsMap map[string]any) map[string]string {
+	out := map[string]string{}
+	for k, v := range claimsMap {
+		switch val := v.(type) {
+		case string:
+			if val != "" {
+				out[k] = val
+			}
+		case float64:
+			// skip numeric claims (exp/nbf/iat)
+		case []any:
+			if k == "aud" {
+				auds := normalizeAud(v)
+				if len(auds) > 0 {
+					out[k] = auds[0]
+				}
+			}
+		}
+	}
+	return out
+}
+
+// WebIdentityConditionKeys maps verified OIDC claims into IAM Condition keys.
+// Lab subset: {issuer-host}:sub / :aud always; GitHub Actions claim keys when issuer matches.
+func WebIdentityConditionKeys(claims OIDCClaims) map[string]string {
+	keys := map[string]string{}
+	host := oidcIssuerHost(claims.Issuer)
+	if host == "" {
+		return keys
+	}
+	if claims.Subject != "" {
+		keys[host+":sub"] = claims.Subject
+	}
+	aud := ""
+	if len(claims.Audience) > 0 {
+		aud = claims.Audience[0]
+	} else if claims.StringClaims != nil {
+		aud = claims.StringClaims["aud"]
+	}
+	if aud != "" {
+		keys[host+":aud"] = aud
+	}
+	if isGitHubActionsIssuer(host) {
+		for _, claim := range []string{
+			"repository", "ref", "actor", "actor_id", "environment",
+			"workflow", "job_workflow_ref", "repository_id", "repository_owner_id",
+			"enterprise_id",
+		} {
+			if v := strings.TrimSpace(claims.StringClaims[claim]); v != "" {
+				keys["token.actions.githubusercontent.com:"+claim] = v
+			}
+		}
+	}
+	return keys
+}
+
+func oidcIssuerHost(issuer string) string {
+	u := strings.TrimSpace(issuer)
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimSuffix(u, "/")
+	return u
+}
+
+func isGitHubActionsIssuer(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	return h == "token.actions.githubusercontent.com" ||
+		strings.HasPrefix(h, "token.actions.") && strings.HasSuffix(h, ".ghe.com")
 }
 
 func issuerMatches(iss, configured string) bool {

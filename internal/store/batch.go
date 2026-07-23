@@ -14,11 +14,12 @@ const (
 	// DefaultBatchRegion is the lab region embedded in Batch ARNs.
 	DefaultBatchRegion = "us-east-1"
 
-	BatchCEStatusValid   = "VALID"
-	BatchJQStatusValid   = "VALID"
-	BatchJobStatusRunning = "RUNNING"
+	BatchCEStatusValid      = "VALID"
+	BatchJQStatusValid      = "VALID"
+	BatchJobStatusSubmitted = "SUBMITTED"
+	BatchJobStatusRunning   = "RUNNING"
 	BatchJobStatusSucceeded = "SUCCEEDED"
-	BatchJobStatusFailed  = "FAILED"
+	BatchJobStatusFailed    = "FAILED"
 )
 
 var (
@@ -51,16 +52,17 @@ type BatchJobQueue struct {
 
 // BatchJobDefinition is a RegisterJobDefinition revision.
 type BatchJobDefinition struct {
-	Name       string
-	ARN        string
-	Revision   int
-	Type       string
-	Image      string
-	Command    []string
-	JobRoleARN string
-	EnvJSON    string
-	Status     string
-	CreatedAt  string
+	Name              string
+	ARN               string
+	Revision          int
+	Type              string
+	Image             string
+	Command           []string
+	JobRoleARN        string
+	ExecutionRoleARN  string
+	EnvJSON           string
+	Status            string
+	CreatedAt         string
 }
 
 // BatchJob is a SubmitJob row.
@@ -94,12 +96,13 @@ type CreateBatchJobQueueInput struct {
 
 // RegisterBatchJobDefinitionInput holds RegisterJobDefinition fields.
 type RegisterBatchJobDefinitionInput struct {
-	Name       string
-	Type       string
-	Image      string
-	Command    []string
-	JobRoleARN string
-	Env        map[string]string
+	Name             string
+	Type             string
+	Image            string
+	Command          []string
+	JobRoleARN       string
+	ExecutionRoleARN string
+	Env              map[string]string
 }
 
 const batchSchema = `
@@ -162,6 +165,12 @@ func EnsureBatchSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(batchSchema); err != nil {
 		return fmt.Errorf("ensure batch schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE batch_job_definitions ADD COLUMN execution_role_arn TEXT NOT NULL DEFAULT ''`); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("ensure batch schema: execution_role_arn: %w", err)
+		}
 	}
 	return nil
 }
@@ -333,9 +342,10 @@ func (s *Store) RegisterBatchJobDefinition(accountID, region string, in Register
 	created := nowRFC3339()
 	_, err := s.db.Exec(
 		`INSERT INTO batch_job_definitions (
-			account_id, name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)`,
+			account_id, name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at, execution_role_arn
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
 		accountID, name, rev, arn, typ, image, string(cmdJSON), strings.TrimSpace(in.JobRoleARN), string(envJSON), created,
+		strings.TrimSpace(in.ExecutionRoleARN),
 	)
 	if err != nil {
 		return BatchJobDefinition{}, fmt.Errorf("register batch job definition: %w", err)
@@ -343,6 +353,7 @@ func (s *Store) RegisterBatchJobDefinition(accountID, region string, in Register
 	return BatchJobDefinition{
 		Name: name, ARN: arn, Revision: rev, Type: typ, Image: image,
 		Command: in.Command, JobRoleARN: strings.TrimSpace(in.JobRoleARN),
+		ExecutionRoleARN: strings.TrimSpace(in.ExecutionRoleARN),
 		EnvJSON: string(envJSON), Status: "ACTIVE", CreatedAt: created,
 	}, nil
 }
@@ -357,10 +368,11 @@ func (s *Store) GetBatchJobDefinition(accountID, ref string) (BatchJobDefinition
 		var jd BatchJobDefinition
 		var cmdJSON string
 		err := s.db.QueryRow(
-			`SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at
+			`SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at,
+			        COALESCE(execution_role_arn, '')
 			 FROM batch_job_definitions WHERE account_id = ? AND jd_arn = ?`,
 			accountID, ref,
-		).Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt)
+		).Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt, &jd.ExecutionRoleARN)
 		if errors.Is(err, sql.ErrNoRows) {
 			return BatchJobDefinition{}, ErrBatchNotFound
 		}
@@ -397,10 +409,11 @@ func (s *Store) getBatchJobDefinitionRev(accountID, name string, rev int) (Batch
 	var jd BatchJobDefinition
 	var cmdJSON string
 	err := s.db.QueryRow(
-		`SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at
+		`SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at,
+		        COALESCE(execution_role_arn, '')
 		 FROM batch_job_definitions WHERE account_id = ? AND name = ? AND revision = ?`,
 		accountID, name, rev,
-	).Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt)
+	).Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt, &jd.ExecutionRoleARN)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BatchJobDefinition{}, ErrBatchNotFound
 	}
@@ -431,7 +444,7 @@ func (s *Store) getBatchJobQueue(accountID, name string) (BatchJobQueue, error) 
 	return jq, nil
 }
 
-// SubmitBatchJob creates a RUNNING job row.
+// SubmitBatchJob creates a SUBMITTED job row (container start is async).
 func (s *Store) SubmitBatchJob(accountID, region, jobName, queueRef, jobDefRef string) (BatchJob, BatchJobDefinition, error) {
 	_ = region
 	jq, err := s.getBatchJobQueue(accountID, queueRef)
@@ -450,13 +463,13 @@ func (s *Store) SubmitBatchJob(accountID, region, jobName, queueRef, jobDefRef s
 	created := nowRFC3339()
 	job := BatchJob{
 		JobID: id, JobName: jobName, JobQueue: jq.Name, JobDefARN: jd.ARN,
-		Status: BatchJobStatusRunning, CreatedAt: created, StartedAt: created,
+		Status: BatchJobStatusSubmitted, CreatedAt: created, StartedAt: "",
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO batch_jobs (
 			account_id, job_id, job_name, job_queue, job_def_arn, status, container_id, created_at, started_at, stopped_at
-		) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, '')`,
-		accountID, job.JobID, job.JobName, job.JobQueue, job.JobDefARN, job.Status, job.CreatedAt, job.StartedAt,
+		) VALUES (?, ?, ?, ?, ?, ?, '', ?, '', '')`,
+		accountID, job.JobID, job.JobName, job.JobQueue, job.JobDefARN, job.Status, job.CreatedAt,
 	)
 	if err != nil {
 		return BatchJob{}, BatchJobDefinition{}, fmt.Errorf("submit batch job: %w", err)
@@ -466,9 +479,15 @@ func (s *Store) SubmitBatchJob(accountID, region, jobName, queueRef, jobDefRef s
 
 // SetBatchJobRuntime updates container id and status.
 func (s *Store) SetBatchJobRuntime(accountID, jobID, containerID, status, stoppedAt string) error {
+	startedAt := ""
+	if status == BatchJobStatusRunning || status == BatchJobStatusSucceeded || status == BatchJobStatusFailed {
+		startedAt = nowRFC3339()
+	}
 	_, err := s.db.Exec(
-		`UPDATE batch_jobs SET container_id = ?, status = ?, stopped_at = ? WHERE account_id = ? AND job_id = ?`,
-		containerID, status, stoppedAt, accountID, jobID,
+		`UPDATE batch_jobs SET container_id = ?, status = ?, stopped_at = ?,
+		 started_at = CASE WHEN started_at = '' AND ? != '' THEN ? ELSE started_at END
+		 WHERE account_id = ? AND job_id = ?`,
+		containerID, status, stoppedAt, startedAt, startedAt, accountID, jobID,
 	)
 	if err != nil {
 		return fmt.Errorf("set batch job runtime: %w", err)
@@ -559,7 +578,8 @@ func (s *Store) DescribeBatchJobQueues(accountID string, names []string) ([]Batc
 // DescribeBatchJobDefinitions returns active definitions matching name (empty = all latest).
 func (s *Store) DescribeBatchJobDefinitions(accountID, name string) ([]BatchJobDefinition, error) {
 	name = strings.TrimSpace(name)
-	query := `SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at
+	query := `SELECT name, revision, jd_arn, type, image, command_json, job_role_arn, env_json, status, created_at,
+		COALESCE(execution_role_arn, '')
 		FROM batch_job_definitions WHERE account_id = ? AND status = 'ACTIVE'`
 	args := []any{accountID}
 	if name != "" {
@@ -576,7 +596,7 @@ func (s *Store) DescribeBatchJobDefinitions(accountID, name string) ([]BatchJobD
 	for rows.Next() {
 		var jd BatchJobDefinition
 		var cmdJSON string
-		if err := rows.Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt); err != nil {
+		if err := rows.Scan(&jd.Name, &jd.Revision, &jd.ARN, &jd.Type, &jd.Image, &cmdJSON, &jd.JobRoleARN, &jd.EnvJSON, &jd.Status, &jd.CreatedAt, &jd.ExecutionRoleARN); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(cmdJSON), &jd.Command)

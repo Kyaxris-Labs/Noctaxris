@@ -218,7 +218,7 @@ func TestSecretsResourcePolicyLifecycle(t *testing.T) {
 		t.Fatalf("CreateSecret status=%d body=%q", createRec.Code, createRec.Body.String())
 	}
 
-	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"*"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`
 	putPolRec := mustSecretsJSON(t, handler, "PutResourcePolicy", map[string]any{
 		"SecretId":       "policy-target",
 		"ResourcePolicy": policy,
@@ -348,7 +348,7 @@ func TestSecretsPutResourcePolicyNotRoutedToDynamoDB(t *testing.T) {
 		t.Fatalf("CreateSecret status=%d body=%q", createRec.Code, createRec.Body.String())
 	}
 
-	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"*"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`
 	putPolRec := mustSecretsJSON(t, handler, "PutResourcePolicy", map[string]any{
 		"SecretId":       "route-check",
 		"ResourcePolicy": policy,

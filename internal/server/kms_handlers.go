@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	kmssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/kms"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -286,6 +287,11 @@ func (s *Server) handleKMS(
 		payload, err = kmssvc.GetKeyPolicyJSON(policy)
 	case catalog.ActionKMSPutKeyPolicy, "PutKeyPolicy":
 		policy, _ := params["Policy"].(string)
+		if err := authz.ValidateResourcePolicyDocument(policy); err != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "MalformedPolicyDocumentException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 		if err := s.store.PutKeyPolicy(keyID, policy); err != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				"Unable to put key policy.", readOnly, eventID, verified)

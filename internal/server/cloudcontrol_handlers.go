@@ -37,6 +37,10 @@ func (s *Server) handleCloudControl(
 		s.ccListResources(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCloudControlDeleteResource:
 		s.ccDeleteResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudControlUpdateResource:
+		s.ccUpdateResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudControlGetResourceRequestStatus:
+		s.ccGetResourceRequestStatus(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCloudControlError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This Cloud Control action is not implemented.", readOnly, eventID, verified)
@@ -56,6 +60,10 @@ func cloudControlAction(action string) string {
 		return catalog.ActionCloudControlListResources
 	case "DeleteResource":
 		return catalog.ActionCloudControlDeleteResource
+	case "UpdateResource":
+		return catalog.ActionCloudControlUpdateResource
+	case "GetResourceRequestStatus":
+		return catalog.ActionCloudControlGetResourceRequestStatus
 	default:
 		return action
 	}
@@ -72,7 +80,7 @@ func (s *Server) ccCreateResource(
 			"User is not authorized to perform cloudcontrol:CreateResource.", readOnly, eventID, verified)
 		return
 	}
-	res, err := s.store.CloudControlCreateResource(verified.AccountID, typeName, desired)
+	res, token, err := s.store.CloudControlCreateResource(verified.AccountID, typeName, desired)
 	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
 		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedActionException",
 			err.Error(), readOnly, eventID, verified)
@@ -93,7 +101,7 @@ func (s *Server) ccCreateResource(
 			"Unable to create resource.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := ccsvc.ProgressEventJSON("CREATE", res.TypeName, res.Identifier, store.CloudControlRequestToken(), res.Properties)
+	payload, _ := ccsvc.ProgressEventJSON("CREATE", res.TypeName, res.Identifier, token, res.Properties)
 	s.writeCloudControlOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudControlEventSource, "CreateResource", readOnly)
 }
@@ -167,7 +175,7 @@ func (s *Server) ccDeleteResource(
 			"User is not authorized to perform cloudcontrol:DeleteResource.", readOnly, eventID, verified)
 		return
 	}
-	err := s.store.CloudControlDeleteResource(verified.AccountID, typeName, identifier)
+	token, err := s.store.CloudControlDeleteResource(verified.AccountID, typeName, identifier)
 	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
 		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedActionException",
 			err.Error(), readOnly, eventID, verified)
@@ -183,7 +191,7 @@ func (s *Server) ccDeleteResource(
 			"Unable to delete resource.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := ccsvc.ProgressEventJSON("DELETE", typeName, identifier, store.CloudControlRequestToken(), "")
+	payload, _ := ccsvc.ProgressEventJSON("DELETE", typeName, identifier, token, "")
 	s.writeCloudControlOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudControlEventSource, "DeleteResource", readOnly)
 }
@@ -204,4 +212,61 @@ func (s *Server) writeCloudControlError(
 	_ = json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": message})
 	_ = body
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudControlEventSource, code, readOnly)
+}
+
+func (s *Server) ccUpdateResource(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	typeName, _ := params["TypeName"].(string)
+	identifier, _ := params["Identifier"].(string)
+	patch, _ := params["PatchDocument"].(string)
+	if patch == "" {
+		patch, _ = params["DesiredState"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionCloudControlUpdateResource, "*") {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform cloudcontrol:UpdateResource.", readOnly, eventID, verified)
+		return
+	}
+	res, token, err := s.store.CloudControlUpdateResource(verified.AccountID, typeName, identifier, patch)
+	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedTypeException", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCloudControlBadRequest) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure", "Unable to update resource.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := ccsvc.ProgressEventJSON("UPDATE", res.TypeName, res.Identifier, token, res.Properties)
+	s.writeCloudControlOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudControlEventSource, "UpdateResource", readOnly)
+}
+
+func (s *Server) ccGetResourceRequestStatus(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	token, _ := params["RequestToken"].(string)
+	if !s.authorize(verified, catalog.ActionCloudControlGetResourceRequestStatus, "*") {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform cloudcontrol:GetResourceRequestStatus.", readOnly, eventID, verified)
+		return
+	}
+	st, err := s.store.CloudControlGetResourceRequestStatus(verified.AccountID, token)
+	if errors.Is(err, store.ErrCloudControlNotFound) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusNotFound, "RequestTokenNotFoundException", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure", "Unable to get request status.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := ccsvc.ProgressEventJSON(st.Operation, st.TypeName, st.Identifier, st.RequestToken, st.Properties)
+	s.writeCloudControlOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudControlEventSource, "GetResourceRequestStatus", readOnly)
 }

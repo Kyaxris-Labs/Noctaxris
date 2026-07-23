@@ -22,11 +22,11 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS targets, in-process ticker, PassRole |
 | [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy |
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD **control-plane stub** (ActiveMQ/RabbitMQ); loopback `stub://` endpoint; not a live broker |
-| [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox under data root; Describe reports `OFFLINE` (no listener) |
+| [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox; OFFLINE without EndpointType/VPC; PassRole on Role |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |
-| [CloudWatch Logs](logs.md) | Shipped | Log groups/streams CRUD lite, Put/GetLogEvents, subscription filters to Lambda/SQS |
+| [CloudWatch Logs](logs.md) | Shipped | Groups/streams, Put/GetLogEvents, XA subscription filters (awslogs envelope), metric filters lite |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
 | [Kinesis Data Streams](kinesis.md) | Shipped | Stream CRUD, Put/Get records, single-shard iterators |
 | [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3 or Lambda; RoleARN session or destination policy on Put |
@@ -42,13 +42,13 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Config](config.md) | Shipped | Recorder / delivery channel lite, StartRecorder SNS notify when snsTopicARN set, compliance stub over tagged resources |
 | [ACM](acm.md) | Shipped | Request/Describe/List/DeleteCertificate, lab self-signed PEM |
 | [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets |
-| [Cloud Map](servicediscovery.md) | Shipped | Namespace/service/instance register and DiscoverInstances |
+| [Cloud Map](servicediscovery.md) | Shipped | Private DNS (requires Vpc) / HTTP namespace, service/instance, Vpc-scoped DiscoverInstances |
 | [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
 | [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY, IAM, or Cognito User Pools auth |
 | [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, NONE/JWT/IAM authorizers, optional CredentialsArn PassRole |
 | [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD, USER_PASSWORD_AUTH, RS256 tokens, JWKS on loopback |
-| [CloudFront](cloudfront.md) | Shipped | Distribution CRUD **control-plane stub** (S3 or Gateway origin strings; no PoP) |
-| [ELB v2](elbv2.md) | Shipped | Load balancer / target group / listener lite (lambda or ip targets; no EC2) |
+| [CloudFront](cloudfront.md) | Shipped | Distribution CRUD **control-plane stub** (origins must exist; `InProgress`, no DomainName/PoP) |
+| [ELB v2](elbv2.md) | Shipped | Load balancer / target group / listener **control-plane stub** (lambda/ip; unused health; no listener invoke) |
 | [S3 Vectors](s3vectors.md) | Shipped | Vector bucket/index CRUD, PutVectors/QueryVectors cosine or euclidean |
 | [Cloud Control](cloudcontrol.md) | Shipped | Create/Get/List/DeleteResource for S3 bucket and IAM role |
 | [BCM Data Exports](bcm-data-exports.md) | Shipped | Export definition CRUD plus sample file under data root |
@@ -56,11 +56,11 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
 | [CodeDeploy](codedeploy.md) | Shipped | Application / deployment group / deployment lite, optional ECS DesiredCount or Lambda PublishVersion hooks |
 | [RDS](rds.md) | Shipped | Postgres Create/Describe/Delete, nested DinD when engine up, nested-network endpoint |
-| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement + txn lite; nested `psql` when DinD started Postgres, else stub marker; no pgx; secretArn fail-closed |
+| [RDS Data API](rds-data.md) | Shipped | ExecuteStatement; nested `psql` when DinD started Postgres else unavailable; VARCHAR SELECT cells; `parameters` rejected until pgx buy-in; secretArn fail-closed |
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
-| [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete cluster, nested Mongo-compatible when engine up |
-| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; missing bucket fails closed |
-| [OpenSearch](opensearch.md) | Shipped | Domain CRUD **control-plane stub** endpoint (`stub://`; no nested search) |
+| [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete; `creating` until nested Mongo-compatible starts |
+| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; GetObject/OutputLocation fail closed |
+| [OpenSearch](opensearch.md) | Shipped | Domain CRUD **control-plane stub** (`stub://`; status `CreateFailed`; no nested search) |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |
 | [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument **canned** Blocks |
@@ -110,7 +110,7 @@ EP=http://127.0.0.1:4566
 
 Prefer WSL or Linux for AWS CLI smoke against `http://127.0.0.1:4566`. On Windows, run the same commands inside WSL when Docker Desktop publishes that port on the Windows host.
 
-**CI vs nested smoke:** Push/PR CI runs `smoke-core` (ready + STS/S3/KMS/DynamoDB). Nested DinD is **manual only**: Actions `workflow_dispatch` with `nested_smoke=true`, or [docker/smoke-nested.sh](../../docker/smoke-nested.sh). A green PR does not prove Lambda Invoke, nested RDS/Data API, or other DinD paths. Full matrix: [ops.md](../ops.md).
+**CI vs nested smoke:** Push/PR CI runs `smoke-core` (ready + STS/S3/KMS/DynamoDB). Nested DinD runs on a weekly schedule and via Actions `workflow_dispatch` with `nested_smoke=true`, or [docker/smoke-nested.sh](../../docker/smoke-nested.sh). A green PR does not prove Lambda Invoke, nested RDS/Data API, or other DinD paths. Full matrix: [ops.md](../ops.md).
 
 Per-service CLI smoke lives on each shipped service page above.
 
@@ -120,11 +120,11 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Organizations SCP/RCP:** Member authorize loads policies attached to the account, each OU on the path to root, and the organization root. Management account is exempt. See [organizations.md](organizations.md).
 
-**Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context now populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, MFA keys, and `aws:ResourceTag/*` (plus matching service ResourceTag keys) when tags exist via the Tagging API. Broader operator matrix and every global key population remain open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
+**Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, `aws:username` / `aws:userid` / `aws:PrincipalType`, `aws:SecureTransport` (from TLS listen config), `aws:CurrentTime` / `aws:EpochTime`, MFA keys, and `aws:ResourceTag/*` (plus `ecr` / `ssm` / `secretsmanager` / `iam` / `ecs` ResourceTag prefixes) when tags exist via the Tagging API. Unrecognized Condition operators fail closed (same Deny class as catalog-unknown keys). Implemented operators: StringEquals/Like/NotEquals/NotLike (+IfExists), ArnEquals/ArnLike/ArnNotEquals/ArnNotLike (+IfExists), Null, Bool (+IfExists), IpAddress/NotIpAddress (+IfExists), Numeric* and Date* comparisons, and `ForAnyValue:` / `ForAllValues:` on String/Arn operators. Deferred: Binary*, StringEqualsIgnoreCase, full multivalued request-context sets beyond single-valued lab keys.
 
 **Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB). Live Invoke/RunTask need a healthy engine. Privilege reduction for the nested engine is planned. Athena runs in-process (no nested query engine).
 
-**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Postgres, Redis/Valkey, Mongo, and OpenSearch ports are not published on the host. Prefer RDS Data API on `:4566` for SQL labs.
+**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines today are RDS (Postgres), ElastiCache (Valkey/Redis), and DocumentDB (Mongo-compatible); those ports are never published on the host. MQ and OpenSearch remain control-plane stubs (no nested broker/search `DataKind`). Prefer RDS Data API on `:4566` for SQL labs.
 
 **In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS (and DynamoDB Streams when enabled) event source mappings use a continuous in-process poller. EventBridge Pipes use a continuous in-process ticker that calls `PollPipeOnce`. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
 

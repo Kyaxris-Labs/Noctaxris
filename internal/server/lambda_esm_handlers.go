@@ -56,13 +56,16 @@ func (s *Server) pollAllEventSourceMappings() {
 		return
 	}
 	for _, m := range mappings {
-		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, eventJSON string) error {
-			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, "$LATEST")
-			if err != nil {
-				return err
+		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, qualifier, eventJSON string) (string, error) {
+			if strings.TrimSpace(qualifier) == "" {
+				qualifier = "$LATEST"
 			}
-			_, err = s.executeLambdaInvoke(context.Background(), accountID, functionName, fn, executedVersion, eventJSON)
-			return err
+			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, qualifier)
+			if err != nil {
+				return "", err
+			}
+			out, err := s.executeLambdaInvoke(context.Background(), accountID, functionName, fn, executedVersion, eventJSON)
+			return string(out), err
 		})
 	}
 }
@@ -115,13 +118,24 @@ func (s *Server) lambdaCreateEventSourceMapping(
 		}
 		filterJSON = string(b)
 	}
+	respTypesJSON := ""
+	if rawRT, ok := params["FunctionResponseTypes"]; ok && rawRT != nil {
+		b, mErr := json.Marshal(rawRT)
+		if mErr != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+				"FunctionResponseTypes must be an array.", readOnly, eventID, verified)
+			return
+		}
+		respTypesJSON = string(b)
+	}
 	m, err := s.store.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
-		AccountID:          verified.AccountID,
-		FunctionName:       fnName,
-		EventSourceARN:     eventSourceARN,
-		BatchSize:          batchSize,
-		Enabled:            enabled,
-		FilterCriteriaJSON: filterJSON,
+		AccountID:                 verified.AccountID,
+		FunctionName:              fnName,
+		EventSourceARN:            eventSourceARN,
+		BatchSize:                 batchSize,
+		Enabled:                   enabled,
+		FilterCriteriaJSON:        filterJSON,
+		FunctionResponseTypesJSON: respTypesJSON,
 	})
 	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
@@ -141,13 +155,13 @@ func (s *Server) lambdaCreateEventSourceMapping(
 	}
 	// Unit tests leave DockerHost empty: run one poll inline so Receive→Invoke→Delete is deterministic.
 	if strings.TrimSpace(s.cfg.DockerHost) == "" && m.Enabled {
-		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, eventJSON string) error {
-			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, "$LATEST")
+		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, qualifier, eventJSON string) (string, error) {
+			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, qualifier)
 			if err != nil {
-				return err
+				return "", err
 			}
-			_, err = s.executeLambdaInvoke(r.Context(), accountID, functionName, fn, executedVersion, eventJSON)
-			return err
+			out, err := s.executeLambdaInvoke(r.Context(), accountID, functionName, fn, executedVersion, eventJSON)
+			return string(out), err
 		})
 	}
 	payload, err := lambdasvc.EventSourceMappingJSON(m)
@@ -263,6 +277,26 @@ func (s *Server) lambdaUpdateEventSourceMapping(
 	}
 	if fn, ok := params["FunctionName"].(string); ok {
 		in.Function = fn
+	}
+	if rawFC, ok := params["FilterCriteria"]; ok && rawFC != nil {
+		b, mErr := json.Marshal(rawFC)
+		if mErr != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+				"FilterCriteria must be an object.", readOnly, eventID, verified)
+			return
+		}
+		fc := string(b)
+		in.FilterCriteriaJSON = &fc
+	}
+	if rawRT, ok := params["FunctionResponseTypes"]; ok && rawRT != nil {
+		b, mErr := json.Marshal(rawRT)
+		if mErr != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+				"FunctionResponseTypes must be an array.", readOnly, eventID, verified)
+			return
+		}
+		rt := string(b)
+		in.FunctionResponseTypesJSON = &rt
 	}
 	m, err := s.store.UpdateEventSourceMapping(in)
 	if errors.Is(err, store.ErrNoSuchEventSourceMapping) {

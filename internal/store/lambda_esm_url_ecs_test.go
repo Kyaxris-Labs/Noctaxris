@@ -67,7 +67,7 @@ func TestEventSourceMappingCRUDAndPollDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	invoked := false
-	err = st.PollEventSourceMappingOnce(m.UUID, func(acct, name, eventJSON string) error {
+	err = st.PollEventSourceMappingOnce(m.UUID, func(acct, name, _, eventJSON string) (string, error) {
 		invoked = true
 		if acct != account || name != fn.FunctionName {
 			t.Fatalf("invoke acct=%s name=%s", acct, name)
@@ -75,7 +75,7 @@ func TestEventSourceMappingCRUDAndPollDelete(t *testing.T) {
 		if !strings.Contains(eventJSON, "Records") || !strings.Contains(eventJSON, "aws:sqs") || !strings.Contains(eventJSON, q.QueueARN) {
 			t.Fatalf("event=%s", eventJSON)
 		}
-		return nil
+		return "", nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,8 +144,8 @@ func TestEventSourceMappingPollLeavesOnInvokeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	invokeErr := errors.New("invoke failed")
-	err = st.PollEventSourceMappingOnce(m.UUID, func(string, string, string) error {
-		return invokeErr
+	err = st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
+		return "", invokeErr
 	})
 	if !errors.Is(err, invokeErr) {
 		t.Fatalf("want invoke err, got %v", err)

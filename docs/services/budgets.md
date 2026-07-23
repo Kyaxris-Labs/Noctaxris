@@ -13,7 +13,7 @@ CreateBudget, DescribeBudget, DescribeBudgets, and DeleteBudget. Optional `Notif
 
 ### Authz notes
 
-Identity `EvaluateFull` on `budgets:*`.
+Identity `EvaluateFull` on `budgets:*`. Optional JSON `AccountId` must equal the caller account (foreign AccountId is rejected).
 
 ## How to verify / CLI smoke
 

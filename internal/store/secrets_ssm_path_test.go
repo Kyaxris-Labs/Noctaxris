@@ -12,7 +12,7 @@ func TestSecretsRecoveryWindowAndRotate(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	created, err := st.CreateSecret(account, "us-east-1", "rot-me", "v1", nil, "", "")
+	created, err := st.CreateSecret(account, "us-east-1", "rot-me", "v1", nil, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestSecretsRecoveryWindowAndRotate(t *testing.T) {
 func TestSecretsSweepExpired(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
-	if _, err := st.CreateSecret(account, "us-east-1", "expire-me", "x", nil, "", ""); err != nil {
+	if _, err := st.CreateSecret(account, "us-east-1", "expire-me", "x", nil, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := st.DeleteSecretWithRecovery(account, "expire-me", 7, false); err != nil {

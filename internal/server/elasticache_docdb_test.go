@@ -90,11 +90,20 @@ func TestDocDBHandlers(t *testing.T) {
 	if !strings.Contains(create.Body.String(), "lab-docdb-1") || !strings.Contains(create.Body.String(), "docdb.noctaxris.internal") {
 		t.Fatalf("create body=%q", create.Body.String())
 	}
+	if !strings.Contains(create.Body.String(), "creating") {
+		t.Fatalf("without DinD expect creating, body=%q", create.Body.String())
+	}
+	if strings.Contains(create.Body.String(), "available") {
+		t.Fatalf("must not claim available without nested engine: %q", create.Body.String())
+	}
 
 	desc := mustDocDBQuery(t, handler,
 		"Action=DescribeDBClusters&Version=2014-10-31&DBClusterIdentifier=lab-docdb-1", now, "rds")
 	if desc.Code != http.StatusOK || !strings.Contains(desc.Body.String(), "27017") {
 		t.Fatalf("DescribeDBClusters status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	if !strings.Contains(desc.Body.String(), "creating") {
+		t.Fatalf("describe without DinD expect creating, body=%q", desc.Body.String())
 	}
 
 	rej := mustDocDBQuery(t, handler, strings.Join([]string{

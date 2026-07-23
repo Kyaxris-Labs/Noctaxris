@@ -39,7 +39,7 @@ func TestEvaluateKMSBothAllow(t *testing.T) {
 		Resource: "arn:aws:kms:us-east-1:000000000001:key/abc",
 	}
 	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:Encrypt","Resource":"*"}]}`
-	keyAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:*","Resource":"*"}]}`
+	keyAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"kms:*","Resource":"*"}]}`
 	got := authz.EvaluateKMS(authz.KMSRequest{
 		Caller:       ctx,
 		IdentityDocs: []string{identityAllow},
@@ -60,7 +60,7 @@ func TestEvaluateKMSGrantPathAllow(t *testing.T) {
 		Action:   "kms:Encrypt",
 		Resource: "arn:aws:kms:us-east-1:000000000001:key/abc",
 	}
-	keyAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:*","Resource":"*"}]}`
+	keyAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/bob"},"Action":"kms:*","Resource":"*"}]}`
 	got := authz.EvaluateKMS(authz.KMSRequest{
 		Caller:         ctx,
 		IdentityDocs:   nil,
@@ -119,7 +119,7 @@ func TestEvaluateKMSKeyPolicyDenyOverridesGrant(t *testing.T) {
 		Action:   "kms:Encrypt",
 		Resource: "arn:aws:kms:us-east-1:000000000001:key/abc",
 	}
-	keyDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"kms:Encrypt","Resource":"*"}]}`
+	keyDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"kms:Encrypt","Resource":"*"}]}`
 	got := authz.EvaluateKMS(authz.KMSRequest{
 		Caller:         ctx,
 		IdentityDocs:   nil,

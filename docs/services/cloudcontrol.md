@@ -2,13 +2,13 @@
 
 **Status:** shipped (lab core)
 
-CreateResource, GetResource, ListResources, and DeleteResource for a documented allowlist of already-emulated types (`AWS::S3::Bucket`, `AWS::IAM::Role`). Unknown types fail closed. Identity authz. Create/Delete return a sync `ProgressEvent` with `OperationStatus` SUCCESS (no async polling depth).
+CreateResource, GetResource, ListResources, UpdateResource, DeleteResource, and GetResourceRequestStatus for a documented allowlist aligned with CloudFormation lab types (except `AWS::CloudFormation::Stack` and `AWS::SQS::QueuePolicy`). Unknown types fail closed. Identity authz. Create/Update/Delete return a sync `ProgressEvent` with `OperationStatus` SUCCESS; tokens are recorded for `GetResourceRequestStatus`.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
-| Resources | `CreateResource`, `GetResource`, `ListResources`, `DeleteResource` |
+| Resources | `CreateResource`, `GetResource`, `ListResources`, `UpdateResource`, `DeleteResource`, `GetResourceRequestStatus` |
 
 ### Authz notes
 
@@ -16,10 +16,19 @@ Identity `EvaluateFull` on `cloudcontrol:*`.
 
 ### Allowlist
 
-| TypeName | Identifier |
-|----------|------------|
-| `AWS::S3::Bucket` | Bucket name |
-| `AWS::IAM::Role` | Role name |
+| TypeName | Identifier | Notes |
+|----------|------------|-------|
+| `AWS::S3::Bucket` | Bucket name | Update: `BucketEncryption` |
+| `AWS::IAM::Role` | Role name | |
+| `AWS::SQS::Queue` | Queue URL | |
+| `AWS::DynamoDB::Table` | Table name | |
+| `AWS::Lambda::Function` | Function name | ZipFile create |
+| `AWS::KMS::Key` | Key id | |
+| `AWS::SNS::Topic` | Topic ARN | |
+| `AWS::Events::EventBus` | Bus name | |
+| `AWS::Events::Rule` | `bus\|rule` | Update: pattern/state |
+| `AWS::SSM::Parameter` | Parameter name | Update: Value/Type |
+| `AWS::SecretsManager::Secret` | Secret name | |
 
 ## How to verify / CLI smoke
 
@@ -34,10 +43,8 @@ aws cloudcontrol list-resources --type-name AWS::S3::Bucket --endpoint-url "$EP"
 aws cloudcontrol delete-resource --type-name AWS::S3::Bucket --identifier lab-cc-bucket --endpoint-url "$EP"
 ```
 
-Live Compose smoke skipped when Docker is unavailable.
-
 ## Not yet / deferred
 
-- Full CloudFormation type coverage
-- Async GetResourceRequestStatus polling depth beyond simple SUCCESS
+- Async ProgressEvent polling depth beyond recorded SUCCESS tokens
+- UpdateResource for every allowlisted type
 - Private registry types

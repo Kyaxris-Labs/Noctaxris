@@ -1,6 +1,6 @@
 services:
   noctaxris-compute-init:
-    image: busybox:1.36
+    image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
     user: "0:0"
     volumes:
       - noctaxris-compute:/lambda
@@ -11,11 +11,14 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "127.0.0.1:4566:4566"
+      # Default loopback publish. In-function SDK labs (fn-sidecar-secret) that need
+      # DinD host-gateway reachability may set NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 with
+      # compose.lab-host-gateway.yaml (lab-only; prefer TLS if exposing beyond loopback).
+      - "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566"
     environment:
       NOCTAXRIS_LISTEN: "0.0.0.0:4566"
-      # Required for the container bind above. Host publish must stay 127.0.0.1:4566.
-      # Do not remap ports to 0.0.0.0 without TLS. Prefer NOCTAXRIS_TLS_CERT/KEY.
+      # Required for the container bind above. Default host publish is 127.0.0.1:4566.
+      # Do not set NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 without TLS except short lab sessions.
       NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN: "1"
       # Intentionally unset: Function URL / HTTP API AuthType NONE stay off on this
       # non-loopback bind. Opt in for CTF labs only:
@@ -30,14 +33,15 @@ services:
       # Function containers run inside DinD and reach the published API via
       # host.docker.internal (Docker Desktop). Override for Linux or custom wiring.
       NOCTAXRIS_LAMBDA_ENDPOINT_URL: "${NOCTAXRIS_LAMBDA_ENDPOINT_URL:-http://host.docker.internal:4566}"
-      # Lambda ExtraHosts host.docker.internal (default on). Set to 0 to omit.
-      # NOCTAXRIS_INJECT_HOST_GATEWAY: "0"
+      # Lambda ExtraHosts host.docker.internal. Code default is off; set 1 for
+      # in-function SDK labs (fn-sidecar-secret). Docs previously said default on.
+      NOCTAXRIS_INJECT_HOST_GATEWAY: "${NOCTAXRIS_INJECT_HOST_GATEWAY:-0}"
       # ECS/CodeBuild/Batch ExtraHosts (default off). Set to 1 to opt in.
       # NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "1"
     volumes:
       # API-only sealed state (master.key, state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris
-      # Lambda zip/code shared with nested engine (no master.key on privileged DinD).
+      # Lambda zip/code shared with nested engine (API RW for unpack; engine mounts :ro).
       - noctaxris-compute:/var/lib/noctaxris/lambda
       - noctaxris-engine-certs:/certs:ro
     # DO NOT add docker.sock
@@ -56,18 +60,25 @@ services:
       retries: 12
       start_period: 20s
   noctaxris-engine:
-    image: docker:27-dind
-    # Privileged DinD required today for nested containers. Privilege reduction planned.
+    image: docker:27-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+    # Default packaged path is privileged DinD so nested Lambda/ECS stay reliable on
+    # Docker Desktop + WSL2. Experimental non-privileged engine:
+    #   docker compose -f compose.yaml -f compose.engine-restricted.yaml up --build
+    # Do not claim deprivilege until nested smoke passes on that overlay.
     privileged: true
     environment:
       # Include Compose DNS name so API TLS verify against noctaxris-engine succeeds.
       DOCKER_TLS_SAN: DNS:noctaxris-engine
     # DOCKER_TLS_CERTDIR defaults to /certs; engine listens on 2376 on the Compose network.
     volumes:
-      - noctaxris-compute:/var/lib/noctaxris/lambda
+      # Read-only: DinD can still bind-mount code into tasks; cannot rewrite zip trees.
+      - noctaxris-compute:/var/lib/noctaxris/lambda:ro
       - noctaxris-engine-certs:/certs
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      noctaxris-compute-init:
+        condition: service_completed_successfully
     # Engine API stays on the Compose network only; do not add host mappings for 2375/2376.
     healthcheck:
       test: ["CMD", "docker", "info"]

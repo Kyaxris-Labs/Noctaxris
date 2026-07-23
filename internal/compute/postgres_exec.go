@@ -124,16 +124,16 @@ func parsePostgresCSV(stdout string) ([]string, [][]string, error) {
 func parsePostgresCommandTagUpdated(stdout string) int64 {
 	line := strings.TrimSpace(stdout)
 	if line == "" {
-		return 1
+		return 0
 	}
 	// Examples: "INSERT 0 1", "UPDATE 3", "DELETE 2"
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		return 1
+		return 0
 	}
 	n, err := strconv.ParseInt(fields[len(fields)-1], 10, 64)
 	if err != nil || n < 0 {
-		return 1
+		return 0
 	}
 	return n
 }

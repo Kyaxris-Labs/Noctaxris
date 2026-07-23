@@ -186,7 +186,15 @@ func (s *Server) rdsTryStartNested(
 		}
 		return inst
 	}
-	_ = cli.WaitDataPlaneHealthy(startCtx, dp.ContainerID)
+	if waitErr := cli.WaitDataPlaneHealthy(startCtx, dp.ContainerID); waitErr != nil {
+		_ = s.store.UpdateRDSDBInstanceRuntime(
+			verified.AccountID, inst.DBInstanceIdentifier, "failed", "", "", 0,
+		)
+		if updated, getErr := s.store.DescribeRDSDBInstance(verified.AccountID, inst.DBInstanceIdentifier); getErr == nil {
+			return updated
+		}
+		return inst
+	}
 	host := strings.Split(dp.Endpoint, ":")[0]
 	_ = s.store.UpdateRDSDBInstanceRuntime(
 		verified.AccountID, inst.DBInstanceIdentifier, "available", dp.ContainerID, host, 5432,

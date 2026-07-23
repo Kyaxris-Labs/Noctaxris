@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,14 +37,21 @@ func TestLambdaGetFunctionCodeSigningConfigREST20200630(t *testing.T) {
 	signHeader(t, req, nil, testAccessKey, testSecret, testRegion, "lambda", now)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("GetFunctionCodeSigningConfig REST status=%d want 404 body=%q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetFunctionCodeSigningConfig REST status=%d want 200 body=%q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, "NoSuchBucket") || strings.HasPrefix(strings.TrimSpace(body), "<") {
-		t.Fatalf("expected Lambda JSON error, got S3/XML body=%q", body)
+		t.Fatalf("expected Lambda JSON success, got S3/XML body=%q", body)
 	}
-	if !strings.Contains(body, "CodeSigningConfigNotFoundException") {
-		t.Fatalf("expected CodeSigningConfigNotFoundException in %q", body)
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json: %v body=%q", err, body)
+	}
+	if out["FunctionName"] != fnName {
+		t.Fatalf("FunctionName=%v want %q", out["FunctionName"], fnName)
+	}
+	if _, ok := out["CodeSigningConfigArn"]; ok {
+		t.Fatalf("lab response must omit CodeSigningConfigArn, got %q", body)
 	}
 }

@@ -22,7 +22,7 @@ CreateKey seeds a default key policy that allows the account root (and the IAM u
 
 ### Authz notes
 
-KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Key policy statements must name the caller principal (account root, IAM user, or IAM role). Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet).
+KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Key policy statements must name a `Principal` on put (`PutKeyPolicy` rejects Principal-less documents) and at eval missing Principal matches none. Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet). Cross-service seals (Secrets Manager, SSM SecureString, DynamoDB SSE, S3 SSE-KMS) pass AWS-shaped EncryptionContext maps into EvaluateKMS and ciphertext AAD; see those service pages for the keys.
 
 When `EncryptionContext` is present, request condition keys include `kms:EncryptionContext:<key>` for each pair and `kms:EncryptionContextKeys` (sorted, comma-joined). Ciphertext integrity binds the same map as AES-GCM AAD: a mismatched or omitted context fails decrypt with `InvalidCiphertextException`.
 

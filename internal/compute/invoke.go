@@ -156,16 +156,7 @@ func (c *Client) RunInvoke(ctx context.Context, opts RunOpts) (InvokeResult, err
 	if mergedOptDir != "" {
 		binds = append(binds, mergedOptDir+":/opt:ro")
 	}
-	sec := nestedTaskSecurity(opts.MemoryMB)
-	hostConfig := &container.HostConfig{
-		Binds:          binds,
-		AutoRemove:     false,
-		NetworkMode:    container.NetworkMode(FunctionNetworkName),
-		ExtraHosts:     hostGatewayExtraHosts(),
-		ReadonlyRootfs: false,
-		CapDrop:        sec.CapDrop,
-		Resources:      container.Resources{Memory: sec.Memory},
-	}
+	hostConfig := zipInvokeHostConfig(binds, opts.MemoryMB)
 
 	cfg := &container.Config{
 		Image:      img,

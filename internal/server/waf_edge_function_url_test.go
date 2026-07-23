@@ -120,9 +120,33 @@ func TestWAFAssociateBlocksHTTPAPIInvoke(t *testing.T) {
 }
 
 func TestCloudFrontCreateListDelete(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
+
+	missing := mustJSONTarget(t, handler, "CloudFront_2016_01_28.CreateDistribution", "cloudfront", map[string]any{
+		"DistributionConfig": map[string]any{
+			"CallerReference": "cf-missing",
+			"Comment":         "lab",
+			"Enabled":         true,
+			"Origins": map[string]any{
+				"Items": []map[string]any{
+					{"Id": "o1", "DomainName": "no-such-bucket", "OriginType": "s3"},
+				},
+			},
+		},
+	}, now)
+	if missing.Code == http.StatusOK {
+		t.Fatalf("missing S3 origin must fail closed: %q", missing.Body.String())
+	}
+
+	if _, err := st.CreateBucket(testAccountID, "lab-bucket"); err != nil {
+		t.Fatal(err)
+	}
+	api, err := st.CreateAPIGatewayAPI(testAccountID, "us-east-1", "cf-origin", "HTTP")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	create := mustJSONTarget(t, handler, "CloudFront_2016_01_28.CreateDistribution", "cloudfront", map[string]any{
 		"DistributionConfig": map[string]any{
@@ -132,7 +156,7 @@ func TestCloudFrontCreateListDelete(t *testing.T) {
 			"Origins": map[string]any{
 				"Items": []map[string]any{
 					{"Id": "o1", "DomainName": "lab-bucket", "OriginType": "s3"},
-					{"Id": "o2", "DomainName": "api-123", "OriginType": "apigateway"},
+					{"Id": "o2", "DomainName": api.APIID, "OriginType": "apigateway"},
 				},
 			},
 		},
@@ -146,6 +170,16 @@ func TestCloudFrontCreateListDelete(t *testing.T) {
 	id, _ := dist["Id"].(string)
 	if id == "" {
 		t.Fatalf("missing id: %s", create.Body.String())
+	}
+	status, _ := dist["Status"].(string)
+	if status != "InProgress" {
+		t.Fatalf("Status=%q want InProgress body=%q", status, create.Body.String())
+	}
+	if _, ok := dist["DomainName"]; ok {
+		t.Fatalf("DomainName must be omitted until fake-edge: %q", create.Body.String())
+	}
+	if strings.Contains(create.Body.String(), `"Deployed"`) {
+		t.Fatalf("must not claim Deployed without PoP: %q", create.Body.String())
 	}
 
 	list := mustJSONTarget(t, handler, "CloudFront_2016_01_28.ListDistributions", "cloudfront", map[string]any{}, now)
@@ -202,14 +236,47 @@ func TestELBv2CreateListenerAndRegisterLambda(t *testing.T) {
 		t.Fatalf("CreateListener status=%d body=%q", listener.Code, listener.Body.String())
 	}
 
-	reg := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.RegisterTargets", "elasticloadbalancing", map[string]any{
+	missing := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.RegisterTargets", "elasticloadbalancing", map[string]any{
 		"TargetGroupArn": tgARN,
 		"Targets": []map[string]any{{
-			"Id": "arn:aws:lambda:us-east-1:" + testAccountID + ":function:lab",
+			"Id": "arn:aws:lambda:us-east-1:" + testAccountID + ":function:missing",
 		}},
+	}, now)
+	if missing.Code == http.StatusOK {
+		t.Fatalf("unresolved lambda target must be rejected: %q", missing.Body.String())
+	}
+
+	mustCreateIAMRole(t, handler, "elb-lambda-exec", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/elb-lambda-exec"
+	createFn := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "lab",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if createFn.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d body=%q", createFn.Code, createFn.Body.String())
+	}
+	mustAddLambdaServicePermission(t, handler, "lab", "elasticloadbalancing.amazonaws.com", "elb-allow", now)
+
+	fnARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:lab"
+	reg := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.RegisterTargets", "elasticloadbalancing", map[string]any{
+		"TargetGroupArn": tgARN,
+		"Targets":        []map[string]any{{"Id": fnARN}},
 	}, now)
 	if reg.Code != http.StatusOK {
 		t.Fatalf("RegisterTargets status=%d body=%q", reg.Code, reg.Body.String())
+	}
+
+	health := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.DescribeTargetHealth", "elasticloadbalancing", map[string]any{
+		"TargetGroupArn": tgARN,
+	}, now)
+	if health.Code != http.StatusOK || !strings.Contains(health.Body.String(), `"unused"`) {
+		t.Fatalf("DescribeTargetHealth want unused, status=%d body=%q", health.Code, health.Body.String())
+	}
+	if strings.Contains(health.Body.String(), `"healthy"`) {
+		t.Fatalf("must not claim healthy without listener dataplane: %q", health.Body.String())
 	}
 
 	reject := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateTargetGroup", "elasticloadbalancing", map[string]any{
@@ -217,6 +284,39 @@ func TestELBv2CreateListenerAndRegisterLambda(t *testing.T) {
 	}, now)
 	if reject.Code == http.StatusOK {
 		t.Fatalf("expected instance target type rejected")
+	}
+
+	nlb := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateLoadBalancer", "elasticloadbalancing", map[string]any{
+		"Name": "lab-nlb", "Type": "network",
+	}, now)
+	if nlb.Code == http.StatusOK {
+		t.Fatalf("Type=network must be rejected: %q", nlb.Body.String())
+	}
+}
+
+func TestWAFAssociateRejectsELBWithoutEnforcePath(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustJSONTarget(t, handler, "AWSWAF_20190729.CreateWebACL", "wafv2", map[string]any{
+		"Name": "elb-acl", "Scope": "REGIONAL",
+		"DefaultAction": map[string]any{"Allow": map[string]any{}},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateWebACL status=%d body=%q", create.Code, create.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(create.Body.Bytes(), &out)
+	sum, _ := out["Summary"].(map[string]any)
+	aclARN, _ := sum["ARN"].(string)
+
+	alb := mustJSONTarget(t, handler, "AWSWAF_20190729.AssociateWebACL", "wafv2", map[string]any{
+		"WebACLArn":   aclARN,
+		"ResourceArn": "arn:aws:elasticloadbalancing:us-east-1:" + testAccountID + ":loadbalancer/app/lab/abc",
+	}, now)
+	if alb.Code == http.StatusOK {
+		t.Fatalf("ALB AssociateWebACL must fail closed without enforce path: %q", alb.Body.String())
 	}
 }
 

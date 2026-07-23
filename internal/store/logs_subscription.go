@@ -1,13 +1,15 @@
 package store
 
 import (
+	"bytes"
+	"compress/gzip"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
-
 )
 
 const servicePrincipalLogs = "logs.amazonaws.com"
@@ -52,10 +54,12 @@ func (s *Store) EnsureLogsSubscriptionSchema() error {
 }
 
 // PutSubscriptionFilter upserts a subscription filter (Lambda or SQS destination).
+// Lambda destinations ignore roleARN (resource-policy delivery path). SQS is lab-only.
 func (s *Store) PutSubscriptionFilter(accountID, group, filterName, pattern, destinationARN, roleARN string) (LogsSubscriptionFilter, error) {
 	group = strings.TrimSpace(group)
 	filterName = strings.TrimSpace(filterName)
 	destinationARN = strings.TrimSpace(destinationARN)
+	roleARN = strings.TrimSpace(roleARN)
 	if group == "" || filterName == "" || destinationARN == "" {
 		return LogsSubscriptionFilter{}, fmt.Errorf("put subscription filter: LogGroupName, FilterName, and DestinationArn are required")
 	}
@@ -64,6 +68,10 @@ func (s *Store) PutSubscriptionFilter(accountID, group, filterName, pattern, des
 	}
 	if !strings.HasPrefix(destinationARN, "arn:aws:lambda:") && !strings.HasPrefix(destinationARN, "arn:aws:sqs:") {
 		return LogsSubscriptionFilter{}, fmt.Errorf("put subscription filter: DestinationArn must be Lambda or SQS")
+	}
+	// AWS Lambda subscription filters use destination resource policy, not roleArn.
+	if strings.HasPrefix(destinationARN, "arn:aws:lambda:") {
+		roleARN = ""
 	}
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
@@ -74,7 +82,7 @@ func (s *Store) PutSubscriptionFilter(accountID, group, filterName, pattern, des
 		   filter_pattern = excluded.filter_pattern,
 		   destination_arn = excluded.destination_arn,
 		   role_arn = excluded.role_arn`,
-		accountID, group, filterName, strings.TrimSpace(pattern), destinationARN, strings.TrimSpace(roleARN), now,
+		accountID, group, filterName, strings.TrimSpace(pattern), destinationARN, roleARN, now,
 	)
 	if err != nil {
 		return LogsSubscriptionFilter{}, fmt.Errorf("put subscription filter: %w", err)
@@ -156,12 +164,17 @@ func labLogFilterMatches(pattern, message string) bool {
 }
 
 func (s *Store) deliverLogSubscription(accountID, group string, f LogsSubscriptionFilter, events []LogEvent) error {
+	lg, err := s.getLogGroup(accountID, group)
+	if err != nil {
+		return err
+	}
+	sourceARN := strings.TrimSpace(lg.Arn)
 	payload, err := json.Marshal(map[string]any{
-		"messageType":     "DATA_MESSAGE",
-		"owner":           accountID,
-		"logGroup":        group,
+		"messageType":         "DATA_MESSAGE",
+		"owner":               accountID,
+		"logGroup":            group,
 		"subscriptionFilters": []string{f.FilterName},
-		"logEvents":       events,
+		"logEvents":           events,
 	})
 	if err != nil {
 		return err
@@ -171,27 +184,94 @@ func (s *Store) deliverLogSubscription(accountID, group string, f LogsSubscripti
 	if !ok {
 		return fmt.Errorf("unsupported destination")
 	}
+	destOwner := resourceOwnerAccountFromARN(arn)
+	if destOwner == "" {
+		destOwner = accountID
+	}
 	roleARN := strings.TrimSpace(f.RoleARN)
-	if roleARN != "" {
-		if !s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "logs-subscription", DefaultEventsRegion) {
-			return fmt.Errorf("role session denied")
-		}
-	} else if !s.deliveryTargetResourcePolicyAllows(accountID, arn, action, servicePrincipalLogs, "") {
+	isLambda := strings.HasPrefix(arn, "arn:aws:lambda:")
+
+	// Destination resource policy always required (Lambda path; SQS with or without role).
+	if !s.deliveryTargetResourcePolicyAllows(accountID, arn, action, servicePrincipalLogs, sourceARN) {
 		return fmt.Errorf("destination policy denied")
 	}
+	// When roleArn is set (lab SQS path), also require role session Allow (AND).
+	if roleARN != "" && !isLambda {
+		if !s.deliveryRoleSessionAllows(accountID, roleARN, action, arn, "logs-subscription", DefaultEventsRegion, sourceARN) {
+			return fmt.Errorf("role session denied")
+		}
+	}
+
 	switch {
 	case strings.HasPrefix(arn, "arn:aws:sqs:"):
 		qName, err := queueNameFromARN(arn)
 		if err != nil {
 			return err
 		}
-		_, err = s.SendMessage(accountID, qName, payload, false, nil, "", nil)
+		// SQS destinations are lab-only: raw DATA_MESSAGE JSON (not awslogs envelope).
+		_, err = s.SendMessage(destOwner, qName, payload, false, nil, "", nil)
 		return err
-	case strings.HasPrefix(arn, "arn:aws:lambda:"):
+	case isLambda:
 		fn, qual := ParseFunctionQualifier(arn)
-		_, err = s.EnqueueAsyncInvoke(accountID, fn, qual, string(payload))
+		envelope, err := encodeAwslogsSubscriptionEnvelope(payload)
+		if err != nil {
+			return err
+		}
+		_, err = s.EnqueueAsyncInvoke(destOwner, fn, qual, string(envelope))
 		return err
 	default:
 		return fmt.Errorf("unsupported destination")
 	}
+}
+
+// EncodeAwslogsSubscriptionEnvelope wraps DATA_MESSAGE JSON as AWS Lambda subscription
+// shape: {"awslogs":{"data":"<base64(gzip(json))>"}}.
+func EncodeAwslogsSubscriptionEnvelope(dataMessageJSON []byte) ([]byte, error) {
+	return encodeAwslogsSubscriptionEnvelope(dataMessageJSON)
+}
+
+func encodeAwslogsSubscriptionEnvelope(dataMessageJSON []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(dataMessageJSON); err != nil {
+		_ = zw.Close()
+		return nil, fmt.Errorf("awslogs gzip: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("awslogs gzip close: %w", err)
+	}
+	return json.Marshal(map[string]any{
+		"awslogs": map[string]string{
+			"data": base64.StdEncoding.EncodeToString(buf.Bytes()),
+		},
+	})
+}
+
+// DecodeAwslogsSubscriptionEnvelope extracts and gunzips awslogs.data for tests.
+func DecodeAwslogsSubscriptionEnvelope(envelope []byte) ([]byte, error) {
+	var wrap struct {
+		Awslogs struct {
+			Data string `json:"data"`
+		} `json:"awslogs"`
+	}
+	if err := json.Unmarshal(envelope, &wrap); err != nil {
+		return nil, err
+	}
+	if wrap.Awslogs.Data == "" {
+		return nil, fmt.Errorf("awslogs.data missing")
+	}
+	raw, err := base64.StdEncoding.DecodeString(wrap.Awslogs.Data)
+	if err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	var out bytes.Buffer
+	if _, err := out.ReadFrom(zr); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }

@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/google/uuid"
 )
 
@@ -828,7 +826,7 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 			deliverErr = err
 			break
 		}
-		_, deliverErr = s.Publish(accountID, topic.TopicName, body, "", nil)
+		_, deliverErr = s.Publish(topic.AccountID, topic.TopicName, body, "", nil)
 	case strings.HasPrefix(arn, "arn:aws:logs:"):
 		deliverErr = s.deliverEventTargetToLogs(accountID, arn, body, source, created)
 	case strings.HasPrefix(arn, "arn:aws:kinesis:"):
@@ -894,7 +892,11 @@ func (s *Store) deliverEventTargetToKinesis(accountID, streamARN, body, entryID 
 }
 
 func (s *Store) deliverEventTargetToSFN(accountID, stateMachineARN, body string) error {
-	_, err := s.StartSFNExecution(accountID, DefaultSFNRegion, stateMachineARN, "", body, s.getSFNTaskInvoker())
+	smAccount := accountID
+	if owner := resourceOwnerAccountFromARN(stateMachineARN); owner != "" {
+		smAccount = owner
+	}
+	_, err := s.StartSFNExecution(smAccount, DefaultSFNRegion, stateMachineARN, "", body, s.getSFNTaskInvoker())
 	return err
 }
 
@@ -946,76 +948,11 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt Eve
 			strings.Contains(arn, ":stateMachine:") {
 			return false
 		}
-		return s.eventTargetResourcePolicyAllows(accountID, arn, action, ruleARN)
+		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalEvents, ruleARN)
 	}
-	return s.eventTargetRoleSessionAllows(accountID, roleARN, action, arn)
-}
-
-// eventTargetRoleSessionAllows mints a temporary session for RoleArn and evaluates
-// whether the role identity policies Allow the delivery action on the target ARN.
-func (s *Store) eventTargetRoleSessionAllows(accountID, roleARN, action, targetARN string) bool {
-	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok || roleAccountID != accountID {
-		return false
-	}
-	if _, _, err := s.GetRole(accountID, roleName); err != nil {
-		return false
-	}
-	secret, err := randomHexSecret(16)
-	if err != nil {
-		log.Printf("events role session mint secret failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	sessionToken, err := randomHexSecret(16)
-	if err != nil {
-		log.Printf("events role session mint token failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	accessKeyID, err := s.MintTempCredentialsOpts(MintTempOpts{
-		AccountID:    accountID,
-		RoleARN:      roleARN,
-		SessionName:  "events-delivery",
-		Secret:       secret,
-		SessionToken: sessionToken,
-		Expires:      time.Now().UTC().Add(time.Hour),
-	})
-	if err != nil {
-		log.Printf("events role session mint failed role=%s err=%v", roleARN, err)
-		return false
-	}
-
-	docs, err := s.identityPolicyDocsForRoleARN(roleARN)
-	if err != nil {
-		log.Printf("events role policy load failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	boundaryDoc := ""
-	if doc, ok, err := s.PermissionsBoundaryDoc(accountID, "role", roleName); err == nil && ok {
-		boundaryDoc = doc
-	}
-	scpDocs, err := s.SCPDocsForAccount(accountID)
-	if err != nil {
-		return false
-	}
-	rcpDocs, err := s.RCPDocsForAccount(accountID)
-	if err != nil {
-		return false
-	}
-	principal := identity.RoleSessionPrincipal(accountID, roleName, "events-delivery", accessKeyID)
-	ctx := authz.RequestContext{
-		Principal: principal,
-		Action:    action,
-		Resource:  targetARN,
-		Region:    DefaultEventsRegion,
-	}
-	in := authz.EvalInputs{
-		IdentityDocs:        docs,
-		BoundaryDoc:         boundaryDoc,
-		SCPDocs:             scpDocs,
-		RCPDocs:             rcpDocs,
-		IsManagementAccount: s.IsManagementAccount(accountID),
-	}
-	return authz.EvaluateFull(ctx, in) == authz.Allow
+	return s.deliveryAuthorizedRoleAndResource(
+		accountID, roleARN, action, arn, authz.ServicePrincipalEvents, ruleARN, "events-delivery", DefaultEventsRegion,
+	)
 }
 
 func (s *Store) identityPolicyDocsForRoleARN(roleARN string) ([]string, error) {
@@ -1060,61 +997,6 @@ func eventTargetDeliveryAction(targetARN string) (string, bool) {
 		return actionSFNStartExecution, true
 	default:
 		return "", false
-	}
-}
-
-func (s *Store) eventTargetResourcePolicyAllows(accountID, targetARN, action, sourceARN string) bool {
-	policyAccount := accountID
-	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
-		policyAccount = owner
-	}
-	policyDoc, err := s.eventTargetResourcePolicyDoc(policyAccount, targetARN)
-	if err != nil {
-		return false
-	}
-	return authz.EventTargetResourcePolicyAllows(
-		policyDoc,
-		action,
-		targetARN,
-		authz.ServicePrincipalEvents,
-		policyAccount,
-		authz.DeliverySourceConditionKeys(sourceARN, ""),
-	)
-}
-
-func (s *Store) eventTargetResourcePolicyDoc(accountID, targetARN string) (string, error) {
-	switch {
-	case strings.HasPrefix(targetARN, "arn:aws:sqs:"):
-		queueName, err := queueNameFromARN(targetARN)
-		if err != nil {
-			return "", err
-		}
-		attrs, err := s.GetQueueAttributes(accountID, queueName)
-		if err != nil {
-			return "", err
-		}
-		return attrs["Policy"], nil
-	case strings.HasPrefix(targetARN, "arn:aws:lambda:"):
-		functionName, _ := ParseFunctionQualifier(targetARN)
-		if functionName == "" {
-			return "", fmt.Errorf("event target: empty function name")
-		}
-		doc, err := s.GetFunctionPolicy(accountID, functionName)
-		if err != nil {
-			if errors.Is(err, ErrNoSuchResourcePolicy) {
-				return "", nil
-			}
-			return "", err
-		}
-		return doc, nil
-	case strings.HasPrefix(targetARN, "arn:aws:sns:"):
-		topic, err := s.GetTopicByARN(targetARN)
-		if err != nil {
-			return "", err
-		}
-		return topic.Policy, nil
-	default:
-		return "", fmt.Errorf("event target: unsupported arn %s", targetARN)
 	}
 }
 

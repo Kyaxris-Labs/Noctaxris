@@ -17,7 +17,7 @@ func TestEvaluateDynamoDBIdentityAllowEmptyResource(t *testing.T) {
 		Action:   "dynamodb:GetItem",
 		Resource: "arn:aws:dynamodb:us-east-1:000000000001:table/lab",
 	}
-	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:GetItem","Resource":"*"}]}`
+	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"dynamodb:GetItem","Resource":"*"}]}`
 	got := authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 		Caller:            ctx,
 		IdentityDocs:      []string{identityAllow},
@@ -39,7 +39,7 @@ func TestEvaluateDynamoDBIdentityDenyResourceAllow(t *testing.T) {
 		Resource: "arn:aws:dynamodb:us-east-1:000000000001:table/lab",
 	}
 	identityDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"dynamodb:GetItem","Resource":"*"}]}`
-	resourceAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:GetItem","Resource":"*"}]}`
+	resourceAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"dynamodb:GetItem","Resource":"*"}]}`
 	got := authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 		Caller:            ctx,
 		IdentityDocs:      []string{identityDeny},
@@ -60,7 +60,7 @@ func TestEvaluateDynamoDBIdentityEmptyResourceAllow(t *testing.T) {
 		Action:   "dynamodb:GetItem",
 		Resource: "arn:aws:dynamodb:us-east-1:000000000001:table/lab",
 	}
-	resourceAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:GetItem","Resource":"*"}]}`
+	resourceAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"dynamodb:GetItem","Resource":"*"}]}`
 	got := authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 		Caller:            ctx,
 		IdentityDocs:      nil,

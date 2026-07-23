@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Distinct Scheduler API (not EventBridge Rules `ScheduleExpression`). Create and manage schedules with rate or a small cron subset, deliver to Lambda, SQS, or SNS via an in-process ticker.
+Distinct Scheduler API (not EventBridge Rules `ScheduleExpression`). Create and manage schedules with rate or a small cron subset, deliver to Lambda, SQS, SNS, or Step Functions state machines via an in-process ticker.
 
 ## Implemented
 
@@ -10,15 +10,15 @@ Distinct Scheduler API (not EventBridge Rules `ScheduleExpression`). Create and 
 |------|---------|
 | Schedules | `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule`, `ListSchedules` |
 | Expressions | `rate(n minutes\|hours\|days)`, AWS-shaped `cron(minutes hours day-of-month month day-of-week year)` subset (digits, `*`, `?`), optional one-time `at(yyyy-mm-ddThh:mm:ss)` |
-| Targets | SQS `SendMessage`, Lambda async Invoke enqueue, SNS `Publish` |
-| Authz | Identity `EvaluateFull` on `scheduler:*`. PassRole when `Target.RoleArn` is set (`scheduler.amazonaws.com` trust). Delivery without RoleArn requires a target resource policy Allow for `scheduler.amazonaws.com` |
+| Targets | SQS `SendMessage`, Lambda async Invoke enqueue, SNS `Publish`, Step Functions `StartExecution` (RoleArn) |
+| Authz | Identity `EvaluateFull` on `scheduler:*`. PassRole when `Target.RoleArn` is set (`scheduler.amazonaws.com` trust). Delivery without RoleArn requires a target resource policy Allow for `scheduler.amazonaws.com`. Foreign SQS/Lambda/SNS targets with RoleArn require role session Allow **and** destination resource policy. Target I/O uses the account embedded in the target ARN |
 | Ticker | In-process worker advances `next_run` and delivers due ENABLED schedules (at-least-once lab best-effort) |
 
 Schedule metadata lives in SQLite under the default group when `GroupName` is omitted.
 
 ### Authz notes
 
-PassRole uses service principal `scheduler.amazonaws.com`. Target delivery with RoleArn mints a role session and evaluates identity policies for the target action. Without RoleArn, delivery checks the SQS, Lambda, or SNS resource policy for the Scheduler service principal.
+PassRole uses service principal `scheduler.amazonaws.com`. Target delivery with RoleArn mints a role session and evaluates identity policies for the target action. Same-account RoleArn-only delivery remains the lab path for SQS/Lambda/SNS; foreign targets also require the destination resource policy. Without RoleArn, delivery checks the SQS, Lambda, or SNS resource policy for the Scheduler service principal. Step Functions targets require RoleArn (`states:StartExecution`).
 
 ## How to verify / CLI smoke
 
@@ -52,5 +52,5 @@ Skip live ticker wait in CI when Docker is unavailable. Unit tests call `Process
 - Flexible time windows beyond Mode=OFF
 - Full retry and DLQ matrix
 - Schedule groups beyond the default group depth
-- Universal targets beyond Lambda, SQS, and SNS
+- Universal targets beyond Lambda, SQS, SNS, and Step Functions
 - Legacy EventBridge scheduled rules (`ScheduleExpression` on Rules)

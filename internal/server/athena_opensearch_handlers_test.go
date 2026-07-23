@@ -150,8 +150,18 @@ func TestOpenSearchDomainHTTP(t *testing.T) {
 	desc := mustJSONTarget(t, handler, "AmazonOpenSearchService.DescribeDomain", "es", map[string]any{
 		"DomainName": "srv-domain",
 	}, now)
-	if desc.Code != http.StatusOK || !strings.Contains(desc.Body.String(), "stub://127.0.0.1/opensearch/") {
+	body := desc.Body.String()
+	if desc.Code != http.StatusOK || !strings.Contains(body, "stub://127.0.0.1/opensearch/") {
 		t.Fatalf("DescribeDomain status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	if !strings.Contains(body, `"DomainStatus":"CreateFailed"`) && !strings.Contains(body, `"DomainStatus": "CreateFailed"`) {
+		t.Fatalf("DescribeDomain must not claim Active without engine; body=%q", body)
+	}
+	if strings.Contains(body, `"DomainStatus":"Active"`) || strings.Contains(body, `"DomainStatus": "Active"`) {
+		t.Fatalf("DescribeDomain must not claim Active on stub://; body=%q", body)
+	}
+	if strings.Contains(body, `"Created":true`) || strings.Contains(body, `"Created": true`) {
+		t.Fatalf("CreateFailed stub must not set Created=true; body=%q", body)
 	}
 
 	list := mustJSONTarget(t, handler, "AmazonOpenSearchService.ListDomainNames", "es", map[string]any{}, now)

@@ -131,7 +131,7 @@ func (s *Server) authorizeEvents(verified *authn.Verified, action, resource stri
 	return s.authorize(verified, action, resource)
 }
 
-func (s *Server) checkEventsPassRole(verified *authn.Verified, roleARN string) error {
+func (s *Server) checkEventsPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("RoleArn must be a valid IAM role ARN")
@@ -161,6 +161,7 @@ func (s *Server) checkEventsPassRole(verified *authn.Verified, roleARN string) e
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalEvents,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to EventBridge")
@@ -347,7 +348,7 @@ func (s *Server) eventsPutTargets(
 		}
 		roleARN := stringParam(m["RoleArn"])
 		if roleARN != "" {
-			if err := s.checkEventsPassRole(verified, roleARN); err != nil {
+			if err := s.checkEventsPassRole(verified, roleARN, resource); err != nil {
 				s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 					err.Error(), readOnly, eventID, verified)
 				return
@@ -879,7 +880,11 @@ func (s *Server) eventsPutPermission(
 			"User is not authorized to perform events:PutPermission.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.PutEventBusPermission(verified.AccountID, busName, statementID, principal, actions); err != nil {
+	var condition map[string]any
+	if rawCond, ok := params["Condition"].(map[string]any); ok && len(rawCond) > 0 {
+		condition = rawCond
+	}
+	if err := s.store.PutEventBusPermission(verified.AccountID, busName, statementID, principal, actions, condition); err != nil {
 		if errors.Is(err, store.ErrNoSuchEventBus) {
 			s.writeEventsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 				"Event bus does not exist.", readOnly, eventID, verified)

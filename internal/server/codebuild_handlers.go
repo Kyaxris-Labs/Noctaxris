@@ -19,11 +19,10 @@ import (
 )
 
 const (
-	codebuildJSONContentType   = "application/x-amz-json-1.1"
-	codebuildEventSource       = "codebuild.amazonaws.com"
-	defaultCodeBuildEndpoint   = "http://host.docker.internal:4566"
-	codebuildSession           = "noctaxris-codebuild"
-	codebuildRegistryPrincipal = "codebuild.amazonaws.com"
+	codebuildJSONContentType = "application/x-amz-json-1.1"
+	codebuildEventSource     = "codebuild.amazonaws.com"
+	defaultCodeBuildEndpoint = "http://host.docker.internal:4566"
+	codebuildSession         = "noctaxris-codebuild"
 )
 
 func (s *Server) handleCodeBuild(
@@ -211,7 +210,7 @@ func (s *Server) codebuildStartBuild(
 		return
 	}
 
-	if err := s.executeCodeBuild(r.Context(), verified.AccountID, b); err != nil {
+	if err := s.startCodeBuildContainer(r.Context(), verified.AccountID, b); err != nil {
 		_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, time.Now().UTC().Format(time.RFC3339))
 		if strings.Contains(err.Error(), "compute unavailable") {
 			s.writeCodeBuildError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
@@ -239,7 +238,8 @@ func (s *Server) codebuildStartBuild(
 	s.writeSuccessAudit(r, requestID, eventID, verified, codebuildEventSource, "StartBuild", readOnly)
 }
 
-func (s *Server) executeCodeBuild(ctx context.Context, accountID string, b store.CodeBuildBuild) error {
+// startCodeBuildContainer starts the nested container and returns IN_PROGRESS; exit reap is background.
+func (s *Server) startCodeBuildContainer(ctx context.Context, accountID string, b store.CodeBuildBuild) error {
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
 		return errors.New("compute unavailable")
@@ -266,8 +266,9 @@ func (s *Server) executeCodeBuild(ctx context.Context, accountID string, b store
 	if err != nil {
 		return err
 	}
-	if roleARN := strings.TrimSpace(proj.ServiceRole); roleARN != "" {
-		minted, mintErr := s.mintRoleSessionEnv(roleARN, codebuildSession, endpoint, store.DefaultCodeBuildRegion)
+	serviceRole := strings.TrimSpace(proj.ServiceRole)
+	if serviceRole != "" {
+		minted, mintErr := s.mintRoleSessionEnv(serviceRole, codebuildSession, endpoint, store.DefaultCodeBuildRegion)
 		if mintErr != nil {
 			return mintErr
 		}
@@ -275,35 +276,44 @@ func (s *Server) executeCodeBuild(ctx context.Context, accountID string, b store
 			env[k] = v
 		}
 	}
-	pullRef, err := s.prepareLabRegistryImage(ctx, cli, accountID, b.Image, codebuildRegistryPrincipal)
+	pullRef, useAuth, username, password, err := s.labRegistryPullOpts(accountID, b.Image, serviceRole)
 	if err != nil {
 		return err
 	}
 	cid, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
-		ImageURI:    pullRef,
-		Command:     []string{"/bin/sh", "-c", script},
-		EndpointURL: endpoint,
-		Env:         env,
+		ImageURI:         pullRef,
+		Command:          []string{"/bin/sh", "-c", script},
+		EndpointURL:      endpoint,
+		Env:              env,
+		LabRegistryPull:  useAuth,
+		RegistryUsername: username,
+		RegistryPassword: password,
 	})
 	if err != nil {
 		return err
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	exitCode, waitErr := cli.WaitECSTaskExit(waitCtx, cid)
-	end := time.Now().UTC().Format(time.RFC3339)
-	status := store.CodeBuildStatusSucceeded
-	if waitErr != nil {
-		status = store.CodeBuildStatusFailed
-	} else if exitCode != 0 {
-		status = store.CodeBuildStatusFailed
-	} else {
-		running, runErr := cli.ContainerRunning(ctx, cid)
-		if runErr == nil && running {
-			status = store.CodeBuildStatusInProgress
-		}
+	if err := s.store.SetCodeBuildBuildRuntime(accountID, b.ID, cid, store.CodeBuildStatusInProgress, ""); err != nil {
+		_ = cli.StopECSTask(ctx, cid)
+		return err
 	}
-	return s.store.SetCodeBuildBuildRuntime(accountID, b.ID, cid, status, end)
+	go s.reapCodeBuild(accountID, b.ID, cid)
+	return nil
+}
+
+func (s *Server) reapCodeBuild(accountID, buildID, containerID string) {
+	cli, err := s.computeClient()
+	if err != nil || cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	exitCode, waitErr := cli.WaitECSTaskExit(ctx, containerID)
+	status := store.CodeBuildStatusSucceeded
+	if waitErr != nil || exitCode != 0 {
+		status = store.CodeBuildStatusFailed
+	}
+	_ = cli.StopECSTask(context.Background(), containerID)
+	_ = s.store.SetCodeBuildBuildRuntime(accountID, buildID, containerID, status, time.Now().UTC().Format(time.RFC3339))
 }
 
 func (s *Server) codebuildBatchGetBuilds(

@@ -120,7 +120,7 @@ func TestDynamoDBResourcePolicyDenyGetItem(t *testing.T) {
 		t.Fatalf("PutItem status=%d body=%q", putRec.Code, putRec.Body.String())
 	}
 
-	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"dynamodb:GetItem","Resource":"*"}]}`
+	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"dynamodb:GetItem","Resource":"*"}]}`
 	polRec := mustDynamoJSON(t, handler, "PutResourcePolicy", map[string]any{
 		"TableName": "deny-items",
 		"Policy":    denyPolicy,
@@ -225,7 +225,8 @@ func TestSQSQueuePolicyDenySendMessage(t *testing.T) {
 		t.Fatalf("missing QueueUrl in %q", createRec.Body.String())
 	}
 
-	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"sqs:SendMessage","Resource":"*"}]}`
+	// Queue policy is resource-based: Principal required (match-none if omitted).
+	denyPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":{"AWS":"*"},"Action":"sqs:SendMessage","Resource":"*"}]}`
 	setRec := mustSQSJSON(t, handler, "SetQueueAttributes", map[string]any{
 		"QueueUrl": queueURL,
 		"Attributes": map[string]string{

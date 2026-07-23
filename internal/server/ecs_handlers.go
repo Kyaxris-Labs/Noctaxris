@@ -133,7 +133,7 @@ func (s *Server) authorizeECS(verified *authn.Verified, action, resource string)
 	return s.authorize(verified, action, resource)
 }
 
-func (s *Server) checkECSPassRole(verified *authn.Verified, roleARN string) error {
+func (s *Server) checkECSPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("RoleArn must be a valid IAM role ARN")
@@ -163,6 +163,7 @@ func (s *Server) checkECSPassRole(verified *authn.Verified, roleARN string) erro
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalECSTasks,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to ECS")
@@ -253,12 +254,12 @@ func (s *Server) ecsRegisterTaskDefinition(
 			"User is not authorized to perform ecs:RegisterTaskDefinition.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.checkECSPassRole(verified, taskRoleARN); err != nil {
+	if err := s.checkECSPassRole(verified, taskRoleARN, resource); err != nil {
 		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	if err := s.checkECSPassRole(verified, executionRoleARN); err != nil {
+	if err := s.checkECSPassRole(verified, executionRoleARN, resource); err != nil {
 		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -459,6 +460,13 @@ func (s *Server) ecsRunTask(
 			"taskDefinition is required.", readOnly, eventID, verified)
 		return
 	}
+	if nc, ok := params["networkConfiguration"].(map[string]any); ok && nc != nil {
+		if awsvpc, ok := nc["awsvpcConfiguration"].(map[string]any); ok && len(awsvpc) > 0 {
+			s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+				"awsvpc networkConfiguration is not supported; lab ECS uses DinD Internal networks, not ENIs.", readOnly, eventID, verified)
+			return
+		}
+	}
 
 	clusterResource := s.ecsClusterARN(verified, cluster)
 	if !s.authorizeECS(verified, catalog.ActionECSRunTask, clusterResource) {
@@ -495,12 +503,16 @@ func (s *Server) ecsRunTask(
 			executionRoleARN = role
 		}
 	}
-	if err := s.checkECSPassRole(verified, taskRoleARN); err != nil {
+	sourceARN := td.ARN
+	if sourceARN == "" {
+		sourceARN = clusterResource
+	}
+	if err := s.checkECSPassRole(verified, taskRoleARN, sourceARN); err != nil {
 		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	if err := s.checkECSPassRole(verified, executionRoleARN); err != nil {
+	if err := s.checkECSPassRole(verified, executionRoleARN, sourceARN); err != nil {
 		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -522,7 +534,7 @@ func (s *Server) ecsRunTask(
 		return
 	}
 
-	if err := s.executeECSTask(r.Context(), verified.AccountID, region, cluster, td, taskRoleARN, task.TaskARN); err != nil {
+	if err := s.executeECSTask(r.Context(), verified.AccountID, region, cluster, td, taskRoleARN, executionRoleARN, task.TaskARN); err != nil {
 		_ = s.store.DeleteTask(verified.AccountID, task.TaskARN)
 		if strings.Contains(err.Error(), "compute unavailable") {
 			s.writeECSError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
@@ -563,7 +575,7 @@ func (s *Server) executeECSTask(
 	ctx context.Context,
 	accountID, region, cluster string,
 	td store.ECSTaskDefinition,
-	taskRoleARN, taskARN string,
+	taskRoleARN, executionRoleARN, taskARN string,
 ) error {
 	containerDef, err := ecsPrimaryContainer(td)
 	if err != nil {
@@ -580,69 +592,36 @@ func (s *Server) executeECSTask(
 		return errors.New("compute unavailable")
 	}
 
-	roleAccountID, _, ok := sts.ParseRoleARN(taskRoleARN)
-	if !ok {
-		return errors.New("task role ARN is invalid")
-	}
-	secret, err := randomSecret()
-	if err != nil {
-		return fmt.Errorf("mint credentials: %w", err)
-	}
-	sessionToken, err := randomSecret()
-	if err != nil {
-		return fmt.Errorf("mint credentials: %w", err)
-	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
-	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
-		AccountID:    roleAccountID,
-		RoleARN:      taskRoleARN,
-		SessionName:  ecsInvokeSession,
-		Secret:       secret,
-		SessionToken: sessionToken,
-		Expires:      expires,
-	})
-	if err != nil {
-		return fmt.Errorf("mint task role credentials: %w", err)
-	}
-
 	endpoint := strings.TrimSpace(s.cfg.LambdaEndpointURL)
 	if endpoint == "" {
 		endpoint = defaultECSEndpoint
 	}
 	env := ecsContainerEnv(containerDef)
-	env["AWS_ACCESS_KEY_ID"] = accessKeyID
-	env["AWS_SECRET_ACCESS_KEY"] = secret
-	env["AWS_SESSION_TOKEN"] = sessionToken
-	env["AWS_DEFAULT_REGION"] = store.DefaultECSRegion
-	env["AWS_REGION"] = store.DefaultECSRegion
-	env["AWS_ENDPOINT_URL"] = endpoint
-	env["AWS_ENDPOINT_URL_STS"] = endpoint
-	env["AWS_ENDPOINT_URL_IAM"] = endpoint
-	env["AWS_ENDPOINT_URL_S3"] = endpoint
-	env["AWS_ENDPOINT_URL_DYNAMODB"] = endpoint
-	env["AWS_ENDPOINT_URL_SQS"] = endpoint
-	env["AWS_ENDPOINT_URL_LAMBDA"] = endpoint
-	env["AWS_ENDPOINT_URL_KMS"] = endpoint
-	env["AWS_ENDPOINT_URL_ECR"] = endpoint
-	env["AWS_ENDPOINT_URL_ECS"] = endpoint
+	minted, mintErr := s.mintRoleSessionEnv(taskRoleARN, ecsInvokeSession, endpoint, store.DefaultECSRegion)
+	if mintErr != nil {
+		return fmt.Errorf("mint task role credentials: %w", mintErr)
+	}
+	for k, v := range minted {
+		env[k] = v
+	}
 
-	pullRef, useAuth, username, password, err := compute.IssueLabRegistryPull(
-		s.store, s.cfg.ListenAddr, accountID, imageURI, "ecs-tasks.amazonaws.com",
-	)
+	pullPrincipal := strings.TrimSpace(executionRoleARN)
+	if pullPrincipal == "" {
+		pullPrincipal = strings.TrimSpace(td.ExecutionRoleARN)
+	}
+	pullRef, useAuth, username, password, err := s.labRegistryPullOpts(accountID, imageURI, pullPrincipal)
 	if err != nil {
 		return err
 	}
-	if useAuth {
-		if err := cli.PullLabRegistryImage(ctx, pullRef, username, password); err != nil {
-			return fmt.Errorf("pull lab registry image: %w", err)
-		}
-	}
 
 	containerID, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
-		ImageURI:    pullRef,
-		Command:     ecsContainerCommand(containerDef),
-		Env:         env,
-		EndpointURL: endpoint,
+		ImageURI:         pullRef,
+		Command:          ecsContainerCommand(containerDef),
+		Env:              env,
+		EndpointURL:      endpoint,
+		LabRegistryPull:  useAuth,
+		RegistryUsername: username,
+		RegistryPassword: password,
 	})
 	if err != nil {
 		return err

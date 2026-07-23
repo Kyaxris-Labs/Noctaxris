@@ -17,7 +17,7 @@ func TestEvaluateSQSIdentityAllowEmptyQueue(t *testing.T) {
 		Action:   "sqs:SendMessage",
 		Resource: "arn:aws:sqs:us-east-1:000000000001:lab",
 	}
-	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`
+	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sqs:SendMessage","Resource":"*"}]}`
 	got := authz.EvaluateSQS(authz.SQSRequest{
 		Caller:         ctx,
 		IdentityDocs:   []string{identityAllow},
@@ -39,7 +39,7 @@ func TestEvaluateSQSIdentityDenyQueueAllow(t *testing.T) {
 		Resource: "arn:aws:sqs:us-east-1:000000000001:lab",
 	}
 	identityDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"sqs:SendMessage","Resource":"*"}]}`
-	queueAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`
+	queueAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sqs:SendMessage","Resource":"*"}]}`
 	got := authz.EvaluateSQS(authz.SQSRequest{
 		Caller:         ctx,
 		IdentityDocs:   []string{identityDeny},
@@ -60,7 +60,7 @@ func TestEvaluateSQSIdentityEmptyQueueAllow(t *testing.T) {
 		Action:   "sqs:SendMessage",
 		Resource: "arn:aws:sqs:us-east-1:000000000001:lab",
 	}
-	queueAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sqs:SendMessage","Resource":"*"}]}`
+	queueAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:user/alice"},"Action":"sqs:SendMessage","Resource":"*"}]}`
 	got := authz.EvaluateSQS(authz.SQSRequest{
 		Caller:         ctx,
 		IdentityDocs:   nil,

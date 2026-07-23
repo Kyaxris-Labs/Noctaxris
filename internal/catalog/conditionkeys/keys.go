@@ -6,6 +6,13 @@ import (
 	"strings"
 )
 
+// labExact adds OIDC claim keys used by AssumeRoleWithWebIdentity labs that are
+// not always present in the SAR snapshot (GitHub Actions :sub / :aud).
+var labExact = map[string]struct{}{
+	"token.actions.githubusercontent.com:sub": {},
+	"token.actions.githubusercontent.com:aud": {},
+}
+
 // Known reports whether key is in the generated catalog (exact or template match).
 // Template catalog entries use ${TagKey} or <key> placeholders for the suffix.
 func Known(key string) bool {
@@ -15,8 +22,18 @@ func Known(key string) bool {
 	if _, ok := knownExact[key]; ok {
 		return true
 	}
+	if _, ok := labExact[key]; ok {
+		return true
+	}
 	for pattern := range knownExact {
 		if templateMatch(pattern, key) {
+			return true
+		}
+	}
+	// Lab OIDC: {issuer-host-or-path}:sub / :aud for registered IdP shapes.
+	if strings.HasSuffix(key, ":sub") || strings.HasSuffix(key, ":aud") {
+		host := strings.TrimSuffix(strings.TrimSuffix(key, ":sub"), ":aud")
+		if host != "" && (strings.Contains(host, ".") || strings.Contains(host, "/")) {
 			return true
 		}
 	}

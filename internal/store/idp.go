@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -11,7 +12,9 @@ type OIDCProvider struct {
 	ProviderARN string
 	AccountID   string
 	URL         string
-	ClientID    string
+	ClientID    string   // primary (first) client ID for backward-compatible callers
+	ClientIDs   []string // full ClientIDList
+	Thumbprints []string // stored for honesty; JWKS path does not validate them
 }
 
 // SAMLProvider is an IAM SAML identity provider config.
@@ -34,19 +37,36 @@ func SAMLProviderARN(accountID, name string) string {
 	return fmt.Sprintf("arn:aws:iam::%s:saml-provider/%s", accountID, name)
 }
 
-// PutOIDCProvider stores or replaces an OIDC provider.
+// PutOIDCProvider stores or replaces an OIDC provider with a single client ID.
 func (s *Store) PutOIDCProvider(accountID, url, clientID string) (providerARN string, err error) {
-	if accountID == "" || url == "" || clientID == "" {
+	return s.PutOIDCProviderOpts(accountID, url, []string{clientID}, nil)
+}
+
+// PutOIDCProviderOpts stores an OIDC provider with ClientIDList and optional thumbprints.
+func (s *Store) PutOIDCProviderOpts(accountID, url string, clientIDs, thumbprints []string) (providerARN string, err error) {
+	clientIDs = normalizeStringList(clientIDs)
+	if accountID == "" || url == "" || len(clientIDs) == 0 {
 		return "", fmt.Errorf("put oidc provider: account_id, url, and client_id required")
 	}
 	providerARN = OIDCProviderARN(accountID, url)
+	clientIDsJSON, err := json.Marshal(clientIDs)
+	if err != nil {
+		return "", fmt.Errorf("put oidc provider: marshal client ids: %w", err)
+	}
+	thumbJSON, err := json.Marshal(normalizeStringList(thumbprints))
+	if err != nil {
+		return "", fmt.Errorf("put oidc provider: marshal thumbprints: %w", err)
+	}
 	_, err = s.db.Exec(
-		`INSERT INTO oidc_providers (provider_arn, account_id, url, client_id) VALUES (?, ?, ?, ?)
+		`INSERT INTO oidc_providers (provider_arn, account_id, url, client_id, client_ids, thumbprints)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(provider_arn) DO UPDATE SET
 		   account_id = excluded.account_id,
 		   url = excluded.url,
-		   client_id = excluded.client_id`,
-		providerARN, accountID, url, clientID,
+		   client_id = excluded.client_id,
+		   client_ids = excluded.client_ids,
+		   thumbprints = excluded.thumbprints`,
+		providerARN, accountID, url, clientIDs[0], string(clientIDsJSON), string(thumbJSON),
 	)
 	if err != nil {
 		return "", fmt.Errorf("put oidc provider %s: %w", providerARN, err)
@@ -77,10 +97,54 @@ func normalizeOIDCURL(url string) string {
 	return strings.ToLower(u)
 }
 
+func normalizeStringList(in []string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func scanOIDCProvider(providerARN, accountID, url, clientID, clientIDsJSON, thumbJSON string) OIDCProvider {
+	p := OIDCProvider{
+		ProviderARN: providerARN,
+		AccountID:   accountID,
+		URL:         url,
+		ClientID:    clientID,
+	}
+	if strings.TrimSpace(clientIDsJSON) != "" {
+		_ = json.Unmarshal([]byte(clientIDsJSON), &p.ClientIDs)
+	}
+	if len(p.ClientIDs) == 0 && clientID != "" {
+		p.ClientIDs = []string{clientID}
+	}
+	if p.ClientID == "" && len(p.ClientIDs) > 0 {
+		p.ClientID = p.ClientIDs[0]
+	}
+	if strings.TrimSpace(thumbJSON) != "" {
+		_ = json.Unmarshal([]byte(thumbJSON), &p.Thumbprints)
+	}
+	if p.Thumbprints == nil {
+		p.Thumbprints = []string{}
+	}
+	return p
+}
+
 // ListOIDCProviders returns OIDC providers for accountID.
 func (s *Store) ListOIDCProviders(accountID string) ([]OIDCProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT provider_arn, account_id, url, client_id FROM oidc_providers
+		`SELECT provider_arn, account_id, url, client_id,
+		        COALESCE(client_ids, ''), COALESCE(thumbprints, '')
+		 FROM oidc_providers
 		 WHERE account_id = ? ORDER BY url`,
 		accountID,
 	)
@@ -91,11 +155,11 @@ func (s *Store) ListOIDCProviders(accountID string) ([]OIDCProvider, error) {
 
 	var out []OIDCProvider
 	for rows.Next() {
-		var p OIDCProvider
-		if err := rows.Scan(&p.ProviderARN, &p.AccountID, &p.URL, &p.ClientID); err != nil {
+		var providerARN, acct, url, clientID, clientIDsJSON, thumbJSON string
+		if err := rows.Scan(&providerARN, &acct, &url, &clientID, &clientIDsJSON, &thumbJSON); err != nil {
 			return nil, fmt.Errorf("list oidc providers %s: %w", accountID, err)
 		}
-		out = append(out, p)
+		out = append(out, scanOIDCProvider(providerARN, acct, url, clientID, clientIDsJSON, thumbJSON))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list oidc providers %s: %w", accountID, err)
@@ -108,15 +172,17 @@ func (s *Store) ListOIDCProviders(accountID string) ([]OIDCProvider, error) {
 
 // GetOIDCProvider returns an OIDC provider by ARN.
 func (s *Store) GetOIDCProvider(providerARN string) (OIDCProvider, error) {
-	var p OIDCProvider
+	var providerARNOut, accountID, url, clientID, clientIDsJSON, thumbJSON string
 	err := s.db.QueryRow(
-		`SELECT provider_arn, account_id, url, client_id FROM oidc_providers WHERE provider_arn = ?`,
+		`SELECT provider_arn, account_id, url, client_id,
+		        COALESCE(client_ids, ''), COALESCE(thumbprints, '')
+		 FROM oidc_providers WHERE provider_arn = ?`,
 		providerARN,
-	).Scan(&p.ProviderARN, &p.AccountID, &p.URL, &p.ClientID)
+	).Scan(&providerARNOut, &accountID, &url, &clientID, &clientIDsJSON, &thumbJSON)
 	if err != nil {
 		return OIDCProvider{}, err
 	}
-	return p, nil
+	return scanOIDCProvider(providerARNOut, accountID, url, clientID, clientIDsJSON, thumbJSON), nil
 }
 
 // DeleteOIDCProvider deletes an OIDC provider by ARN.

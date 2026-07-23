@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT and IAM authorizers. No REST API v1. No HTTP_PROXY to arbitrary URLs.
+HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT, IAM, and Lambda authorizers. No REST API v1. No HTTP_PROXY to arbitrary URLs.
 
 ## Implemented
 
@@ -10,8 +10,8 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 |------|---------|
 | API | `CreateApi` (ProtocolType HTTP), `GetApi`, `GetApis`, `DeleteApi` |
 | Integration | `CreateIntegration` (AWS_PROXY Lambda ARN only, optional `CredentialsArn` with PassRole) |
-| Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience) |
-| Route | `CreateRoute` (AuthorizationType NONE, JWT, or AWS_IAM) |
+| Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience; REQUEST Lambda authorizer) |
+| Route | `CreateRoute` (AuthorizationType NONE, JWT, AWS_IAM, or CUSTOM) |
 | Stage | `CreateStage` (`$default` common) |
 | Invoke | `GET/POST http://127.0.0.1:4566/http-api/{apiId}/{stage}/{path}` |
 
@@ -22,8 +22,30 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 | `NONE` | Open when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1` | Create and invoke refuse `NONE` on non-loopback without the opt-in. Default Compose does not set the opt-in (container bind is non-loopback) |
 | `JWT` | Bearer token | Verifies lab Cognito JWKS in-process (issuer `http://127.0.0.1:4566/cognito-idp/...`). Remote JWKS issuers fail closed unless `NOCTAXRIS_ALLOW_REMOTE_JWKS=1` with a public host allowlist. Requires `token_use=access` (rejects missing or `id`). Enforces `exp` and `nbf`. Audience matches `aud` or `client_id`. `IdentitySource` must be `$request.header.Authorization` |
 | `AWS_IAM` | SigV4 service `execute-api` | Identity `execute-api:Invoke` on route ARN. HTTP API resource policies are not supported |
+| `CUSTOM` | Lambda authorizer (REQUEST) | Invokes the authorizer Lambda before the integration. Deny returns 403 and skips integration. See Lambda authorizer below |
 
 Management APIs use SigV4 service `apigateway` and `apigatewayv2:*` identity actions.
+
+### Lambda authorizer
+
+HTTP API `AuthorizerType=REQUEST` only. REST-style `TOKEN` is rejected.
+
+| Field | Lab support |
+|-------|-------------|
+| `AuthorizerUri` | Lambda ARN, or `arn:aws:apigateway:region:lambda:path/2015-03-31/functions/.../invocations` |
+| `AuthorizerPayloadFormatVersion` | `1.0` or `2.0` (default `2.0`) |
+| `EnableSimpleResponses` | Default true for simple `{ "isAuthorized": true\|false }` |
+| `AuthorizerCredentialsArn` | Optional; PassRole + `apigateway.amazonaws.com` trust at create; role-session `lambda:InvokeFunction` at invoke |
+| `IdentitySource` | `$request.header.*`, `$request.querystring.*`, or `$context.routeKey` |
+
+Supported authorizer responses (fail closed otherwise):
+
+- Simple: `{ "isAuthorized": true|false }` (optional `context`)
+- IAM policy: `policyDocument.Statement[].Effect` Allow/Deny (any Deny or missing Allow denies)
+
+Without `AuthorizerCredentialsArn`, authorizer invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com` (same parity as AWS_PROXY integration). Missing permission returns 403 before the authorizer runs.
+
+Proxy integration responses strip hop-by-hop headers and `Set-Cookie` by default. Set `NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE=1` to pass `Set-Cookie` through.
 
 ### Authz notes
 
@@ -52,12 +74,24 @@ curl -s "http://127.0.0.1:4566/http-api/$API/\$default/hello"
 
 JWT lab: create a Cognito user pool and client, `InitiateAuth`, create a JWT authorizer with Issuer `http://127.0.0.1:4566/cognito-idp/us-east-1/$POOL` and Audience client id, then call the route with `Authorization: Bearer $ACCESS_TOKEN`.
 
+Lambda authorizer lab: create an authorizer function that returns `{ "isAuthorized": true }`, `add-permission` for `apigateway.amazonaws.com` on that function, then:
+
+```bash
+aws apigatewayv2 create-authorizer --api-id "$API" --name lab-authz --authorizer-type REQUEST \
+  --authorizer-uri "arn:aws:lambda:us-east-1:000000000001:function:authz" \
+  --authorizer-payload-format-version 2.0 --enable-simple-responses \
+  --identity-source '$request.header.Authorization' --endpoint-url "$EP"
+aws apigatewayv2 create-route --api-id "$API" --route-key "GET /secure" \
+  --target "integrations/$INT" --authorization-type CUSTOM --authorizer-id "$AUTHZ" --endpoint-url "$EP"
+```
+
 Invoke requires a registered Lambda and DinD compute. Document skip when Docker is unavailable.
 
 ## Not yet / deferred
 
 - REST API (v1) and WebSocket APIs
+- REST TOKEN authorizers (HTTP API REQUEST only)
 - HTTP_PROXY / VPC link integrations
-- Lambda authorizers
+- Authorizer result caching / TTL
 - Custom domains beyond lab ACM string linkage
-- CORS configuration depth
+- CORS configuration depth on HTTP API itself

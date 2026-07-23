@@ -19,6 +19,9 @@ var (
 
 const DefaultCloudFrontRegion = "us-east-1"
 
+// CloudFrontStatusInProgress is the control-plane stub status until a fake-edge path exists.
+const CloudFrontStatusInProgress = "InProgress"
+
 const cloudfrontSchema = `
 CREATE TABLE IF NOT EXISTS cloudfront_distributions (
   account_id TEXT NOT NULL,
@@ -29,7 +32,7 @@ CREATE TABLE IF NOT EXISTS cloudfront_distributions (
   enabled INTEGER NOT NULL DEFAULT 1,
   origins_json TEXT NOT NULL,
   caller_reference TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'Deployed',
+  status TEXT NOT NULL DEFAULT 'InProgress',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, id)
 );
@@ -102,13 +105,26 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 			return CloudFrontDistribution{}, fmt.Errorf("%w: OriginType must be s3 or apigateway", ErrCloudFrontBadRequest)
 		}
 	}
+	for _, o := range origins {
+		switch o.OriginType {
+		case "s3":
+			if _, err := s.GetBucket(accountID, o.DomainName); err != nil {
+				return CloudFrontDistribution{}, fmt.Errorf("%w: S3 origin DomainName must be an existing lab bucket name", ErrCloudFrontBadRequest)
+			}
+		case "apigateway":
+			if _, err := s.GetAPIGatewayAPI(accountID, o.DomainName); err != nil {
+				return CloudFrontDistribution{}, fmt.Errorf("%w: apigateway origin DomainName must be an existing lab HTTP API id", ErrCloudFrontBadRequest)
+			}
+		}
+	}
 	originsJSON, err := json.Marshal(origins)
 	if err != nil {
 		return CloudFrontDistribution{}, fmt.Errorf("marshal origins: %w", err)
 	}
 	id := "E" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:13])
 	arn := CloudFrontDistributionARN(accountID, id)
-	domain := strings.ToLower(id) + ".cloudfront.lab.local"
+	// No fake-edge listener yet: omit DomainName and keep Status InProgress (not Deployed).
+	domain := ""
 	now := time.Now().UTC().UnixMilli()
 	enabledInt := 0
 	if enabled {
@@ -118,7 +134,7 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 		`INSERT INTO cloudfront_distributions
 		 (account_id, id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), callerReference, "Deployed", now,
+		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), callerReference, CloudFrontStatusInProgress, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -128,7 +144,7 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}
 	return CloudFrontDistribution{
 		ID: id, ARN: arn, DomainName: domain, Comment: comment, Enabled: enabled,
-		OriginsJSON: string(originsJSON), CallerReference: callerReference, Status: "Deployed", CreatedAt: now,
+		OriginsJSON: string(originsJSON), CallerReference: callerReference, Status: CloudFrontStatusInProgress, CreatedAt: now,
 	}, nil
 }
 

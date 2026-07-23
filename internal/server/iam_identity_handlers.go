@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
@@ -358,11 +360,14 @@ func (s *Server) handleIAMIdentity(
 	case catalog.ActionIAMCreateOpenIDConnectProvider, "CreateOpenIDConnectProvider":
 		handled = true
 		oidcURL := params["Url"]
-		clientID := params["ClientIDList.member.1"]
-		if clientID == "" {
-			clientID = params["ClientId"]
+		clientIDs := collectIndexedParams(params, "ClientIDList.member.")
+		if len(clientIDs) == 0 {
+			if clientID := params["ClientId"]; clientID != "" {
+				clientIDs = []string{clientID}
+			}
 		}
-		arn, createErr := s.store.PutOIDCProvider(accountID, oidcURL, clientID)
+		thumbprints := collectIndexedParams(params, "ThumbprintList.member.")
+		arn, createErr := s.store.PutOIDCProviderOpts(accountID, oidcURL, clientIDs, thumbprints)
 		if createErr != nil {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
 				createErr.Error(), readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
@@ -533,3 +538,16 @@ func (s *Server) handleIAMIdentity(
 
 // errHandled signals that handleIAMIdentity already wrote an error response.
 var errHandled = errors.New("iam t2 handler wrote response")
+
+// collectIndexedParams reads AWS query-protocol lists (Prefix1, Prefix2, …).
+func collectIndexedParams(params map[string]string, prefix string) []string {
+	var out []string
+	for i := 1; i <= 100; i++ {
+		v := strings.TrimSpace(params[fmt.Sprintf("%s%d", prefix, i)])
+		if v == "" {
+			break
+		}
+		out = append(out, v)
+	}
+	return out
+}

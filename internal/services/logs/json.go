@@ -85,3 +85,22 @@ func DescribeSubscriptionFiltersJSON(filters []store.LogsSubscriptionFilter) ([]
 	}
 	return json.Marshal(map[string]any{"subscriptionFilters": entries})
 }
+
+// DescribeMetricFiltersJSON builds DescribeMetricFilters response.
+func DescribeMetricFiltersJSON(filters []store.LogsMetricFilter) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(filters))
+	for _, f := range filters {
+		entries = append(entries, map[string]any{
+			"filterName":    f.FilterName,
+			"logGroupName":  f.LogGroupName,
+			"filterPattern": f.FilterPattern,
+			"metricTransformations": []map[string]any{{
+				"metricName":      f.MetricName,
+				"metricNamespace": f.MetricNamespace,
+				"metricValue":     f.MetricValue,
+			}},
+			"creationTime": f.CreatedAt,
+		})
+	}
+	return json.Marshal(map[string]any{"metricFilters": entries})
+}

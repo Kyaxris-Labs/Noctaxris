@@ -61,6 +61,11 @@ func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrin
 	if conditionKeys == nil {
 		conditionKeys = map[string]string{}
 	}
+	for _, st := range doc.Statement {
+		if conditionCatalogUnknown(st.Condition) {
+			return false
+		}
+	}
 	var serviceDeny, serviceAllow, rootDeny, rootAllow bool
 	for _, st := range doc.Statement {
 		if resourcePrincipalStatementMatches(st, action, resourceARN, conditionKeys, func(spec principalSpec) bool {

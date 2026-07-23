@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
 const (
@@ -139,10 +137,11 @@ func validateScheduleTargetARN(arn string) error {
 	switch {
 	case strings.HasPrefix(arn, "arn:aws:sqs:"),
 		strings.HasPrefix(arn, "arn:aws:lambda:"),
-		strings.HasPrefix(arn, "arn:aws:sns:"):
+		strings.HasPrefix(arn, "arn:aws:sns:"),
+		strings.Contains(arn, ":stateMachine:"):
 		return nil
 	default:
-		return fmt.Errorf("%w: target Arn must be SQS, Lambda, or SNS", ErrInvalidScheduleTarget)
+		return fmt.Errorf("%w: target Arn must be SQS, Lambda, SNS, or Step Functions state machine", ErrInvalidScheduleTarget)
 	}
 }
 
@@ -431,95 +430,10 @@ func (s *Store) schedulerDeliveryAuthorized(sch Schedule) bool {
 	if !ok {
 		return false
 	}
-	roleARN := strings.TrimSpace(sch.RoleARN)
-	if roleARN == "" {
-		return s.schedulerTargetResourcePolicyAllows(sch.AccountID, arn, action, sch.ScheduleARN)
-	}
-	return s.schedulerRoleSessionAllows(sch.AccountID, roleARN, action, arn)
-}
-
-func (s *Store) schedulerTargetResourcePolicyAllows(accountID, targetARN, action, sourceARN string) bool {
-	policyAccount := accountID
-	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
-		policyAccount = owner
-	}
-	policyDoc, err := s.eventTargetResourcePolicyDoc(policyAccount, targetARN)
-	if err != nil {
-		return false
-	}
-	return authz.EventTargetResourcePolicyAllows(
-		policyDoc,
-		action,
-		targetARN,
-		authz.ServicePrincipalScheduler,
-		policyAccount,
-		authz.DeliverySourceConditionKeys(sourceARN, ""),
+	return s.deliveryAuthorizedRoleAndResource(
+		sch.AccountID, sch.RoleARN, action, arn, authz.ServicePrincipalScheduler, sch.ScheduleARN,
+		"scheduler-delivery", DefaultSchedulerRegion,
 	)
-}
-
-func (s *Store) schedulerRoleSessionAllows(accountID, roleARN, action, targetARN string) bool {
-	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok || roleAccountID != accountID {
-		return false
-	}
-	if _, _, err := s.GetRole(accountID, roleName); err != nil {
-		return false
-	}
-	secret, err := randomHexSecret(16)
-	if err != nil {
-		log.Printf("scheduler role session mint secret failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	sessionToken, err := randomHexSecret(16)
-	if err != nil {
-		log.Printf("scheduler role session mint token failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	accessKeyID, err := s.MintTempCredentialsOpts(MintTempOpts{
-		AccountID:    accountID,
-		RoleARN:      roleARN,
-		SessionName:  "scheduler-delivery",
-		Secret:       secret,
-		SessionToken: sessionToken,
-		Expires:      time.Now().UTC().Add(time.Hour),
-	})
-	if err != nil {
-		log.Printf("scheduler role session mint failed role=%s err=%v", roleARN, err)
-		return false
-	}
-
-	docs, err := s.identityPolicyDocsForRoleARN(roleARN)
-	if err != nil {
-		log.Printf("scheduler role policy load failed role=%s err=%v", roleARN, err)
-		return false
-	}
-	boundaryDoc := ""
-	if doc, ok, err := s.PermissionsBoundaryDoc(accountID, "role", roleName); err == nil && ok {
-		boundaryDoc = doc
-	}
-	scpDocs, err := s.SCPDocsForAccount(accountID)
-	if err != nil {
-		return false
-	}
-	rcpDocs, err := s.RCPDocsForAccount(accountID)
-	if err != nil {
-		return false
-	}
-	principal := identity.RoleSessionPrincipal(accountID, roleName, "scheduler-delivery", accessKeyID)
-	ctx := authz.RequestContext{
-		Principal: principal,
-		Action:    action,
-		Resource:  targetARN,
-		Region:    DefaultSchedulerRegion,
-	}
-	in := authz.EvalInputs{
-		IdentityDocs:        docs,
-		BoundaryDoc:         boundaryDoc,
-		SCPDocs:             scpDocs,
-		RCPDocs:             rcpDocs,
-		IsManagementAccount: s.IsManagementAccount(accountID),
-	}
-	return authz.EvaluateFull(ctx, in) == authz.Allow
 }
 
 func (s *Store) deliverScheduleTarget(sch Schedule) error {
@@ -530,25 +444,36 @@ func (s *Store) deliverScheduleTarget(sch Schedule) error {
 	arn := strings.TrimSpace(sch.TargetARN)
 	switch {
 	case strings.HasPrefix(arn, "arn:aws:sqs:"):
-		queueName, err := queueNameFromARN(arn)
+		queueAccount, queueName, err := s.resolveSQSEndpoint(sch.AccountID, arn)
 		if err != nil {
 			return err
 		}
-		_, err = s.SendMessage(sch.AccountID, queueName, []byte(body), false, nil, "", nil)
+		_, err = s.SendMessage(queueAccount, queueName, []byte(body), false, nil, "", nil)
 		return err
 	case strings.HasPrefix(arn, "arn:aws:lambda:"):
-		functionName, qualifier := ParseFunctionQualifier(arn)
-		if functionName == "" {
+		fnAccount, functionName, ok := ParseLambdaARNFromSFNResource(arn)
+		if !ok || functionName == "" {
 			return fmt.Errorf("empty function name")
 		}
-		_, err := s.EnqueueAsyncInvoke(sch.AccountID, functionName, qualifier, body)
+		if fnAccount == "" {
+			fnAccount = sch.AccountID
+		}
+		_, qualifier := ParseFunctionQualifier(arn)
+		_, err := s.EnqueueAsyncInvoke(fnAccount, functionName, qualifier, body)
 		return err
 	case strings.HasPrefix(arn, "arn:aws:sns:"):
 		topic, err := s.GetTopicByARN(arn)
 		if err != nil {
 			return err
 		}
-		_, err = s.Publish(sch.AccountID, topic.TopicName, body, "", nil)
+		_, err = s.Publish(topic.AccountID, topic.TopicName, body, "", nil)
+		return err
+	case strings.Contains(arn, ":stateMachine:"):
+		smAccount := sch.AccountID
+		if owner := resourceOwnerAccountFromARN(arn); owner != "" {
+			smAccount = owner
+		}
+		_, err := s.StartSFNExecution(smAccount, DefaultSFNRegion, arn, "", body, s.getSFNTaskInvoker())
 		return err
 	default:
 		return fmt.Errorf("unsupported target %s", arn)

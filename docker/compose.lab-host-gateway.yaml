@@ -1,0 +1,15 @@
+# Opt-in overlay for in-function SDK labs (fn-sidecar-secret).
+# Code and default compose.yaml leave NOCTAXRIS_INJECT_HOST_GATEWAY off.
+#
+# Usage (from repo root):
+#   docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
+#
+# On Docker Desktop + nested DinD, host-gateway often cannot reach a loopback-only
+# publish. For that layout only, also set (session .env or shell):
+#   NOCTAXRIS_PUBLISH_ADDR=0.0.0.0
+# Prefer TLS if the host is reachable beyond your lab machine. Keep default
+# 127.0.0.1 publish for all other work.
+services:
+  noctaxris:
+    environment:
+      NOCTAXRIS_INJECT_HOST_GATEWAY: "1"

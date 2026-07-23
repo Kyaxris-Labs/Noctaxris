@@ -31,7 +31,7 @@ func TestSecretsCreateGetStringRoundTrip(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	created, err := st.CreateSecret(account, "us-east-1", "app/db-password", "s3cr3t!", nil, "", "")
+	created, err := st.CreateSecret(account, "us-east-1", "app/db-password", "s3cr3t!", nil, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestSecretsCreateGetBinaryRoundTrip(t *testing.T) {
 	account := "000000000001"
 	bin := []byte{0xde, 0xad, 0xbe, 0xef}
 
-	created, err := st.CreateSecret(account, "us-east-1", "app/cert", "", bin, "", "")
+	created, err := st.CreateSecret(account, "us-east-1", "app/cert", "", bin, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +91,10 @@ func TestSecretsCreateAlreadyExists(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	if _, err := st.CreateSecret(account, "us-east-1", "dup", "v1", nil, "", ""); err != nil {
+	if _, err := st.CreateSecret(account, "us-east-1", "dup", "v1", nil, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateSecret(account, "us-east-1", "dup", "v2", nil, "", ""); !errors.Is(err, store.ErrSecretAlreadyExists) {
+	if _, err := st.CreateSecret(account, "us-east-1", "dup", "v2", nil, "", "", ""); !errors.Is(err, store.ErrSecretAlreadyExists) {
 		t.Fatalf("want ErrSecretAlreadyExists, got %v", err)
 	}
 }
@@ -103,7 +103,7 @@ func TestSecretsPutSecretValueAndDescribe(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	if _, err := st.CreateSecret(account, "us-east-1", "rotating", "v1", nil, "", ""); err != nil {
+	if _, err := st.CreateSecret(account, "us-east-1", "rotating", "v1", nil, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,7 @@ func TestSecretsListSecrets(t *testing.T) {
 	account := "000000000001"
 
 	for _, name := range []string{"alpha", "beta"} {
-		if _, err := st.CreateSecret(account, "us-east-1", name, name, nil, "", ""); err != nil {
+		if _, err := st.CreateSecret(account, "us-east-1", name, name, nil, "", "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,7 +155,7 @@ func TestSecretsDeleteSecret(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	if _, err := st.CreateSecret(account, "us-east-1", "gone", "x", nil, "", ""); err != nil {
+	if _, err := st.CreateSecret(account, "us-east-1", "gone", "x", nil, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DeleteSecret(account, "gone"); err != nil {
@@ -170,7 +170,7 @@ func TestSecretsResourcePolicyLifecycle(t *testing.T) {
 	st := openSecretsStore(t)
 	account := "000000000001"
 
-	if _, err := st.CreateSecret(account, "us-east-1", "policy-test", "x", nil, "", ""); err != nil {
+	if _, err := st.CreateSecret(account, "us-east-1", "policy-test", "x", nil, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 

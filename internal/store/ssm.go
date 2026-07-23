@@ -76,6 +76,14 @@ func ParameterARN(region, accountID, name string) string {
 	return fmt.Sprintf("arn:aws:ssm:%s:%s:parameter%s", region, accountID, n)
 }
 
+// SSMEncryptionContext is the AWS Parameter Store KMS EncryptionContext map
+// (PARAMETER_ARN) used for SecureString seal/unseal and EvaluateKMS conditions.
+func SSMEncryptionContext(parameterARN string) map[string]string {
+	return map[string]string{
+		"PARAMETER_ARN": parameterARN,
+	}
+}
+
 func normalizeParameterName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -191,7 +199,8 @@ func (s *Store) PutParameter(
 		if err != nil {
 			return Parameter{}, fmt.Errorf("put parameter: unseal key: %w", err)
 		}
-		sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, []byte(value), nil)
+		encCtx := SSMEncryptionContext(arn)
+		sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, []byte(value), encCtx)
 		if err != nil {
 			return Parameter{}, fmt.Errorf("put parameter: encrypt: %w", err)
 		}
@@ -292,7 +301,8 @@ func (s *Store) parameterFromRow(row parameterRow, withDecryption bool) (Paramet
 	if !KeyUsableForCrypto(k.KeyState) {
 		return Parameter{}, fmt.Errorf("parameter %s: %w", row.Name, ErrInvalidKeyState)
 	}
-	plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.ValueSealed)
+	encCtx := SSMEncryptionContext(row.ARN)
+	plain, err := s.DecryptBlobWithKeyContext(row.KMSKeyID, row.ValueSealed, encCtx)
 	if err != nil {
 		return Parameter{}, fmt.Errorf("parameter %s: decrypt: %w", row.Name, err)
 	}

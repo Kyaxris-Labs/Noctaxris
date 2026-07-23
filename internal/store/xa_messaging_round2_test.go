@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,7 +191,17 @@ func TestSFNTaskDeniesWithoutRoleOrPolicy(t *testing.T) {
     "Send": {"Type":"Task","Resource":"` + q.QueueARN + `","End":true}
   }
 }`
-	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "sfn-deny-sm", def, "")
+	_, err = st.CreateSFNStateMachine(account, "us-east-1", "sfn-deny-sm", def, "")
+	if !errors.Is(err, store.ErrSFNRoleArnRequired) {
+		t.Fatalf("want ErrSFNRoleArnRequired got %v", err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "sfn-deny-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Role exists but has no SendMessage Allow and queue has no states policy.
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "sfn-deny-sm", def, roleARN)
 	if err != nil {
 		t.Fatal(err)
 	}

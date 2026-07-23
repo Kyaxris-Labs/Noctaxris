@@ -315,6 +315,11 @@ func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) 
 			return nil, err
 		}
 		out[i].StoredBytes = bytes
+		n, err := s.countMetricFilters(accountID, out[i].LogGroupName)
+		if err != nil {
+			return nil, err
+		}
+		out[i].MetricFilterCount = n
 	}
 	return out, nil
 }
@@ -388,6 +393,7 @@ func (s *Store) PutLogEvents(
 		return "", nil, fmt.Errorf("put log events: commit: %w", err)
 	}
 	s.fanOutLogSubscriptionFilters(accountID, group, events)
+	s.fanOutLogMetricFilters(accountID, group, events)
 	return next, nil, nil
 }
 

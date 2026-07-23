@@ -107,10 +107,11 @@ func (s *Store) CreateDocDBCluster(accountID, region, dbClusterIdentifier, engin
 	}
 	addr := fmt.Sprintf("%s.docdb.noctaxris.internal", id)
 	now := time.Now().UTC().UnixMilli()
+	// Match RDS/ElastiCache: stay creating until SetDocDBContainerID after nested start.
 	_, err = s.db.Exec(
 		`INSERT INTO docdb_clusters
 		 (account_id, db_cluster_identifier, engine, engine_version, status, endpoint_address, endpoint_port, master_username, container_id, created_at)
-		 VALUES (?, ?, ?, ?, 'available', ?, ?, ?, '', ?)`,
+		 VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, '', ?)`,
 		accountID, id, engine, engineVersion, addr, port, masterUsername, now,
 	)
 	if err != nil {
@@ -120,7 +121,7 @@ func (s *Store) CreateDocDBCluster(accountID, region, dbClusterIdentifier, engin
 		DBClusterIdentifier: id,
 		Engine:              engine,
 		EngineVersion:       engineVersion,
-		Status:              "available",
+		Status:              "creating",
 		EndpointAddress:     addr,
 		EndpointPort:        port,
 		MasterUsername:      masterUsername,

@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. No WAN listener and no loopback SFTP listener. Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe reports `EndpointType=VPC` and `State=OFFLINE` so control-plane shape does not claim a public online listener.
+Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. No WAN listener and no loopback SFTP listener. Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe reports `State=OFFLINE` and omits `EndpointType` (no VPC theatre). `EndpointDetails` and client `EndpointType` are rejected.
 
 ## Implemented
 
@@ -15,7 +15,7 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 
 ### Authz notes
 
-Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create).
+Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create). Non-empty CreateUser `Role` requires `iam:PassRole` plus `transfer.amazonaws.com` trust.
 
 ## How to verify / CLI smoke
 

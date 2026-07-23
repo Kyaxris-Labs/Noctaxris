@@ -7,17 +7,25 @@ import (
 )
 
 func domainStatus(d store.OpenSearchDomain) map[string]any {
+	status := d.DomainStatus
+	if status == "" {
+		status = store.OpenSearchDomainStatusCreateFailed
+	}
+	// Active means engine-ready on AWS. Stub domains stay CreateFailed (Created=false).
+	created := status == "Active"
+	processing := status == "Processing" || status == "Creating"
 	return map[string]any{
-		"DomainId":      d.DomainID,
-		"DomainName":    d.DomainName,
-		"ARN":           d.DomainARN,
-		"Created":       true,
-		"Deleted":       false,
-		"Endpoint":      d.StubEndpoint,
-		"Processing":    false,
+		"DomainId":          d.DomainID,
+		"DomainName":        d.DomainName,
+		"ARN":               d.DomainARN,
+		"Created":           created,
+		"Deleted":           false,
+		"Endpoint":          d.StubEndpoint,
+		"Processing":        processing,
 		"UpgradeProcessing": false,
-		"EngineVersion": d.EngineVersion,
-		"DomainStatus":  d.DomainStatus,
+		"EngineVersion":     d.EngineVersion,
+		// Lab status string for honesty; not a field on AWS DomainStatus.
+		"DomainStatus": status,
 	}
 }
 

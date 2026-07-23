@@ -246,8 +246,15 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 		t.Fatalf("recorder: %v %#v", err, rec)
 	}
 	results, err := st.DescribeConfigComplianceByRule(account, "lab")
+	if err != nil || len(results) != 0 {
+		t.Fatalf("compliance without stored rule: %v %#v", err, results)
+	}
+	if err := st.PutConfigRule(account, "lab", "lab rule"); err != nil {
+		t.Fatal(err)
+	}
+	results, err = st.DescribeConfigComplianceByRule(account, "lab")
 	if err != nil || len(results) != 1 || results[0].ComplianceType != "NOT_APPLICABLE" {
-		t.Fatalf("compliance: %v %#v", err, results)
+		t.Fatalf("compliance for stored rule: %v %#v", err, results)
 	}
 	if _, err := st.PutConfigDeliveryChannel(account, "missing", "no-such-bucket", "", ""); err == nil {
 		t.Fatal("expected missing bucket rejection")

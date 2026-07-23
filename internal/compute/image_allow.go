@@ -61,28 +61,26 @@ func isLabRegistryRef(ref string) bool {
 
 func isPinnedLabImage(ref string) bool {
 	lower := strings.ToLower(ref)
-	pinnedExact := map[string]struct{}{
-		"public.ecr.aws/lambda/python:3.12":             {},
-		"public.ecr.aws/lambda/python:3.11":             {},
-		"public.ecr.aws/lambda/nodejs:20":               {},
-		"python:3.12-slim":                              {},
-		"python:3.11-slim":                              {},
-		"node:20-slim":                                  {},
-		"alpine:3.20":                                   {},
-		"public.ecr.aws/docker/library/alpine:3.20":     {},
-		"postgres:16-alpine":                            {},
-		"valkey/valkey:8-alpine":                        {},
-		"mongo:7":                                       {},
-	}
-	if _, ok := pinnedExact[lower]; ok {
-		return true
-	}
-	// Documented Lambda public ECR path, including tag variants used in labs/tests.
-	if strings.HasPrefix(lower, "public.ecr.aws/lambda/") {
+	// Digest-pinned public Lambda bases (exact tags also allowed for lab smoke).
+	if strings.HasPrefix(lower, "public.ecr.aws/lambda/") && strings.Contains(lower, "@sha256:") {
 		rest := strings.TrimPrefix(lower, "public.ecr.aws/lambda/")
 		return rest != "" && !strings.Contains(rest, "..")
 	}
-	return false
+	pinnedExact := map[string]struct{}{
+		"public.ecr.aws/lambda/python:3.12":         {},
+		"public.ecr.aws/lambda/python:3.11":         {},
+		"public.ecr.aws/lambda/nodejs:20":           {},
+		"python:3.12-slim":                          {},
+		"python:3.11-slim":                          {},
+		"node:20-slim":                              {},
+		"alpine:3.20":                               {},
+		"public.ecr.aws/docker/library/alpine:3.20": {},
+		"postgres:16-alpine":                        {},
+		"valkey/valkey:8-alpine":                    {},
+		"mongo:7":                                   {},
+	}
+	_, ok := pinnedExact[lower]
+	return ok
 }
 
 func imageAllowPrefixNeedsDigest(prefix string) bool {

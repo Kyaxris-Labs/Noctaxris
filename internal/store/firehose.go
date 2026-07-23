@@ -231,11 +231,9 @@ func (s *Store) firehoseDeliveryAuthorized(accountID string, st FirehoseStream) 
 	if !ok {
 		return false
 	}
-	roleARN := strings.TrimSpace(st.RoleARN)
-	if roleARN == "" {
-		return s.deliveryTargetResourcePolicyAllows(accountID, targetARN, action, authz.ServicePrincipalFirehose, st.StreamARN)
-	}
-	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, "firehose-delivery", DefaultFirehoseRegion)
+	return s.deliveryAuthorizedRoleAndResource(
+		accountID, st.RoleARN, action, targetARN, authz.ServicePrincipalFirehose, st.StreamARN, "firehose-delivery", DefaultFirehoseRegion,
+	)
 }
 
 func firehoseDestinationTarget(st FirehoseStream) (targetARN, action string, ok bool) {

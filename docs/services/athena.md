@@ -11,10 +11,10 @@ In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON ob
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
 | SQL subset | `SELECT cols FROM db.table [LIMIT n]` (or `table` with `QueryExecutionContext.Database`) |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON) |
-| Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3 when the bucket exists |
+| Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
 | WorkGroup | Optional. Defaults to `primary` |
 
-Unsupported SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED).
+Unsupported SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED). If a listed object under the table prefix fails `GetObject`, the query is `FAILED` (no silent skip). An empty prefix listing that succeeds may return header-only `SUCCEEDED` (intentional when no objects match).
 
 ### Authz notes
 

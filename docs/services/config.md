@@ -10,7 +10,7 @@ Configuration recorder and delivery channel lite, StartConfigurationRecorder, an
 |------|---------|
 | Recorder | `PutConfigurationRecorder`, `StartConfigurationRecorder` (requires delivery channel + existing bucket) |
 | Delivery | `PutDeliveryChannel` (bucket must exist; optional `snsTopicARN`) |
-| Compliance | `DescribeComplianceByConfigRule` → `NOT_APPLICABLE` (rule evaluation not implemented) |
+| Compliance | `DescribeComplianceByConfigRule` returns `NOT_APPLICABLE` only for stored `config_rules` rows (empty list when the rule name is unknown). Rule evaluation is not implemented |
 | Notify | StartConfigurationRecorder → SNS Publish `ConfigurationRecorderStarted` when delivery channel has `snsTopicARN` |
 
 ### Authz notes
@@ -35,7 +35,7 @@ aws configservice start-configuration-recorder \
 aws configservice describe-compliance-by-config-rule --endpoint-url "$EP"
 ```
 
-Omit roleARN or create a role trusted by `config.amazonaws.com` before PassRole checks. Expect DescribeCompliance to return `NOT_APPLICABLE` until managed rules exist.
+Omit roleARN or create a role trusted by `config.amazonaws.com` before PassRole checks. Expect DescribeCompliance to return an empty list until a config rule row exists; stored rules return `NOT_APPLICABLE` (no invented COMPLIANT rows). StartConfigurationRecorder sets the recording flag only and does not write configuration history objects.
 
 ## Not yet / deferred
 

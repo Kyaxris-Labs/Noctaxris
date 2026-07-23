@@ -450,6 +450,11 @@ func (s *Server) ecrSetRepositoryPolicy(
 			"policyText is required.", readOnly, eventID, verified)
 		return
 	}
+	if err := authz.ValidateResourcePolicyDocument(policy); err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if err := s.store.SetRepositoryPolicy(verified.AccountID, name, policy); err != nil {
 		if errors.Is(err, store.ErrRepositoryNotFound) {
 			s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "RepositoryNotFoundException",

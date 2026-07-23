@@ -23,7 +23,6 @@ const (
 	batchEventSource     = "batch.amazonaws.com"
 	defaultBatchEndpoint = "http://host.docker.internal:4566"
 	batchJobSession      = "noctaxris-batch"
-	batchRegistryPrincipal = "ecs-tasks.amazonaws.com"
 )
 
 func (s *Server) handleBatch(
@@ -329,8 +328,19 @@ func (s *Server) batchRegisterJobDefinition(
 	container, _ := params["containerProperties"].(map[string]any)
 	image := stringParam(container["image"])
 	jobRole := stringParam(container["jobRoleArn"])
+	execRole := stringParam(container["executionRoleArn"])
 	if err := s.checkBatchJobPassRole(verified, jobRole); err != nil {
 		s.writeBatchError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err := s.checkBatchJobPassRole(verified, execRole); err != nil {
+		s.writeBatchError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err := batchRejectUnsupportedFargateShape(params, container); err != nil {
+		s.writeBatchError(w, r, body, requestID, http.StatusBadRequest, "ClientException",
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
@@ -356,12 +366,13 @@ func (s *Server) batchRegisterJobDefinition(
 		}
 	}
 	jd, err := s.store.RegisterBatchJobDefinition(verified.AccountID, s.batchRegion(verified), store.RegisterBatchJobDefinitionInput{
-		Name:       name,
-		Type:       stringParam(params["type"]),
-		Image:      image,
-		Command:    cmd,
-		JobRoleARN: jobRole,
-		Env:        env,
+		Name:             name,
+		Type:             stringParam(params["type"]),
+		Image:            image,
+		Command:          cmd,
+		JobRoleARN:       jobRole,
+		ExecutionRoleARN: execRole,
+		Env:              env,
 	})
 	if errors.Is(err, store.ErrBatchInvalidInput) {
 		s.writeBatchError(w, r, body, requestID, http.StatusBadRequest, "ClientException",
@@ -407,6 +418,11 @@ func (s *Server) batchSubmitJob(
 				err.Error(), readOnly, eventID, verified)
 			return
 		}
+		if err := s.checkBatchJobPassRole(verified, jdPreview.ExecutionRoleARN); err != nil {
+			s.writeBatchError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 	}
 	job, jd, err := s.store.SubmitBatchJob(verified.AccountID, s.batchRegion(verified), jobName, queue, jobDef)
 	if errors.Is(err, store.ErrBatchInvalidInput) {
@@ -419,7 +435,8 @@ func (s *Server) batchSubmitJob(
 			"Unable to submit job.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.executeBatchJob(r.Context(), verified.AccountID, job, jd, params); err != nil {
+	// Start nested container; return SUBMITTED; background reap (ECS pattern).
+	if err := s.startBatchJobContainer(r.Context(), verified.AccountID, job, jd, params); err != nil {
 		_ = s.store.SetBatchJobRuntime(verified.AccountID, job.JobID, "", store.BatchJobStatusFailed, time.Now().UTC().Format(time.RFC3339))
 		if strings.Contains(err.Error(), "compute unavailable") {
 			s.writeBatchError(w, r, body, requestID, http.StatusServiceUnavailable, "ServerException",
@@ -430,6 +447,7 @@ func (s *Server) batchSubmitJob(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
+	job.Status = store.BatchJobStatusSubmitted
 	payload, err := batchsvc.SubmitJobJSON(job)
 	if err != nil {
 		s.writeBatchError(w, r, body, requestID, http.StatusInternalServerError, "ServerException",
@@ -440,7 +458,30 @@ func (s *Server) batchSubmitJob(
 	s.writeSuccessAudit(r, requestID, eventID, verified, batchEventSource, "SubmitJob", readOnly)
 }
 
-func (s *Server) executeBatchJob(ctx context.Context, accountID string, job store.BatchJob, jd store.BatchJobDefinition, params map[string]any) error {
+func batchRejectUnsupportedFargateShape(params, container map[string]any) error {
+	if caps, ok := params["platformCapabilities"].([]any); ok {
+		for _, c := range caps {
+			if strings.EqualFold(stringParam(c), "FARGATE") {
+				return fmt.Errorf("platformCapabilities FARGATE is not supported (lab nested Docker only)")
+			}
+		}
+	}
+	if nm := stringParam(container["networkMode"]); strings.EqualFold(nm, "awsvpc") {
+		return fmt.Errorf("networkMode awsvpc is not supported (lab nested Docker only)")
+	}
+	return nil
+}
+
+func batchPullRoleARN(jd store.BatchJobDefinition) string {
+	if role := strings.TrimSpace(jd.ExecutionRoleARN); role != "" {
+		return role
+	}
+	return strings.TrimSpace(jd.JobRoleARN)
+}
+
+// startBatchJobContainer starts the nested container and returns once RUNNING is recorded.
+// Exit reaping runs in the background.
+func (s *Server) startBatchJobContainer(ctx context.Context, accountID string, job store.BatchJob, jd store.BatchJobDefinition, params map[string]any) error {
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
 		return errors.New("compute unavailable")
@@ -486,32 +527,45 @@ func (s *Server) executeBatchJob(ctx context.Context, accountID string, job stor
 			env[k] = v
 		}
 	}
-	pullRef, err := s.prepareLabRegistryImage(ctx, cli, accountID, jd.Image, batchRegistryPrincipal)
+	pullRole := batchPullRoleARN(jd)
+	pullRef, useAuth, username, password, err := s.labRegistryPullOpts(accountID, jd.Image, pullRole)
 	if err != nil {
 		return err
 	}
 	cid, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
-		ImageURI:    pullRef,
-		Command:     cmd,
-		Env:         env,
-		EndpointURL: endpoint,
+		ImageURI:         pullRef,
+		Command:          cmd,
+		Env:              env,
+		EndpointURL:      endpoint,
+		LabRegistryPull:  useAuth,
+		RegistryUsername: username,
+		RegistryPassword: password,
 	})
 	if err != nil {
 		return err
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	if err := s.store.SetBatchJobRuntime(accountID, job.JobID, cid, store.BatchJobStatusRunning, ""); err != nil {
+		_ = cli.StopECSTask(ctx, cid)
+		return err
+	}
+	go s.reapBatchJob(accountID, job.JobID, cid)
+	return nil
+}
+
+func (s *Server) reapBatchJob(accountID, jobID, containerID string) {
+	cli, err := s.computeClient()
+	if err != nil || cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	exitCode, waitErr := cli.WaitECSTaskExit(waitCtx, cid)
+	exitCode, waitErr := cli.WaitECSTaskExit(ctx, containerID)
 	status := store.BatchJobStatusSucceeded
 	if waitErr != nil || exitCode != 0 {
 		status = store.BatchJobStatusFailed
-	} else {
-		running, runErr := cli.ContainerRunning(ctx, cid)
-		if runErr == nil && running {
-			status = store.BatchJobStatusRunning
-		}
 	}
-	return s.store.SetBatchJobRuntime(accountID, job.JobID, cid, status, time.Now().UTC().Format(time.RFC3339))
+	_ = cli.StopECSTask(context.Background(), containerID)
+	_ = s.store.SetBatchJobRuntime(accountID, jobID, containerID, status, time.Now().UTC().Format(time.RFC3339))
 }
 
 func (s *Server) batchDescribeComputeEnvironments(

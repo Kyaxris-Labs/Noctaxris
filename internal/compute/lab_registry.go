@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -56,8 +57,30 @@ func RequireLabRegistryCreds(useAuth bool, creds LabRegistryPullCreds) error {
 	return nil
 }
 
+// IsLabRegistryPullPrincipal reports whether principal is an IAM/STS ARN Registry V2 can evaluate.
+// Bare service names (e.g. ecs-tasks.amazonaws.com) are rejected; pull tokens must use a role ARN.
+func IsLabRegistryPullPrincipal(principal string) bool {
+	principal = strings.TrimSpace(principal)
+	if principal == "" {
+		return false
+	}
+	if _, _, ok := sts.ParseRoleARN(principal); ok {
+		return true
+	}
+	// assumed-role / user / root ARNs used by GetAuthorizationToken and role sessions
+	if strings.HasPrefix(principal, "arn:aws:iam::") || strings.HasPrefix(principal, "arn:aws:sts::") {
+		return strings.Contains(principal, ":root") ||
+			strings.Contains(principal, ":user/") ||
+			strings.Contains(principal, ":role/") ||
+			strings.Contains(principal, ":assumed-role/") ||
+			strings.Contains(principal, ":federated-user/")
+	}
+	return false
+}
+
 // IssueLabRegistryPull rewrites a lab ECR image URI for DinD and issues a registry
-// authorization token (ECS RunTask / Lambda Image parity). Public images return useAuth=false.
+// authorization token. principal must be an IAM/STS ARN (execution/service/job role).
+// Public images return useAuth=false.
 func IssueLabRegistryPull(st *store.Store, listenAddr, accountID, imageURI, principal string) (pullRef string, useAuth bool, username, password string, err error) {
 	pullRef, useAuth = ResolveLabImagePull(imageURI, listenAddr)
 	if !useAuth {
@@ -66,8 +89,9 @@ func IssueLabRegistryPull(st *store.Store, listenAddr, accountID, imageURI, prin
 	if st == nil {
 		return "", true, "", "", fmt.Errorf("issue registry token: store is nil")
 	}
-	if strings.TrimSpace(principal) == "" {
-		principal = "lambda.amazonaws.com"
+	principal = strings.TrimSpace(principal)
+	if !IsLabRegistryPullPrincipal(principal) {
+		return "", true, "", "", fmt.Errorf("issue registry token: principal must be an IAM role or STS ARN (got %q)", principal)
 	}
 	token, _, err := st.IssueAuthorizationToken(accountID, principal, store.DefaultAuthTokenTTL)
 	if err != nil {

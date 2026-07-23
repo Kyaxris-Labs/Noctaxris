@@ -56,17 +56,28 @@ func CreateIntegrationJSON(in store.APIGatewayIntegration) ([]byte, error) {
 
 // CreateAuthorizerJSON builds CreateAuthorizer response.
 func CreateAuthorizerJSON(a store.APIGatewayAuthorizer) ([]byte, error) {
-	return json.Marshal(map[string]any{
+	m := map[string]any{
 		"AuthorizerId":   a.AuthorizerID,
 		"Name":           a.Name,
 		"AuthorizerType": a.AuthorizerType,
 		"IdentitySource": []string{a.IdentitySource},
-		"JwtConfiguration": map[string]any{
+		"ApiId":          a.APIID,
+	}
+	switch a.AuthorizerType {
+	case store.APIGatewayAuthorizerJWT:
+		m["JwtConfiguration"] = map[string]any{
 			"Issuer":   a.JWTIssuer,
 			"Audience": a.JWTAudience,
-		},
-		"ApiId": a.APIID,
-	})
+		}
+	case store.APIGatewayAuthorizerREQUEST:
+		m["AuthorizerUri"] = a.AuthorizerURI
+		m["AuthorizerPayloadFormatVersion"] = a.AuthorizerPayloadFormatVersion
+		m["EnableSimpleResponses"] = a.EnableSimpleResponses
+		if a.AuthorizerCredentialsArn != "" {
+			m["AuthorizerCredentialsArn"] = a.AuthorizerCredentialsArn
+		}
+	}
+	return json.Marshal(m)
 }
 
 // CreateRouteJSON builds CreateRoute response.

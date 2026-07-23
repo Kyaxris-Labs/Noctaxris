@@ -615,6 +615,7 @@ type roleXML struct {
 	Arn                      string                  `xml:"Arn"`
 	CreateDate               string                  `xml:"CreateDate,omitempty"`
 	AssumeRolePolicyDocument string                  `xml:"AssumeRolePolicyDocument,omitempty"`
+	MaxSessionDuration       int                     `xml:"MaxSessionDuration,omitempty"`
 	PermissionsBoundary      *permissionsBoundaryXML `xml:"PermissionsBoundary,omitempty"`
 }
 
@@ -630,9 +631,14 @@ type createRoleResponse struct {
 // CreateRoleXML builds CreateRole response XML.
 func CreateRoleXML(r store.Role, requestID string) ([]byte, error) {
 	resp := createRoleResponse{XMLNS: iamXMLNS}
+	maxDur := r.MaxSessionDuration
+	if maxDur <= 0 {
+		maxDur = 3600
+	}
 	resp.CreateRoleResult.Role = roleXML{
 		Path: "/", RoleName: r.RoleName, RoleId: r.RoleID, Arn: r.RoleARN,
 		CreateDate: r.CreateDate, AssumeRolePolicyDocument: r.TrustPolicy,
+		MaxSessionDuration: maxDur,
 	}
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
@@ -651,9 +657,14 @@ type getRoleResponse struct {
 // boundaryARN, when non-empty, is embedded as PermissionsBoundary (AWS-shaped).
 func GetRoleXML(r store.Role, boundaryARN, requestID string) ([]byte, error) {
 	resp := getRoleResponse{XMLNS: iamXMLNS}
+	maxDur := r.MaxSessionDuration
+	if maxDur <= 0 {
+		maxDur = 3600
+	}
 	resp.GetRoleResult.Role = roleXML{
 		Path: "/", RoleName: r.RoleName, RoleId: r.RoleID, Arn: r.RoleARN,
 		CreateDate: r.CreateDate, AssumeRolePolicyDocument: r.TrustPolicy,
+		MaxSessionDuration: maxDur,
 	}
 	if boundaryARN != "" {
 		resp.GetRoleResult.Role.PermissionsBoundary = &permissionsBoundaryXML{

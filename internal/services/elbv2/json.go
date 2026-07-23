@@ -91,12 +91,17 @@ func DescribeListenersJSON(ls []store.ELBv2Listener) ([]byte, error) {
 func RegisterTargetsJSON() ([]byte, error) { return []byte(`{}`), nil }
 
 // DescribeTargetHealthJSON builds a lite target health list.
+// Without a lab listener dataplane, registered targets stay unused (not healthy).
 func DescribeTargetHealthJSON(targets []store.ELBv2Target) ([]byte, error) {
 	items := make([]map[string]any, 0, len(targets))
 	for _, t := range targets {
 		items = append(items, map[string]any{
-			"Target":       map[string]any{"Id": t.ID, "Port": t.Port},
-			"TargetHealth": map[string]any{"State": "healthy"},
+			"Target": map[string]any{"Id": t.ID, "Port": t.Port},
+			"TargetHealth": map[string]any{
+				"State":       "unused",
+				"Reason":      "Target.NotInUse",
+				"Description": "Control-plane stub: no lab listener dataplane.",
+			},
 		})
 	}
 	return json.Marshal(map[string]any{"TargetHealthDescriptions": items})

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	"github.com/google/uuid"
 )
 
@@ -17,6 +19,7 @@ var (
 	ErrSFNStateMachineNotFound = errors.New("StateMachineDoesNotExist")
 	ErrSFNExecutionNotFound    = errors.New("ExecutionDoesNotExist")
 	ErrSFNInvalidDefinition    = errors.New("InvalidDefinition")
+	ErrSFNRoleArnRequired = errors.New("ValidationException: roleArn is required when definition contains Task")
 )
 
 const (
@@ -132,6 +135,10 @@ func (s *Store) CreateSFNStateMachine(accountID, region, name, definition, roleA
 	}
 	if err := validateSFNDefinition(definition); err != nil {
 		return SFNStateMachine{}, err
+	}
+	roleARN = strings.TrimSpace(roleARN)
+	if sfnDefinitionHasTask(definition) && roleARN == "" {
+		return SFNStateMachine{}, ErrSFNRoleArnRequired
 	}
 	if _, err := s.getSFNStateMachineByName(accountID, name); err == nil {
 		return SFNStateMachine{}, ErrSFNStateMachineExists
@@ -397,6 +404,23 @@ func validateSFNDefinition(definition string) error {
 	return nil
 }
 
+func sfnDefinitionHasTask(definition string) bool {
+	var def sfnDef
+	if err := json.Unmarshal([]byte(definition), &def); err != nil {
+		return false
+	}
+	for _, raw := range def.States {
+		var st sfnState
+		if err := json.Unmarshal(raw, &st); err != nil {
+			continue
+		}
+		if st.Type == "Task" {
+			return true
+		}
+	}
+	return false
+}
+
 func runSFNDefinition(definition, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist) {
 	var def sfnDef
 	if err := json.Unmarshal([]byte(definition), &def); err != nil {
@@ -524,14 +548,38 @@ func sfnLambdaTaskARN(accountID, resourceARN string) (string, bool) {
 
 // sfnTaskDeliveryAuthorized authorizes Task delivery via the state machine RoleArn
 // session, or (when RoleArn empty) a target resource policy Allow for states.amazonaws.com.
+// Foreign SQS/Lambda/SNS targets require RoleArn session Allow AND destination resource policy.
 func (s *Store) sfnTaskDeliveryAuthorized(accountID, roleARN, stateMachineARN, action, targetARN string) bool {
-	roleARN = strings.TrimSpace(roleARN)
-	if roleARN != "" {
-		if s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, "sfn-task", DefaultSFNRegion) {
-			return true
-		}
+	return s.deliveryAuthorizedRoleAndResource(
+		accountID, roleARN, action, targetARN, authz.ServicePrincipalStates, stateMachineARN, "sfn-task", DefaultSFNRegion,
+	)
+}
+
+// sfnBusPutEventsDualEval requires bus resource-policy dual-eval after RoleArn Allow.
+func (s *Store) sfnBusPutEventsDualEval(accountID, roleARN, stateMachineARN, busAccount, busName string) bool {
+	bus, err := s.DescribeEventBus(busAccount, busName)
+	if err != nil {
+		return false
 	}
-	return s.deliveryTargetResourcePolicyAllows(accountID, targetARN, action, authz.ServicePrincipalStates, stateMachineARN)
+	roleARN = strings.TrimSpace(roleARN)
+	if roleARN == "" {
+		return authz.EventTargetResourcePolicyAllows(
+			bus.Policy, actionEventsPutEvents, bus.ARN, authz.ServicePrincipalStates, busAccount,
+			authz.DeliverySourceConditionKeys(stateMachineARN, ""),
+		)
+	}
+	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok || roleAccountID != accountID {
+		return false
+	}
+	docs, err := s.identityPolicyDocsForRoleARN(roleARN)
+	if err != nil {
+		return false
+	}
+	principal := identity.RoleSessionPrincipal(accountID, roleName, "sfn-task", "ASIATEMP")
+	return EvaluateEventBusPutEvents(
+		principal, docs, bus, DefaultSFNRegion, authz.DeliverySourceConditionKeys(stateMachineARN, ""),
+	) == authz.Allow
 }
 
 // sfnInvokeBuiltInTask handles lab Task resources that do not need nested Lambda compute:
@@ -575,6 +623,9 @@ func (s *Store) sfnInvokeBuiltInTask(accountID, roleARN, stateMachineARN, resour
 		busAccount := accountID
 		if owner := resourceOwnerAccountFromARN(resourceARN); owner != "" {
 			busAccount = owner
+		}
+		if !s.sfnBusPutEventsDualEval(accountID, roleARN, stateMachineARN, busAccount, busName) {
+			return "", true, fmt.Errorf("not authorized to PutEvents on event bus policy")
 		}
 		result, perr := s.PutEvents(busAccount, []PutEventsEntry{{
 			Source:       "noctaxris.sfn",

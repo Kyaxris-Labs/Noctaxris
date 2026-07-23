@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Noctaxris CFN lab: multi-resource YAML with Ref/Sub/GetAtt"
+Resources:
+  LabBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: REPLACE_BUCKET_NAME
+  LabRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: REPLACE_ROLE_NAME
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+  LabQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${LabBucket}-q"
+  LabTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: REPLACE_TABLE_NAME
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+  LabFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: REPLACE_FUNCTION_NAME
+      Role: !GetAtt LabRole.Arn
+      Runtime: python3.12
+      Handler: index.handler
+      Description: !Sub "${AWS::StackName}-fn"
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return event

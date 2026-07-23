@@ -18,33 +18,39 @@ var (
 
 // ECSService is a lab ECS service row.
 type ECSService struct {
-	ServiceName    string
-	ServiceARN     string
-	ClusterARN     string
-	ClusterName    string
-	TaskDefinition string
-	DesiredCount   int
-	RunningCount   int
-	PendingCount   int
-	Status         string
-	CreatedAt      string
-	UpdatedAt      string
+	ServiceName            string
+	ServiceARN             string
+	ClusterARN             string
+	ClusterName            string
+	TaskDefinition         string
+	DesiredCount           int
+	RunningCount           int
+	PendingCount           int
+	Status                 string
+	CreatedAt              string
+	UpdatedAt              string
+	PassedTaskRoleARN      string
+	PassedExecutionRoleARN string
 }
 
 // CreateServiceInput holds CreateService fields.
 type CreateServiceInput struct {
-	Cluster        string
-	ServiceName    string
-	TaskDefinition string
-	DesiredCount   int
+	Cluster                string
+	ServiceName            string
+	TaskDefinition         string
+	DesiredCount           int
+	PassedTaskRoleARN      string
+	PassedExecutionRoleARN string
 }
 
 // UpdateServiceInput holds UpdateService fields.
 type UpdateServiceInput struct {
-	Cluster        string
-	Service        string
-	TaskDefinition string
-	DesiredCount   *int
+	Cluster                string
+	Service                string
+	TaskDefinition         string
+	DesiredCount           *int
+	PassedTaskRoleARN      string
+	PassedExecutionRoleARN string
 }
 
 const ecsServiceSchema = `
@@ -76,6 +82,17 @@ func EnsureECSServiceSchema(db *sql.DB) error {
 			return fmt.Errorf("ensure ecs service schema: %w", err)
 		}
 	}
+	for _, col := range []string{
+		`ALTER TABLE ecs_services ADD COLUMN passed_task_role_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ecs_services ADD COLUMN passed_execution_role_arn TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(col); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+				return fmt.Errorf("ensure ecs service schema: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -105,8 +122,7 @@ func (s *Store) CreateService(accountID, region string, in CreateServiceInput) (
 	if err := s.ensureDefaultCluster(accountID, region); err != nil {
 		return ECSService{}, err
 	}
-	clusterRow, err := s.getClusterRow(accountID, clusterName)
-	if err != nil {
+	if _, err := s.getClusterRow(accountID, clusterName); err != nil {
 		return ECSService{}, err
 	}
 	td, err := s.resolveTaskDefinitionForService(accountID, in.TaskDefinition)
@@ -125,30 +141,15 @@ func (s *Store) CreateService(accountID, region string, in CreateServiceInput) (
 	arn := ServiceARN(region, accountID, clusterName, serviceName)
 	_, err = s.db.Exec(
 		`INSERT INTO ecs_services
-		 (account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
+		 (account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at, passed_task_role_arn, passed_execution_role_arn)
+		 VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`,
 		accountID, clusterName, serviceName, arn, td.ARN, in.DesiredCount, now, now,
+		strings.TrimSpace(in.PassedTaskRoleARN), strings.TrimSpace(in.PassedExecutionRoleARN),
 	)
 	if err != nil {
 		return ECSService{}, fmt.Errorf("create service: %w", err)
 	}
-	running, pending, err := s.countServiceTasks(accountID, clusterName, serviceName)
-	if err != nil {
-		return ECSService{}, err
-	}
-	return ECSService{
-		ServiceName:    serviceName,
-		ServiceARN:     arn,
-		ClusterARN:     clusterRow.ARN,
-		ClusterName:    clusterName,
-		TaskDefinition: td.ARN,
-		DesiredCount:   in.DesiredCount,
-		RunningCount:   running,
-		PendingCount:   pending,
-		Status:         "ACTIVE",
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}, nil
+	return s.GetService(accountID, clusterName, serviceName)
 }
 
 // GetService returns a service by cluster and name.
@@ -156,7 +157,8 @@ func (s *Store) GetService(accountID, cluster, serviceName string) (ECSService, 
 	clusterName := normalizeECSClusterName(cluster)
 	serviceName = strings.TrimSpace(serviceName)
 	row := s.db.QueryRow(
-		`SELECT account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at
+		`SELECT account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at,
+		        COALESCE(passed_task_role_arn, ''), COALESCE(passed_execution_role_arn, '')
 		 FROM ecs_services WHERE account_id = ? AND cluster_name = ? AND service_name = ?`,
 		accountID, clusterName, serviceName,
 	)
@@ -165,7 +167,8 @@ func (s *Store) GetService(accountID, cluster, serviceName string) (ECSService, 
 		svc  ECSService
 	)
 	err := row.Scan(&acct, &svc.ClusterName, &svc.ServiceName, &svc.ServiceARN, &svc.TaskDefinition,
-		&svc.DesiredCount, &svc.Status, &svc.CreatedAt, &svc.UpdatedAt)
+		&svc.DesiredCount, &svc.Status, &svc.CreatedAt, &svc.UpdatedAt,
+		&svc.PassedTaskRoleARN, &svc.PassedExecutionRoleARN)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ECSService{}, ErrECSServiceNotFound
 	}
@@ -208,11 +211,20 @@ func (s *Store) UpdateService(accountID, region string, in UpdateServiceInput) (
 		}
 		desired = *in.DesiredCount
 	}
+	passedTask := svc.PassedTaskRoleARN
+	passedExec := svc.PassedExecutionRoleARN
+	if strings.TrimSpace(in.PassedTaskRoleARN) != "" {
+		passedTask = strings.TrimSpace(in.PassedTaskRoleARN)
+	}
+	if strings.TrimSpace(in.PassedExecutionRoleARN) != "" {
+		passedExec = strings.TrimSpace(in.PassedExecutionRoleARN)
+	}
 	now := nowRFC3339()
 	_, err = s.db.Exec(
-		`UPDATE ecs_services SET task_def_arn = ?, desired_count = ?, updated_at = ?
+		`UPDATE ecs_services SET task_def_arn = ?, desired_count = ?, updated_at = ?,
+		 passed_task_role_arn = ?, passed_execution_role_arn = ?
 		 WHERE account_id = ? AND cluster_name = ? AND service_name = ?`,
-		taskDefARN, desired, now, accountID, clusterName, svc.ServiceName,
+		taskDefARN, desired, now, passedTask, passedExec, accountID, clusterName, svc.ServiceName,
 	)
 	if err != nil {
 		return ECSService{}, fmt.Errorf("update service: %w", err)
@@ -280,7 +292,8 @@ func (s *Store) ListServices(accountID, cluster string) ([]string, error) {
 // ListActiveServicesWithAccount returns ACTIVE services with owning account IDs.
 func (s *Store) ListActiveServicesWithAccount() ([]ECSServiceAccount, error) {
 	rows, err := s.db.Query(
-		`SELECT account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at
+		`SELECT account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at,
+		        COALESCE(passed_task_role_arn, ''), COALESCE(passed_execution_role_arn, '')
 		 FROM ecs_services WHERE status = 'ACTIVE' ORDER BY account_id, cluster_name, service_name`,
 	)
 	if err != nil {
@@ -294,7 +307,8 @@ func (s *Store) ListActiveServicesWithAccount() ([]ECSServiceAccount, error) {
 			svc  ECSService
 		)
 		if err := rows.Scan(&acct, &svc.ClusterName, &svc.ServiceName, &svc.ServiceARN, &svc.TaskDefinition,
-			&svc.DesiredCount, &svc.Status, &svc.CreatedAt, &svc.UpdatedAt); err != nil {
+			&svc.DesiredCount, &svc.Status, &svc.CreatedAt, &svc.UpdatedAt,
+			&svc.PassedTaskRoleARN, &svc.PassedExecutionRoleARN); err != nil {
 			return nil, fmt.Errorf("list active services: %w", err)
 		}
 		clusterRow, err := s.getClusterRow(acct, svc.ClusterName)

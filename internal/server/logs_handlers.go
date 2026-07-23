@@ -8,6 +8,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	logssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/logs"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -51,6 +53,12 @@ func (s *Server) handleLogs(
 		s.logsDeleteSubscriptionFilter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsDescribeSubscriptionFilters:
 		s.logsDescribeSubscriptionFilters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsPutMetricFilter:
+		s.logsPutMetricFilter(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteMetricFilter:
+		s.logsDeleteMetricFilter(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDescribeMetricFilters:
+		s.logsDescribeMetricFilters(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLogsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CloudWatch Logs action is not implemented.", readOnly, eventID, verified)
@@ -84,9 +92,52 @@ func logsAction(action string) string {
 		return catalog.ActionLogsDeleteSubscriptionFilter
 	case "DescribeSubscriptionFilters":
 		return catalog.ActionLogsDescribeSubscriptionFilters
+	case "PutMetricFilter":
+		return catalog.ActionLogsPutMetricFilter
+	case "DeleteMetricFilter":
+		return catalog.ActionLogsDeleteMetricFilter
+	case "DescribeMetricFilters":
+		return catalog.ActionLogsDescribeMetricFilters
 	default:
 		return action
 	}
+}
+
+func (s *Server) checkLogsPassRole(verified *authn.Verified, roleARN string) error {
+	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok {
+		return errors.New("roleArn must be a valid IAM role ARN")
+	}
+	if accountID != verified.AccountID {
+		return errors.New("roleArn must be in the same account")
+	}
+	storedARN, trust, err := s.store.GetRole(accountID, roleName)
+	if err != nil {
+		return errors.New("roleArn not found")
+	}
+	if storedARN != "" {
+		roleARN = storedARN
+	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to CloudWatch Logs")
+	}
+	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
+		EvalInputs:       in,
+		RoleARN:          roleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalLogs,
+	})
+	if decision != authz.Allow {
+		return errors.New("not authorized to pass role to CloudWatch Logs")
+	}
+	return nil
 }
 
 func (s *Server) logsRegion(verified *authn.Verified) string {
@@ -462,6 +513,17 @@ func (s *Server) logsPutSubscriptionFilter(
 			"User is not authorized to perform logs:PutSubscriptionFilter.", readOnly, eventID, verified)
 		return
 	}
+	// Lambda destinations use resource-policy delivery; roleArn is not a bypass.
+	if strings.HasPrefix(strings.TrimSpace(dest), "arn:aws:lambda:") {
+		role = ""
+	}
+	if strings.TrimSpace(role) != "" {
+		if err := s.checkLogsPassRole(verified, role); err != nil {
+			s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	if _, err := s.store.PutSubscriptionFilter(verified.AccountID, group, name, pattern, dest, role); err != nil {
 		if errors.Is(err, store.ErrLogGroupNotFound) {
 			s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
@@ -537,6 +599,111 @@ func (s *Server) logsDescribeSubscriptionFilters(
 	}
 	s.writeLogsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeSubscriptionFilters", readOnly)
+}
+
+func (s *Server) logsPutMetricFilter(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	name, _ := params["filterName"].(string)
+	pattern, _ := params["filterPattern"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsPutMetricFilter, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:PutMetricFilter.", readOnly, eventID, verified)
+		return
+	}
+	metricName, metricNS, metricValue := "", "", "1"
+	if transforms, ok := params["metricTransformations"].([]any); ok && len(transforms) > 0 {
+		if t, ok := transforms[0].(map[string]any); ok {
+			metricName, _ = t["metricName"].(string)
+			metricNS, _ = t["metricNamespace"].(string)
+			if v, ok := t["metricValue"].(string); ok && v != "" {
+				metricValue = v
+			}
+		}
+	}
+	if _, err := s.store.PutMetricFilter(verified.AccountID, group, name, pattern, metricName, metricNS, metricValue); err != nil {
+		if errors.Is(err, store.ErrLogGroupNotFound) {
+			s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+				"Log group does not exist.", readOnly, eventID, verified)
+			return
+		}
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "PutMetricFilter", readOnly)
+}
+
+func (s *Server) logsDeleteMetricFilter(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	name, _ := params["filterName"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsDeleteMetricFilter, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteMetricFilter.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteMetricFilter(verified.AccountID, group, name); err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Metric filter does not exist.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteMetricFilter", readOnly)
+}
+
+func (s *Server) logsDescribeMetricFilters(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	group, _ := params["logGroupName"].(string)
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, group)
+	if !s.authorize(verified, catalog.ActionLogsDescribeMetricFilters, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DescribeMetricFilters.", readOnly, eventID, verified)
+		return
+	}
+	filters, err := s.store.DescribeMetricFilters(verified.AccountID, group)
+	if errors.Is(err, store.ErrLogGroupNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Log group does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to describe metric filters.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := logssvc.DescribeMetricFiltersJSON(filters)
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeMetricFilters", readOnly)
 }
 
 func logsInt64Param(v any) int64 {

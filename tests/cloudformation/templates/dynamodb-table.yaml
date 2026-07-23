@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Noctaxris CFN lab: DynamoDB table (YAML)"
+Resources:
+  LabTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: REPLACE_TABLE_NAME
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH

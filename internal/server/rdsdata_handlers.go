@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,7 +20,7 @@ const (
 
 var (
 	rdsDataExecutorMu       sync.Mutex
-	rdsDataExecutorOverride store.RDSDataExecutor // nil = prefer nested DinD psql, else stub
+	rdsDataExecutorOverride store.RDSDataExecutor // nil = production path; override is test injection only
 )
 
 // SetRDSDataExecutor replaces the Data API executor (tests).
@@ -96,6 +97,7 @@ func (s *Server) rdsDataExecute(
 		Database:      stringParam(params["database"]),
 		SQL:           stringParam(params["sql"]),
 		TransactionID: stringParam(params["transactionId"]),
+		Parameters:    parseRDSDataParameters(params["parameters"]),
 	}
 	if req.SQL == "" {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
@@ -105,6 +107,11 @@ func (s *Server) rdsDataExecute(
 	if strings.TrimSpace(req.TransactionID) != "" {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"ExecuteStatement with transactionId is not implemented.", readOnly, eventID, verified)
+		return
+	}
+	if len(req.Parameters) > 0 && !rdsDataPgxEnabled() {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"parameters require the optional wire-protocol Data API executor (not enabled).", readOnly, eventID, verified)
 		return
 	}
 	inst, err := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
@@ -202,6 +209,76 @@ func (s *Server) writeRDSDataResolveError(
 	default:
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
 			err.Error(), readOnly, eventID, verified)
+	}
+}
+
+func parseRDSDataParameters(raw any) []store.RDSDataSqlParameter {
+	list, ok := raw.([]any)
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	out := make([]store.RDSDataSqlParameter, 0, len(list))
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		p := store.RDSDataSqlParameter{Name: stringParam(m["name"])}
+		val, _ := m["value"].(map[string]any)
+		if val == nil {
+			out = append(out, p)
+			continue
+		}
+		if b, ok := val["isNull"].(bool); ok && b {
+			t := true
+			p.IsNull = &t
+		}
+		if s, ok := val["stringValue"].(string); ok {
+			p.StringValue = &s
+		}
+		if n, ok := asInt64(val["longValue"]); ok {
+			p.LongValue = &n
+		}
+		if f, ok := asFloat64(val["doubleValue"]); ok {
+			p.DoubleValue = &f
+		}
+		if b, ok := val["booleanValue"].(bool); ok {
+			p.BooleanValue = &b
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func asInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func asFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int64:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
 	}
 }
 

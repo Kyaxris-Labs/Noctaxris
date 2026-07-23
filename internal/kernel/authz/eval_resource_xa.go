@@ -38,7 +38,7 @@ func EvaluateResourceAccess(req ResourceAccessRequest) Decision {
 	var resourceDeny, resourceAllow bool
 	var resourceUnknown bool
 	if strings.TrimSpace(req.ResourcePolicyDoc) != "" {
-		resourceDeny, resourceAllow, resourceUnknown = policyEffectHits(req.Caller, []string{req.ResourcePolicyDoc})
+		resourceDeny, resourceAllow, resourceUnknown = resourcePolicyEffectHits(req.Caller, []string{req.ResourcePolicyDoc})
 	}
 	if identityUnknown || resourceUnknown || identityDeny || resourceDeny {
 		return Deny

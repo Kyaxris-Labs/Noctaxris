@@ -12,12 +12,9 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 	ok := []string{
 		"arn:aws:apigateway:us-east-1::/apis/abc123",
 		"arn:aws:apigateway:us-east-1::/apis/abc123/stages/$default",
-		"arn:aws:apigateway:us-east-1::/restapis/api1/stages/prod",
 		"arn:aws:execute-api:us-east-1:000000000001:abc123",
 		"arn:aws:execute-api:us-east-1:000000000001:abc123/$default/GET/hello",
-		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/lab/abc",
 		"arn:aws:appsync:us-east-1:000000000001:apis/gql1",
-		"arn:aws:cognito-idp:us-east-1:000000000001:userpool/us-east-1_abc",
 		"arn:aws:lambda:us-east-1:000000000001:function:fn",
 	}
 	for _, arn := range ok {
@@ -30,6 +27,9 @@ func TestIsWAFAssociableResourceARN(t *testing.T) {
 		"not-an-arn",
 		"arn:aws:s3:::bucket",
 		"arn:aws:apigateway:us-east-1::/unknown/x",
+		"arn:aws:apigateway:us-east-1::/restapis/api1/stages/prod",
+		"arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/lab/abc",
+		"arn:aws:cognito-idp:us-east-1:000000000001:userpool/us-east-1_abc",
 	}
 	for _, arn := range bad {
 		if store.IsWAFAssociableResourceARN(arn) {
@@ -79,22 +79,41 @@ func TestCloudFrontDistributionCRUD(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	d, err := st.CreateCloudFrontDistribution("000000000001", "lab", "ref-1", true, []store.CloudFrontOrigin{
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "lab-bucket"); err != nil {
+		t.Fatal(err)
+	}
+	api, err := st.CreateAPIGatewayAPI(account, "us-east-1", "cf-origin", "HTTP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateCloudFrontDistribution(account, "lab", "ref-missing", true, []store.CloudFrontOrigin{
+		{ID: "s3", DomainName: "missing-bucket", OriginType: "s3"},
+	}); !errors.Is(err, store.ErrCloudFrontBadRequest) {
+		t.Fatalf("want origin fail-closed, got %v", err)
+	}
+	d, err := st.CreateCloudFrontDistribution(account, "lab", "ref-1", true, []store.CloudFrontOrigin{
 		{ID: "s3", DomainName: "lab-bucket", OriginType: "s3"},
-		{ID: "gw", DomainName: "api-id-1", OriginType: "apigateway"},
+		{ID: "gw", DomainName: api.APIID, OriginType: "apigateway"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.GetCloudFrontDistribution("000000000001", d.ID)
-	if err != nil || got.DomainName == "" {
+	if d.Status != store.CloudFrontStatusInProgress {
+		t.Fatalf("status=%q want %q", d.Status, store.CloudFrontStatusInProgress)
+	}
+	if d.DomainName != "" {
+		t.Fatalf("DomainName=%q want empty until fake-edge", d.DomainName)
+	}
+	got, err := st.GetCloudFrontDistribution(account, d.ID)
+	if err != nil || got.Status != store.CloudFrontStatusInProgress || got.DomainName != "" {
 		t.Fatalf("get: %+v err=%v", got, err)
 	}
-	list, err := st.ListCloudFrontDistributions("000000000001")
+	list, err := st.ListCloudFrontDistributions(account)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list=%v err=%v", list, err)
 	}
-	if err := st.DeleteCloudFrontDistribution("000000000001", d.ID); err != nil {
+	if err := st.DeleteCloudFrontDistribution(account, d.ID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -111,27 +130,51 @@ func TestELBv2LambdaTarget(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	lb, err := st.CreateELBv2LoadBalancer("000000000001", "us-east-1", "lab-alb", "internet-facing")
+	account := "000000000001"
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "lab-alb", "internet-facing")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tg, err := st.CreateELBv2TargetGroup("000000000001", "us-east-1", "lab-tg", "lambda", "HTTP", 80)
+	tg, err := st.CreateELBv2TargetGroup(account, "us-east-1", "lab-tg", "lambda", "HTTP", 80)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateELBv2TargetGroup("000000000001", "us-east-1", "bad", "instance", "HTTP", 80); err == nil {
+	if _, err := st.CreateELBv2TargetGroup(account, "us-east-1", "bad", "instance", "HTTP", 80); err == nil {
 		t.Fatal("expected instance target type rejected")
 	}
-	listener, err := st.CreateELBv2Listener("000000000001", "us-east-1", lb.ARN, tg.ARN, "HTTP", 80)
+	listener, err := st.CreateELBv2Listener(account, "us-east-1", lb.ARN, tg.ARN, "HTTP", 80)
 	if err != nil || listener.ListenerARN == "" {
 		t.Fatalf("listener=%+v err=%v", listener, err)
 	}
-	fnARN := "arn:aws:lambda:us-east-1:000000000001:function:lab"
-	if err := st.RegisterELBv2Targets("000000000001", tg.ARN, []store.ELBv2Target{{ID: fnARN}}); err != nil {
+	missing := "arn:aws:lambda:us-east-1:" + account + ":function:missing"
+	if err := st.RegisterELBv2Targets(account, tg.ARN, []store.ELBv2Target{{ID: missing}}); err == nil {
+		t.Fatal("expected unresolved lambda target rejected")
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "lab",
+		RoleARN: "arn:aws:iam::" + account + ":role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: zip,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RegisterELBv2Targets("000000000001", tg.ARN, []store.ELBv2Target{{ID: "i-ec2"}}); err == nil {
+	if err := st.RegisterELBv2Targets(account, tg.ARN, []store.ELBv2Target{{ID: fn.FunctionARN}}); err == nil {
+		t.Fatal("expected RegisterTargets without ELB permission rejected")
+	}
+	if _, err := st.AddFunctionPermission(account, "lab", "elb-allow", "lambda:InvokeFunction",
+		"elasticloadbalancing.amazonaws.com", "", tg.ARN); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RegisterELBv2Targets(account, tg.ARN, []store.ELBv2Target{{ID: fn.FunctionARN}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RegisterELBv2Targets(account, tg.ARN, []store.ELBv2Target{{ID: "i-ec2"}}); err == nil {
 		t.Fatal("expected non-lambda id rejected on lambda TG")
+	}
+	targets, err := st.ListELBv2Targets(account, tg.ARN)
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("targets=%v err=%v", targets, err)
 	}
 }
 

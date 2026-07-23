@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # CloudFormation create/describe/delete via AWS CLI against Noctaxris.
+# Exercises JSON (S3+IAM) and YAML multi-type templates.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,10 +23,15 @@ if ! curl -fsS "$EP/_noctaxris/ready" | grep -q ready; then
 fi
 
 SUFFIX="$(date +%s)$RANDOM"
+SHORT="$(echo "$SUFFIX" | cut -c1-12)"
 BUCKET="cfn-cli-${SUFFIX}"
 BUCKET="$(echo "$BUCKET" | tr '[:upper:]' '[:lower:]' | cut -c1-63)"
-ROLE="CfnCliRole${SUFFIX}"
-STACK="cfn-cli-${SUFFIX}"
+ROLE="CfnCliRole${SHORT}"
+QUEUE="cfn-cli-q-${SHORT}"
+TABLE="cfn-cli-ddb-${SHORT}"
+FN="cfn-cli-fn-${SHORT}"
+STACK_JSON="cfn-cli-json-${SHORT}"
+STACK_YAML="cfn-cli-yaml-${SHORT}"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/noctaxris-cfn.XXXXXX")"
 cleanup() {
@@ -37,18 +43,45 @@ sed -e "s/REPLACE_BUCKET_NAME/${BUCKET}/g" -e "s/REPLACE_ROLE_NAME/${ROLE}/g" \
   "$TEMPLATES/s3-and-iam.json" >"$WORKDIR/stack.json"
 
 aws cloudformation create-stack \
-  --stack-name "$STACK" \
+  --stack-name "$STACK_JSON" \
   --template-body "file://$WORKDIR/stack.json" \
   --endpoint-url "$EP"
 
-aws cloudformation describe-stacks --stack-name "$STACK" --endpoint-url "$EP" \
+aws cloudformation describe-stacks --stack-name "$STACK_JSON" --endpoint-url "$EP" \
   --query 'Stacks[0].StackStatus' --output text | grep -E 'CREATE_COMPLETE|CREATE_IN_PROGRESS'
 
 aws cloudformation list-stacks --endpoint-url "$EP" \
-  --query "StackSummaries[?StackName=='${STACK}'].StackName" --output text | grep -qx "$STACK"
+  --query "StackSummaries[?StackName=='${STACK_JSON}'].StackName" --output text | grep -qx "$STACK_JSON"
 
 aws s3api head-bucket --bucket "$BUCKET" --endpoint-url "$EP"
 
-aws cloudformation delete-stack --stack-name "$STACK" --endpoint-url "$EP"
+aws cloudformation delete-stack --stack-name "$STACK_JSON" --endpoint-url "$EP"
 
-echo "CloudFormation CLI suite succeeded (stack=$STACK)"
+# YAML multi-resource with Ref/Sub/GetAtt (S3, IAM, SQS, DynamoDB, Lambda ZipFile).
+sed \
+  -e "s/REPLACE_BUCKET_NAME/${BUCKET}/g" \
+  -e "s/REPLACE_ROLE_NAME/${ROLE}Y/g" \
+  -e "s/REPLACE_TABLE_NAME/${TABLE}/g" \
+  -e "s/REPLACE_FUNCTION_NAME/${FN}/g" \
+  "$TEMPLATES/multi-resource.yaml" >"$WORKDIR/stack.yaml"
+
+aws cloudformation create-stack \
+  --stack-name "$STACK_YAML" \
+  --template-body "file://$WORKDIR/stack.yaml" \
+  --endpoint-url "$EP"
+
+aws cloudformation describe-stacks --stack-name "$STACK_YAML" --endpoint-url "$EP" \
+  --query 'Stacks[0].StackStatus' --output text | grep -E 'CREATE_COMPLETE|CREATE_IN_PROGRESS'
+
+aws cloudformation delete-stack --stack-name "$STACK_YAML" --endpoint-url "$EP"
+
+# Single-type YAML smoke (SQS + DynamoDB) for coverage beyond multi-resource.
+sed -e "s/REPLACE_QUEUE_NAME/${QUEUE}/g" "$TEMPLATES/sqs-queue.yaml" >"$WORKDIR/sqs.yaml"
+STACK_SQS="cfn-cli-sqs-${SHORT}"
+aws cloudformation create-stack \
+  --stack-name "$STACK_SQS" \
+  --template-body "file://$WORKDIR/sqs.yaml" \
+  --endpoint-url "$EP"
+aws cloudformation delete-stack --stack-name "$STACK_SQS" --endpoint-url "$EP"
+
+echo "CloudFormation CLI suite succeeded (json=$STACK_JSON yaml=$STACK_YAML sqs=$STACK_SQS)"

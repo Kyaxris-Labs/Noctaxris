@@ -23,13 +23,19 @@ const DefaultAPIGatewayRegion = "us-east-1"
 const (
 	APIGatewayProtocolHTTP = "HTTP"
 
-	APIGatewayAuthNone = "NONE"
-	APIGatewayAuthJWT  = "JWT"
-	APIGatewayAuthIAM  = "AWS_IAM"
+	APIGatewayAuthNone   = "NONE"
+	APIGatewayAuthJWT    = "JWT"
+	APIGatewayAuthIAM    = "AWS_IAM"
+	APIGatewayAuthCUSTOM = "CUSTOM"
 
-	APIGatewayAuthorizerJWT = "JWT"
+	APIGatewayAuthorizerJWT     = "JWT"
+	APIGatewayAuthorizerREQUEST = "REQUEST"
+	APIGatewayAuthorizerTOKEN   = "TOKEN"
 
 	APIGatewayIntegrationAWSProxy = "AWS_PROXY"
+
+	APIGatewayAuthorizerPayload20 = "2.0"
+	APIGatewayAuthorizerPayload10 = "1.0"
 )
 
 const apiGatewayV2Schema = `
@@ -61,6 +67,10 @@ CREATE TABLE IF NOT EXISTS apigwv2_authorizers (
   identity_source TEXT NOT NULL,
   jwt_issuer TEXT NOT NULL DEFAULT '',
   jwt_audience_json TEXT NOT NULL DEFAULT '[]',
+  authorizer_uri TEXT NOT NULL DEFAULT '',
+  authorizer_credentials_arn TEXT NOT NULL DEFAULT '',
+  authorizer_payload_format_version TEXT NOT NULL DEFAULT '',
+  enable_simple_responses INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (account_id, api_id, authorizer_id)
 );
 CREATE TABLE IF NOT EXISTS apigwv2_routes (
@@ -102,15 +112,34 @@ type APIGatewayIntegration struct {
 	CredentialsArn       string
 }
 
-// APIGatewayAuthorizer is a JWT authorizer.
+// APIGatewayAuthorizer is a JWT or REQUEST (Lambda) authorizer.
 type APIGatewayAuthorizer struct {
-	AuthorizerID   string
-	APIID          string
-	Name           string
-	AuthorizerType string
-	IdentitySource string
-	JWTIssuer      string
-	JWTAudience    []string
+	AuthorizerID                   string
+	APIID                          string
+	Name                           string
+	AuthorizerType                 string
+	IdentitySource                 string
+	JWTIssuer                      string
+	JWTAudience                    []string
+	AuthorizerURI                  string // normalized Lambda ARN for REQUEST
+	AuthorizerCredentialsArn       string
+	AuthorizerPayloadFormatVersion string
+	EnableSimpleResponses          bool
+}
+
+// CreateAPIGatewayAuthorizerInput holds CreateAuthorizer fields.
+type CreateAPIGatewayAuthorizerInput struct {
+	AccountID                      string
+	APIID                          string
+	Name                           string
+	AuthorizerType                 string
+	IdentitySource                 string
+	JWTIssuer                      string
+	JWTAudience                    []string
+	AuthorizerURI                  string
+	AuthorizerCredentialsArn       string
+	AuthorizerPayloadFormatVersion string
+	EnableSimpleResponses          *bool
 }
 
 // APIGatewayRoute is a route row.
@@ -140,6 +169,10 @@ func EnsureAPIGatewayV2Schema(db *sql.DB) error {
 	}
 	alters := []string{
 		`ALTER TABLE apigwv2_integrations ADD COLUMN credentials_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_uri TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_credentials_arn TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_payload_format_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apigwv2_authorizers ADD COLUMN enable_simple_responses INTEGER NOT NULL DEFAULT 1`,
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil {
@@ -331,67 +364,176 @@ func (s *Store) GetAPIGatewayIntegration(accountID, apiID, integrationID string)
 	return in, nil
 }
 
-// CreateAPIGatewayAuthorizer creates a JWT authorizer.
-func (s *Store) CreateAPIGatewayAuthorizer(accountID, apiID, name, authorizerType, identitySource, issuer string, audience []string) (APIGatewayAuthorizer, error) {
-	name = strings.TrimSpace(name)
-	authorizerType = strings.ToUpper(strings.TrimSpace(authorizerType))
-	identitySource = strings.TrimSpace(identitySource)
-	issuer = strings.TrimSpace(issuer)
+// CreateAPIGatewayAuthorizer creates a JWT or REQUEST (Lambda) authorizer.
+// TOKEN (REST-style) authorizers are rejected; HTTP API lab supports REQUEST only.
+func (s *Store) CreateAPIGatewayAuthorizer(in CreateAPIGatewayAuthorizerInput) (APIGatewayAuthorizer, error) {
+	name := strings.TrimSpace(in.Name)
+	authorizerType := strings.ToUpper(strings.TrimSpace(in.AuthorizerType))
+	identitySource := strings.TrimSpace(in.IdentitySource)
+	issuer := strings.TrimSpace(in.JWTIssuer)
+	uri := strings.TrimSpace(in.AuthorizerURI)
+	credARN := strings.TrimSpace(in.AuthorizerCredentialsArn)
+	payloadVer := strings.TrimSpace(in.AuthorizerPayloadFormatVersion)
 	if name == "" {
 		return APIGatewayAuthorizer{}, fmt.Errorf("%w: Name required", ErrAPIGatewayBadRequest)
 	}
 	if authorizerType == "" {
 		authorizerType = APIGatewayAuthorizerJWT
 	}
-	if authorizerType != APIGatewayAuthorizerJWT {
-		return APIGatewayAuthorizer{}, fmt.Errorf("%w: AuthorizerType must be JWT", ErrAPIGatewayBadRequest)
+	switch authorizerType {
+	case APIGatewayAuthorizerJWT, APIGatewayAuthorizerREQUEST:
+	case APIGatewayAuthorizerTOKEN:
+		return APIGatewayAuthorizer{}, fmt.Errorf("%w: AuthorizerType TOKEN is REST-only; use REQUEST for HTTP API Lambda authorizers", ErrAPIGatewayBadRequest)
+	default:
+		return APIGatewayAuthorizer{}, fmt.Errorf("%w: AuthorizerType must be JWT or REQUEST", ErrAPIGatewayBadRequest)
 	}
-	if issuer == "" {
-		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer required", ErrAPIGatewayBadRequest)
+
+	var lambdaARN string
+	simple := true
+	if in.EnableSimpleResponses != nil {
+		simple = *in.EnableSimpleResponses
 	}
-	if err := jwksfetch.ValidateIssuerForConfig(issuer); err != nil {
-		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer: %v", ErrAPIGatewayBadRequest, err)
+	audience := in.JWTAudience
+
+	switch authorizerType {
+	case APIGatewayAuthorizerJWT:
+		if issuer == "" {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer required", ErrAPIGatewayBadRequest)
+		}
+		if err := jwksfetch.ValidateIssuerForConfig(issuer); err != nil {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Issuer: %v", ErrAPIGatewayBadRequest, err)
+		}
+		if len(audience) == 0 {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Audience required", ErrAPIGatewayBadRequest)
+		}
+		if identitySource == "" {
+			identitySource = "$request.header.Authorization"
+		}
+		if identitySource != "$request.header.Authorization" {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: IdentitySource must be $request.header.Authorization", ErrAPIGatewayBadRequest)
+		}
+		payloadVer = ""
+		credARN = ""
+		uri = ""
+		simple = true
+	case APIGatewayAuthorizerREQUEST:
+		normalized, err := NormalizeAPIGatewayAuthorizerURI(uri)
+		if err != nil {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: %v", ErrAPIGatewayBadRequest, err)
+		}
+		lambdaARN = normalized
+		if payloadVer == "" {
+			payloadVer = APIGatewayAuthorizerPayload20
+		}
+		if payloadVer != APIGatewayAuthorizerPayload20 && payloadVer != APIGatewayAuthorizerPayload10 {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: AuthorizerPayloadFormatVersion must be 1.0 or 2.0", ErrAPIGatewayBadRequest)
+		}
+		if identitySource == "" {
+			identitySource = "$request.header.Authorization"
+		}
+		if !isValidAPIGatewayIdentitySource(identitySource) {
+			return APIGatewayAuthorizer{}, fmt.Errorf("%w: IdentitySource must be $request.header.*, $request.querystring.*, or $context.routeKey", ErrAPIGatewayBadRequest)
+		}
+		issuer = ""
+		audience = nil
 	}
-	if len(audience) == 0 {
-		return APIGatewayAuthorizer{}, fmt.Errorf("%w: JwtConfiguration.Audience required", ErrAPIGatewayBadRequest)
-	}
-	if identitySource == "" {
-		identitySource = "$request.header.Authorization"
-	}
-	if identitySource != "$request.header.Authorization" {
-		return APIGatewayAuthorizer{}, fmt.Errorf("%w: IdentitySource must be $request.header.Authorization", ErrAPIGatewayBadRequest)
-	}
-	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
+
+	if _, err := s.GetAPIGatewayAPI(in.AccountID, in.APIID); err != nil {
 		return APIGatewayAuthorizer{}, err
 	}
 	audJSON, err := json.Marshal(audience)
 	if err != nil {
 		return APIGatewayAuthorizer{}, fmt.Errorf("marshal audience: %w", err)
 	}
+	if audJSON == nil {
+		audJSON = []byte("[]")
+	}
+	simpleInt := 0
+	if simple {
+		simpleInt = 1
+	}
 	id := uuid.NewString()
 	_, err = s.db.Exec(
-		`INSERT INTO apigwv2_authorizers (account_id, api_id, authorizer_id, name, authorizer_type, identity_source, jwt_issuer, jwt_audience_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, apiID, id, name, authorizerType, identitySource, issuer, string(audJSON),
+		`INSERT INTO apigwv2_authorizers (
+			account_id, api_id, authorizer_id, name, authorizer_type, identity_source,
+			jwt_issuer, jwt_audience_json, authorizer_uri, authorizer_credentials_arn,
+			authorizer_payload_format_version, enable_simple_responses)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		in.AccountID, in.APIID, id, name, authorizerType, identitySource,
+		issuer, string(audJSON), lambdaARN, credARN, payloadVer, simpleInt,
 	)
 	if err != nil {
 		return APIGatewayAuthorizer{}, fmt.Errorf("create authorizer: %w", err)
 	}
 	return APIGatewayAuthorizer{
-		AuthorizerID: id, APIID: apiID, Name: name, AuthorizerType: authorizerType,
+		AuthorizerID: id, APIID: in.APIID, Name: name, AuthorizerType: authorizerType,
 		IdentitySource: identitySource, JWTIssuer: issuer, JWTAudience: audience,
+		AuthorizerURI: lambdaARN, AuthorizerCredentialsArn: credARN,
+		AuthorizerPayloadFormatVersion: payloadVer, EnableSimpleResponses: simple,
 	}, nil
+}
+
+// NormalizeAPIGatewayAuthorizerURI accepts a Lambda ARN or API Gateway Lambda invoke URI
+// and returns a normalized Lambda function ARN.
+func NormalizeAPIGatewayAuthorizerURI(uri string) (string, error) {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return "", fmt.Errorf("AuthorizerUri required for REQUEST authorizers")
+	}
+	if strings.HasPrefix(uri, "arn:aws:lambda:") {
+		parts := strings.Split(uri, ":")
+		if len(parts) >= 7 && parts[5] == "function" && parts[3] != "" && parts[4] != "" && parts[6] != "" {
+			return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", parts[3], parts[4], parts[6]), nil
+		}
+		return "", fmt.Errorf("AuthorizerUri must be a Lambda ARN or apigateway Lambda invoke URI")
+	}
+	// arn:aws:apigateway:region:lambda:path/2015-03-31/functions/arn:aws:lambda:.../invocations
+	const marker = "/functions/"
+	idx := strings.Index(uri, marker)
+	if idx >= 0 && strings.Contains(uri, "arn:aws:apigateway:") {
+		rest := uri[idx+len(marker):]
+		rest = strings.TrimSuffix(rest, "/invocations")
+		if acct, name, ok := ParseLambdaARNFromSFNResource(rest); ok && strings.HasPrefix(rest, "arn:aws:lambda:") {
+			region := DefaultLambdaRegion
+			parts := strings.Split(rest, ":")
+			if len(parts) >= 4 && parts[3] != "" {
+				region = parts[3]
+			}
+			return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", region, acct, name), nil
+		}
+	}
+	return "", fmt.Errorf("AuthorizerUri must be a Lambda ARN or apigateway Lambda invoke URI")
+}
+
+func isValidAPIGatewayIdentitySource(src string) bool {
+	src = strings.TrimSpace(src)
+	switch {
+	case strings.HasPrefix(src, "$request.header.") && len(src) > len("$request.header."):
+		return true
+	case strings.HasPrefix(src, "$request.querystring.") && len(src) > len("$request.querystring."):
+		return true
+	case src == "$context.routeKey":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetAPIGatewayAuthorizer returns an authorizer.
 func (s *Store) GetAPIGatewayAuthorizer(accountID, apiID, authorizerID string) (APIGatewayAuthorizer, error) {
 	var a APIGatewayAuthorizer
 	var audJSON string
+	var simpleInt int
 	err := s.db.QueryRow(
-		`SELECT authorizer_id, api_id, name, authorizer_type, identity_source, jwt_issuer, jwt_audience_json
+		`SELECT authorizer_id, api_id, name, authorizer_type, identity_source, jwt_issuer, jwt_audience_json,
+		        COALESCE(authorizer_uri, ''), COALESCE(authorizer_credentials_arn, ''),
+		        COALESCE(authorizer_payload_format_version, ''), COALESCE(enable_simple_responses, 1)
 		 FROM apigwv2_authorizers WHERE account_id = ? AND api_id = ? AND authorizer_id = ?`,
 		accountID, apiID, authorizerID,
-	).Scan(&a.AuthorizerID, &a.APIID, &a.Name, &a.AuthorizerType, &a.IdentitySource, &a.JWTIssuer, &audJSON)
+	).Scan(
+		&a.AuthorizerID, &a.APIID, &a.Name, &a.AuthorizerType, &a.IdentitySource, &a.JWTIssuer, &audJSON,
+		&a.AuthorizerURI, &a.AuthorizerCredentialsArn, &a.AuthorizerPayloadFormatVersion, &simpleInt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIGatewayAuthorizer{}, ErrAPIGatewayNotFound
 	}
@@ -399,6 +541,7 @@ func (s *Store) GetAPIGatewayAuthorizer(accountID, apiID, authorizerID string) (
 		return APIGatewayAuthorizer{}, fmt.Errorf("get authorizer: %w", err)
 	}
 	_ = json.Unmarshal([]byte(audJSON), &a.JWTAudience)
+	a.EnableSimpleResponses = simpleInt != 0
 	return a, nil
 }
 
@@ -421,19 +564,34 @@ func (s *Store) CreateAPIGatewayRoute(accountID, apiID, routeKey, target, authTy
 		authType = APIGatewayAuthNone
 	}
 	switch authType {
-	case APIGatewayAuthNone, APIGatewayAuthJWT, APIGatewayAuthIAM:
+	case APIGatewayAuthNone, APIGatewayAuthJWT, APIGatewayAuthIAM, APIGatewayAuthCUSTOM:
 	default:
-		return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizationType must be NONE, JWT, or AWS_IAM", ErrAPIGatewayBadRequest)
+		return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizationType must be NONE, JWT, AWS_IAM, or CUSTOM", ErrAPIGatewayBadRequest)
 	}
-	if authType == APIGatewayAuthJWT {
+	switch authType {
+	case APIGatewayAuthJWT:
 		if authorizerID == "" {
 			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for JWT", ErrAPIGatewayBadRequest)
 		}
-		if _, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID); err != nil {
+		authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
+		if err != nil {
 			return APIGatewayRoute{}, err
 		}
-	}
-	if authType != APIGatewayAuthJWT {
+		if authz.AuthorizerType != APIGatewayAuthorizerJWT {
+			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a JWT authorizer", ErrAPIGatewayBadRequest)
+		}
+	case APIGatewayAuthCUSTOM:
+		if authorizerID == "" {
+			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for CUSTOM", ErrAPIGatewayBadRequest)
+		}
+		authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
+		if err != nil {
+			return APIGatewayRoute{}, err
+		}
+		if authz.AuthorizerType != APIGatewayAuthorizerREQUEST {
+			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a REQUEST Lambda authorizer", ErrAPIGatewayBadRequest)
+		}
+	default:
 		authorizerID = ""
 	}
 	integrationID := strings.TrimPrefix(target, "integrations/")

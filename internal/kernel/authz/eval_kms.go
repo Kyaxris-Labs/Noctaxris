@@ -35,7 +35,7 @@ func EvaluateKMS(req KMSRequest) Decision {
 	var keyDeny, keyAllow bool
 	var keyUnknown bool
 	if req.KeyPolicyDoc != "" {
-		keyDeny, keyAllow, keyUnknown = policyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
+		keyDeny, keyAllow, keyUnknown = resourcePolicyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
 	}
 	if identityUnknown || keyUnknown || identityDeny || keyDeny {
 		return Deny
@@ -57,14 +57,29 @@ func EvaluateKMS(req KMSRequest) Decision {
 
 // policyEffectHits reports whether any statement in docs is an explicit Deny or Allow match.
 // catalogUnknown is true if any Condition references a key absent from the catalog.
+// Uses identity statement matching (Principal optional).
 func policyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool, catalogUnknown bool) {
+	return policyEffectHitsWith(ctx, docs, statementMatches)
+}
+
+// resourcePolicyEffectHits is policyEffectHits for resource-based documents
+// (KMS key policy, S3/Secrets/DynamoDB/ECR resource policies). Missing Principal is match-none.
+func resourcePolicyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool, catalogUnknown bool) {
+	return policyEffectHitsWith(ctx, docs, resourceStatementMatches)
+}
+
+func policyEffectHitsWith(
+	ctx RequestContext,
+	docs []string,
+	match func(statement, RequestContext) (bool, bool),
+) (denyHit, allowHit bool, catalogUnknown bool) {
 	for _, raw := range docs {
 		doc, err := parsePolicyDocument(raw)
 		if err != nil {
 			continue
 		}
 		for _, st := range doc.Statement {
-			matches, unknown := statementMatches(st, ctx)
+			matches, unknown := match(st, ctx)
 			if unknown {
 				return false, false, true
 			}

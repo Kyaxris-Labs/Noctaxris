@@ -402,6 +402,7 @@ func cfnDependencyOrder(resources map[string]cfnResource) ([]string, error) {
 	for id, res := range resources {
 		deps[id] = map[string]struct{}{}
 		collectCFNDeps(res.Properties, id, resources, deps[id])
+		collectCFNDependsOn(res.DependsOn, id, resources, deps[id])
 	}
 	var order []string
 	ready := map[string]struct{}{}
@@ -443,6 +444,27 @@ func indexOfString(list []string, want string) (int, bool) {
 		}
 	}
 	return -1, false
+}
+
+
+func collectCFNDependsOn(v any, self string, resources map[string]cfnResource, out map[string]struct{}) {
+	switch x := v.(type) {
+	case string:
+		name := strings.TrimSpace(x)
+		if name != "" && name != self {
+			if _, exists := resources[name]; exists {
+				out[name] = struct{}{}
+			}
+		}
+	case []any:
+		for _, item := range x {
+			collectCFNDependsOn(item, self, resources, out)
+		}
+	case []string:
+		for _, item := range x {
+			collectCFNDependsOn(item, self, resources, out)
+		}
+	}
 }
 
 func collectCFNDeps(v any, self string, resources map[string]cfnResource, out map[string]struct{}) {
@@ -534,14 +556,5 @@ func cfnIntProp(props map[string]any, key string, fallback int) int {
 		return n
 	default:
 		return fallback
-	}
-}
-
-func supportedCFNType(t string) bool {
-	switch t {
-	case "AWS::S3::Bucket", "AWS::IAM::Role", "AWS::SQS::Queue", "AWS::DynamoDB::Table", "AWS::Lambda::Function":
-		return true
-	default:
-		return false
 	}
 }

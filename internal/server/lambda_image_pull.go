@@ -1,23 +1,22 @@
 package server
 
 import (
+	"strings"
+
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-const lambdaRegistryPrincipal = "lambda.amazonaws.com"
-
 // prepareLambdaImageRunOpts rewrites lab ECR ImageUri for DinD and attaches a lab
-// registry authorization token (same path ECS RunTask uses for 127.0.0.1:4566 refs).
+// registry authorization token issued as the function execution role ARN.
 func (s *Server) prepareLambdaImageRunOpts(
 	accountID string,
 	fn store.LambdaFunction,
 	env map[string]string,
 	eventJSON, endpoint, eventHostPath string,
 ) (compute.ImageRunOpts, error) {
-	pullRef, useAuth, username, password, err := compute.IssueLabRegistryPull(
-		s.store, s.cfg.ListenAddr, accountID, fn.ImageURI, lambdaRegistryPrincipal,
-	)
+	pullPrincipal := strings.TrimSpace(fn.RoleARN)
+	pullRef, useAuth, username, password, err := s.labRegistryPullOpts(accountID, fn.ImageURI, pullPrincipal)
 	if err != nil {
 		return compute.ImageRunOpts{}, err
 	}
@@ -25,18 +24,21 @@ func (s *Server) prepareLambdaImageRunOpts(
 	if err != nil {
 		return compute.ImageRunOpts{}, err
 	}
+	// Lab ECR images are full-container exec; public Lambda bases use one-shot override.
+	allowDefault := useAuth
 	return compute.ImageRunOpts{
-		ImageURI:         pullRef,
-		Handler:          fn.Handler,
-		TimeoutSec:       clampLambdaTimeout(fn.Timeout),
-		MemoryMB:         clampLambdaMemory(fn.Memory),
-		Env:              env,
-		EventJSON:        eventJSON,
-		EndpointURL:      endpoint,
-		EventHostPath:    eventHostPath,
-		LayerHostPaths:   layerPaths,
-		LabRegistryPull:  useAuth,
-		RegistryUsername: username,
-		RegistryPassword: password,
+		ImageURI:               pullRef,
+		Handler:                fn.Handler,
+		TimeoutSec:             clampLambdaTimeout(fn.Timeout),
+		MemoryMB:               clampLambdaMemory(fn.Memory),
+		Env:                    env,
+		EventJSON:              eventJSON,
+		EndpointURL:            endpoint,
+		EventHostPath:          eventHostPath,
+		LayerHostPaths:         layerPaths,
+		LabRegistryPull:        useAuth,
+		RegistryUsername:       username,
+		RegistryPassword:       password,
+		AllowDefaultEntrypoint: allowDefault,
 	}, nil
 }

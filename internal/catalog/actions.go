@@ -479,6 +479,9 @@ const (
 	ActionLogsPutSubscriptionFilter    = "logs:PutSubscriptionFilter"
 	ActionLogsDeleteSubscriptionFilter = "logs:DeleteSubscriptionFilter"
 	ActionLogsDescribeSubscriptionFilters = "logs:DescribeSubscriptionFilters"
+	ActionLogsPutMetricFilter          = "logs:PutMetricFilter"
+	ActionLogsDeleteMetricFilter       = "logs:DeleteMetricFilter"
+	ActionLogsDescribeMetricFilters    = "logs:DescribeMetricFilters"
 )
 
 // Resource Groups Tagging API lab actions.
@@ -534,10 +537,17 @@ const (
 
 // CloudFormation lab actions.
 const (
-	ActionCFNCreateStack    = "cloudformation:CreateStack"
-	ActionCFNDescribeStacks = "cloudformation:DescribeStacks"
-	ActionCFNDeleteStack    = "cloudformation:DeleteStack"
-	ActionCFNListStacks     = "cloudformation:ListStacks"
+	ActionCFNCreateStack                       = "cloudformation:CreateStack"
+	ActionCFNDescribeStacks                    = "cloudformation:DescribeStacks"
+	ActionCFNDeleteStack                       = "cloudformation:DeleteStack"
+	ActionCFNListStacks                        = "cloudformation:ListStacks"
+	ActionCFNUpdateStack                       = "cloudformation:UpdateStack"
+	ActionCFNCreateChangeSet                   = "cloudformation:CreateChangeSet"
+	ActionCFNDescribeChangeSet                 = "cloudformation:DescribeChangeSet"
+	ActionCFNExecuteChangeSet                  = "cloudformation:ExecuteChangeSet"
+	ActionCFNDetectStackDrift                  = "cloudformation:DetectStackDrift"
+	ActionCFNDescribeStackDriftDetectionStatus = "cloudformation:DescribeStackDriftDetectionStatus"
+	ActionCFNDescribeStackResourceDrifts       = "cloudformation:DescribeStackResourceDrifts"
 )
 
 // CodePipeline lab actions.
@@ -696,10 +706,12 @@ const (
 
 // Cloud Control API lab actions.
 const (
-	ActionCloudControlCreateResource = "cloudcontrol:CreateResource"
-	ActionCloudControlGetResource    = "cloudcontrol:GetResource"
-	ActionCloudControlListResources  = "cloudcontrol:ListResources"
-	ActionCloudControlDeleteResource = "cloudcontrol:DeleteResource"
+	ActionCloudControlCreateResource           = "cloudcontrol:CreateResource"
+	ActionCloudControlGetResource              = "cloudcontrol:GetResource"
+	ActionCloudControlListResources            = "cloudcontrol:ListResources"
+	ActionCloudControlDeleteResource           = "cloudcontrol:DeleteResource"
+	ActionCloudControlUpdateResource           = "cloudcontrol:UpdateResource"
+	ActionCloudControlGetResourceRequestStatus = "cloudcontrol:GetResourceRequestStatus"
 )
 
 // BCM Data Exports lab actions.
@@ -847,8 +859,11 @@ const (
 	ActionLambdaDeleteFunctionUrlConfig     = "lambda:DeleteFunctionUrlConfig"
 	ActionLambdaListFunctionUrlConfigs      = "lambda:ListFunctionUrlConfigs"
 	ActionLambdaInvokeFunctionUrl           = "lambda:InvokeFunctionUrl"
-	ActionLambdaListTags                    = "lambda:ListTags"
+	ActionLambdaListTags                     = "lambda:ListTags"
 	ActionLambdaGetFunctionCodeSigningConfig = "lambda:GetFunctionCodeSigningConfig"
+	ActionLambdaPutFunctionEventInvokeConfig    = "lambda:PutFunctionEventInvokeConfig"
+	ActionLambdaGetFunctionEventInvokeConfig    = "lambda:GetFunctionEventInvokeConfig"
+	ActionLambdaDeleteFunctionEventInvokeConfig = "lambda:DeleteFunctionEventInvokeConfig"
 )
 
 // KnownAction reports whether action is recognized in the current catalog.
@@ -1103,6 +1118,9 @@ func KnownAction(action string) bool {
 		ActionLambdaInvokeFunctionUrl,
 		ActionLambdaListTags,
 		ActionLambdaGetFunctionCodeSigningConfig,
+		ActionLambdaPutFunctionEventInvokeConfig,
+		ActionLambdaGetFunctionEventInvokeConfig,
+		ActionLambdaDeleteFunctionEventInvokeConfig,
 		ActionSSMPutParameter,
 		ActionSSMGetParameter,
 		ActionSSMGetParameters,
@@ -1204,6 +1222,9 @@ func KnownAction(action string) bool {
 		ActionLogsPutSubscriptionFilter,
 		ActionLogsDeleteSubscriptionFilter,
 		ActionLogsDescribeSubscriptionFilters,
+		ActionLogsPutMetricFilter,
+		ActionLogsDeleteMetricFilter,
+		ActionLogsDescribeMetricFilters,
 		ActionTaggingTagResources,
 		ActionTaggingUntagResources,
 		ActionTaggingGetResources,
@@ -1251,6 +1272,13 @@ func KnownAction(action string) bool {
 		ActionCFNDescribeStacks,
 		ActionCFNDeleteStack,
 		ActionCFNListStacks,
+		ActionCFNUpdateStack,
+		ActionCFNCreateChangeSet,
+		ActionCFNDescribeChangeSet,
+		ActionCFNExecuteChangeSet,
+		ActionCFNDetectStackDrift,
+		ActionCFNDescribeStackDriftDetectionStatus,
+		ActionCFNDescribeStackResourceDrifts,
 		ActionCodePipelineCreatePipeline,
 		ActionCodePipelineGetPipeline,
 		ActionCodePipelineDeletePipeline,
@@ -1347,6 +1375,8 @@ func KnownAction(action string) bool {
 		ActionCloudControlGetResource,
 		ActionCloudControlListResources,
 		ActionCloudControlDeleteResource,
+		ActionCloudControlUpdateResource,
+		ActionCloudControlGetResourceRequestStatus,
 		ActionBCMCreateExport,
 		ActionBCMGetExport,
 		ActionBCMListExports,

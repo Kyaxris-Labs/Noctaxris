@@ -61,11 +61,16 @@ func (s *Server) lambdaCreateFunctionUrlConfig(
 	} else if strings.HasPrefix(s.cfg.ListenAddr, ":") {
 		host = "127.0.0.1" + s.cfg.ListenAddr
 	}
+	corsOrigins := parseFunctionURLCorsAllowOrigins(params)
+	if len(corsOrigins) == 0 {
+		corsOrigins = append([]string{}, s.cfg.FunctionURLCORSOrigins...)
+	}
 	u, err := s.store.CreateFunctionURLConfig(store.CreateFunctionURLInput{
-		AccountID:    verified.AccountID,
-		FunctionName: base,
-		AuthType:     authType,
-		EndpointHost: host,
+		AccountID:        verified.AccountID,
+		FunctionName:     base,
+		AuthType:         authType,
+		EndpointHost:     host,
+		CorsAllowOrigins: corsOrigins,
 	})
 	if errors.Is(err, store.ErrFunctionURLExists) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusConflict, "ResourceConflictException",
@@ -257,7 +262,7 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "open data plane disabled (set NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1)", http.StatusForbidden)
 			return
 		}
-		setFunctionURLCORSHeaders(w)
+		setFunctionURLCORSHeaders(w, r.Header.Get("Origin"), u.CorsAllowOrigins)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -317,14 +322,64 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if u.AuthType == store.FunctionURLAuthNone {
-		setFunctionURLCORSHeaders(w)
+		setFunctionURLCORSHeaders(w, r.Header.Get("Origin"), u.CorsAllowOrigins)
 	}
 	s.writeLambdaInvokeREST(w, requestID, result, executedVersion)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "InvokeFunctionUrl", false)
 }
 
-func setFunctionURLCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+func parseFunctionURLCorsAllowOrigins(params map[string]any) []string {
+	cors, _ := params["Cors"].(map[string]any)
+	if cors == nil {
+		cors, _ = params["cors"].(map[string]any)
+	}
+	if cors == nil {
+		return nil
+	}
+	raw, ok := cors["AllowOrigins"]
+	if !ok {
+		raw = cors["allowOrigins"]
+	}
+	switch v := raw.(type) {
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	case []string:
+		return v
+	default:
+		return nil
+	}
+}
+
+func setFunctionURLCORSHeaders(w http.ResponseWriter, requestOrigin string, allowOrigins []string) {
+	acao := "*"
+	if len(allowOrigins) > 0 {
+		acao = ""
+		req := strings.TrimSpace(requestOrigin)
+		for _, o := range allowOrigins {
+			if o == "*" {
+				acao = "*"
+				break
+			}
+			if req != "" && strings.EqualFold(o, req) {
+				acao = req
+				break
+			}
+		}
+		if acao == "" {
+			// Allowlist configured but Origin missing/not matched: omit ACAO.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			return
+		}
+	}
+	w.Header().Set("Access-Control-Allow-Origin", acao)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "*")
 	w.Header().Set("Access-Control-Max-Age", "86400")

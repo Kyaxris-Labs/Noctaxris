@@ -95,6 +95,7 @@ func TestServiceDiscoveryDiscover(t *testing.T) {
 
 	ns := mustJSONTarget(t, handler, "Route53AutoNaming_v20170314.CreatePrivateDnsNamespace", "servicediscovery", map[string]any{
 		"Name": "srv.local",
+		"Vpc":  "vpc-lab1",
 	}, now)
 	if ns.Code != http.StatusOK {
 		t.Fatalf("CreatePrivateDnsNamespace status=%d body=%q", ns.Code, ns.Body.String())
@@ -128,6 +129,7 @@ func TestServiceDiscoveryDiscover(t *testing.T) {
 	disc := mustJSONTarget(t, handler, "Route53AutoNaming_v20170314.DiscoverInstances", "servicediscovery", map[string]any{
 		"NamespaceName": "srv.local",
 		"ServiceName":   "web",
+		"Vpc":           "vpc-lab1",
 	}, now)
 	if disc.Code != http.StatusOK || !strings.Contains(disc.Body.String(), "10.0.0.9") {
 		t.Fatalf("DiscoverInstances status=%d body=%q", disc.Code, disc.Body.String())

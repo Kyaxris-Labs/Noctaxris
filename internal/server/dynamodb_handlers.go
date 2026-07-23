@@ -321,6 +321,16 @@ func (s *Server) dynamoCreateTable(
 						"KMSMasterKeyId not found.", readOnly, eventID, verified)
 					return
 				}
+				encCtx := map[string]string{
+					"aws:dynamodb:tableName":    tableName,
+					"aws:dynamodb:subscriberId": verified.AccountID,
+				}
+				if !s.authorizeKMSOp(verified, catalog.ActionKMSDescribeKey, key, encCtx) ||
+					!s.authorizeKMSOp(verified, catalog.ActionKMSCreateGrant, key, encCtx) {
+					s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+						"User is not authorized to perform kms:DescribeKey or kms:CreateGrant on the table SSE-KMS key.", readOnly, eventID, verified)
+					return
+				}
 				kmsKeyID = key.ARN
 			}
 		}
@@ -565,6 +575,16 @@ func (s *Server) dynamoUpdateTable(
 				if err != nil || key.AccountID != verified.AccountID {
 					s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 						"KMSMasterKeyId not found.", readOnly, eventID, verified)
+					return
+				}
+				encCtx := map[string]string{
+					"aws:dynamodb:tableName":    tableName,
+					"aws:dynamodb:subscriberId": verified.AccountID,
+				}
+				if !s.authorizeKMSOp(verified, catalog.ActionKMSDescribeKey, key, encCtx) ||
+					!s.authorizeKMSOp(verified, catalog.ActionKMSCreateGrant, key, encCtx) {
+					s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+						"User is not authorized to perform kms:DescribeKey or kms:CreateGrant on the table SSE-KMS key.", readOnly, eventID, verified)
 					return
 				}
 				kmsKeyID = key.ARN
@@ -1417,6 +1437,11 @@ func (s *Server) dynamoPutResourcePolicy(
 			"Policy is required.", readOnly, eventID, verified)
 		return
 	}
+	if err := authz.ValidateResourcePolicyDocument(policy); err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if err := s.store.PutResourcePolicy(table.AccountID, table.TableName, policy); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put resource policy.", readOnly, eventID, verified)
@@ -1991,7 +2016,8 @@ func (s *Server) dynamoUnsealTableCMK(
 			"Table SSE-KMS key is disabled.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
-	if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, key, nil) {
+	encCtx := ddb.EncryptionContext(table)
+	if !s.authorizeKMSOp(verified, catalog.ActionKMSDecrypt, key, encCtx) {
 		err = errors.New("kms decrypt denied")
 		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform kms:Decrypt on the table SSE-KMS key.", readOnly, eventID, verified)

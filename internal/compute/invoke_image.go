@@ -40,6 +40,9 @@ type ImageRunOpts struct {
 	RegistryUsername string
 	// RegistryPassword is the lab ECR authorization token password.
 	RegistryPassword string
+	// AllowDefaultEntrypoint permits running the image ENTRYPOINT/CMD when no
+	// one-shot runtime match exists (lab ECR full-container exec). Fail-closed otherwise.
+	AllowDefaultEntrypoint bool
 }
 
 // ValidateImageRunOpts checks required fields without talking to Docker.
@@ -152,16 +155,7 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	if mergedOptDir != "" {
 		binds = append(binds, mergedOptDir+":/opt:ro")
 	}
-	sec := nestedTaskSecurity(opts.MemoryMB)
-	hostConfig := &container.HostConfig{
-		Binds:          binds,
-		AutoRemove:     false,
-		NetworkMode:    container.NetworkMode(FunctionNetworkName),
-		ExtraHosts:     hostGatewayExtraHosts(),
-		ReadonlyRootfs: false,
-		CapDrop:        sec.CapDrop,
-		Resources:      container.Resources{Memory: sec.Memory},
-	}
+	hostConfig := imageInvokeHostConfig(binds, opts.MemoryMB)
 
 	cfg := &container.Config{
 		Image:      opts.ImageURI,
@@ -171,6 +165,8 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 	if cmd, ok := imageOneShotCommand(opts.ImageURI); ok {
 		cfg.Entrypoint = []string{cmd.Exe, cmd.Flag, cmd.Script}
 		cfg.Cmd = nil
+	} else if !opts.AllowDefaultEntrypoint {
+		return InvokeResult{}, fmt.Errorf("compute: image %q has no recognized one-shot entrypoint (set lab ImageConfig/AllowDefaultEntrypoint for full-container exec)", opts.ImageURI)
 	}
 
 	netCfg := &network.NetworkingConfig{

@@ -238,12 +238,64 @@ func (s *Store) GetConfigRecorder(accountID, name string) (ConfigRecorder, error
 	return r, nil
 }
 
-// DescribeConfigComplianceByRule returns NOT_APPLICABLE until real config rules exist.
-// Does not invent COMPLIANT rows over Tagging API resources.
-func (s *Store) DescribeConfigComplianceByRule(accountID, ruleName string) ([]ConfigComplianceResult, error) {
-	_ = accountID
+// PutConfigRule stores a config rule name for compliance describe honesty (lab lite).
+func (s *Store) PutConfigRule(accountID, ruleName, description string) error {
+	ruleName = strings.TrimSpace(ruleName)
 	if ruleName == "" {
-		ruleName = "default"
+		return fmt.Errorf("%w: ConfigRuleName required", ErrConfigBadRequest)
+	}
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.db.Exec(
+		`INSERT INTO config_rules (account_id, rule_name, description, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(account_id, rule_name) DO UPDATE SET description = excluded.description`,
+		accountID, ruleName, description, now,
+	)
+	if err != nil {
+		return fmt.Errorf("put config rule: %w", err)
+	}
+	return nil
+}
+
+// DescribeConfigComplianceByRule returns NOT_APPLICABLE only for stored config_rules rows.
+// Unknown rule names yield an empty list (no invented compliance theatre).
+func (s *Store) DescribeConfigComplianceByRule(accountID, ruleName string) ([]ConfigComplianceResult, error) {
+	ruleName = strings.TrimSpace(ruleName)
+	if ruleName == "" {
+		rows, err := s.db.Query(
+			`SELECT rule_name FROM config_rules WHERE account_id = ? ORDER BY rule_name`,
+			accountID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("describe compliance: %w", err)
+		}
+		defer rows.Close()
+		var out []ConfigComplianceResult
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return nil, err
+			}
+			out = append(out, ConfigComplianceResult{
+				ConfigRuleName: name,
+				ComplianceType: "NOT_APPLICABLE",
+				ResourceType:   "AWS::Config::ConfigRule",
+				ResourceID:     name,
+				Annotation:     "rule evaluation not implemented",
+			})
+		}
+		return out, rows.Err()
+	}
+	var exists string
+	err := s.db.QueryRow(
+		`SELECT rule_name FROM config_rules WHERE account_id = ? AND rule_name = ?`,
+		accountID, ruleName,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []ConfigComplianceResult{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("describe compliance: %w", err)
 	}
 	return []ConfigComplianceResult{{
 		ConfigRuleName: ruleName,

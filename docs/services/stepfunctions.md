@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Standard state machines with a small ASL subset. Executions run synchronously in-process. Identity authz. Optional PassRole for `RoleArn` with `states.amazonaws.com` trust. Task delivery uses the state machine `RoleArn` session (or a target resource policy Allow for `states.amazonaws.com`) for Lambda Invoke and built-in SQS/SNS/EventBridge Tasks; StartExecution callers are not used for Task resource access.
+Standard state machines with a small ASL subset. Executions run synchronously in-process. Identity authz. PassRole for `RoleArn` with `states.amazonaws.com` trust. Definitions that contain Task require `roleArn` at create time. Task delivery uses the state machine `RoleArn` session (or a target resource policy Allow for `states.amazonaws.com`) for Lambda Invoke and built-in SQS/SNS/EventBridge Tasks; foreign SQS/Lambda/SNS targets require RoleArn session Allow **and** destination resource policy. EventBridge PutEvents Tasks also dual-eval the bus resource policy after RoleArn Allow. StartExecution callers are not used for Task resource access. EventBridge Scheduler may target a state machine ARN with RoleArn (`states:StartExecution`).
 
 ## Implemented
 
@@ -49,4 +49,4 @@ Task to Lambda needs Compose DinD for a successful Invoke. Without Docker, expec
 - Choice, Wait, Parallel, Map, Callback / activity patterns
 - Express workflows, Map distributed mode
 - InputPath / ResultPath / OutputPath depth beyond Pass Result
-- Scheduler Task resources and EventBridge→SFN Lambda Tasks without a wired sync invoker
+- EventBridge→SFN Lambda Tasks without a wired sync invoker

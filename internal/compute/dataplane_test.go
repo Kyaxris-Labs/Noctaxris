@@ -15,6 +15,9 @@ func TestDataPlaneHostConfigNeverPublishesPorts(t *testing.T) {
 	if string(hc.NetworkMode) != DataPlaneNetworkName {
 		t.Fatalf("NetworkMode=%q want %q", hc.NetworkMode, DataPlaneNetworkName)
 	}
+	if !hostConfigSecurityOK(hc) {
+		t.Fatalf("dataplane HostConfig not hardened: Privileged=%v CapAdd=%#v CapDrop=%#v", hc.Privileged, hc.CapAdd, hc.CapDrop)
+	}
 }
 
 func TestValidateDataPlaneOpts(t *testing.T) {

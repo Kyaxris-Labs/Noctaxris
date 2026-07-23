@@ -21,7 +21,7 @@ Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (a
 
 Repository-scoped APIs use `authorizeDataplaneOR` with the repository owner account from the repository ARN (or `registryId` when resolving). Same-account access: allow if identity **or** repository policy Allows. Cross-account access: allow only when identity **and** repository policy both Allow. Empty repository policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
 
-Registry V2 (`/v2/...`) validates the ECR authorization token, then runs the same `authorizeECR` dual-eval path as the JSON APIs for the mapped action (`PutImage`, `BatchGetImage`, `ListImages`, layer upload actions). A principal that can only call `ecr:GetAuthorizationToken` cannot push or pull arbitrary repositories via the registry path.
+Registry V2 (`/v2/...`) validates the ECR authorization token, then runs the same `authorizeECR` dual-eval path as the JSON APIs for the mapped action (`PutImage`, `BatchGetImage`, `ListImages`, layer upload actions). Tokens issued for ECS/Batch/CodeBuild/Lambda Image pulls store an IAM role ARN as principal (not a bare service name) so Registry V2 can EvaluateFull. A principal that can only call `ecr:GetAuthorizationToken` cannot push or pull arbitrary repositories via the registry path.
 
 `GetAuthorizationToken` uses identity eval on `Resource: *`.
 

@@ -39,10 +39,35 @@ func functionConfiguration(fn store.LambdaFunction) map[string]any {
 	if strings.TrimSpace(fn.DeadLetterTargetArn) != "" {
 		cfg["DeadLetterConfig"] = map[string]any{"TargetArn": fn.DeadLetterTargetArn}
 	}
+	destCfg := map[string]any{}
 	if strings.TrimSpace(fn.DestinationOnFailureArn) != "" {
-		cfg["DestinationConfig"] = map[string]any{"OnFailure": fn.DestinationOnFailureArn}
+		destCfg["OnFailure"] = map[string]any{"Destination": fn.DestinationOnFailureArn}
+	}
+	if strings.TrimSpace(fn.DestinationOnSuccessArn) != "" {
+		destCfg["OnSuccess"] = map[string]any{"Destination": fn.DestinationOnSuccessArn}
+	}
+	if len(destCfg) > 0 {
+		cfg["DestinationConfig"] = destCfg
 	}
 	return cfg
+}
+
+// EventInvokeConfigJSON builds Put/GetFunctionEventInvokeConfig success body.
+func EventInvokeConfigJSON(fn store.LambdaFunction) ([]byte, error) {
+	out := map[string]any{
+		"FunctionArn": fn.FunctionARN,
+	}
+	destCfg := map[string]any{}
+	if strings.TrimSpace(fn.DestinationOnFailureArn) != "" {
+		destCfg["OnFailure"] = map[string]any{"Destination": fn.DestinationOnFailureArn}
+	}
+	if strings.TrimSpace(fn.DestinationOnSuccessArn) != "" {
+		destCfg["OnSuccess"] = map[string]any{"Destination": fn.DestinationOnSuccessArn}
+	}
+	if len(destCfg) > 0 {
+		out["DestinationConfig"] = destCfg
+	}
+	return json.Marshal(out)
 }
 
 // codeSHA256AWS converts store hex digest to AWS base64 CodeSha256.
@@ -276,10 +301,19 @@ func eventSourceMappingConfiguration(m store.LambdaEventSourceMapping) map[strin
 		"State":          m.State,
 		"LastModified":   m.LastModified,
 	}
+	if q := strings.TrimSpace(m.Qualifier); q != "" && q != "$LATEST" {
+		out["Qualifier"] = q
+	}
 	if strings.TrimSpace(m.FilterCriteriaJSON) != "" {
 		var fc any
 		if err := json.Unmarshal([]byte(m.FilterCriteriaJSON), &fc); err == nil {
 			out["FilterCriteria"] = fc
+		}
+	}
+	if strings.TrimSpace(m.FunctionResponseTypesJSON) != "" {
+		var rt any
+		if err := json.Unmarshal([]byte(m.FunctionResponseTypesJSON), &rt); err == nil {
+			out["FunctionResponseTypes"] = rt
 		}
 	}
 	return out
@@ -300,12 +334,16 @@ func ListEventSourceMappingsJSON(mappings []store.LambdaEventSourceMapping) ([]b
 }
 
 func functionURLConfiguration(u store.LambdaFunctionURL) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"FunctionUrl":  u.FunctionURL,
 		"FunctionArn":  u.FunctionARN,
 		"AuthType":     u.AuthType,
 		"CreationTime": u.CreationTime,
 	}
+	if len(u.CorsAllowOrigins) > 0 {
+		m["Cors"] = map[string]any{"AllowOrigins": u.CorsAllowOrigins}
+	}
+	return m
 }
 
 // FunctionURLConfigJSON builds Create/GetFunctionUrlConfig success body.

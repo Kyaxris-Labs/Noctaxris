@@ -17,11 +17,10 @@ func distributionMap(d store.CloudFrontDistribution) map[string]any {
 			"OriginType": o.OriginType,
 		})
 	}
-	return map[string]any{
-		"Id":         d.ID,
-		"ARN":        d.ARN,
-		"DomainName": d.DomainName,
-		"Status":     d.Status,
+	out := map[string]any{
+		"Id":     d.ID,
+		"ARN":    d.ARN,
+		"Status": d.Status,
 		"DistributionConfig": map[string]any{
 			"CallerReference": d.CallerReference,
 			"Comment":         d.Comment,
@@ -32,6 +31,10 @@ func distributionMap(d store.CloudFrontDistribution) map[string]any {
 			},
 		},
 	}
+	if d.DomainName != "" {
+		out["DomainName"] = d.DomainName
+	}
+	return out
 }
 
 // CreateDistributionJSON builds CreateDistribution response.
@@ -48,14 +51,17 @@ func GetDistributionJSON(d store.CloudFrontDistribution) ([]byte, error) {
 func ListDistributionsJSON(dists []store.CloudFrontDistribution) ([]byte, error) {
 	items := make([]map[string]any, 0, len(dists))
 	for _, d := range dists {
-		items = append(items, map[string]any{
-			"Id":         d.ID,
-			"ARN":        d.ARN,
-			"DomainName": d.DomainName,
-			"Status":     d.Status,
-			"Enabled":    d.Enabled,
-			"Comment":    d.Comment,
-		})
+		item := map[string]any{
+			"Id":      d.ID,
+			"ARN":     d.ARN,
+			"Status":  d.Status,
+			"Enabled": d.Enabled,
+			"Comment": d.Comment,
+		}
+		if d.DomainName != "" {
+			item["DomainName"] = d.DomainName
+		}
+		items = append(items, item)
 	}
 	return json.Marshal(map[string]any{
 		"DistributionList": map[string]any{

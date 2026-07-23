@@ -107,6 +107,12 @@ func (s *Server) handleLambda(
 		s.lambdaListTags(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLambdaGetFunctionCodeSigningConfig:
 		s.lambdaGetFunctionCodeSigningConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaPutFunctionEventInvokeConfig:
+		s.lambdaPutFunctionEventInvokeConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaGetFunctionEventInvokeConfig:
+		s.lambdaGetFunctionEventInvokeConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaDeleteFunctionEventInvokeConfig:
+		s.lambdaDeleteFunctionEventInvokeConfig(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Lambda action is not implemented.", readOnly, eventID, verified)
@@ -182,6 +188,12 @@ func lambdaAction(action string) string {
 		return catalog.ActionLambdaListTags
 	case "GetFunctionCodeSigningConfig":
 		return catalog.ActionLambdaGetFunctionCodeSigningConfig
+	case "PutFunctionEventInvokeConfig":
+		return catalog.ActionLambdaPutFunctionEventInvokeConfig
+	case "GetFunctionEventInvokeConfig":
+		return catalog.ActionLambdaGetFunctionEventInvokeConfig
+	case "DeleteFunctionEventInvokeConfig":
+		return catalog.ActionLambdaDeleteFunctionEventInvokeConfig
 	default:
 		return action
 	}
@@ -269,13 +281,34 @@ func lambdaEnvFromParams(params map[string]any) map[string]string {
 }
 
 func lambdaDLQFromParams(params map[string]any) (deadLetterTarget, onFailure string) {
+	deadLetterTarget, onFailure, _ = lambdaDestinationsFromParams(params)
+	return deadLetterTarget, onFailure
+}
+
+// lambdaDestinationsFromParams parses DeadLetterConfig and DestinationConfig.
+// AWS shape: DestinationConfig.OnFailure/OnSuccess are objects with Destination ARN.
+// Bare-string OnFailure is accepted as a lab alias for Create/UpdateFunctionConfiguration.
+func lambdaDestinationsFromParams(params map[string]any) (deadLetterTarget, onFailure, onSuccess string) {
 	if dlc, ok := params["DeadLetterConfig"].(map[string]any); ok {
 		deadLetterTarget, _ = dlc["TargetArn"].(string)
 	}
 	if dc, ok := params["DestinationConfig"].(map[string]any); ok {
-		onFailure, _ = dc["OnFailure"].(string)
+		onFailure = destinationARNFromConfig(dc["OnFailure"])
+		onSuccess = destinationARNFromConfig(dc["OnSuccess"])
 	}
-	return strings.TrimSpace(deadLetterTarget), strings.TrimSpace(onFailure)
+	return strings.TrimSpace(deadLetterTarget), strings.TrimSpace(onFailure), strings.TrimSpace(onSuccess)
+}
+
+func destinationARNFromConfig(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case map[string]any:
+		if dest, ok := v["Destination"].(string); ok {
+			return strings.TrimSpace(dest)
+		}
+	}
+	return ""
 }
 
 func lambdaLayersFromParams(params map[string]any) []string {
@@ -396,7 +429,7 @@ func lambdaImageURIFromCode(params map[string]any) (string, error) {
 	return "", errors.New("Code.ImageUri is required")
 }
 
-func (s *Server) checkLambdaPassRole(verified *authn.Verified, roleARN string) error {
+func (s *Server) checkLambdaPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("Role must be a valid IAM role ARN")
@@ -426,11 +459,31 @@ func (s *Server) checkLambdaPassRole(verified *authn.Verified, roleARN string) e
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalLambda,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to Lambda")
 	}
 	return nil
+}
+
+func lambdaVpcConfigRejectMessage() string {
+	return "VpcConfig is not supported until ENI attachment exists; omit VpcConfig."
+}
+
+func lambdaHasNonEmptyVpcConfig(params map[string]any) bool {
+	vc, ok := params["VpcConfig"].(map[string]any)
+	if !ok || vc == nil {
+		return false
+	}
+	if subs, ok := vc["SubnetIds"].([]any); ok && len(subs) > 0 {
+		return true
+	}
+	if sgs, ok := vc["SecurityGroupIds"].([]any); ok && len(sgs) > 0 {
+		return true
+	}
+	// Any other non-empty VpcConfig object is also rejected (no silent drop).
+	return len(vc) > 0
 }
 
 func (s *Server) lambdaCreateFunction(
@@ -442,6 +495,11 @@ func (s *Server) lambdaCreateFunction(
 	readOnly bool,
 	params map[string]any,
 ) {
+	if lambdaHasNonEmptyVpcConfig(params) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			lambdaVpcConfigRejectMessage(), readOnly, eventID, verified)
+		return
+	}
 	name := functionNameParam(params)
 	roleARN, _ := params["Role"].(string)
 	runtime, _ := params["Runtime"].(string)
@@ -470,7 +528,7 @@ func (s *Server) lambdaCreateFunction(
 			"User is not authorized to perform lambda:CreateFunction.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.checkLambdaPassRole(verified, roleARN); err != nil {
+	if err := s.checkLambdaPassRole(verified, roleARN, resource); err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -501,7 +559,7 @@ func (s *Server) lambdaCreateFunction(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	deadLetter, onFailure := lambdaDLQFromParams(params)
+	deadLetter, onFailure, onSuccess := lambdaDestinationsFromParams(params)
 	fn, err := s.store.CreateFunction(store.CreateFunctionMeta{
 		AccountID:               verified.AccountID,
 		Region:                  region,
@@ -519,6 +577,7 @@ func (s *Server) lambdaCreateFunction(
 		Layers:                  lambdaLayersFromParams(params),
 		DeadLetterTargetArn:     deadLetter,
 		DestinationOnFailureArn: onFailure,
+		DestinationOnSuccessArn: onSuccess,
 	})
 	if errors.Is(err, store.ErrFunctionAlreadyExists) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusConflict, "ResourceConflictException",
@@ -755,6 +814,11 @@ func (s *Server) lambdaUpdateFunctionConfiguration(
 	readOnly bool,
 	params map[string]any,
 ) {
+	if lambdaHasNonEmptyVpcConfig(params) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			lambdaVpcConfigRejectMessage(), readOnly, eventID, verified)
+		return
+	}
 	name := functionNameParam(params)
 	if name == "" {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -786,7 +850,7 @@ func (s *Server) lambdaUpdateFunctionConfiguration(
 		Runtime: fn.Runtime,
 	}
 	if role, ok := params["Role"].(string); ok && role != "" {
-		if err := s.checkLambdaPassRole(verified, role); err != nil {
+		if err := s.checkLambdaPassRole(verified, role, fn.FunctionARN); err != nil {
 			s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				err.Error(), readOnly, eventID, verified)
 			return
@@ -826,12 +890,13 @@ func (s *Server) lambdaUpdateFunctionConfiguration(
 		meta.Layers = &layers
 	}
 	if _, ok := params["DeadLetterConfig"]; ok {
-		deadLetter, _ := lambdaDLQFromParams(params)
+		deadLetter, _, _ := lambdaDestinationsFromParams(params)
 		meta.DeadLetterTargetArn = &deadLetter
 	}
 	if _, ok := params["DestinationConfig"]; ok {
-		_, onFailure := lambdaDLQFromParams(params)
+		_, onFailure, onSuccess := lambdaDestinationsFromParams(params)
 		meta.DestinationOnFailureArn = &onFailure
+		meta.DestinationOnSuccessArn = &onSuccess
 	}
 	updated, err := s.store.UpdateFunctionConfiguration(verified.AccountID, name, meta)
 	if errors.Is(err, store.ErrInvalidRuntime) {
@@ -947,6 +1012,135 @@ func (s *Server) lambdaGetFunctionCodeSigningConfig(
 	}
 	s.writeLambdaOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "GetFunctionCodeSigningConfig", readOnly)
+}
+
+func (s *Server) lambdaPutFunctionEventInvokeConfig(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name := functionNameParam(params)
+	if name == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"FunctionName is required.", readOnly, eventID, verified)
+		return
+	}
+	fn, err := s.store.GetFunction(verified.AccountID, name)
+	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Function not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to load function.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeLambda(verified, catalog.ActionLambdaPutFunctionEventInvokeConfig, fn.FunctionARN, fn.ResourcePolicy) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lambda:PutFunctionEventInvokeConfig.", readOnly, eventID, verified)
+		return
+	}
+	_, onFailure, onSuccess := lambdaDestinationsFromParams(params)
+	updated, err := s.store.PutFunctionEventInvokeConfig(verified.AccountID, name, onFailure, onSuccess)
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to put event invoke config.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := lambdasvc.EventInvokeConfigJSON(updated)
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLambdaOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "PutFunctionEventInvokeConfig", readOnly)
+}
+
+func (s *Server) lambdaGetFunctionEventInvokeConfig(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name := functionNameParam(params)
+	if name == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"FunctionName is required.", readOnly, eventID, verified)
+		return
+	}
+	fn, err := s.store.GetFunction(verified.AccountID, name)
+	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Function not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to load function.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeLambda(verified, catalog.ActionLambdaGetFunctionEventInvokeConfig, fn.FunctionARN, fn.ResourcePolicy) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lambda:GetFunctionEventInvokeConfig.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := lambdasvc.EventInvokeConfigJSON(fn)
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLambdaOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "GetFunctionEventInvokeConfig", readOnly)
+}
+
+func (s *Server) lambdaDeleteFunctionEventInvokeConfig(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name := functionNameParam(params)
+	if name == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"FunctionName is required.", readOnly, eventID, verified)
+		return
+	}
+	fn, err := s.store.GetFunction(verified.AccountID, name)
+	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Function not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to load function.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeLambda(verified, catalog.ActionLambdaDeleteFunctionEventInvokeConfig, fn.FunctionARN, fn.ResourcePolicy) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lambda:DeleteFunctionEventInvokeConfig.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteFunctionEventInvokeConfig(verified.AccountID, name); err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to delete event invoke config.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLambdaOK(w, requestID, []byte("{}"))
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "DeleteFunctionEventInvokeConfig", readOnly)
 }
 
 func (s *Server) lambdaListVersionsByFunction(
@@ -1861,6 +2055,9 @@ func (s *Server) executeLambdaInvoke(
 	fn store.LambdaFunction,
 	executedVersion, eventJSON string,
 ) ([]byte, error) {
+	if s.lambdaInvokeHook != nil {
+		return s.lambdaInvokeHook(ctx, accountID, name, fn, executedVersion, eventJSON)
+	}
 	if strings.TrimSpace(s.cfg.DockerHost) == "" {
 		return nil, errors.New("compute unavailable")
 	}

@@ -75,7 +75,7 @@ func TestDocDBClusterCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Status != "available" || c.EndpointPort != store.DocDBNestedPort {
+	if c.Status != "creating" || c.EndpointPort != store.DocDBNestedPort {
 		t.Fatalf("cluster=%+v", c)
 	}
 	if !strings.HasSuffix(c.EndpointAddress, ".docdb.noctaxris.internal") {
@@ -94,6 +94,10 @@ func TestDocDBClusterCRUD(t *testing.T) {
 	}
 	if err := st.SetDocDBContainerID(account, "lab-docdb", "mongo-1", "available", ""); err != nil {
 		t.Fatal(err)
+	}
+	ready, err := st.DescribeDocDBCluster(account, "lab-docdb")
+	if err != nil || ready.Status != "available" || ready.ContainerID != "mongo-1" {
+		t.Fatalf("after nested start: %+v err=%v", ready, err)
 	}
 	ctr, err := st.DeleteDocDBCluster(account, "lab-docdb")
 	if err != nil || ctr != "mongo-1" {

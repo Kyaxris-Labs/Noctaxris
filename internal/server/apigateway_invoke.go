@@ -39,7 +39,7 @@ func parseHTTPAPIInvokePath(path string) (apiID, stage, routePath string, ok boo
 }
 
 // handleHTTPAPIInvoke serves HTTP API route invoke on /http-api/{apiId}/{stage}/{path}.
-// Auth is route-specific: NONE, JWT (Bearer), or AWS_IAM (SigV4 execute-api).
+// Auth is route-specific: NONE, JWT (Bearer), AWS_IAM (SigV4 execute-api), or CUSTOM (Lambda REQUEST authorizer).
 func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, readOnly bool) {
 	apiID, stage, routePath, ok := parseHTTPAPIInvokePath(r.URL.Path)
 	if !ok {
@@ -88,7 +88,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		}
 		verified = &authn.Verified{AccountID: accountID, Region: region, Service: "execute-api"}
 	case store.APIGatewayAuthJWT:
-		authz, err := s.store.GetAPIGatewayAuthorizer(accountID, apiID, route.AuthorizerID)
+		authzRow, err := s.store.GetAPIGatewayAuthorizer(accountID, apiID, route.AuthorizerID)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -98,8 +98,28 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if err := s.verifyAPIGatewayJWT(token, authz.JWTIssuer, authz.JWTAudience, s.now(), "access"); err != nil {
+		if err := s.verifyAPIGatewayJWT(token, authzRow.JWTIssuer, authzRow.JWTAudience, s.now(), "access"); err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		verified = &authn.Verified{AccountID: accountID, Region: region, Service: "execute-api"}
+	case store.APIGatewayAuthCUSTOM:
+		authzRow, err := s.store.GetAPIGatewayAuthorizer(accountID, apiID, route.AuthorizerID)
+		if err != nil || authzRow.AuthorizerType != store.APIGatewayAuthorizerREQUEST {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		allowed, denyMsg := s.invokeHTTPAPILambdaAuthorizer(r.Context(), r, accountID, apiID, stage, routePath, requestID, route, authzRow)
+		if !allowed {
+			if denyMsg == "compute unavailable" {
+				http.Error(w, "compute unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if denyMsg == "Forbidden" {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			http.Error(w, "Unauthorized", http.StatusForbidden)
 			return
 		}
 		verified = &authn.Verified{AccountID: accountID, Region: region, Service: "execute-api"}
@@ -156,6 +176,15 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+		// Foreign Lambda: CredentialsArn session Allow AND function resource policy.
+		if fnAccount != accountID {
+			if !s.store.DeliveryTargetResourcePolicyAllows(
+				fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAPIGateway, executeAPISourceARN,
+			) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+		}
 	} else if !s.store.DeliveryTargetResourcePolicyAllows(
 		fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAPIGateway, executeAPISourceARN,
 	) {
@@ -190,7 +219,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		http.Error(w, "invoke failed", http.StatusInternalServerError)
 		return
 	}
-	writeHTTPAPIProxyResponse(w, result)
+	writeHTTPAPIProxyResponseOpts(w, result, s.cfg.HTTPAPIAllowSetCookie)
 	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "Invoke", readOnly)
 }
 
@@ -217,7 +246,12 @@ func flattenHeaders(h http.Header) map[string]string {
 }
 
 // writeHTTPAPIProxyResponse maps Lambda proxy 2.0 response shape to HTTP, or raw body.
+// Hop-by-hop headers and Set-Cookie are stripped unless allowSetCookie is true.
 func writeHTTPAPIProxyResponse(w http.ResponseWriter, result []byte) {
+	writeHTTPAPIProxyResponseOpts(w, result, false)
+}
+
+func writeHTTPAPIProxyResponseOpts(w http.ResponseWriter, result []byte, allowSetCookie bool) {
 	var proxy struct {
 		StatusCode int               `json:"statusCode"`
 		Headers    map[string]string `json:"headers"`
@@ -225,6 +259,9 @@ func writeHTTPAPIProxyResponse(w http.ResponseWriter, result []byte) {
 	}
 	if json.Unmarshal(result, &proxy) == nil && proxy.StatusCode > 0 {
 		for k, v := range proxy.Headers {
+			if isHTTPAPIStrippedResponseHeader(k, allowSetCookie) {
+				continue
+			}
 			w.Header().Set(k, v)
 		}
 		if w.Header().Get("Content-Type") == "" {
@@ -241,4 +278,16 @@ func writeHTTPAPIProxyResponse(w http.ResponseWriter, result []byte) {
 		return
 	}
 	_, _ = w.Write(result)
+}
+
+func isHTTPAPIStrippedResponseHeader(name string, allowSetCookie bool) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailers", "transfer-encoding", "upgrade":
+		return true
+	case "set-cookie":
+		return !allowSetCookie
+	default:
+		return false
+	}
 }

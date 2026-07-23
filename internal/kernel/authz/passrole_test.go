@@ -260,3 +260,37 @@ func TestTrustAllowsServiceConditionFailClosedWithoutKeys(t *testing.T) {
 		t.Fatal("expected Allow with matching SourceAccount")
 	}
 }
+
+func TestCheckPassRoleTrustSourceArnCondition(t *testing.T) {
+	fnARN := "arn:aws:lambda:us-east-1:" + passRoleAccountID + ":function:lab"
+	trust := `{
+		"Version":"2012-10-17",
+		"Statement":[{
+			"Effect":"Allow",
+			"Principal":{"Service":"lambda.amazonaws.com"},
+			"Action":"sts:AssumeRole",
+			"Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:lambda:us-east-1:` + passRoleAccountID + `:function:*"}}
+		}]
+	}`
+	req := authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal: identity.RootPrincipal(passRoleAccountID, "AKIAROOT"),
+		},
+		RoleARN:          lambdaExecRoleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalLambda,
+	}
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("missing SourceArn got %v, want Deny", got)
+	}
+	req.SourceArn = fnARN
+	if got := authz.CheckPassRole(req); got != authz.Allow {
+		t.Fatalf("SourceArn match got %v, want Allow", got)
+	}
+	req.SourceArn = "arn:aws:lambda:us-east-1:" + passRoleAccountID + ":function:other-acct-shape"
+	// still matches function/* — mismatch path:
+	req.SourceArn = "arn:aws:sqs:us-east-1:" + passRoleAccountID + ":q"
+	if got := authz.CheckPassRole(req); got != authz.Deny {
+		t.Fatalf("SourceArn mismatch got %v, want Deny", got)
+	}
+}

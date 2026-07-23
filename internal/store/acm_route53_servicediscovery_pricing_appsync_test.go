@@ -59,9 +59,12 @@ func TestRoute53ZoneAndRecords(t *testing.T) {
 func TestServiceDiscoveryRegisterDiscover(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
-	ns, err := st.CreateSDNamespace(account, "us-east-1", "lab.local", "DNS_PRIVATE", "")
+	ns, err := st.CreateSDNamespace(account, "us-east-1", "lab.local", "DNS_PRIVATE", "", "vpc-lab1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ns.Vpc != "vpc-lab1" {
+		t.Fatalf("vpc=%q", ns.Vpc)
 	}
 	svc, err := st.CreateSDService(account, "us-east-1", ns.ID, "api", "")
 	if err != nil {
@@ -71,7 +74,14 @@ func TestServiceDiscoveryRegisterDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, err := st.DiscoverSDInstances(account, "lab.local", "api")
+	if _, err := st.DiscoverSDInstances(account, "lab.local", "api", ""); err == nil {
+		t.Fatal("expected Vpc required for private DNS discover")
+	}
+	wrong, err := st.DiscoverSDInstances(account, "lab.local", "api", "vpc-other")
+	if err != nil || len(wrong) != 0 {
+		t.Fatalf("wrong vpc should yield empty: %v %#v", err, wrong)
+	}
+	found, err := st.DiscoverSDInstances(account, "lab.local", "api", "vpc-lab1")
 	if err != nil || len(found) != 1 || found[0].Attributes["AWS_INSTANCE_IPV4"] != "10.0.0.5" {
 		t.Fatalf("discover: %v %#v", err, found)
 	}

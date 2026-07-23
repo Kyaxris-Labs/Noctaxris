@@ -93,8 +93,11 @@ type ObjectMeta struct {
 	SSEAlgorithm string
 	KMSKeyID     string
 	SealedDEK    []byte
-	StoragePath  string
-	LastModified string
+	// SSEKMSContextJSON is optional customer encryption-context pairs (JSON object),
+	// excluding the default aws:s3:arn entry which is rebuilt on decrypt.
+	SSEKMSContextJSON string
+	StoragePath       string
+	LastModified      string
 }
 
 // ListObjectsResult is a minimal ListObjectsV2 response payload.
@@ -415,6 +418,8 @@ type PutObjectMeta struct {
 	SSEAlgorithm string
 	KMSKeyID     string
 	SealedDEK    []byte
+	// SSEKMSContextJSON is optional customer encryption-context pairs (JSON object).
+	SSEKMSContextJSON string
 	// Data is the on-disk payload (ciphertext when SSE applies, else plaintext).
 	Data []byte
 	// PlainSize is the logical object size reported to clients.
@@ -467,8 +472,8 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 
 	_, err = s.db.Exec(
 		`INSERT INTO s3_objects
-		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, storage_path, last_modified)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key) DO UPDATE SET
 		   etag = excluded.etag,
 		   size = excluded.size,
@@ -476,9 +481,10 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		   sse_algorithm = excluded.sse_algorithm,
 		   kms_key_id = excluded.kms_key_id,
 		   sealed_dek = excluded.sealed_dek,
+		   sse_kms_context = excluded.sse_kms_context,
 		   storage_path = excluded.storage_path,
 		   last_modified = excluded.last_modified`,
-		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, rel, modified,
+		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, rel, modified,
 	)
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -489,17 +495,18 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		return ObjectMeta{}, fmt.Errorf("put object rename: %w", err)
 	}
 	return ObjectMeta{
-		AccountID:    accountID,
-		Bucket:       bucket,
-		Key:          key,
-		ETag:         etag,
-		Size:         size,
-		ContentType:  ct,
-		SSEAlgorithm: meta.SSEAlgorithm,
-		KMSKeyID:     meta.KMSKeyID,
-		SealedDEK:    meta.SealedDEK,
-		StoragePath:  rel,
-		LastModified: modified,
+		AccountID:         accountID,
+		Bucket:            bucket,
+		Key:               key,
+		ETag:              etag,
+		Size:              size,
+		ContentType:       ct,
+		SSEAlgorithm:      meta.SSEAlgorithm,
+		KMSKeyID:          meta.KMSKeyID,
+		SealedDEK:         meta.SealedDEK,
+		SSEKMSContextJSON: meta.SSEKMSContextJSON,
+		StoragePath:       rel,
+		LastModified:      modified,
 	}, nil
 }
 
@@ -523,13 +530,14 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 		return ObjectMeta{}, err
 	}
 	var m ObjectMeta
-	var ct, sse, kmsID sql.NullString
+	var ct, sse, kmsID, sseCtx sql.NullString
 	var sealed []byte
 	err = s.db.QueryRow(
-		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, storage_path, last_modified
+		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek,
+		        COALESCE(sse_kms_context, ''), storage_path, last_modified
 		 FROM s3_objects WHERE account_id = ? AND bucket = ? AND key = ?`,
 		accountID, bucket, key,
-	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &m.StoragePath, &m.LastModified)
+	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &sseCtx, &m.StoragePath, &m.LastModified)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ObjectMeta{}, ErrNoSuchKey
 	}
@@ -544,6 +552,9 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 	}
 	if kmsID.Valid {
 		m.KMSKeyID = kmsID.String
+	}
+	if sseCtx.Valid {
+		m.SSEKMSContextJSON = sseCtx.String
 	}
 	m.SealedDEK = sealed
 	return m, nil
@@ -637,15 +648,16 @@ func ObjectARN(bucket, key string) string {
 
 // MultipartUpload is in-progress multipart upload metadata.
 type MultipartUpload struct {
-	AccountID    string
-	Bucket       string
-	Key          string
-	UploadID     string
-	ContentType  string
-	SSEAlgorithm string
-	KMSKeyID     string
-	SealedDEK    []byte
-	Initiated    string
+	AccountID         string
+	Bucket            string
+	Key               string
+	UploadID          string
+	ContentType       string
+	SSEAlgorithm      string
+	KMSKeyID          string
+	SealedDEK         []byte
+	SSEKMSContextJSON string
+	Initiated         string
 }
 
 // MultipartPart is a stored upload part.
@@ -658,10 +670,11 @@ type MultipartPart struct {
 
 // CreateMultipartUploadMeta carries optional SSE and content metadata for a new upload.
 type CreateMultipartUploadMeta struct {
-	ContentType  string
-	SSEAlgorithm string
-	KMSKeyID     string
-	SealedDEK    []byte
+	ContentType       string
+	SSEAlgorithm      string
+	KMSKeyID          string
+	SealedDEK         []byte
+	SSEKMSContextJSON string
 }
 
 // CompletedPartInput is a part reference supplied to CompleteMultipartUpload.
@@ -690,23 +703,24 @@ func (s *Store) CreateMultipartUpload(accountID, bucket, key string, meta Create
 	initiated := nowRFC3339()
 	_, err = s.db.Exec(
 		`INSERT INTO s3_multipart_uploads
-		 (upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		uploadID, accountID, bucket, key, ct, nullIfEmpty(meta.SSEAlgorithm), nullIfEmpty(meta.KMSKeyID), meta.SealedDEK, initiated,
+		 (upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, initiated)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uploadID, accountID, bucket, key, ct, nullIfEmpty(meta.SSEAlgorithm), nullIfEmpty(meta.KMSKeyID), meta.SealedDEK, meta.SSEKMSContextJSON, initiated,
 	)
 	if err != nil {
 		return MultipartUpload{}, fmt.Errorf("create multipart upload: %w", err)
 	}
 	return MultipartUpload{
-		AccountID:    accountID,
-		Bucket:       bucket,
-		Key:          key,
-		UploadID:     uploadID,
-		ContentType:  ct,
-		SSEAlgorithm: meta.SSEAlgorithm,
-		KMSKeyID:     meta.KMSKeyID,
-		SealedDEK:    meta.SealedDEK,
-		Initiated:    initiated,
+		AccountID:         accountID,
+		Bucket:            bucket,
+		Key:               key,
+		UploadID:          uploadID,
+		ContentType:       ct,
+		SSEAlgorithm:      meta.SSEAlgorithm,
+		KMSKeyID:          meta.KMSKeyID,
+		SealedDEK:         meta.SealedDEK,
+		SSEKMSContextJSON: meta.SSEKMSContextJSON,
+		Initiated:         initiated,
 	}, nil
 }
 
@@ -875,7 +889,8 @@ func (s *Store) ListMultipartUploads(accountID, bucket, prefix string) ([]Multip
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated
+		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek,
+		        COALESCE(sse_kms_context, ''), initiated
 		 FROM s3_multipart_uploads WHERE account_id = ? AND bucket = ? AND key LIKE ? ORDER BY key`,
 		accountID, bucket, prefix+"%",
 	)
@@ -905,7 +920,8 @@ func (s *Store) getMultipartUpload(accountID, bucket, key, uploadID string) (Mul
 		return MultipartUpload{}, err
 	}
 	row := s.db.QueryRow(
-		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek, initiated
+		`SELECT upload_id, account_id, bucket, key, content_type, sse_algorithm, kms_key_id, sealed_dek,
+		        COALESCE(sse_kms_context, ''), initiated
 		 FROM s3_multipart_uploads WHERE upload_id = ? AND account_id = ? AND bucket = ? AND key = ?`,
 		uploadID, accountID, bucket, key,
 	)
@@ -960,9 +976,9 @@ func (s *Store) deleteMultipartUpload(uploadID string) error {
 
 func scanMultipartUpload(rows *sql.Rows) (MultipartUpload, error) {
 	var u MultipartUpload
-	var ct, sse, kmsID sql.NullString
+	var ct, sse, kmsID, sseCtx sql.NullString
 	var sealed []byte
-	if err := rows.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &u.Initiated); err != nil {
+	if err := rows.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &sseCtx, &u.Initiated); err != nil {
 		return MultipartUpload{}, err
 	}
 	if ct.Valid {
@@ -973,6 +989,9 @@ func scanMultipartUpload(rows *sql.Rows) (MultipartUpload, error) {
 	}
 	if kmsID.Valid {
 		u.KMSKeyID = kmsID.String
+	}
+	if sseCtx.Valid {
+		u.SSEKMSContextJSON = sseCtx.String
 	}
 	u.SealedDEK = sealed
 	return u, nil
@@ -980,9 +999,9 @@ func scanMultipartUpload(rows *sql.Rows) (MultipartUpload, error) {
 
 func scanMultipartUploadRow(row *sql.Row) (MultipartUpload, error) {
 	var u MultipartUpload
-	var ct, sse, kmsID sql.NullString
+	var ct, sse, kmsID, sseCtx sql.NullString
 	var sealed []byte
-	if err := row.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &u.Initiated); err != nil {
+	if err := row.Scan(&u.UploadID, &u.AccountID, &u.Bucket, &u.Key, &ct, &sse, &kmsID, &sealed, &sseCtx, &u.Initiated); err != nil {
 		return MultipartUpload{}, err
 	}
 	if ct.Valid {
@@ -993,6 +1012,9 @@ func scanMultipartUploadRow(row *sql.Row) (MultipartUpload, error) {
 	}
 	if kmsID.Valid {
 		u.KMSKeyID = kmsID.String
+	}
+	if sseCtx.Valid {
+		u.SSEKMSContextJSON = sseCtx.String
 	}
 	u.SealedDEK = sealed
 	return u, nil

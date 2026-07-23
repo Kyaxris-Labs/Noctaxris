@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS opensearch_domains (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_opensearch_domains_name ON opensearch_domains(account_id, domain_name);
 `
 
+// OpenSearchDomainStatusCreateFailed is the honest stub terminal status when no
+// nested OpenSearch engine exists. Do not use Active without a live container.
+const OpenSearchDomainStatusCreateFailed = "CreateFailed"
+
 // OpenSearchDomain is an OpenSearch Service domain control-plane row (stub endpoint).
 type OpenSearchDomain struct {
 	DomainID      string
@@ -92,18 +96,19 @@ func (s *Store) CreateOpenSearchDomain(accountID, region, name, engineVersion st
 	arn := OpenSearchDomainARN(region, accountID, name)
 	stub := fmt.Sprintf("stub://127.0.0.1/opensearch/%s", id)
 	now := time.Now().UTC().UnixMilli()
+	// MQ-style honesty: terminal CreateFailed until a nested engine exists (stub endpoint only).
 	_, err = s.db.Exec(
 		`INSERT INTO opensearch_domains
 		 (account_id, domain_id, domain_name, domain_arn, engine_version, domain_status, stub_endpoint, created_at)
-		 VALUES (?, ?, ?, ?, ?, 'Active', ?, ?)`,
-		accountID, id, name, arn, engineVersion, stub, now,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, id, name, arn, engineVersion, OpenSearchDomainStatusCreateFailed, stub, now,
 	)
 	if err != nil {
 		return OpenSearchDomain{}, fmt.Errorf("create opensearch domain: insert: %w", err)
 	}
 	return OpenSearchDomain{
 		DomainID: id, DomainName: name, DomainARN: arn,
-		EngineVersion: engineVersion, DomainStatus: "Active",
+		EngineVersion: engineVersion, DomainStatus: OpenSearchDomainStatusCreateFailed,
 		StubEndpoint: stub, CreatedAt: now,
 	}, nil
 }

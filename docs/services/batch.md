@@ -12,8 +12,8 @@ Lab AWS Batch core: compute environments, job queues, job definitions, and Submi
 | Job queue | `CreateJobQueue`, `DescribeJobQueues` |
 | Job definition | `RegisterJobDefinition`, `DescribeJobDefinitions` |
 | Jobs | `SubmitJob`, `DescribeJobs` |
-| Roles | Optional `serviceRole` on compute environment requires PassRole for `batch.amazonaws.com`. Optional `jobRoleArn` on container properties requires PassRole for `ecs-tasks.amazonaws.com`. When `jobRoleArn` is set, SubmitJob mints temporary AWS_* credentials for that role into the nested container (same pattern as ECS RunTask) |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob reuses the nested ECS run helper on Internal network `noctaxris-ecs` (host-gateway ExtraHosts off by default). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled with a registry token before start |
+| Roles | Optional `serviceRole` on compute environment requires PassRole for `batch.amazonaws.com`. Optional `jobRoleArn` / `executionRoleArn` on container properties require PassRole for `ecs-tasks.amazonaws.com`. When `jobRoleArn` is set, SubmitJob mints temporary AWS_* credentials for that role into the nested container. Lab registry pull uses `executionRoleArn` when set, otherwise `jobRoleArn` |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob starts the container and returns `SUBMITTED` / `RUNNING`; exit is reaped in the background (ECS pattern). `platformCapabilities: FARGATE` and `networkMode: awsvpc` are rejected (lab nested Docker only). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled once with authenticated Registry V2 |
 
 ### Authz notes
 

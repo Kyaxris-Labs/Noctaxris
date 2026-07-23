@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # Nested DinD operator/CI smoke for Noctaxris.
 # Requires Docker Compose, curl, and AWS CLI v2.
+#
+# Privilege / compose-engine PRs: run this script (not smoke-core alone).
+# A green PR smoke-core proves STS/S3/KMS/DynamoDB only; it does not prove Invoke.
+#
+# Optional restricted engine overlay:
+#   COMPOSE_EXTRA_FILES="-f docker/compose.engine-restricted.yaml" bash docker/smoke-nested.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE=(docker compose -f "$ROOT/docker/compose.yaml" --env-file "$ROOT/docker/.env")
+COMPOSE=(docker compose -f "$ROOT/docker/compose.yaml")
+# shellcheck disable=SC2206
+if [[ -n "${COMPOSE_EXTRA_FILES:-}" ]]; then
+  # shellcheck disable=SC2206
+  EXTRA=( ${COMPOSE_EXTRA_FILES} )
+  COMPOSE+=("${EXTRA[@]}")
+fi
+COMPOSE+=(--env-file "$ROOT/docker/.env")
 EP="${EP:-http://127.0.0.1:4566}"
 READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-180}"
 KEEP_UP="${KEEP_UP:-0}"
@@ -142,11 +155,62 @@ PY
   OUT="$TMP/out.json"
   if aws lambda invoke --function-name "$FN" --payload '{}' --endpoint-url "$EP" "$OUT" >/dev/null; then
     grep -q '"ok"' "$OUT" || { echo "invoke payload unexpected: $(cat "$OUT")" >&2; exit 1; }
-    echo "Lambda Invoke ok"
+    echo "Lambda zip Invoke ok"
   else
-    echo "Lambda Invoke failed (engine/image pull); see compose logs" >&2
+    echo "Lambda zip Invoke failed (engine/image pull); see compose logs" >&2
     exit 1
   fi
+fi
+
+# Lab one-shot overrides entrypoint for public Lambda python bases. Skip with SKIP_LAMBDA_IMAGE=1
+# when image pull budget is tight (large public.ecr.aws/lambda/python pull).
+echo "==> optional Lambda Image CreateFunction + Invoke (skip with SKIP_LAMBDA_IMAGE=1)"
+if [[ "${SKIP_LAMBDA_IMAGE:-0}" != "1" ]]; then
+  TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+  aws iam create-role --role-name SmokeLambdaImageRole --assume-role-policy-document "$TRUST" --endpoint-url "$EP" >/dev/null || true
+  IMG_ROLE="$(aws iam get-role --role-name SmokeLambdaImageRole --endpoint-url "$EP" --query Role.Arn --output text)"
+  IMG_FN="smoke-img-$RANDOM"
+  aws lambda create-function \
+    --function-name "$IMG_FN" \
+    --package-type Image \
+    --role "$IMG_ROLE" \
+    --code ImageUri=public.ecr.aws/lambda/python:3.12 \
+    --endpoint-url "$EP" >/dev/null
+  aws lambda get-function --function-name "$IMG_FN" --endpoint-url "$EP" \
+    --query 'Configuration.PackageType' --output text | grep -qx Image
+  IMG_OUT="$(mktemp)"
+  if aws lambda invoke --function-name "$IMG_FN" --payload '{}' --endpoint-url "$EP" "$IMG_OUT" >/dev/null; then
+    echo "Lambda Image Invoke ok"
+  else
+    echo "Lambda Image Invoke failed (engine/image pull); see compose logs" >&2
+    exit 1
+  fi
+fi
+
+echo "==> optional short ECS RunTask alpine (skip with SKIP_ECS=1)"
+if [[ "${SKIP_ECS:-0}" != "1" ]]; then
+  ECS_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+  aws iam create-role --role-name SmokeECSTaskRole --assume-role-policy-document "$ECS_TRUST" --endpoint-url "$EP" >/dev/null || true
+  aws iam create-role --role-name SmokeECSExecRole --assume-role-policy-document "$ECS_TRUST" --endpoint-url "$EP" >/dev/null || true
+  TASK_ROLE="$(aws iam get-role --role-name SmokeECSTaskRole --endpoint-url "$EP" --query Role.Arn --output text)"
+  EXEC_ROLE="$(aws iam get-role --role-name SmokeECSExecRole --endpoint-url "$EP" --query Role.Arn --output text)"
+  FAMILY="smoke-ecs-$RANDOM"
+  CONTAINERS='[{"name":"app","image":"alpine:3.20","essential":true,"command":["echo","ecs-ok"]}]'
+  aws ecs register-task-definition \
+    --family "$FAMILY" \
+    --task-role-arn "$TASK_ROLE" \
+    --execution-role-arn "$EXEC_ROLE" \
+    --container-definitions "$CONTAINERS" \
+    --endpoint-url "$EP" >/dev/null
+  RUN_OUT="$(aws ecs run-task --cluster default --task-definition "$FAMILY" --endpoint-url "$EP" --output json)"
+  if ! echo "$RUN_OUT" | grep -Eq 'taskArn|TaskArn|"tasks"'; then
+    echo "ECS RunTask missing task ARN" >&2
+    echo "$RUN_OUT" >&2
+    exit 1
+  fi
+  aws ecs list-tasks --cluster default --endpoint-url "$EP" --output text | grep -Eq 'arn:aws:ecs|TASK' \
+    || { echo "ListTasks empty after RunTask" >&2; exit 1; }
+  echo "ECS RunTask ok"
 fi
 
 echo "smoke-nested OK"

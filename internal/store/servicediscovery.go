@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS sd_namespaces (
   type TEXT NOT NULL,
   arn TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
+  vpc TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, id)
 );
@@ -59,6 +60,7 @@ type SDNamespace struct {
 	Type        string // DNS_PRIVATE or HTTP
 	ARN         string
 	Description string
+	Vpc         string // lab-opaque ID; required for DNS_PRIVATE (not EC2-validated)
 	CreatedAt   int64
 }
 
@@ -88,6 +90,11 @@ func EnsureServiceDiscoverySchema(db *sql.DB) error {
 	if _, err := db.Exec(serviceDiscoverySchema); err != nil {
 		return fmt.Errorf("ensure servicediscovery schema: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE sd_namespaces ADD COLUMN vpc TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("ensure servicediscovery schema: migrate vpc: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -97,9 +104,11 @@ func (s *Store) EnsureServiceDiscoverySchema() error {
 }
 
 // CreateSDNamespace creates a private DNS or HTTP namespace.
-func (s *Store) CreateSDNamespace(accountID, region, name, nsType, description string) (SDNamespace, error) {
+// DNS_PRIVATE requires a non-empty lab-opaque Vpc ID (not EC2-validated).
+func (s *Store) CreateSDNamespace(accountID, region, name, nsType, description, vpc string) (SDNamespace, error) {
 	name = strings.TrimSpace(name)
 	nsType = strings.ToUpper(strings.TrimSpace(nsType))
+	vpc = strings.TrimSpace(vpc)
 	if name == "" {
 		return SDNamespace{}, fmt.Errorf("%w: Name required", ErrServiceDiscoveryBadRequest)
 	}
@@ -109,6 +118,9 @@ func (s *Store) CreateSDNamespace(accountID, region, name, nsType, description s
 	if nsType != "DNS_PRIVATE" && nsType != "HTTP" {
 		return SDNamespace{}, fmt.Errorf("%w: Type must be DNS_PRIVATE or HTTP", ErrServiceDiscoveryBadRequest)
 	}
+	if nsType == "DNS_PRIVATE" && vpc == "" {
+		return SDNamespace{}, fmt.Errorf("%w: Vpc is required for CreatePrivateDnsNamespace", ErrServiceDiscoveryBadRequest)
+	}
 	if region == "" {
 		region = DefaultServiceDiscoveryRegion
 	}
@@ -116,9 +128,9 @@ func (s *Store) CreateSDNamespace(accountID, region, name, nsType, description s
 	arn := fmt.Sprintf("arn:aws:servicediscovery:%s:%s:namespace/%s", region, accountID, id)
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
-		`INSERT INTO sd_namespaces (account_id, id, name, type, arn, description, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		accountID, id, name, nsType, arn, description, now,
+		`INSERT INTO sd_namespaces (account_id, id, name, type, arn, description, vpc, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, id, name, nsType, arn, description, vpc, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -126,17 +138,17 @@ func (s *Store) CreateSDNamespace(accountID, region, name, nsType, description s
 		}
 		return SDNamespace{}, fmt.Errorf("create namespace: %w", err)
 	}
-	return SDNamespace{ID: id, Name: name, Type: nsType, ARN: arn, Description: description, CreatedAt: now}, nil
+	return SDNamespace{ID: id, Name: name, Type: nsType, ARN: arn, Description: description, Vpc: vpc, CreatedAt: now}, nil
 }
 
 // GetSDNamespace returns a namespace by ID.
 func (s *Store) GetSDNamespace(accountID, id string) (SDNamespace, error) {
 	var n SDNamespace
 	err := s.db.QueryRow(
-		`SELECT id, name, type, arn, description, created_at FROM sd_namespaces
+		`SELECT id, name, type, arn, description, vpc, created_at FROM sd_namespaces
 		 WHERE account_id = ? AND id = ?`,
 		accountID, id,
-	).Scan(&n.ID, &n.Name, &n.Type, &n.ARN, &n.Description, &n.CreatedAt)
+	).Scan(&n.ID, &n.Name, &n.Type, &n.ARN, &n.Description, &n.Vpc, &n.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SDNamespace{}, ErrServiceDiscoveryNotFound
 	}
@@ -149,7 +161,7 @@ func (s *Store) GetSDNamespace(accountID, id string) (SDNamespace, error) {
 // ListSDNamespaces lists namespaces.
 func (s *Store) ListSDNamespaces(accountID string) ([]SDNamespace, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, type, arn, description, created_at FROM sd_namespaces
+		`SELECT id, name, type, arn, description, vpc, created_at FROM sd_namespaces
 		 WHERE account_id = ? ORDER BY name`,
 		accountID,
 	)
@@ -160,7 +172,7 @@ func (s *Store) ListSDNamespaces(accountID string) ([]SDNamespace, error) {
 	var out []SDNamespace
 	for rows.Next() {
 		var n SDNamespace
-		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &n.ARN, &n.Description, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &n.ARN, &n.Description, &n.Vpc, &n.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list namespaces scan: %w", err)
 		}
 		out = append(out, n)
@@ -259,11 +271,32 @@ func (s *Store) DeregisterSDInstance(accountID, serviceID, instanceID string) er
 }
 
 // DiscoverSDInstances finds instances by namespace name + service name.
-func (s *Store) DiscoverSDInstances(accountID, namespaceName, serviceName string) ([]SDInstance, error) {
+// For DNS_PRIVATE namespaces, vpc must match the namespace Vpc (lab privacy scope).
+func (s *Store) DiscoverSDInstances(accountID, namespaceName, serviceName, vpc string) ([]SDInstance, error) {
 	namespaceName = strings.TrimSpace(namespaceName)
 	serviceName = strings.TrimSpace(serviceName)
+	vpc = strings.TrimSpace(vpc)
 	if namespaceName == "" || serviceName == "" {
 		return nil, fmt.Errorf("%w: NamespaceName and ServiceName required", ErrServiceDiscoveryBadRequest)
+	}
+	var nsType, nsVpc string
+	err := s.db.QueryRow(
+		`SELECT type, vpc FROM sd_namespaces WHERE account_id = ? AND name = ?`,
+		accountID, namespaceName,
+	).Scan(&nsType, &nsVpc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrServiceDiscoveryNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("discover instances: namespace: %w", err)
+	}
+	if nsType == "DNS_PRIVATE" {
+		if vpc == "" {
+			return nil, fmt.Errorf("%w: Vpc is required to discover instances in a private DNS namespace", ErrServiceDiscoveryBadRequest)
+		}
+		if vpc != nsVpc {
+			return []SDInstance{}, nil
+		}
 	}
 	rows, err := s.db.Query(
 		`SELECT i.instance_id, i.service_id, i.attributes_json, i.created_at

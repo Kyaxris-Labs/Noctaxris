@@ -11,13 +11,14 @@ Lab log groups and streams with Put/GetLogEvents, DescribeLogGroups/DescribeLogS
 | Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
 | Streams | `CreateLogStream`, `DeleteLogStream`, `DescribeLogStreams` (optional `logStreamNamePrefix`) |
 | Events | `PutLogEvents` (sequence token after first put) and `GetLogEvents` (`startFromHead`, optional time bounds) |
-| Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Lab filter pattern is substring match on the message. Fan-out on PutLogEvents (best-effort). Destination policy must Allow `logs.amazonaws.com` unless `roleArn` is set |
+| Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Lab filter pattern is substring match. Fan-out on PutLogEvents (best-effort). Delivery uses the destination ARN owner account. Destination resource policy must Allow `logs.amazonaws.com` (with log-group `aws:SourceArn`). Lambda destinations use the AWS `awslogs.data` gzip+base64 envelope; SQS destinations are lab-only raw `DATA_MESSAGE` JSON. Lambda ignores `roleArn` (resource-policy path). For SQS, optional `roleArn` requires PassRole + `logs.amazonaws.com` trust and AND with destination policy at deliver |
+| Metric filters | `PutMetricFilter` / `DeleteMetricFilter` / `DescribeMetricFilters`. `DescribeLogGroups` reports honest `metricFilterCount`. Matching PutLogEvents emit SQLite datapoints readable via store `GetMetricData` (no full CloudWatch Metrics API) |
 
 Log group ARN shape: `arn:aws:logs:REGION:ACCOUNT:log-group:NAME`. Stream ARN adds `:log-stream:STREAM`.
 
 ### Authz notes
 
-Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups). Org SCP/RCP filters apply. No log-group resource policy path.
+Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups). Org SCP/RCP filters apply. No log-group resource policy path. PutSubscriptionFilter with non-empty `roleArn` (SQS lab path) requires `iam:PassRole` plus `logs.amazonaws.com` trust.
 
 ## How to verify / CLI smoke
 
@@ -64,8 +65,9 @@ aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Metric filters, Insights queries, export tasks
+- Insights queries, export tasks, FilterLogEvents
 - CloudWatch Logs filter syntax (lab uses substring match)
-- FilterLogEvents
-- Cross-account observability and log-group resource policies
+- Full CloudWatch Metrics / Alarms surface (datapoints are store-lite only)
+- Log-group resource policies
+- Kinesis / Firehose / OpenSearch subscription destinations
 - Full pagination token parity

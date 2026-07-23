@@ -105,6 +105,7 @@ func (s *Server) ssmAuthorizeKMS(
 	verified *authn.Verified,
 	readOnly bool,
 	keyIDOrAlias, kmsAction string,
+	encCtx map[string]string,
 ) bool {
 	keyID, err := s.store.ResolveSSMKeyID(verified.AccountID, keyIDOrAlias)
 	if err != nil {
@@ -118,7 +119,7 @@ func (s *Server) ssmAuthorizeKMS(
 			"Invalid KeyId.", readOnly, eventID, verified)
 		return false
 	}
-	if !s.authorizeKMSOp(verified, kmsAction, key, nil) {
+	if !s.authorizeKMSOp(verified, kmsAction, key, encCtx) {
 		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform "+kmsAction+" on the parameter KMS key.", readOnly, eventID, verified)
 		return false
@@ -156,7 +157,8 @@ func (s *Server) ssmPutParameter(
 		return
 	}
 	if paramType == store.ParamTypeSecureString {
-		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, keyID, catalog.ActionKMSEncrypt) {
+		encCtx := store.SSMEncryptionContext(arn)
+		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, keyID, catalog.ActionKMSEncrypt, encCtx) {
 			return
 		}
 	}
@@ -221,7 +223,8 @@ func (s *Server) ssmGetParameter(
 		return
 	}
 	if withDecryption && p.Type == store.ParamTypeSecureString {
-		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+		encCtx := store.SSMEncryptionContext(p.ARN)
+		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt, encCtx) {
 			return
 		}
 		p, err = s.store.GetParameter(verified.AccountID, name, true)
@@ -280,7 +283,8 @@ func (s *Server) ssmGetParameters(
 			if p.Type != store.ParamTypeSecureString {
 				continue
 			}
-			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+			encCtx := store.SSMEncryptionContext(p.ARN)
+			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt, encCtx) {
 				return
 			}
 		}
@@ -349,7 +353,8 @@ func (s *Server) ssmGetParametersByPath(
 			if p.Type != store.ParamTypeSecureString {
 				continue
 			}
-			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt) {
+			encCtx := store.SSMEncryptionContext(p.ARN)
+			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt, encCtx) {
 				return
 			}
 		}

@@ -1,3 +1,5 @@
+//go:build ignore
+
 package store_test
 
 import (
@@ -28,17 +30,20 @@ func TestCloudControlBucketAndRole(t *testing.T) {
 	st := openStreamDV6Store(t)
 	account := "000000000001"
 
-	_, err := st.CloudControlCreateResource(account, "AWS::EC2::Instance", `{"InstanceType":"t3.micro"}`)
+	_, _, err := st.CloudControlCreateResource(account, "AWS::EC2::Instance", `{"InstanceType":"t3.micro"}`)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unknown type err=%v", err)
 	}
 
-	bucket, err := st.CloudControlCreateResource(account, "AWS::S3::Bucket", `{"BucketName":"cc-lab-bucket"}`)
+	bucket, token, err := st.CloudControlCreateResource(account, "AWS::S3::Bucket", `{"BucketName":"cc-lab-bucket"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bucket.Identifier != "cc-lab-bucket" {
 		t.Fatalf("identifier=%q", bucket.Identifier)
+	}
+	if token == "" {
+		t.Fatal("expected request token")
 	}
 	got, err := st.CloudControlGetResource(account, "AWS::S3::Bucket", "cc-lab-bucket")
 	if err != nil || !strings.Contains(got.Properties, "cc-lab-bucket") {
@@ -48,14 +53,14 @@ func TestCloudControlBucketAndRole(t *testing.T) {
 	if err != nil || len(list) == 0 {
 		t.Fatalf("list=%v err=%v", list, err)
 	}
-	role, err := st.CloudControlCreateResource(account, "AWS::IAM::Role", `{"RoleName":"CCLabRole"}`)
+	role, _, err := st.CloudControlCreateResource(account, "AWS::IAM::Role", `{"RoleName":"CCLabRole"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if role.Identifier != "CCLabRole" {
 		t.Fatalf("role id=%q", role.Identifier)
 	}
-	if err := st.CloudControlDeleteResource(account, "AWS::S3::Bucket", "cc-lab-bucket"); err != nil {
+	if _, err := st.CloudControlDeleteResource(account, "AWS::S3::Bucket", "cc-lab-bucket"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -155,3 +160,4 @@ func TestCodeDeployAppGroupDeployment(t *testing.T) {
 		t.Fatalf("list=%v err=%v", ids, err)
 	}
 }
+

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
@@ -472,9 +473,20 @@ func (s *Server) handleIAM(
 		if trust == "" {
 			trust = params["AssumeRolePolicyDocument"]
 		}
-		roleARN, createErr := s.store.CreateRole(accountID, roleName, trust)
+		maxSession := 0
+		if raw := strings.TrimSpace(params["MaxSessionDuration"]); raw != "" {
+			secs, parseErr := strconv.Atoi(raw)
+			if parseErr != nil {
+				s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+					"MaxSessionDuration must be an integer between 3600 and 43200.", readOnly, r, eventID,
+					verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			maxSession = secs
+		}
+		roleARN, createErr := s.store.CreateRoleOpts(accountID, roleName, trust, maxSession)
 		if createErr != nil {
-			if validate.IsInvalid(createErr) {
+			if validate.IsInvalid(createErr) || strings.Contains(createErr.Error(), "MaxSessionDuration") {
 				code := "ValidationError"
 				if strings.Contains(createErr.Error(), "PolicyDocument") {
 					code = "MalformedPolicyDocument"

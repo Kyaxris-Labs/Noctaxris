@@ -80,10 +80,11 @@ func DescribeJobDefinitionsJSON(defs []store.BatchJobDefinition) ([]byte, error)
 			"type":              jd.Type,
 			"status":            jd.Status,
 			"containerProperties": map[string]any{
-				"image":      jd.Image,
-				"command":    jd.Command,
-				"jobRoleArn": jd.JobRoleARN,
-				"environment": envToList(env),
+				"image":              jd.Image,
+				"command":            jd.Command,
+				"jobRoleArn":         jd.JobRoleARN,
+				"executionRoleArn":   jd.ExecutionRoleARN,
+				"environment":        envToList(env),
 			},
 		})
 	}

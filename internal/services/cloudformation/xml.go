@@ -109,3 +109,72 @@ func ListStacksXML(stacks []store.CFNStack, requestID string) ([]byte, error) {
 	}
 	return marshal("ListStacksResponse", r, requestID)
 }
+
+// CreateChangeSetXML builds CreateChangeSet response.
+func CreateChangeSetXML(changeSetID, stackID, requestID string) ([]byte, error) {
+	type result struct {
+		XMLName     xml.Name `xml:"CreateChangeSetResult"`
+		Id          string   `xml:"Id"`
+		StackId     string   `xml:"StackId"`
+	}
+	return marshal("CreateChangeSetResponse", result{Id: changeSetID, StackId: stackID}, requestID)
+}
+
+// ExecuteChangeSetXML builds ExecuteChangeSet response.
+func ExecuteChangeSetXML(requestID string) ([]byte, error) {
+	type result struct {
+		XMLName xml.Name `xml:"ExecuteChangeSetResult"`
+	}
+	return marshal("ExecuteChangeSetResponse", result{}, requestID)
+}
+
+// UpdateStackXML builds UpdateStack response.
+func UpdateStackXML(stackID, requestID string) ([]byte, error) {
+	type result struct {
+		XMLName xml.Name `xml:"UpdateStackResult"`
+		StackID string   `xml:"StackId"`
+	}
+	return marshal("UpdateStackResponse", result{StackID: stackID}, requestID)
+}
+
+// DescribeChangeSetXML builds a minimal DescribeChangeSet response.
+func DescribeChangeSetXML(cs store.CFNChangeSet, requestID string) ([]byte, error) {
+	type changeMember struct {
+		Action            string `xml:"Action"`
+		LogicalResourceID string `xml:"LogicalResourceId"`
+		ResourceType      string `xml:"ResourceType"`
+	}
+	type result struct {
+		XMLName       xml.Name `xml:"DescribeChangeSetResult"`
+		ChangeSetId   string   `xml:"ChangeSetId"`
+		ChangeSetName string   `xml:"ChangeSetName"`
+		StackId       string   `xml:"StackId"`
+		StackName     string   `xml:"StackName"`
+		Status        string   `xml:"Status"`
+		Changes       struct {
+			Member []changeMember `xml:"member"`
+		} `xml:"Changes"`
+	}
+	var r result
+	r.ChangeSetId = cs.ChangeSetID
+	r.ChangeSetName = cs.ChangeSetName
+	r.StackId = cs.StackID
+	r.StackName = cs.StackName
+	r.Status = cs.Status
+	for _, ch := range cs.Changes {
+		r.Changes.Member = append(r.Changes.Member, changeMember{
+			Action: ch.Action, LogicalResourceID: ch.LogicalResourceID, ResourceType: ch.ResourceType,
+		})
+	}
+	return marshal("DescribeChangeSetResponse", r, requestID)
+}
+
+// DetectStackDriftXML builds DetectStackDrift response.
+func DetectStackDriftXML(detectionID, requestID string) ([]byte, error) {
+	type result struct {
+		XMLName               xml.Name `xml:"DetectStackDriftResult"`
+		StackDriftDetectionId string   `xml:"StackDriftDetectionId"`
+	}
+	return marshal("DetectStackDriftResponse", result{StackDriftDetectionId: detectionID}, requestID)
+}
+

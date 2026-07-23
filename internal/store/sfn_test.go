@@ -92,6 +92,14 @@ func TestSFNFailExecution(t *testing.T) {
 func TestSFNTaskWithoutInvokerFails(t *testing.T) {
 	st := openSFNStore(t)
 	account := "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "task-sm-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "invoke", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"lambda:InvokeFunction","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 	def := `{
   "StartAt": "Call",
   "States": {
@@ -102,7 +110,7 @@ func TestSFNTaskWithoutInvokerFails(t *testing.T) {
     }
   }
 }`
-	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "task-sm", def, "")
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "task-sm", def, roleARN)
 	if err != nil {
 		t.Fatal(err)
 	}

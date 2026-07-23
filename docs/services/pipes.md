@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or SQS targets. Optional Lambda `Enrichment` ARN runs sync before target delivery (ticker uses nested Invoke). An in-process ticker polls RUNNING pipes via `PollPipeOnce`. Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Source poll requires a RoleArn session Allow on source actions, or (SQS) a source queue policy Allow for `pipes.amazonaws.com`. Enrichment requires RoleArn session `lambda:InvokeFunction`. Target delivery uses a RoleArn session or the target resource policy Allow for `pipes.amazonaws.com`. SQS source/target ARNs may be cross-account (queue owner account).
+Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or SQS targets. Optional Lambda `Enrichment` ARN runs sync before target delivery (ticker uses nested Invoke). An in-process ticker polls RUNNING pipes via `PollPipeOnce`. Identity authz plus PassRole when `RoleArn` is set (`pipes.amazonaws.com`). Source poll requires a RoleArn session Allow on source actions, or (SQS) a source queue policy Allow for `pipes.amazonaws.com`. EventBridge bus sources require RoleArn session Allow on `events:PutEvents` (lab stand-in for retrieve). Enrichment requires RoleArn session `lambda:InvokeFunction`. Target delivery uses a RoleArn session or the target resource policy Allow for `pipes.amazonaws.com`; foreign targets require both. SQS source/target ARNs may be cross-account (queue owner account).
 
 ## Implemented
 
@@ -16,7 +16,7 @@ Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or S
 
 ### Authz notes
 
-Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present. At poll time source actions require RoleArn session Allow (DynamoDB/EventBridge sources require RoleArn; SQS may use a source queue policy Allow for `pipes.amazonaws.com` instead). Enrichment Invoke always requires RoleArn. Target delivery mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root).
+Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present. At poll time source actions require RoleArn session Allow (DynamoDB/EventBridge sources require RoleArn with a session Allow; SQS may use a source queue policy Allow for `pipes.amazonaws.com` instead). Enrichment Invoke always requires RoleArn. Target delivery mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root). Foreign targets with RoleArn also require the destination resource policy.
 
 ## How to verify / CLI smoke
 
@@ -49,4 +49,4 @@ Skip live Compose smoke when Docker is unavailable.
 ## Not yet / deferred
 
 - Filter partner matrix and enrichment HTTP/API destinations
-- Cross-account bus sources
+- Cross-account bus sources beyond RoleArn session Allow on `events:PutEvents`

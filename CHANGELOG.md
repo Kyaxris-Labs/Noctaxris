@@ -2,16 +2,47 @@
 
 ## Unreleased
 
+### Storage and KMS custody
+
+- Secrets Manager / SSM SecureString / DynamoDB SSE bind AWS-shaped KMS EncryptionContext on seal/unseal and EvaluateKMS (`SecretARN`+`SecretVersionId`, `PARAMETER_ARN`, `aws:dynamodb:tableName`+`aws:dynamodb:subscriberId`)
+- DynamoDB `CreateTable` / `UpdateTable` SSE-KMS requires caller `kms:DescribeKey` and `kms:CreateGrant` with that table context
+- Resource-based policies (KMS key, S3 bucket, Secrets, DynamoDB, ECR) require `Principal` on put; missing Principal matches none at eval (identity policies unchanged)
+- S3 SSE-KMS persists customer `x-amz-server-side-encryption-context` pairs and rebuilds full context on Get/Copy/multipart
+- Anonymous S3 GetObject still deferred (secure-by-default SigV4)
+
+### HTTP API Lambda authorizer
+
+- HTTP API `CreateAuthorizer` REQUEST (Lambda) with CUSTOM routes; Deny short-circuits before integration
+- Authorizer invoke uses CredentialsArn or `apigateway.amazonaws.com` resource-policy parity with AWS_PROXY
+- Proxy responses strip hop-by-hop headers and `Set-Cookie` (opt-in `NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE=1`)
+- Function URL CORS AllowOrigins allowlist; WAF Associate rejects ALB / REST / Cognito (no enforce path)
+
+### ELB / CloudFront dataplane honesty
+
+- ELBv2 **control-plane stub**: `Type=network` rejected; Lambda `RegisterTargets` requires function resolve and `elasticloadbalancing.amazonaws.com` Allow; `DescribeTargetHealth` returns `unused` until a lab listener exists
+- CloudFront **control-plane stub**: origins must exist (lab S3 / HTTP API); Status `InProgress` with DomainName omitted (not Deployed; no PoP)
+
 ### Compute path honesty
 
 - Removed opt-in microVM / Firecracker selection path. Nested DinD via Compose `noctaxris-engine` is the only packaged compute plane
 - `NOCTAXRIS_COMPUTE_RUNTIME` accepts only `dind` (or unset); `NOCTAXRIS_FIRECRACKER_BIN` removed
-- Docs and README describe DinD-only compute; privilege reduction for the nested engine is planned
+- Docs and README describe DinD-only compute; default engine remains privileged DinD with experimental `compose.engine-restricted.yaml`
+
+### Nested engine integrity
+
+- Engine mounts `noctaxris-compute` `:ro` (API still unpacks read-write); compose-static tests lock the mount
+- Nested Lambda/ECS/data-plane HostConfig: `Privileged=false`, empty CapAdd, CapDrop ALL, `no-new-privileges`
+- Digest pins for Compose `docker:27-dind` and `busybox` init images
+- Nested smoke covers zip Invoke + short ECS RunTask; privilege/compose-engine PRs must run `docker/smoke-nested.sh` (green `smoke-core` is not enough)
 
 ### Integration suites
 
 - Real Compose-backed suites under `tests/`: Go / Node.js / Python AWS SDK round-trips, Terraform apply/destroy (S3 + IAM + DynamoDB + KMS), CloudFormation JSON/YAML stack CRUD for lab resource types
 - Optional CI job `integration-suites` (`workflow_dispatch` or `tests/**` path filter); not a required PR gate
+- `run-all.sh` folds SDK fullstack + Terraform `lab-fullstack` behind `NOCTAXRIS_ADVANCED=1`, and SDK Lambda Invoke behind `NOCTAXRIS_NESTED=1`
+- Default SDK coverage includes SSM String and Secrets Manager create/get/delete; Go fullstack includes SecureString KMS decrypt-deny
+- CFN suite expects YAML success (SQS, DynamoDB, Lambda ZipFile, multi-resource Ref/Sub)
+- Nested smoke: weekly schedule + zip/Image Invoke + ECS RunTask; push/PR still proves `smoke-core` only
 - Run guide: [tests/README.md](tests/README.md)
 - CloudFormation CreateStack: provision S3/IAM resources before the SQLite write transaction (avoids `SQLITE_BUSY` under the open tx)
 - IAM `ListInstanceProfilesForRole` (empty list when none; needed for Terraform `aws_iam_role` destroy)
@@ -29,7 +60,8 @@
 ### Platform depth
 
 - RDS Data API: ExecuteStatement runs real SQL via nested `psql` (DinD exec) when a Postgres container was started; stub marker when DinD is unset (still no `pgx`)
-- Nested DinD smoke: `docker/smoke-nested.sh` (manual only: Actions `workflow_dispatch` with `nested_smoke=true`, or run the script locally). Not on push/PR; a green PR proves `smoke-core` only. See [docs/ops.md](docs/ops.md).
+- RDS Data API prep: parse `parameters` and reject them until optional wire-protocol executor buy-in; nested-psql remains the default path (VARCHAR SELECT cells)
+- Nested DinD smoke: `docker/smoke-nested.sh` (weekly schedule + Actions `workflow_dispatch` with `nested_smoke=true`, or run the script locally). Not on push/PR; a green PR proves `smoke-core` only. See [docs/ops.md](docs/ops.md).
 
 ### Security hardening (H1)
 

@@ -4,14 +4,29 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    # Nested DinD is not on every PR; weekly main smoke keeps the contract honest.
+    - cron: "17 6 * * 1"
   workflow_dispatch:
     inputs:
       nested_smoke:
-        description: Run nested DinD smoke (engine healthy, RDS describe, Data API nested-psql, Lambda Invoke)
+        description: Run nested DinD smoke (engine healthy, RDS describe, Data API nested-psql, Lambda zip/Image Invoke, ECS RunTask)
         type: boolean
         default: false
       integration_suites:
         description: Run SDK / Terraform / CloudFormation integration suites against Compose
+        type: boolean
+        default: false
+      advanced_suites:
+        description: Also run NOCTAXRIS_ADVANCED=1 (SDK fullstack + Terraform lab-fullstack)
+        type: boolean
+        default: false
+      nested_sdk:
+        description: Also run NOCTAXRIS_NESTED=1 (SDK Lambda Invoke) when integration suites run
+        type: boolean
+        default: false
+      tf_fullstack:
+        description: Also run TF_FULLSTACK=1 (Terraform lab-fullstack after lab-core)
         type: boolean
         default: false
 
@@ -25,6 +40,7 @@ concurrency:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -35,6 +51,7 @@ jobs:
 
   compose-static:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -45,6 +62,7 @@ jobs:
 
   govulncheck:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -57,6 +75,7 @@ jobs:
 
   race:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -67,6 +86,7 @@ jobs:
 
   image:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - name: Build API image
@@ -74,6 +94,7 @@ jobs:
 
   smoke-core:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     needs: [unit, compose-static, image]
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +168,10 @@ jobs:
 
   smoke-nested:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && inputs.nested_smoke
+    # Manual workflow_dispatch, or weekly schedule on default branch. Not on push/PR.
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.nested_smoke)
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -178,10 +202,11 @@ jobs:
     runs-on: ubuntu-latest
     # Optional: workflow_dispatch with integration_suites=true, or PRs that touch tests/**.
     # Not a required status check; smoke-core remains the PR Compose gate.
+    # Default path stays fast (no ADVANCED/NESTED). Opt in via workflow_dispatch inputs.
     if: >
       (github.event_name == 'workflow_dispatch' && inputs.integration_suites) ||
       github.event_name == 'pull_request'
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -248,6 +273,27 @@ jobs:
           echo "API never became ready" >&2
           docker compose -f docker/compose.yaml --env-file docker/.env logs --no-color || true
           exit 1
+      - name: Optional advanced / nested flags
+        if: steps.decide.outputs.run == 'true'
+        id: flags
+        run: |
+          ADVANCED=""
+          NESTED=""
+          TF_FULLSTACK=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.advanced_suites }}" = "true" ]; then
+              ADVANCED=1
+            fi
+            if [ "${{ inputs.nested_sdk }}" = "true" ]; then
+              NESTED=1
+            fi
+            if [ "${{ inputs.tf_fullstack }}" = "true" ]; then
+              TF_FULLSTACK=1
+            fi
+          fi
+          echo "advanced=$ADVANCED" >> "$GITHUB_OUTPUT"
+          echo "nested=$NESTED" >> "$GITHUB_OUTPUT"
+          echo "tf_fullstack=$TF_FULLSTACK" >> "$GITHUB_OUTPUT"
       - name: Integration suites
         if: steps.decide.outputs.run == 'true'
         env:
@@ -256,6 +302,9 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
           AWS_EC2_METADATA_DISABLED: "true"
           NOCTAXRIS_ENDPOINT: http://127.0.0.1:4566
+          NOCTAXRIS_ADVANCED: ${{ steps.flags.outputs.advanced }}
+          NOCTAXRIS_NESTED: ${{ steps.flags.outputs.nested }}
+          TF_FULLSTACK: ${{ steps.flags.outputs.tf_fullstack }}
         run: bash tests/run-all.sh
       - name: Compose down
         if: always() && steps.decide.outputs.run == 'true'

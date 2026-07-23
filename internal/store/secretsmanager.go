@@ -96,6 +96,20 @@ func newSecretARNSuffix() (string, error) {
 	return strings.ToLower(hex.EncodeToString(b[:])), nil
 }
 
+// NewSecretARNSuffix returns a lab six-character hex ARN suffix (AWS-shaped).
+func NewSecretARNSuffix() (string, error) {
+	return newSecretARNSuffix()
+}
+
+// SecretsEncryptionContext is the AWS Secrets Manager KMS EncryptionContext map
+// (SecretARN + SecretVersionId) used for seal/unseal and EvaluateKMS conditions.
+func SecretsEncryptionContext(secretARN, versionID string) map[string]string {
+	return map[string]string{
+		"SecretARN":       secretARN,
+		"SecretVersionId": versionID,
+	}
+}
+
 func normalizeSecretLookup(nameOrARN string) string {
 	return strings.TrimSpace(nameOrARN)
 }
@@ -232,7 +246,7 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 	return row, nil
 }
 
-func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte) ([]byte, string, error) {
+func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte, encCtx map[string]string) ([]byte, string, error) {
 	resolvedKeyID, err := s.resolveSecretsKeyID(accountID, keyID)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve key: %w", err)
@@ -248,7 +262,7 @@ func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte) ([]by
 	if err != nil {
 		return nil, "", fmt.Errorf("unseal key: %w", err)
 	}
-	sealed, err := EncryptUnderCMK(cmk, resolvedKeyID, plaintext, nil)
+	sealed, err := EncryptUnderCMK(cmk, resolvedKeyID, plaintext, encCtx)
 	if err != nil {
 		return nil, "", fmt.Errorf("encrypt: %w", err)
 	}
@@ -256,7 +270,7 @@ func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte) ([]by
 }
 
 func (s *Store) storeSecretValues(
-	accountID, keyID, secretString string, secretBinary []byte,
+	accountID, keyID, secretString string, secretBinary []byte, encCtx map[string]string,
 ) (stringPlain string, stringSealed []byte, stringSealFlag int, binaryPlain, binarySealed []byte, binarySealFlag int, kmsKeyID string, err error) {
 	hasString := secretString != ""
 	hasBinary := len(secretBinary) > 0
@@ -267,7 +281,7 @@ func (s *Store) storeSecretValues(
 
 	resolvedKeyID := ""
 	if hasString {
-		sealed, kid, sealErr := s.sealSecretValue(accountID, keyID, []byte(secretString))
+		sealed, kid, sealErr := s.sealSecretValue(accountID, keyID, []byte(secretString), encCtx)
 		if sealErr != nil {
 			return "", nil, 0, nil, nil, 0, "", sealErr
 		}
@@ -276,7 +290,7 @@ func (s *Store) storeSecretValues(
 		resolvedKeyID = kid
 	}
 	if hasBinary {
-		sealed, kid, sealErr := s.sealSecretValue(accountID, keyID, secretBinary)
+		sealed, kid, sealErr := s.sealSecretValue(accountID, keyID, secretBinary, encCtx)
 		if sealErr != nil {
 			return "", nil, 0, nil, nil, 0, "", sealErr
 		}
@@ -307,6 +321,7 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		return out, nil
 	}
 
+	encCtx := SecretsEncryptionContext(row.ARN, fmt.Sprintf("%d", row.Version))
 	if row.StringSealed {
 		if row.KMSKeyID == "" {
 			return Secret{}, fmt.Errorf("secret %s: sealed string without kms key id", row.Name)
@@ -318,7 +333,7 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		if !KeyUsableForCrypto(k.KeyState) {
 			return Secret{}, fmt.Errorf("secret %s: %w", row.Name, ErrInvalidKeyState)
 		}
-		plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.SecretStringSealed)
+		plain, err := s.DecryptBlobWithKeyContext(row.KMSKeyID, row.SecretStringSealed, encCtx)
 		if err != nil {
 			return Secret{}, fmt.Errorf("secret %s: decrypt string: %w", row.Name, err)
 		}
@@ -338,7 +353,7 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		if !KeyUsableForCrypto(k.KeyState) {
 			return Secret{}, fmt.Errorf("secret %s: %w", row.Name, ErrInvalidKeyState)
 		}
-		plain, err := s.DecryptBlobWithKey(row.KMSKeyID, row.SecretBinarySealed)
+		plain, err := s.DecryptBlobWithKeyContext(row.KMSKeyID, row.SecretBinarySealed, encCtx)
 		if err != nil {
 			return Secret{}, fmt.Errorf("secret %s: decrypt binary: %w", row.Name, err)
 		}
@@ -351,8 +366,10 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 }
 
 // CreateSecret stores a new secret encrypted under KMS (default alias/aws/secretsmanager).
+// arnSuffix may be empty to generate one; pass a precomputed suffix when the caller
+// already authorized KMS with SecretsEncryptionContext for that ARN.
 func (s *Store) CreateSecret(
-	accountID, region, name, secretString string, secretBinary []byte, keyID, description string,
+	accountID, region, name, secretString string, secretBinary []byte, keyID, description, arnSuffix string,
 ) (Secret, error) {
 	name = normalizeSecretLookup(name)
 	if name == "" {
@@ -368,15 +385,20 @@ func (s *Store) CreateSecret(
 		return Secret{}, err
 	}
 
-	suffix, err := newSecretARNSuffix()
-	if err != nil {
-		return Secret{}, fmt.Errorf("create secret: suffix: %w", err)
+	suffix := strings.TrimSpace(arnSuffix)
+	if suffix == "" {
+		var err error
+		suffix, err = newSecretARNSuffix()
+		if err != nil {
+			return Secret{}, fmt.Errorf("create secret: suffix: %w", err)
+		}
 	}
 	arn := SecretARN(region, accountID, name, suffix)
 	now := nowRFC3339()
+	encCtx := SecretsEncryptionContext(arn, "1")
 
 	stringPlain, stringSealed, stringSealFlag, binaryPlain, binarySealed, binarySealFlag, kmsKeyID, err := s.storeSecretValues(
-		accountID, keyID, secretString, secretBinary,
+		accountID, keyID, secretString, secretBinary, encCtx,
 	)
 	if err != nil {
 		return Secret{}, fmt.Errorf("create secret: %w", err)
@@ -444,14 +466,15 @@ func (s *Store) PutSecretValue(
 		return Secret{}, ErrSecretScheduledDeletion
 	}
 
+	version := row.Version + 1
+	encCtx := SecretsEncryptionContext(row.ARN, fmt.Sprintf("%d", version))
 	stringPlain, stringSealed, stringSealFlag, binaryPlain, binarySealed, binarySealFlag, kmsKeyID, err := s.storeSecretValues(
-		accountID, row.KMSKeyID, secretString, secretBinary,
+		accountID, row.KMSKeyID, secretString, secretBinary, encCtx,
 	)
 	if err != nil {
 		return Secret{}, fmt.Errorf("put secret value: %w", err)
 	}
 
-	version := row.Version + 1
 	modified := nowRFC3339()
 	_, err = s.db.Exec(
 		`UPDATE secretsmanager_secrets

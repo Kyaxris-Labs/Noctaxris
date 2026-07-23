@@ -14,7 +14,7 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 | Attachments | `AttachUserPolicy`, `DetachUserPolicy`, `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedUserPolicies`, `ListAttachedRolePolicies` |
 | Inline user | `PutUserPolicy`, `GetUserPolicy`, `DeleteUserPolicy`, `ListUserPolicies` |
 | Inline role | `PutRolePolicy`, `GetRolePolicy`, `DeleteRolePolicy`, `ListRolePolicies` |
-| Roles | `CreateRole`, `GetRole`, `ListRoles`, `DeleteRole`, `UpdateAssumeRolePolicy` |
+| Roles | `CreateRole` (optional `MaxSessionDuration`), `GetRole`, `ListRoles`, `DeleteRole`, `UpdateAssumeRolePolicy` |
 | Groups | `CreateGroup`, `DeleteGroup`, `GetGroup`, `ListGroups`, `AddUserToGroup`, `RemoveUserFromGroup` |
 | Group policies | `AttachGroupPolicy`, `DetachGroupPolicy`, `ListAttachedGroupPolicies`, `PutGroupPolicy`, `GetGroupPolicy`, `DeleteGroupPolicy`, `ListGroupPolicies` |
 | Boundaries | `PutUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `DeleteRolePermissionsBoundary`. `GetUser` / `GetRole` embed `PermissionsBoundary` and `CreateDate`. Lab-only: `GetUserPermissionsBoundary` / `GetRolePermissionsBoundary` |
@@ -29,7 +29,7 @@ Group-attached and inline policies feed identity documents for authorization. Ac
 
 IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection. Assumed-role sessions resolve identity documents from the IAM role ARN (attachments and inline role policies), not the STS session ARN.
 
-Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Broader request-context population for every global key remains open. See [index.md](index.md#cross-cutting).
+Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Request context populates username, userid, PrincipalType, SecureTransport, and clock keys; see [index.md](index.md#cross-cutting) for the operator matrix. PassRole trust evaluation sets `aws:SourceAccount` and, for Lambda / EventBridge PutTargets / ECS task-definition configure paths, `aws:SourceArn` from the resource being configured. `CreateRole` accepts `MaxSessionDuration` (default 3600). OIDC providers persist the full `ClientIDList` and thumbprint list.
 
 ## How to verify / CLI smoke
 
@@ -118,4 +118,5 @@ aws iam enable-mfa-device \
 
 - Service-linked roles
 - Full IAM pagination, tagging, and API parity beyond the lab subset
-- PassRole trust Conditions beyond StringEquals on common keys (`aws:SourceAccount` / `aws:SourceArn` when populated); full operator matrix (ArnLike, Bool, …)
+- IgnoreCase string operators; Binary*; PrincipalTag / RequestTag population on tagging APIs
+- PassRole `aws:SourceArn` on configure paths beyond Lambda, EventBridge PutTargets, and ECS

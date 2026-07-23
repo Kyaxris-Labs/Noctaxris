@@ -42,12 +42,21 @@ From the repo root (bash / WSL / Git Bash):
 
 ```bash
 bash tests/run-all.sh
+
+# Advanced fullstack + Terraform lab-fullstack (longer)
+NOCTAXRIS_ADVANCED=1 bash tests/run-all.sh
+
+# Terraform lab-fullstack only (after lab-core), without full ADVANCED SDK
+TF_FULLSTACK=1 bash tests/run-all.sh
+
+# Nested Lambda Invoke in SDK suites (Compose noctaxris-engine healthy)
+NOCTAXRIS_NESTED=1 bash tests/run-all.sh
 ```
 
 Or run each suite:
 
 ```bash
-# SDK round-trips (STS, S3, DynamoDB, IAM, KMS, SQS, SNS, Lambda CRUD, EventBridge)
+# SDK round-trips (STS, S3, DynamoDB, IAM, KMS, SQS, SNS, Lambda CRUD, EventBridge, SSM, Secrets)
 cd tests/sdk/go && go test ./... -count=1 -timeout 10m
 
 cd tests/sdk/nodejs && npm install && npm test
@@ -87,8 +96,8 @@ Failures on assertions happen only when the endpoint is up.
 
 ## Honest limitations
 
-- CloudFormation lab subset: JSON or YAML, resources S3 / IAM Role / SQS / DynamoDB / Lambda (`Code.ZipFile`), intrinsics `Ref` / `Fn::GetAtt` / `Fn::Sub` / `Fn::Join`. Unknown types fail closed.
-- Lambda SDK tests cover Create/Get/List/Delete. Live Invoke needs nested DinD and is not required here.
+- CloudFormation lab subset: JSON or YAML; ChangeSet lite; nested stacks (lab S3 TemplateURL); drift lite; resources toward lab-fullstack (S3, IAM Role, SQS(+QueuePolicy), DynamoDB, Lambda ZipFile, KMS, SNS, Events, SSM, Secrets, nested Stack); DependsOn + `Ref`/`Fn::GetAtt`/`Fn::Sub`/`Fn::Join`. Unknown types/props fail closed.
+- Default Lambda SDK tests cover Create/Get/List/Delete. Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
 - Terraform needs the Terraform binary on `PATH`. The runner skips when it is missing.
 - Prefer WSL or Linux for AWS CLI and Terraform against `127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host.
 
@@ -96,15 +105,22 @@ Gaps and follow-ups: [HANDOFF.md](HANDOFF.md).
 
 ## Advanced suites
 
-Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. None of these are in `run-all.sh` yet.
+Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. Both fold into `run-all.sh` when `NOCTAXRIS_ADVANCED=1`.
 
 ```bash
 export NOCTAXRIS_ADVANCED=1
 # same AWS_* / NOCTAXRIS_ENDPOINT as above
 
+NOCTAXRIS_ADVANCED=1 bash tests/run-all.sh
+
+# Terraform lab-fullstack only (after lab-core), without full ADVANCED SDK
+TF_FULLSTACK=1 bash tests/run-all.sh
+
+# Or individually:
 cd tests/sdk/nodejs && npm install && node --test --test-name-pattern=fullstack test/fullstack.test.mjs
 cd tests/sdk/python && pip install -r requirements.txt && pytest test_fullstack.py
 cd tests/sdk/go && go test ./... -count=1 -timeout 10m -run Fullstack
+STACK=lab-fullstack bash tests/terraform/run.sh
 ```
 
 | Suite | Path | Status |
@@ -112,10 +128,11 @@ cd tests/sdk/go && go test ./... -count=1 -timeout 10m -run Fullstack
 | Node.js SDK | `tests/sdk/nodejs/test/fullstack.test.mjs` | Implemented (gate `NOCTAXRIS_ADVANCED=1`) |
 | Python SDK | `tests/sdk/python/test_fullstack.py` | Implemented (same gate) |
 | Go SDK | `tests/sdk/go/fullstack_test.go` | Implemented (same gate) |
-| Terraform | `tests/terraform/stacks/lab-fullstack/` | Apply+destroy green via `STACK=lab-fullstack bash tests/terraform/run.sh` (not in `run-all.sh`) |
+| Terraform | `tests/terraform/stacks/lab-fullstack/` | Implemented (`STACK=lab-fullstack` or `NOCTAXRIS_ADVANCED=1` in `run-all.sh`) |
+| Nested Invoke | `*lambda*invoke*` per language | Implemented (gate `NOCTAXRIS_NESTED=1`) |
 
 Assertions cover EventBridge → SQS delivery (including SourceArn queue policy), SNS → SQS fan-out, data-plane reads (S3/DDB/SSM SecureString/Secrets), empty delivery without an events queue policy, and SecureString decrypt denied when the CMK policy omits `kms:Decrypt`.
 
 ## CI
 
-Optional GitHub Actions job `integration-suites` runs on `workflow_dispatch` or when paths under `tests/` change. It is not a required PR gate. See [docs/ops.md](../docs/ops.md).
+Optional GitHub Actions job `integration-suites` runs on `workflow_dispatch` or when paths under `tests/` change. Default path is the fast suite. `workflow_dispatch` can set `advanced_suites` / `nested_sdk`. Nested DinD smoke is weekly + manual, not every PR. See [docs/ops.md](../docs/ops.md).
