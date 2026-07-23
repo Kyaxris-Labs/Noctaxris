@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.0
+
+Minor release after 1.0.0: lab-core depth, inter-service wiring, CLI fidelity, and secure-default honesty. Docker Hub: `kyaxris/noctaxris` (`1.1.0`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 ### Cognito SRP, trigger PassRole, and sync Lambda Invoke
 
 - Cognito `InitiateAuth` `USER_SRP_AUTH` / `SRP_A` with `PASSWORD_VERIFIER` challenge (RFC 5054 3072-bit + Cognito HKDF); MFA still applies after a successful verifier

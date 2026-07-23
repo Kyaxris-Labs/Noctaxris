@@ -48,7 +48,7 @@ Product version: file `VERSION`, OCI label `org.opencontainers.image.version`, b
 
 1. Stop Compose.
 2. Take a backup (above).
-3. Pull a Hub tag (`docker pull kyaxris/noctaxris:1.0.0`) or rebuild (`docker compose ... up --build`).
+3. Pull a Hub tag (`docker pull kyaxris/noctaxris:1.1.0`) or rebuild (`docker compose ... up --build`).
 4. Start Compose and confirm `/_noctaxris/ready` returns `ready` (optional: `/_noctaxris/version`).
 
 Schema changes are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` marker row exists (currently `1`) for operators and tests; migrations are still independent `Ensure*` helpers and do **not** consult that integer as a migration ledger. Do not treat the value as proof that a particular ALTER has applied. There is no down-migration. Prefer stop → backup → start over live multi-writer upgrades.
