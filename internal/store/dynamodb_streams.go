@@ -21,8 +21,10 @@ const (
 	// LabDynamoStreamShardID is the single shard for every lab table stream.
 	LabDynamoStreamShardID = "shardId-000000000000"
 
-	StreamViewNewImage = "NEW_IMAGE"
-	StreamViewKeysOnly = "KEYS_ONLY"
+	StreamViewNewImage         = "NEW_IMAGE"
+	StreamViewOldImage         = "OLD_IMAGE"
+	StreamViewNewAndOldImages  = "NEW_AND_OLD_IMAGES"
+	StreamViewKeysOnly         = "KEYS_ONLY"
 
 	StreamStatusEnabled = "ENABLED"
 )
@@ -35,6 +37,8 @@ CREATE TABLE IF NOT EXISTS dynamodb_stream_records (
   event_name TEXT NOT NULL,
   keys_json TEXT NOT NULL,
   new_image_json TEXT NOT NULL DEFAULT '',
+  old_image_json TEXT NOT NULL DEFAULT '',
+  stream_view_type TEXT NOT NULL DEFAULT '',
   arrival_ms INTEGER NOT NULL,
   seq_ord INTEGER NOT NULL,
   PRIMARY KEY (account_id, table_name, sequence_number)
@@ -53,12 +57,14 @@ CREATE TABLE IF NOT EXISTS dynamodb_stream_iterators (
 
 // DynamoStreamRecord is one change record on a table stream.
 type DynamoStreamRecord struct {
-	SequenceNumber string
-	EventName      string // INSERT, MODIFY, REMOVE
-	KeysJSON       string
-	NewImageJSON   string
-	ArrivalMS      int64
-	SeqOrd         int
+	SequenceNumber  string
+	EventName       string // INSERT, MODIFY, REMOVE
+	KeysJSON        string
+	NewImageJSON    string
+	OldImageJSON    string
+	StreamViewType  string
+	ArrivalMS       int64
+	SeqOrd          int
 }
 
 // EnsureDynamoDBStreamsSchema adds stream columns and record/iterator tables.
@@ -66,12 +72,12 @@ func EnsureDynamoDBStreamsSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure dynamodb streams schema: db is nil")
 	}
-	alters := []string{
+	tableAlters := []string{
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_view_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_label TEXT NOT NULL DEFAULT ''`,
 	}
-	for _, q := range alters {
+	for _, q := range tableAlters {
 		if _, err := db.Exec(q); err != nil {
 			msg := strings.ToLower(err.Error())
 			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
@@ -82,7 +88,28 @@ func EnsureDynamoDBStreamsSchema(db *sql.DB) error {
 	if _, err := db.Exec(dynamodbStreamsSchema); err != nil {
 		return fmt.Errorf("ensure dynamodb streams schema: records: %w", err)
 	}
+	recordAlters := []string{
+		`ALTER TABLE dynamodb_stream_records ADD COLUMN old_image_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_stream_records ADD COLUMN stream_view_type TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, q := range recordAlters {
+		if _, err := db.Exec(q); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+				return fmt.Errorf("ensure dynamodb streams schema: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+func validDynamoStreamViewType(viewType string) bool {
+	switch viewType {
+	case StreamViewNewImage, StreamViewOldImage, StreamViewNewAndOldImages, StreamViewKeysOnly:
+		return true
+	default:
+		return false
+	}
 }
 
 // EnsureDynamoDBStreamsSchema ensures stream tables on an open store.
@@ -139,7 +166,7 @@ func (s *Store) UpdateTableStreamSpec(accountID, name string, enabled bool, view
 		if viewType == "" {
 			viewType = StreamViewNewImage
 		}
-		if viewType != StreamViewNewImage && viewType != StreamViewKeysOnly {
+		if !validDynamoStreamViewType(viewType) {
 			return DynamoTable{}, ErrDynamoStreamBadView
 		}
 		label := table.StreamLabel
@@ -168,7 +195,9 @@ func (s *Store) UpdateTableStreamSpec(accountID, name string, enabled bool, view
 }
 
 // AppendDynamoStreamRecord writes a change record when the table stream is enabled.
-func (s *Store) AppendDynamoStreamRecord(accountID, tableName, eventName string, keysJSON, newImageJSON []byte) error {
+// newImageJSON / oldImageJSON are omitted according to StreamViewType and eventName
+// (INSERT has no OldImage; REMOVE has no NewImage).
+func (s *Store) AppendDynamoStreamRecord(accountID, tableName, eventName string, keysJSON, newImageJSON, oldImageJSON []byte) error {
 	table, err := s.GetTable(accountID, tableName)
 	if err != nil {
 		return err
@@ -179,8 +208,29 @@ func (s *Store) AppendDynamoStreamRecord(accountID, tableName, eventName string,
 	view := table.StreamViewType
 	keys := string(keysJSON)
 	newImg := ""
-	if view == StreamViewNewImage && eventName != "REMOVE" {
-		newImg = string(newImageJSON)
+	oldImg := ""
+	switch view {
+	case StreamViewNewImage:
+		if eventName != "REMOVE" {
+			newImg = string(newImageJSON)
+		}
+	case StreamViewOldImage:
+		if eventName != "INSERT" {
+			oldImg = string(oldImageJSON)
+		}
+	case StreamViewNewAndOldImages:
+		if eventName != "REMOVE" {
+			newImg = string(newImageJSON)
+		}
+		if eventName != "INSERT" {
+			oldImg = string(oldImageJSON)
+		}
+	case StreamViewKeysOnly:
+		// keys only
+	default:
+		if eventName != "REMOVE" {
+			newImg = string(newImageJSON)
+		}
 	}
 	seqOrd, err := s.nextDynamoStreamSeqOrd(accountID, tableName)
 	if err != nil {
@@ -190,9 +240,9 @@ func (s *Store) AppendDynamoStreamRecord(accountID, tableName, eventName string,
 	seq := strconv.FormatInt(now, 10) + strconv.FormatInt(int64(seqOrd), 10)
 	_, err = s.db.Exec(
 		`INSERT INTO dynamodb_stream_records
-		 (account_id, table_name, sequence_number, event_name, keys_json, new_image_json, arrival_ms, seq_ord)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, tableName, seq, eventName, keys, newImg, now, seqOrd,
+		 (account_id, table_name, sequence_number, event_name, keys_json, new_image_json, old_image_json, stream_view_type, arrival_ms, seq_ord)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, tableName, seq, eventName, keys, newImg, oldImg, view, now, seqOrd,
 	)
 	if err != nil {
 		return fmt.Errorf("append dynamodb stream record: %w", err)
@@ -320,7 +370,7 @@ func (s *Store) GetDynamoStreamRecords(iterator string, limit int) (records []Dy
 		limit = 1000
 	}
 	rows, err := s.db.Query(
-		`SELECT sequence_number, event_name, keys_json, new_image_json, arrival_ms, seq_ord
+		`SELECT sequence_number, event_name, keys_json, new_image_json, old_image_json, stream_view_type, arrival_ms, seq_ord
 		 FROM dynamodb_stream_records
 		 WHERE account_id = ? AND table_name = ? AND seq_ord >= ?
 		 ORDER BY seq_ord ASC LIMIT ?`,
@@ -334,8 +384,14 @@ func (s *Store) GetDynamoStreamRecords(iterator string, limit int) (records []Dy
 	lastOrd := nextOrd - 1
 	for rows.Next() {
 		var rec DynamoStreamRecord
-		if err := rows.Scan(&rec.SequenceNumber, &rec.EventName, &rec.KeysJSON, &rec.NewImageJSON, &rec.ArrivalMS, &rec.SeqOrd); err != nil {
+		if err := rows.Scan(
+			&rec.SequenceNumber, &rec.EventName, &rec.KeysJSON, &rec.NewImageJSON,
+			&rec.OldImageJSON, &rec.StreamViewType, &rec.ArrivalMS, &rec.SeqOrd,
+		); err != nil {
 			return nil, "", fmt.Errorf("get dynamodb stream records: scan: %w", err)
+		}
+		if rec.StreamViewType == "" {
+			rec.StreamViewType = StreamViewNewImage
 		}
 		records = append(records, rec)
 		lastOrd = rec.SeqOrd
@@ -372,14 +428,37 @@ func (s *Store) GetDynamoStreamRecords(iterator string, limit int) (records []Dy
 }
 
 // DynamoStreamKeysJSON builds Keys AttributeValue map JSON from primary key strings.
+// itemPK/itemSK may be store CanonicalAV JSON (e.g. {"S":"a"}) or a plain string value.
 func DynamoStreamKeysJSON(table DynamoTable, itemPK, itemSK string) ([]byte, error) {
+	hash, err := decodeStreamKeyAV(itemPK)
+	if err != nil {
+		return nil, err
+	}
 	keys := map[string]any{
-		table.HashKeyName: map[string]string{"S": itemPK},
+		table.HashKeyName: hash,
 	}
 	if table.HasRangeKey() {
-		keys[table.RangeKeyName] = map[string]string{"S": itemSK}
+		rng, err := decodeStreamKeyAV(itemSK)
+		if err != nil {
+			return nil, err
+		}
+		keys[table.RangeKeyName] = rng
 	}
 	return json.Marshal(keys)
+}
+
+func decodeStreamKeyAV(raw string) (any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]string{"S": ""}, nil
+	}
+	if strings.HasPrefix(raw, "{") {
+		var av map[string]any
+		if err := json.Unmarshal([]byte(raw), &av); err == nil && len(av) > 0 {
+			return av, nil
+		}
+	}
+	return map[string]string{"S": raw}, nil
 }
 
 func (s *Store) nextDynamoStreamSeqOrd(accountID, name string) (int, error) {

@@ -8,7 +8,7 @@ Lab log groups and streams with Put/GetLogEvents, FilterLogEvents, DescribeLogGr
 
 | Area | Actions |
 |------|---------|
-| Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
+| Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`; reports `retentionInDays` when set), `PutRetentionPolicy` / `DeleteRetentionPolicy` (AWS-allowed day values; expired events purged on put/get/describe) |
 | Streams | `CreateLogStream`, `DeleteLogStream`, `DescribeLogStreams` (optional `logStreamNamePrefix`) |
 | Events | `PutLogEvents` (sequence token after first put), `GetLogEvents` (`startFromHead`, optional time bounds), and `FilterLogEvents` (optional `logStreamNames`, `startTime`/`endTime`, lab `filterPattern` subset below, offset `nextToken`; lab page cap 1000) |
 | Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Same lab `filterPattern` subset as `FilterLogEvents` (unsupported patterns rejected at put). Fan-out on PutLogEvents (best-effort). Delivery uses the destination ARN owner account. Destination resource policy must Allow `logs.amazonaws.com` (with log-group `aws:SourceArn`). Lambda destinations use the AWS `awslogs.data` gzip+base64 envelope; SQS destinations are lab-only raw `DATA_MESSAGE` JSON. Lambda ignores `roleArn` (resource-policy path). For SQS, optional `roleArn` requires PassRole + `logs.amazonaws.com` trust and AND with destination policy at deliver |
@@ -68,6 +68,11 @@ aws logs filter-log-events \
   --filter-pattern "hello -bye" \
   --endpoint-url "$EP"
 
+aws logs put-retention-policy \
+  --log-group-name "$GROUP" \
+  --retention-in-days 7 \
+  --endpoint-url "$EP"
+
 aws logs describe-log-groups \
   --log-group-name-prefix /noctaxris \
   --endpoint-url "$EP"
@@ -84,10 +89,10 @@ aws logs delete-log-stream \
 aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Insights queries (`StartQuery` / `GetQueryResults` / query language), export tasks
-- Full CloudWatch Logs filter syntax beyond the lab subset (JSON object filters, space-delimited field patterns, `%regex%`, AWS optional `?term` OR semantics)
-- Full CloudWatch Metrics / Alarms surface (datapoints are store-lite only)
-- Kinesis / Firehose / OpenSearch subscription destinations
-- Full pagination token parity (`FilterLogEvents` uses a lab offset token)
+- Insights queries (`StartQuery` / `GetQueryResults` / query language), export tasks (out of lab scope; no fake Insights engine)
+- Full CloudWatch Logs filter syntax beyond the lab subset (JSON object filters, space-delimited field patterns, `%regex%`, AWS optional `?term` OR semantics) (out of lab scope; lab filterPattern subset is shipped)
+- Full CloudWatch Metrics / Alarms surface (out of lab scope; datapoints are store-lite only)
+- Kinesis / Firehose / OpenSearch subscription destinations (out of lab scope)
+- Full pagination token parity (`FilterLogEvents` uses a lab offset token) (out of lab scope)

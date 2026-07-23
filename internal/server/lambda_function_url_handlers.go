@@ -286,7 +286,11 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if !s.authorizeLambda(verified, catalog.ActionLambdaInvokeFunctionUrl, fn.FunctionARN, fn.ResourcePolicy) {
+		urlKeys := map[string]string{
+			"lambda:FunctionUrlAuthType":   u.AuthType,
+			"lambda:InvokedViaFunctionUrl": "true",
+		}
+		if !s.authorizeLambdaWithKeys(verified, catalog.ActionLambdaInvokeFunctionUrl, fn.FunctionARN, fn.ResourcePolicy, urlKeys) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

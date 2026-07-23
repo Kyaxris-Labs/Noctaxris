@@ -38,9 +38,12 @@ aws rds describe-db-instances \
 
 Without DinD, status stays `creating` and the nested endpoint is still recorded. With DinD, status becomes `available` after the nested container starts.
 
-## Not yet / deferred
+## Out of lab scope
 
-- MySQL engine image
-- Multi-AZ, read replicas, Aurora full cluster matrix
-- Host-published Postgres ports (will not ship)
-- IAM DB auth tokens
+- MySQL engine image (out of lab scope; Postgres nested DinD + Data API is the marketed data path)
+- Multi-AZ, read replicas, Aurora full cluster matrix (out of lab scope)
+- IAM DB auth tokens (out of lab scope)
+
+## Will not ship
+
+- Host-published Postgres ports (will not ship; would break loopback-only `:4566` publish; use RDS Data API on `:4566`)

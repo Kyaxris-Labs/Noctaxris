@@ -26,23 +26,27 @@ var (
 // Secret is a Secrets Manager secret metadata row. Value fields are populated
 // on create/get/put responses and omitted on describe/list.
 type Secret struct {
-	Name               string
-	ARN                string
-	SecretString       string
-	SecretBinary       []byte
-	Version            int
-	VersionID          string
-	VersionStages      []string
-	VersionIdsToStages map[string][]string
-	KmsKeyID           string
-	Description        string
-	ResourcePolicy     string
-	CreatedDate        string
-	LastChangedDate    string
-	DeletedDate        string
-	DeletionDate       string
-	RotationLambdaARN  string
-	RotationRoleARN    string
+	Name                   string
+	ARN                    string
+	SecretString           string
+	SecretBinary           []byte
+	Version                int
+	VersionID              string
+	VersionStages          []string
+	VersionIdsToStages     map[string][]string
+	KmsKeyID               string
+	Description            string
+	ResourcePolicy         string
+	CreatedDate            string
+	LastChangedDate        string
+	DeletedDate            string
+	DeletionDate           string
+	RotationLambdaARN      string
+	RotationRoleARN        string
+	RotationEnabled        bool
+	RotationRules          SecretRotationRules
+	NextRotationDate       string
+	LastRotatedDate        string
 }
 
 const secretsSchema = `
@@ -180,25 +184,31 @@ func (s *Store) resolveSecretsKeyID(accountID, keyIDOrAlias string) (string, err
 }
 
 type secretRow struct {
-	Name               string
-	ARN                string
-	ARNSuffix          string
-	Description        string
-	SecretStringPlain  string
-	SecretStringSealed []byte
-	StringSealed       bool
-	SecretBinaryPlain  []byte
-	SecretBinarySealed []byte
-	BinarySealed       bool
-	KMSKeyID           string
-	Version            int
-	ResourcePolicy     string
-	CreatedDate        string
-	LastChangedDate    string
-	DeletedDate        string
-	DeletionDate       string
-	RotationLambdaARN  string
-	RotationRoleARN    string
+	Name                   string
+	ARN                    string
+	ARNSuffix              string
+	Description            string
+	SecretStringPlain      string
+	SecretStringSealed     []byte
+	StringSealed           bool
+	SecretBinaryPlain      []byte
+	SecretBinarySealed     []byte
+	BinarySealed           bool
+	KMSKeyID               string
+	Version                int
+	ResourcePolicy         string
+	CreatedDate            string
+	LastChangedDate        string
+	DeletedDate            string
+	DeletionDate           string
+	RotationLambdaARN      string
+	RotationRoleARN        string
+	RotationEnabled        bool
+	AutomaticallyAfterDays int64
+	ScheduleExpression     string
+	RotationDuration       string
+	NextRotationDate       string
+	LastRotatedDate        string
 }
 
 func (s *Store) resolveSecretName(accountID, nameOrARN string) (string, error) {
@@ -226,12 +236,16 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 		binaryPlain  []byte
 		binarySealed []byte
 	)
+	var rotationEnabled int
 	err := s.db.QueryRow(
 		`SELECT name, arn, arn_suffix, description, secret_string_plain, secret_string_sealed, string_sealed,
 		        secret_binary_plain, secret_binary_sealed, binary_sealed, kms_key_id, version, resource_policy,
 		        created_date, last_changed_date,
 		        COALESCE(deleted_date, ''), COALESCE(deletion_date, ''),
-		        COALESCE(rotation_lambda_arn, ''), COALESCE(rotation_role_arn, '')
+		        COALESCE(rotation_lambda_arn, ''), COALESCE(rotation_role_arn, ''),
+		        COALESCE(rotation_enabled, 0), COALESCE(automatically_after_days, 0),
+		        COALESCE(schedule_expression, ''), COALESCE(rotation_duration, ''),
+		        COALESCE(next_rotation_date, ''), COALESCE(last_rotated_date, '')
 		 FROM secretsmanager_secrets WHERE account_id = ? AND name = ?`,
 		accountID, name,
 	).Scan(
@@ -239,6 +253,8 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 		&stringSeal, &binaryPlain, &binarySealed, &binarySeal, &row.KMSKeyID, &row.Version, &row.ResourcePolicy,
 		&row.CreatedDate, &row.LastChangedDate, &row.DeletedDate, &row.DeletionDate,
 		&row.RotationLambdaARN, &row.RotationRoleARN,
+		&rotationEnabled, &row.AutomaticallyAfterDays, &row.ScheduleExpression, &row.RotationDuration,
+		&row.NextRotationDate, &row.LastRotatedDate,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -246,6 +262,7 @@ func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 		}
 		return secretRow{}, fmt.Errorf("get secret row %s: %w", name, err)
 	}
+	row.RotationEnabled = rotationEnabled == 1
 	row.StringSealed = stringSeal == 1
 	row.BinarySealed = binarySeal == 1
 	row.SecretStringSealed = stringSealed
@@ -326,6 +343,14 @@ func (s *Store) secretFromRow(row secretRow, withValues bool) (Secret, error) {
 		DeletionDate:      row.DeletionDate,
 		RotationLambdaARN: row.RotationLambdaARN,
 		RotationRoleARN:   row.RotationRoleARN,
+		RotationEnabled:   row.RotationEnabled,
+		RotationRules: SecretRotationRules{
+			AutomaticallyAfterDays: row.AutomaticallyAfterDays,
+			ScheduleExpression:     row.ScheduleExpression,
+			Duration:               row.RotationDuration,
+		},
+		NextRotationDate: row.NextRotationDate,
+		LastRotatedDate:  row.LastRotatedDate,
 	}
 	if !withValues {
 		return out, nil

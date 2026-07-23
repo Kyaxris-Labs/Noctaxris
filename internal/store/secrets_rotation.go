@@ -53,6 +53,9 @@ func EnsureSecretsRecoverySchema(db *sql.DB) error {
 	if err := EnsureSecretsRotationSchema(db); err != nil {
 		return err
 	}
+	if err := EnsureSecretsRotationScheduleSchema(db); err != nil {
+		return err
+	}
 	return EnsureSecretsVersionsSchema(db)
 }
 

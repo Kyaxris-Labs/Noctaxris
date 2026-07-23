@@ -8,13 +8,40 @@ import (
 
 // CreateApiJSON builds CreateApi response.
 func CreateApiJSON(a store.APIGatewayAPI) ([]byte, error) {
-	return json.Marshal(map[string]any{
+	m := map[string]any{
 		"ApiId":        a.APIID,
 		"Name":         a.Name,
 		"ProtocolType": a.ProtocolType,
 		"ApiEndpoint":  a.APIEndpoint,
 		"CreatedDate":  a.CreatedAt / 1000,
-	})
+	}
+	if a.CORS.HasCORS() {
+		m["CorsConfiguration"] = corsConfigurationMap(a.CORS)
+	}
+	return json.Marshal(m)
+}
+
+func corsConfigurationMap(c store.APIGatewayCORS) map[string]any {
+	m := map[string]any{}
+	if len(c.AllowOrigins) > 0 {
+		m["AllowOrigins"] = c.AllowOrigins
+	}
+	if len(c.AllowMethods) > 0 {
+		m["AllowMethods"] = c.AllowMethods
+	}
+	if len(c.AllowHeaders) > 0 {
+		m["AllowHeaders"] = c.AllowHeaders
+	}
+	if len(c.ExposeHeaders) > 0 {
+		m["ExposeHeaders"] = c.ExposeHeaders
+	}
+	if c.MaxAge > 0 {
+		m["MaxAge"] = c.MaxAge
+	}
+	if c.AllowCredentials {
+		m["AllowCredentials"] = true
+	}
+	return m
 }
 
 // GetApiJSON builds GetApi response.

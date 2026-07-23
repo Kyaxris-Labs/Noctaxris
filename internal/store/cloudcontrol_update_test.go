@@ -118,6 +118,10 @@ func TestCloudControlUpdateLabFullstackTypes(t *testing.T) {
 
 	_, _, err = st.CloudControlUpdateResource(account, "AWS::Events::EventBus", "cc-upd-bus", `{"Name":"other"}`)
 	if err == nil {
-		t.Fatal("expected EventBus update reject")
+		t.Fatal("expected EventBus Name patch reject")
+	}
+	policyPatch := `{"Policy":{"Version":"2012-10-17","Statement":[{"Sid":"Lab","Effect":"Allow","Principal":{"AWS":"*"},"Action":"events:PutEvents","Resource":"*"}]}}`
+	if _, _, err := st.CloudControlUpdateResource(account, "AWS::Events::EventBus", "cc-upd-bus", policyPatch); err != nil {
+		t.Fatal(err)
 	}
 }

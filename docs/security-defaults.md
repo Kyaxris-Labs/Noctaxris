@@ -59,7 +59,7 @@ Unauthenticated or alternate-auth paths (no SigV4 required):
 | `GET /cognito-idp/{region}/{pool}/.well-known/jwks.json` | Public JWKS on the loopback listener |
 | `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` | Federation token crypto (not SigV4) |
 | Lambda Function URL with AuthType `NONE` | Open invoke on `/lambda-url/...` when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1`. CORS defaults to `Access-Control-Allow-Origin: *` unless `Cors.AllowOrigins` / `NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS` is set |
-| HTTP API routes with authorizer `NONE` | Open invoke on `/http-api/...` (same open-data-plane gate; no CORS `*` by default) |
+| HTTP API routes with authorizer `NONE` | Open invoke on `/http-api/...` (same open-data-plane gate). CORS is off until `CorsConfiguration` is set on the API; there is no default `AllowOrigins: *` |
 | AppSync GraphQL | `API_KEY`, `AWS_IAM` (SigV4), or Cognito User Pools Bearer JWT |
 | S3 anonymous GetObject / HeadObject | Off by default. With `NOCTAXRIS_ALLOW_ANONYMOUS_S3=1`, unsigned path-style object GET/HEAD only when bucket policy Principal `"*"` / `{"AWS":"*"}` Allows `s3:GetObject` or the object canned ACL is `public-read` / `public-read-write`. Explicit Deny beats ACL. List/Put and other S3 APIs stay SigV4-required |
 | Cognito `InitiateAuth` | Public IdP API (unsigned AWS CLI / SDK shape). Pool/client CRUD and `Admin*` stay SigV4 |
@@ -81,9 +81,9 @@ Additional auth notes:
 - Cognito management APIs (pool/client CRUD, `Admin*`) require SigV4 and identity Allow. `InitiateAuth` is the public IdP exception (unsigned).
 - API Gateway JWT routes reject missing, expired, not-yet-valid (`nbf`), or invalid Bearer tokens. IAM routes reject unsigned requests. HTTP API resource policies are not invented. `IdentitySource` must be `$request.header.Authorization`.
 - Gateway CredentialsArn requires PassRole plus matching service trust at create, and role-session `lambda:InvokeFunction` evaluation at invoke when set. Without CredentialsArn, HTTP API invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require a resource policy Allow for `appsync.amazonaws.com`. CodeDeploy serviceRoleArn requires PassRole plus matching service trust when set.
-- S3 bucket notifications and EventBridge target delivery re-check destination resource policies on emit (`s3.amazonaws.com` / `events.amazonaws.com` + `aws:SourceArn` / `aws:SourceAccount`). Empty notification config is off. EventBridge `PutTargets` without `RoleArn` is allowed only for SQS/Lambda/SNS when the destination policy Allows; Logs/Kinesis/SFN still require `RoleArn`.
+- S3 bucket notifications and EventBridge target delivery re-check destination resource policies on emit (`s3.amazonaws.com` / `events.amazonaws.com` + `aws:SourceArn` / `aws:SourceAccount`). Empty notification config is off. EventBridge `PutTargets` without `RoleArn` delivers to SQS/Lambda/SNS/Logs/Kinesis/SFN only when the destination resource policy Allows `events.amazonaws.com` (or account root); empty policy skips that target.
 - Associated WAFv2 Web ACLs must exist at Associate time. Invoke-time association evaluation errors fail closed (403).
-- `iam:PassRole` evaluation populates `iam:PassedToService` from the target service principal.
+- `iam:PassRole` evaluation populates `iam:PassedToService` from the target service principal. Configure-time PassRole sets trust `aws:SourceArn` (and `aws:SourceAccount`) for Lambda, EventBridge PutTargets, ECS task definitions, Scheduler schedules, Pipes, Secrets Manager Lambda rotate, API Gateway HTTP `CredentialsArn` / `AuthorizerCredentialsArn`, and Cognito user-pool trigger `RoleArn`.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Residual escape notes

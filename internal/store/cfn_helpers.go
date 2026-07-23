@@ -403,6 +403,25 @@ func (s *Store) provisionCFNNestedStack(accountID, region, parentStackID, logica
 	}, nil
 }
 
+func cfnPolicyDocumentJSON(raw any) (string, error) {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return "", fmt.Errorf("empty policy document")
+		}
+		if !json.Valid([]byte(v)) {
+			return "", fmt.Errorf("policy document must be JSON")
+		}
+		return v, nil
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+}
+
 func cfnStringListProp(props map[string]any, key string) []string {
 	raw, ok := props[key]
 	if !ok || raw == nil {
@@ -582,16 +601,26 @@ func (s *Store) provisionCFNLambdaPermission(accountID, logicalID string, props 
 	if principal == "" {
 		return "", nil, fmt.Errorf("%w: Lambda Permission Principal required for %s", ErrCFNBadTemplate, logicalID)
 	}
-	if principal == "*" {
-		return "", nil, fmt.Errorf("%w: Lambda Permission wildcard Principal is not supported for %s", ErrCFNBadTemplate, logicalID)
+	authType := cfnStringProp(props, "FunctionUrlAuthType")
+	if principal == "*" && authType == "" {
+		return "", nil, fmt.Errorf("%w: Lambda Permission wildcard Principal requires FunctionUrlAuthType for %s", ErrCFNBadTemplate, logicalID)
 	}
 	sid := cfnStringProp(props, "StatementId")
 	if sid == "" {
 		sid = logicalID
 	}
-	sourceARN := cfnStringProp(props, "SourceArn")
-	sourceAccount := cfnStringProp(props, "SourceAccount")
-	if _, err := s.AddFunctionPermission(accountID, fn, sid, action, principal, sourceAccount, sourceARN); err != nil {
+	opts := AddFunctionPermissionOpts{
+		StatementID:         sid,
+		Action:              action,
+		Principal:           principal,
+		SourceAccount:       cfnStringProp(props, "SourceAccount"),
+		SourceARN:           cfnStringProp(props, "SourceArn"),
+		FunctionUrlAuthType: authType,
+	}
+	if _, has := props["InvokedViaFunctionUrl"]; has {
+		opts.InvokedViaFunctionUrl = cfnPropTruthyString(props, "InvokedViaFunctionUrl") == "true"
+	}
+	if _, err := s.AddFunctionPermissionWithOpts(accountID, fn, opts); err != nil {
 		return "", nil, fmt.Errorf("%w: Lambda Permission %s: %v", ErrCFNBadTemplate, logicalID, err)
 	}
 	fnName, err := resolveFunctionName(accountID, fn)
@@ -712,6 +741,43 @@ func (s *Store) provisionCFNSNSSubscription(accountID, logicalID string, props m
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: SNS Subscription %s: %v", ErrCFNBadTemplate, logicalID, err)
 	}
+	attrsMap := map[string]string{}
+	if raw, ok := props["FilterPolicy"]; ok && raw != nil {
+		b, mErr := json.Marshal(raw)
+		if mErr != nil {
+			_ = s.Unsubscribe(sub.SubscriptionARN)
+			return "", nil, fmt.Errorf("%w: Subscription FilterPolicy for %s", ErrCFNBadTemplate, logicalID)
+		}
+		attrsMap["FilterPolicy"] = string(b)
+	}
+	if scope := cfnStringProp(props, "FilterPolicyScope"); scope != "" {
+		attrsMap["FilterPolicyScope"] = scope
+	}
+	if _, ok := props["RawMessageDelivery"]; ok {
+		attrsMap["RawMessageDelivery"] = cfnPropTruthyString(props, "RawMessageDelivery")
+	}
+	if raw, ok := props["DeliveryPolicy"]; ok && raw != nil {
+		b, mErr := json.Marshal(raw)
+		if mErr != nil {
+			_ = s.Unsubscribe(sub.SubscriptionARN)
+			return "", nil, fmt.Errorf("%w: Subscription DeliveryPolicy for %s", ErrCFNBadTemplate, logicalID)
+		}
+		attrsMap["DeliveryPolicy"] = string(b)
+	}
+	if raw, ok := props["RedrivePolicy"]; ok && raw != nil {
+		b, mErr := json.Marshal(raw)
+		if mErr != nil {
+			_ = s.Unsubscribe(sub.SubscriptionARN)
+			return "", nil, fmt.Errorf("%w: Subscription RedrivePolicy for %s", ErrCFNBadTemplate, logicalID)
+		}
+		attrsMap["RedrivePolicy"] = string(b)
+	}
+	if len(attrsMap) > 0 {
+		if err := s.SetSubscriptionAttributes(sub.SubscriptionARN, attrsMap); err != nil {
+			_ = s.Unsubscribe(sub.SubscriptionARN)
+			return "", nil, fmt.Errorf("%w: SNS Subscription %s attributes: %v", ErrCFNBadTemplate, logicalID, err)
+		}
+	}
 	return sub.SubscriptionARN, map[string]string{
 		"Ref": sub.SubscriptionARN, "Arn": sub.SubscriptionARN,
 	}, nil
@@ -725,6 +791,17 @@ func (s *Store) provisionCFNLogGroup(accountID, region, logicalID string, props 
 	g, err := s.CreateLogGroup(accountID, region, name)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: LogGroup %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if _, ok := props["RetentionInDays"]; ok {
+		days := cfnIntProp(props, "RetentionInDays", 0)
+		if days <= 0 {
+			_ = s.DeleteLogGroup(accountID, name)
+			return "", nil, fmt.Errorf("%w: LogGroup RetentionInDays must be a positive AWS retention value for %s", ErrCFNBadTemplate, logicalID)
+		}
+		if err := s.PutRetentionPolicy(accountID, name, days); err != nil {
+			_ = s.DeleteLogGroup(accountID, name)
+			return "", nil, fmt.Errorf("%w: LogGroup %s RetentionInDays: %v", ErrCFNBadTemplate, logicalID, err)
+		}
 	}
 	return g.LogGroupName, map[string]string{"Ref": g.LogGroupName, "Arn": g.Arn}, nil
 }

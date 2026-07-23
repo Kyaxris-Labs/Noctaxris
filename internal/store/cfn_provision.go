@@ -264,6 +264,17 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: EventBus %s: %v", ErrCFNBadTemplate, logicalID, err)
 		}
+		if raw, ok := props["Policy"]; ok && raw != nil {
+			policyJSON, pErr := cfnPolicyDocumentJSON(raw)
+			if pErr != nil {
+				_ = s.DeleteEventBus(accountID, name)
+				return "", nil, fmt.Errorf("%w: EventBus Policy for %s: %v", ErrCFNBadTemplate, logicalID, pErr)
+			}
+			if err := s.PutEventBusPolicy(accountID, name, policyJSON); err != nil {
+				_ = s.DeleteEventBus(accountID, name)
+				return "", nil, fmt.Errorf("%w: EventBus %s Policy: %v", ErrCFNBadTemplate, logicalID, err)
+			}
+		}
 		return bus.Name, map[string]string{"Ref": bus.Name, "Arn": bus.ARN, "Name": bus.Name}, nil
 	case "AWS::Events::Rule":
 		return s.provisionCFNEventRule(accountID, region, logicalID, props)

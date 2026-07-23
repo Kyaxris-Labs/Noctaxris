@@ -29,10 +29,10 @@ Policy and permission notes:
 | `AWS::SQS::Queue` | Queue attribute props (`DelaySeconds`, FIFO flags, etc.) are passed to `CreateQueue`. |
 | `AWS::SQS::QueuePolicy` | Sets queue `Policy` attribute; physical id `{queueUrl}#QueuePolicy`. |
 | `AWS::SNS::TopicPolicy` | Sets topic `Policy` via `SetTopicAttributes` for each entry in `Topics`; physical id `{firstTopicArn}#TopicPolicy`. |
-| `AWS::SNS::Subscription` | `TopicArn` + `Protocol` + `Endpoint` only (`sqs` / `lambda` auto-confirm; HTTP uses lab allowlist). Filter/delivery/redrive policies are rejected. |
-| `AWS::Logs::LogGroup` | `CreateLogGroup`. `RetentionInDays`, KMS, and data-protection properties are rejected (not implemented in the Logs store). |
+| `AWS::SNS::Subscription` | `TopicArn` + `Protocol` + `Endpoint` (`sqs` / `lambda` auto-confirm; HTTP uses lab allowlist). Optional `FilterPolicy` / `FilterPolicyScope` (lab exact-match / string-list subset), `RawMessageDelivery`, plus persisted `DeliveryPolicy` / `RedrivePolicy` attributes (retry/DLQ timing not AWS-complete). |
+| `AWS::Logs::LogGroup` | `CreateLogGroup` with optional `RetentionInDays` (AWS-allowed day values via Logs `PutRetentionPolicy`). KMS and data-protection properties are rejected. |
 | `AWS::KMS::Alias` | `AliasName` + `TargetKeyId` (key id or ARN); resolves via `ResolveKeyID`. |
-| `AWS::Lambda::Permission` | Calls `AddPermission` with `StatementId` (defaults to logical id). Wildcard `Principal` and properties such as `PrincipalOrgID` / `FunctionUrlAuthType` are rejected. Service principals (for example `s3.amazonaws.com`) with `SourceArn` / `SourceAccount` stay available for PassRole-style notification wiring. |
+| `AWS::Lambda::Permission` | Calls `AddPermission` with `StatementId` (defaults to logical id). Optional `FunctionUrlAuthType` (`NONE` / `AWS_IAM`) and `InvokedViaFunctionUrl` add `lambda:FunctionUrlAuthType` / `lambda:InvokedViaFunctionUrl` conditions; wildcard `Principal` requires `FunctionUrlAuthType`. `PrincipalOrgID` and `EventSourceToken` are rejected (fail closed). Service principals (for example `s3.amazonaws.com`) with `SourceArn` / `SourceAccount` stay available for notification wiring. |
 | `AWS::S3::Bucket` `NotificationConfiguration` | Optional. Maps CFN `LambdaConfigurations` / `QueueConfigurations` / `TopicConfigurations` (`Event` + destination ARN + optional `Filter.S3Key.Rules`) and `EventBridgeConfiguration` onto `PutBucketNotificationConfiguration`. Destinations and resource policies must already exist (use `DependsOn`); circular CreateStack graphs fail closed like AWS. |
 | `AWS::Events::Rule` | Event pattern rules with optional `Targets`. `ScheduleExpression` is rejected (use the Scheduler service). |
 
@@ -54,8 +54,8 @@ ChangeSet Modify in-place subsets (fail closed otherwise):
 | `AWS::DynamoDB::Table` | `SSESpecification` only (key schema / table name fail closed) |
 | `AWS::KMS::Alias` | `TargetKeyId` |
 | `AWS::KMS::Key` | `KeyPolicy`, `EnableKeyRotation` (`Description` accepted/ignored) |
-| `AWS::Logs::LogGroup` | No-op when name unchanged |
-| `AWS::Events::EventBus` | Tags-only / name match; other props fail closed |
+| `AWS::Logs::LogGroup` | `RetentionInDays` (clear when omitted/zero); name immutable |
+| `AWS::Events::EventBus` | `Policy`; name immutable; `Tags` ignored |
 
 ### Authz notes
 
@@ -78,14 +78,14 @@ aws cloudformation delete-stack --stack-name lab --endpoint-url "$EP"
 
 CreateStack round-trip suite: [tests/cloudformation/](../../tests/cloudformation/) (see [tests/README.md](../../tests/README.md)).
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full intrinsic matrix (`Fn::If`, `Fn::Select`, mappings, conditions, transforms)
-- Nested stack drift comparison beyond `NOT_CHECKED`
-- ChangeSet Modify for nested `AWS::CloudFormation::Stack` and other non-allowlisted type/property sets
-- Broader resource type catalog beyond the lab set above
-- `AWS::IAM::ManagedPolicy` / `AWS::IAM::User` / `AWS::IAM::Group` custom `Path` values other than `/`
-- `AWS::Lambda::Permission` function-URL and org-id properties (`FunctionUrlAuthType`, `PrincipalOrgID`, `InvokedViaFunctionUrl`, `EventSourceToken`)
-- `AWS::SNS::Subscription` filter / delivery / redrive policy attributes
-- `AWS::Logs::LogGroup` retention, KMS key, and resource policy properties
-- `AWS::Events::Rule` `ScheduleExpression` (use Scheduler)
+- Full intrinsic matrix (`Fn::If`, `Fn::Select`, mappings, conditions, transforms) (out of lab scope; lab-fullstack types + ChangeSet Modify + nested create cover green suites)
+- Nested stack drift comparison beyond `NOT_CHECKED` (out of lab scope)
+- ChangeSet Modify for nested `AWS::CloudFormation::Stack` and other non-allowlisted type/property sets (out of lab scope; unknown Modify fails closed)
+- Broader resource type catalog beyond the lab set above (out of lab scope)
+- `AWS::IAM::ManagedPolicy` / `AWS::IAM::User` / `AWS::IAM::Group` custom `Path` values other than `/` (out of lab scope)
+- `AWS::Logs::LogGroup` KMS key and data-protection properties (out of lab scope)
+- `AWS::Lambda::Permission` `PrincipalOrgID` / `EventSourceToken` (out of lab scope; fail closed)
+- `AWS::SNS::Subscription` delivery retry timing and RedrivePolicy DLQ fan-out (out of lab scope; attributes persist; FilterPolicy + RawMessageDelivery shipped)
+- `AWS::Events::Rule` `ScheduleExpression` (out of lab scope; use Scheduler; CFN fails closed)

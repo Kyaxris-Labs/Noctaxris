@@ -2,19 +2,20 @@
 
 **Status:** shipped (lab core)
 
-HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT, IAM, and Lambda authorizers. No REST API v1. No HTTP_PROXY to arbitrary URLs.
+HTTP API (API Gateway v2) lite: CreateApi / UpdateApi (CORS) / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT, IAM, and Lambda authorizers. Optional HTTP API `CorsConfiguration` for browser preflight. No REST API v1. No HTTP_PROXY to arbitrary URLs.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
-| API | `CreateApi` (ProtocolType HTTP), `GetApi`, `GetApis`, `DeleteApi` |
+| API | `CreateApi` (ProtocolType HTTP, optional `CorsConfiguration`), `GetApi`, `UpdateApi` (lab: `CorsConfiguration`), `GetApis`, `DeleteApi` |
 | Integration | `CreateIntegration` (AWS_PROXY Lambda ARN only, optional `CredentialsArn` with PassRole), `GetIntegrations` |
 | Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience; REQUEST Lambda authorizer), `GetAuthorizers` |
 | Route | `CreateRoute` (AuthorizationType NONE, JWT, AWS_IAM, or CUSTOM), `GetRoutes` |
 | Stage | `CreateStage` (`$default` common) |
 | REST vs Registry | HTTP API management REST under `/v2/apis...` is matched before lab ECR Docker Registry `/v2/` on the same listener |
 | Invoke | `GET/POST http://127.0.0.1:4566/http-api/{apiId}/{stage}/{path}` |
+| CORS | `CorsConfiguration` on CreateApi/UpdateApi: `AllowOrigins`, `AllowMethods`, `AllowHeaders`, `ExposeHeaders`, `MaxAge`, `AllowCredentials`. Browser `OPTIONS` preflight is answered without an OPTIONS route when CORS is set. Matching origins receive CORS headers on integration responses. `AllowCredentials` with `AllowOrigins: *` fails closed |
 
 ### Route auth
 
@@ -52,7 +53,7 @@ Proxy integration responses strip hop-by-hop headers and `Set-Cookie` by default
 
 Identity `EvaluateFull` on manage actions. IAM invoke uses `execute-api:Invoke` only (no invent HTTP API resource policy).
 
-When `CredentialsArn` is set on `CreateIntegration`, PassRole plus `apigateway.amazonaws.com` trust is required. At invoke, a role session for that ARN must Allow `lambda:InvokeFunction` on the integration target.
+When `CredentialsArn` is set on `CreateIntegration` (or `AuthorizerCredentialsArn` on `CreateAuthorizer`), PassRole plus `apigateway.amazonaws.com` trust is required; configure-time PassRole sets trust `aws:SourceArn` to the HTTP API ARN (`arn:aws:apigateway:region::/apis/{apiId}`). At invoke, a role session for that ARN must Allow `lambda:InvokeFunction` on the integration target.
 
 Without `CredentialsArn`, invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com` (`lambda:AddPermission`; optional `SourceArn` of the execute-api route). Missing permission returns 403.
 
@@ -88,11 +89,28 @@ aws apigatewayv2 create-route --api-id "$API" --route-key "GET /secure" \
 
 Invoke requires a registered Lambda and DinD compute. Document skip when Docker is unavailable.
 
-## Not yet / deferred
+CORS (browser JWT labs):
 
-- REST API (v1) and WebSocket APIs
-- REST TOKEN authorizers (HTTP API REQUEST only)
-- HTTP_PROXY / VPC link integrations
-- Authorizer result caching / TTL
-- Custom domains beyond lab ACM string linkage
-- CORS configuration depth on HTTP API itself
+```bash
+aws apigatewayv2 create-api --name lab --protocol-type HTTP \
+  --cors-configuration AllowOrigins="https://app.example",AllowMethods="GET,POST,OPTIONS",AllowHeaders="authorization,content-type",MaxAge=300 \
+  --endpoint-url "$EP"
+# or: aws apigatewayv2 update-api --api-id "$API" --cors-configuration AllowOrigins="https://app.example" --endpoint-url "$EP"
+curl -i -X OPTIONS "http://127.0.0.1:4566/http-api/$API/\$default/hello" \
+  -H "Origin: https://app.example" \
+  -H "Access-Control-Request-Method: GET"
+```
+
+Expect `204` and `Access-Control-Allow-Origin: https://app.example` when the origin is listed.
+
+## Out of lab scope
+
+- REST API (v1) and WebSocket APIs (out of lab scope; HTTP API Lambda proxy + JWT/IAM/CUSTOM is the marketed edge)
+- REST TOKEN authorizers (out of lab scope; HTTP API REQUEST only)
+- Authorizer result caching / TTL (out of lab scope)
+- Custom domains beyond lab ACM string linkage (out of lab scope)
+- HTTP API resource policies (out of lab scope; IAM invoke via `execute-api:Invoke` only — not invented)
+
+## Will not ship
+
+- `HTTP_PROXY` / VPC link integrations (will not ship; arbitrary URL proxy is open-SSRF class; AWS_PROXY Lambda only)

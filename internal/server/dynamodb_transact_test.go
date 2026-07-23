@@ -209,3 +209,137 @@ func TestDynamoDBTransactWriteUpdateWithCondition(t *testing.T) {
 		t.Fatalf("want TransactionCanceledException, status=%d body=%q", cancel.Code, cancel.Body.String())
 	}
 }
+
+func TestDynamoDBTransactWriteClientRequestToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustDynamoJSON(t, handler, "CreateTable", map[string]any{
+		"TableName": "txn-token",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+		},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateTable status=%d body=%q", create.Code, create.Body.String())
+	}
+
+	items := []any{
+		map[string]any{
+			"Put": map[string]any{
+				"TableName": "txn-token",
+				"Item": map[string]any{
+					"pk":  map[string]any{"S": "a"},
+					"val": map[string]any{"S": "one"},
+				},
+			},
+		},
+	}
+	first := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
+		"ClientRequestToken": "client-tok-1",
+		"TransactItems":      items,
+	}, now)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first TransactWriteItems status=%d body=%q", first.Code, first.Body.String())
+	}
+	replay := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
+		"ClientRequestToken": "client-tok-1",
+		"TransactItems":      items,
+	}, now)
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status=%d body=%q", replay.Code, replay.Body.String())
+	}
+	mismatch := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
+		"ClientRequestToken": "client-tok-1",
+		"TransactItems": []any{
+			map[string]any{
+				"Put": map[string]any{
+					"TableName": "txn-token",
+					"Item": map[string]any{
+						"pk":  map[string]any{"S": "a"},
+						"val": map[string]any{"S": "other"},
+					},
+				},
+			},
+		},
+	}, now)
+	if mismatch.Code != http.StatusBadRequest || !strings.Contains(mismatch.Body.String(), "IdempotentParameterMismatchException") {
+		t.Fatalf("want IdempotentParameterMismatchException, status=%d body=%q", mismatch.Code, mismatch.Body.String())
+	}
+}
+
+func TestDynamoDBTransactWriteAppendsStream(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustDynamoJSON(t, handler, "CreateTable", map[string]any{
+		"TableName": "txn-stream",
+		"AttributeDefinitions": []map[string]any{
+			{"AttributeName": "pk", "AttributeType": "S"},
+		},
+		"KeySchema": []map[string]any{
+			{"AttributeName": "pk", "KeyType": "HASH"},
+		},
+		"StreamSpecification": map[string]any{
+			"StreamEnabled":  true,
+			"StreamViewType": "NEW_AND_OLD_IMAGES",
+		},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateTable status=%d body=%q", create.Code, create.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(create.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	desc, _ := createOut["TableDescription"].(map[string]any)
+	streamARN, _ := desc["LatestStreamArn"].(string)
+	if streamARN == "" {
+		t.Fatalf("missing stream arn: %q", create.Body.String())
+	}
+
+	write := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
+		"TransactItems": []any{
+			map[string]any{
+				"Put": map[string]any{
+					"TableName": "txn-stream",
+					"Item": map[string]any{
+						"pk": map[string]any{"S": "a"},
+						"v":  map[string]any{"S": "1"},
+					},
+				},
+			},
+		},
+	}, now)
+	if write.Code != http.StatusOK {
+		t.Fatalf("TransactWriteItems status=%d body=%q", write.Code, write.Body.String())
+	}
+
+	itRec := mustDynamoStreamsJSON(t, handler, "GetShardIterator", map[string]any{
+		"StreamArn":         streamARN,
+		"ShardId":           "shardId-000000000000",
+		"ShardIteratorType": "TRIM_HORIZON",
+	}, now)
+	if itRec.Code != http.StatusOK {
+		t.Fatalf("GetShardIterator status=%d body=%q", itRec.Code, itRec.Body.String())
+	}
+	var itOut map[string]any
+	if err := json.Unmarshal(itRec.Body.Bytes(), &itOut); err != nil {
+		t.Fatal(err)
+	}
+	get := mustDynamoStreamsJSON(t, handler, "GetRecords", map[string]any{
+		"ShardIterator": itOut["ShardIterator"],
+		"Limit":         10,
+	}, now)
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"INSERT"`) || !strings.Contains(get.Body.String(), `"1"`) {
+		t.Fatalf("GetRecords status=%d body=%q", get.Code, get.Body.String())
+	}
+	if !strings.Contains(get.Body.String(), `"NEW_AND_OLD_IMAGES"`) {
+		t.Fatalf("want StreamViewType NEW_AND_OLD_IMAGES, body=%q", get.Body.String())
+	}
+}

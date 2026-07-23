@@ -221,10 +221,10 @@ func TestESMFilterCriteriaDynamoDBNewImage(t *testing.T) {
 	keysDrop, _ := store.DynamoStreamKeysJSON(table, "drop", "")
 	keepItem, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "keep"}, "status": map[string]string{"S": "ok"}})
 	dropItem, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "drop"}, "status": map[string]string{"S": "no"}})
-	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keysDrop, dropItem); err != nil {
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keysDrop, dropItem, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keysKeep, keepItem); err != nil {
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keysKeep, keepItem, nil); err != nil {
 		t.Fatal(err)
 	}
 	fc := `{"Filters":[{"Pattern":"{\"eventName\":[\"INSERT\"],\"dynamodb\":{\"NewImage\":{\"status\":{\"S\":[\"ok\"]}}}}"}]}`
@@ -240,6 +240,79 @@ func TestESMFilterCriteriaDynamoDBNewImage(t *testing.T) {
 		invoked++
 		if !strings.Contains(eventJSON, `"S":"ok"`) || strings.Contains(eventJSON, `"S":"no"`) {
 			t.Fatalf("event=%s", eventJSON)
+		}
+		return "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if invoked != 1 {
+		t.Fatalf("invoked=%d", invoked)
+	}
+}
+
+func TestESMFilterCriteriaDynamoDBOldImage(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	if err := st.EnsureLambdaESMSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureDynamoDBStreamsSchema(); err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "lambda", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"dynamodb:GetRecords","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "esm-ddb-old", allowDoc); err != nil {
+		t.Fatal(err)
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "ddb-old-filt-fn",
+		Runtime: store.LambdaRuntimePython312, RoleARN: roleARN,
+		Handler: "app.handler", Zip: zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := st.CreateTableWithGSIs(account, "us-east-1", "ddb-old-filt-tbl", "pk", "S", "", "", store.SSETypeAWSOwned, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err = st.UpdateTableStreamSpec(account, table.TableName, true, store.StreamViewNewAndOldImages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keysKeep, _ := store.DynamoStreamKeysJSON(table, "keep", "")
+	keysDrop, _ := store.DynamoStreamKeysJSON(table, "drop", "")
+	oldKeep, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "keep"}, "status": map[string]string{"S": "ok"}})
+	newKeep, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "keep"}, "status": map[string]string{"S": "next"}})
+	oldDrop, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "drop"}, "status": map[string]string{"S": "no"}})
+	newDrop, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "drop"}, "status": map[string]string{"S": "next"}})
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "MODIFY", keysDrop, newDrop, oldDrop); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "MODIFY", keysKeep, newKeep, oldKeep); err != nil {
+		t.Fatal(err)
+	}
+	fc := `{"Filters":[{"Pattern":"{\"eventName\":[\"MODIFY\"],\"dynamodb\":{\"OldImage\":{\"status\":{\"S\":[\"ok\"]}}}}"}]}`
+	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
+		AccountID: account, FunctionName: fn.FunctionName, EventSourceARN: table.StreamARN("us-east-1"),
+		FilterCriteriaJSON: fc, BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoked := 0
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(_, _, _, eventJSON string) (string, error) {
+		invoked++
+		if !strings.Contains(eventJSON, `"S":"ok"`) || strings.Contains(eventJSON, `"S":"no"`) {
+			t.Fatalf("event=%s", eventJSON)
+		}
+		if !strings.Contains(eventJSON, `"OldImage"`) {
+			t.Fatalf("missing OldImage in %s", eventJSON)
 		}
 		return "", nil
 	}); err != nil {

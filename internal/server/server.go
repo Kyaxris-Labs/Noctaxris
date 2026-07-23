@@ -63,6 +63,10 @@ type Server struct {
 	// In-process EventBridge Pipes poller.
 	pipesTickerOnce   sync.Once
 	pipesTickerCancel context.CancelFunc
+
+	// In-process Secrets Manager RotationRules ticker.
+	secretsRotationTickerOnce   sync.Once
+	secretsRotationTickerCancel context.CancelFunc
 }
 
 type awsError struct {
@@ -90,6 +94,7 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 	st.SetOnAsyncEnqueue(func(job store.LambdaAsyncInvocation) {
 		s.startAsyncInvoke(job, job.AccountID, job.FunctionName, "")
 	})
+	s.wireCognitoTriggerInvoker()
 	return s
 }
 
@@ -147,11 +152,12 @@ func (s *Server) ListenAndServeContext(ctx context.Context) error {
 	}
 }
 
-// StopBackgroundWorkers stops in-process Scheduler, ESM, Pipes, and ECS reconciler tickers.
+// StopBackgroundWorkers stops in-process Scheduler, ESM, Pipes, Secrets rotation, and ECS reconciler tickers.
 func (s *Server) StopBackgroundWorkers() {
 	s.StopSchedulerTicker()
 	s.StopESMPoller()
 	s.StopPipesTicker()
+	s.StopSecretsRotationTicker()
 	s.StopECSServiceReconciler()
 }
 
@@ -788,7 +794,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLogsPutResourcePolicy,
 		catalog.ActionLogsGetResourcePolicy,
 		catalog.ActionLogsDeleteResourcePolicy,
-		catalog.ActionLogsDescribeResourcePolicies, "DescribeResourcePolicies":
+		catalog.ActionLogsDescribeResourcePolicies, "DescribeResourcePolicies",
+		catalog.ActionLogsPutRetentionPolicy, "PutRetentionPolicy",
+		catalog.ActionLogsDeleteRetentionPolicy, "DeleteRetentionPolicy":
 		s.handleLogs(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionTaggingTagResources, "TagResources",
 		catalog.ActionTaggingUntagResources, "UntagResources",
@@ -969,6 +977,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCognitoCreateUserPool, "CreateUserPool",
 		catalog.ActionCognitoDescribeUserPool, "DescribeUserPool",
+		catalog.ActionCognitoUpdateUserPool, "UpdateUserPool",
 		catalog.ActionCognitoListUserPools, "ListUserPools",
 		catalog.ActionCognitoDeleteUserPool, "DeleteUserPool",
 		catalog.ActionCognitoCreateUserPoolClient, "CreateUserPoolClient",
@@ -2056,6 +2065,10 @@ func normalizeAction(action string) string {
 		return catalog.ActionLogsFilterLogEvents
 	case "DescribeLogGroups":
 		return catalog.ActionLogsDescribeLogGroups
+	case "PutRetentionPolicy":
+		return catalog.ActionLogsPutRetentionPolicy
+	case "DeleteRetentionPolicy":
+		return catalog.ActionLogsDeleteRetentionPolicy
 	case "TagResources":
 		return catalog.ActionTaggingTagResources
 	case "UntagResources":

@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete Secrets Manager core: create, read, update, delete, describe, and list secrets. Resource policies on secrets, KMS encryption via KeyId or lab `alias/aws/secretsmanager`, and identity-or-resource-policy authz.
+Lab-complete Secrets Manager core: create, read, update, delete, describe, and list secrets. Resource policies on secrets, KMS encryption via KeyId or lab `alias/aws/secretsmanager`, identity-or-resource-policy authz, and RotationRules scheduling (`AutomaticallyAfterDays` or lab `rate` / `cron` ScheduleExpression plus optional `Duration`) with an in-process due ticker.
 
 ## Implemented
 
@@ -17,6 +17,7 @@ Lab-complete Secrets Manager core: create, read, update, delete, describe, and l
 | Versions / stages | Multi-version rows with `AWSCURRENT`, `AWSPENDING`, and `AWSPREVIOUS`. `DescribeSecret` returns `VersionIdsToStages`. `GetSecretValue` accepts optional `VersionStage` / `VersionId`. `PutSecretValue` accepts optional `VersionStages` + `ClientRequestToken` (rotation `createSecret` path). `UpdateSecretVersionStage` moves or removes a label; moving `AWSCURRENT` clears `AWSPENDING` on the destination and labels the former current `AWSPREVIOUS` |
 | Rotate (default) | Without a rotator, `RotateSecret` writes a new `AWSCURRENT` version with a random secret string (former current becomes `AWSPREVIOUS`) |
 | Rotate (Lambda) | Optional `RotationLambdaARN` on `RotateSecret` persists the rotator. Caller needs `secretsmanager:RotateSecret` plus `iam:PassRole` on the function role (or optional `RotationRoleARN`) with trust `secretsmanager.amazonaws.com`. Lab runs four async Invokes: `createSecret` → `setSecret` → `testSecret` → `finishSecret`. Before the first invoke the lab creates an `AWSPENDING` version (`ClientRequestToken` as `VersionId`, random string). After all four succeed, `finishSecret` promotion moves `AWSCURRENT` onto that version. Mid-rotation failure leaves `AWSPENDING` and blocks a second `RotateSecret` until the label is cleared (`UpdateSecretVersionStage` or successful finish). `DescribeSecret` returns `RotationLambdaARN` when set |
+| RotationRules | `RotateSecret` accepts `RotationRules` (`AutomaticallyAfterDays`, or `ScheduleExpression` — not both) and optional `Duration` / `RotateImmediately` (default `true`). Lab `ScheduleExpression`: `rate(N days)`, `rate(N hours)` (N≥4), or Secrets-shaped `cron(0 H D M Dow *)` (minutes must be `0`, year must be `*`; digit/`*`/`?` fields like Scheduler). Optional `Duration` is `Nh` and must fit the schedule window (≤24h for day schedules; ≤ rate hours for hourly). `RotateImmediately=false` persists the schedule and returns the current version without rotating. In-process ticker rotates when `NextRotationDate` ≤ now (lab fires at window start; no random in-window delay) and advances `NextRotationDate` / `LastRotatedDate`. `DescribeSecret` returns `RotationEnabled`, `RotationRules`, `NextRotationDate`, `LastRotatedDate` when set |
 
 Secret metadata and sealed values live in SQLite. ARNs include a random six-character hex suffix (AWS-shaped).
 
@@ -28,7 +29,7 @@ Plaintext paths also call `EvaluateKMS` on the secret CMK: `kms:Encrypt` for `Cr
 
 Pass a full secret ARN as `SecretId` for cross-account `GetSecretValue`. Cross-account reads also need the trusting account key policy (and caller identity) to Allow `kms:Decrypt`.
 
-Lambda-backed rotate: PassRole uses service principal `secretsmanager.amazonaws.com` (not `lambda.amazonaws.com`). The function execution role typically trusts both so CreateFunction and RotateSecret configure succeed. Lab `setSecret` / `testSecret` may no-op when the rotator returns success without updating an external system.
+Lambda-backed rotate: PassRole uses service principal `secretsmanager.amazonaws.com` (not `lambda.amazonaws.com`) and sets trust `aws:SourceArn` to the secret ARN. The function execution role typically trusts both so CreateFunction and RotateSecret configure succeed (use a separate trust statement for `secretsmanager.amazonaws.com` when locking SourceArn to the secret). Lab `setSecret` / `testSecret` may no-op when the rotator returns success without updating an external system.
 
 ## How to verify / CLI smoke
 
@@ -94,6 +95,21 @@ aws secretsmanager rotate-secret \
   --endpoint-url "$EP"
 ```
 
+Schedule automatic rotation without rotating immediately:
+
+```bash
+aws secretsmanager rotate-secret \
+  --secret-id "$SECRET" \
+  --rotation-rules '{"AutomaticallyAfterDays": 7}' \
+  --rotate-immediately false \
+  --endpoint-url "$EP"
+
+aws secretsmanager describe-secret \
+  --secret-id "$SECRET" \
+  --endpoint-url "$EP"
+# RotationEnabled, RotationRules, NextRotationDate
+```
+
 Optional Lambda rotator (function role must trust `secretsmanager.amazonaws.com`; nested engine or invoke hook required for live Invoke):
 
 ```bash
@@ -125,8 +141,12 @@ aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --endpoint-url "$E
 
 ## Not yet / deferred
 
-- Automatic rotation schedules (`RotationRules` / cron) and `RotateImmediately` false deferral
-- Random password generation APIs
-- Replication, filtering on `ListSecrets`, full pagination parity
-- Service-linked grant approximation that skips caller KMS (lab requires caller EvaluateKMS for CTF fidelity)
-- True AWS-owned `alias/aws/secretsmanager` key (lab convenience alias is a per-account CMK approximation)
+- Secrets cron wildcards beyond the lab digit/`*`/`?` subset (lists, ranges, `L`, `#`, hour increments such as `2/10`)
+- Random rotate time inside the `Duration` window (lab uses `NextRotationDate` as window start)
+
+## Out of lab scope
+
+- Random password generation APIs (out of lab scope)
+- Replication, filtering on `ListSecrets`, full pagination parity (out of lab scope; rotate + stages cover lab)
+- Service-linked grant approximation that skips caller KMS (out of lab scope; lab requires caller EvaluateKMS for authz fidelity)
+- True AWS-owned `alias/aws/secretsmanager` key (out of lab scope; lab convenience alias is a per-account CMK approximation)

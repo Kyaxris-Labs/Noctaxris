@@ -59,12 +59,13 @@ type RDSDataSqlParameter struct {
 
 // RDSDataExecuteRequest is the Data API ExecuteStatement input (lab subset).
 type RDSDataExecuteRequest struct {
-	ResourceARN   string
-	SecretARN     string
-	Database      string
-	SQL           string
-	TransactionID string
-	Parameters    []RDSDataSqlParameter
+	ResourceARN     string
+	SecretARN       string
+	Database        string
+	SQL             string
+	TransactionID   string
+	Parameters      []RDSDataSqlParameter
+	FormatRecordsAs string // NONE (default) or JSON
 }
 
 // RDSDataBatchExecuteRequest is the Data API BatchExecuteStatement input (lab subset).
@@ -110,6 +111,7 @@ type RDSDataColumnMeta struct {
 type RDSDataExecuteResult struct {
 	ColumnMetadata         []RDSDataColumnMeta
 	Records                [][]RDSDataField
+	GeneratedFields        []RDSDataField
 	NumberOfRecordsUpdated int64
 	FormattedRecords       string
 }

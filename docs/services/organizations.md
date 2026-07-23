@@ -52,6 +52,6 @@ aws organizations move-account \
 
 Expect management account `000000000001` plus any `CreateAccount` members. After `move-account`, SCPs attached to the destination OU apply to that member on identity and data-plane authorize paths.
 
-## Not yet / deferred
+## Out of lab scope
 
-- Account invites and related control-plane APIs beyond the lab subset
+- Account invites and handshake control-plane APIs beyond the lab MoveAccount / OU model (out of lab scope)

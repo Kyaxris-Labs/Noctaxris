@@ -20,12 +20,12 @@ import (
 )
 
 var (
-	ErrCognitoNotFound      = errors.New("ResourceNotFoundException")
-	ErrCognitoBadRequest    = errors.New("InvalidParameterException")
-	ErrCognitoUnauthorized  = errors.New("NotAuthorizedException")
-	ErrCognitoUserExists    = errors.New("UsernameExistsException")
-	ErrCognitoUserNotFound  = errors.New("UserNotFoundException")
-	ErrCognitoInvalidPass   = errors.New("InvalidPasswordException")
+	ErrCognitoNotFound     = errors.New("ResourceNotFoundException")
+	ErrCognitoBadRequest   = errors.New("InvalidParameterException")
+	ErrCognitoUnauthorized = errors.New("NotAuthorizedException")
+	ErrCognitoUserExists   = errors.New("UsernameExistsException")
+	ErrCognitoUserNotFound = errors.New("UserNotFoundException")
+	ErrCognitoInvalidPass  = errors.New("InvalidPasswordException")
 )
 
 const (
@@ -77,14 +77,44 @@ CREATE TABLE IF NOT EXISTS cognito_refresh_tokens (
 );
 `
 
+// CognitoLambdaConfig is the lab subset of LambdaConfigType trigger ARNs.
+type CognitoLambdaConfig struct {
+	PreSignUp                   string `json:"PreSignUp,omitempty"`
+	PostConfirmation            string `json:"PostConfirmation,omitempty"`
+	PreAuthentication           string `json:"PreAuthentication,omitempty"`
+	PostAuthentication          string `json:"PostAuthentication,omitempty"`
+	PreTokenGeneration          string `json:"PreTokenGeneration,omitempty"`
+	UserMigration               string `json:"UserMigration,omitempty"`
+	DefineAuthChallenge         string `json:"DefineAuthChallenge,omitempty"`
+	CreateAuthChallenge         string `json:"CreateAuthChallenge,omitempty"`
+	VerifyAuthChallengeResponse string `json:"VerifyAuthChallengeResponse,omitempty"`
+	CustomMessage               string `json:"CustomMessage,omitempty"`
+}
+
+// HasTriggers reports whether any trigger ARN is set.
+func (c CognitoLambdaConfig) HasTriggers() bool {
+	return strings.TrimSpace(c.PreSignUp) != "" ||
+		strings.TrimSpace(c.PostConfirmation) != "" ||
+		strings.TrimSpace(c.PreAuthentication) != "" ||
+		strings.TrimSpace(c.PostAuthentication) != "" ||
+		strings.TrimSpace(c.PreTokenGeneration) != "" ||
+		strings.TrimSpace(c.UserMigration) != "" ||
+		strings.TrimSpace(c.DefineAuthChallenge) != "" ||
+		strings.TrimSpace(c.CreateAuthChallenge) != "" ||
+		strings.TrimSpace(c.VerifyAuthChallengeResponse) != "" ||
+		strings.TrimSpace(c.CustomMessage) != ""
+}
+
 // CognitoUserPool is a lab User Pool row.
 type CognitoUserPool struct {
-	PoolID    string
-	Region    string
-	Name      string
-	ARN       string
-	Kid       string
-	CreatedAt int64
+	PoolID       string
+	Region       string
+	Name         string
+	ARN          string
+	Kid          string
+	CreatedAt    int64
+	RoleArn      string
+	LambdaConfig CognitoLambdaConfig
 }
 
 // CognitoUserPoolClient is an app client.
@@ -122,6 +152,12 @@ func EnsureCognitoSchema(db *sql.DB) error {
 		return fmt.Errorf("ensure cognito schema: %w", err)
 	}
 	if err := EnsureCognitoMFASchema(db); err != nil {
+		return err
+	}
+	if err := EnsureCognitoSRPSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureCognitoTriggerSchema(db); err != nil {
 		return err
 	}
 	return nil
@@ -216,33 +252,43 @@ func (s *Store) CreateCognitoUserPool(accountID, region, name string) (CognitoUs
 func (s *Store) DescribeCognitoUserPool(accountID, poolID string) (CognitoUserPool, error) {
 	poolID = strings.TrimSpace(poolID)
 	var p CognitoUserPool
+	var roleARN, lambdaJSON string
 	err := s.db.QueryRow(
-		`SELECT pool_id, region, name, arn, kid, created_at FROM cognito_user_pools
+		`SELECT pool_id, region, name, arn, kid, created_at,
+		        COALESCE(role_arn, ''), COALESCE(lambda_config_json, '{}')
+		 FROM cognito_user_pools
 		 WHERE account_id = ? AND pool_id = ?`,
 		accountID, poolID,
-	).Scan(&p.PoolID, &p.Region, &p.Name, &p.ARN, &p.Kid, &p.CreatedAt)
+	).Scan(&p.PoolID, &p.Region, &p.Name, &p.ARN, &p.Kid, &p.CreatedAt, &roleARN, &lambdaJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CognitoUserPool{}, ErrCognitoNotFound
 	}
 	if err != nil {
 		return CognitoUserPool{}, fmt.Errorf("describe user pool: %w", err)
 	}
+	p.RoleArn = roleARN
+	p.LambdaConfig = parseCognitoLambdaConfig(lambdaJSON)
 	return p, nil
 }
 
 // GetCognitoUserPoolByID returns a pool by global pool_id (lab JWKS lookup).
 func (s *Store) GetCognitoUserPoolByID(poolID string) (accountID string, pool CognitoUserPool, err error) {
 	poolID = strings.TrimSpace(poolID)
+	var roleARN, lambdaJSON string
 	err = s.db.QueryRow(
-		`SELECT account_id, pool_id, region, name, arn, kid, created_at FROM cognito_user_pools WHERE pool_id = ?`,
+		`SELECT account_id, pool_id, region, name, arn, kid, created_at,
+		        COALESCE(role_arn, ''), COALESCE(lambda_config_json, '{}')
+		 FROM cognito_user_pools WHERE pool_id = ?`,
 		poolID,
-	).Scan(&accountID, &pool.PoolID, &pool.Region, &pool.Name, &pool.ARN, &pool.Kid, &pool.CreatedAt)
+	).Scan(&accountID, &pool.PoolID, &pool.Region, &pool.Name, &pool.ARN, &pool.Kid, &pool.CreatedAt, &roleARN, &lambdaJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", CognitoUserPool{}, ErrCognitoNotFound
 	}
 	if err != nil {
 		return "", CognitoUserPool{}, fmt.Errorf("get user pool by id: %w", err)
 	}
+	pool.RoleArn = roleARN
+	pool.LambdaConfig = parseCognitoLambdaConfig(lambdaJSON)
 	return accountID, pool, nil
 }
 
@@ -288,6 +334,7 @@ func (s *Store) DeleteCognitoUserPool(accountID, poolID string) error {
 	_, _ = tx.Exec(`DELETE FROM cognito_users WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_refresh_tokens WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_mfa_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_srp_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	return tx.Commit()
 }
 
@@ -460,6 +507,9 @@ func (s *Store) AdminCreateCognitoUser(accountID, poolID, username, password str
 		}
 		return CognitoUser{}, fmt.Errorf("admin create user: %w", err)
 	}
+	if err := s.storeUserSRPVerifier(accountID, strings.TrimSpace(poolID), username, password); err != nil {
+		return CognitoUser{}, err
+	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "CONFIRMED", PoolID: poolID, CreatedAt: now}, nil
 }
 
@@ -476,6 +526,12 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	}
 	if accountID != "" && acct != accountID {
 		return CognitoUser{}, "", ErrCognitoNotFound
+	}
+	if err := s.FireCognitoTriggerIfConfigured(
+		acct, poolID, clientID, username, "", "UNCONFIRMED",
+		CognitoTriggerPreSignUp, "PreSignUp_SignUp",
+	); err != nil {
+		return CognitoUser{}, "", err
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -494,6 +550,9 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 		}
 		return CognitoUser{}, "", fmt.Errorf("sign up: %w", err)
 	}
+	if err := s.storeUserSRPVerifier(acct, poolID, username, password); err != nil {
+		return CognitoUser{}, "", err
+	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now}, poolID, nil
 }
 
@@ -504,13 +563,13 @@ func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode st
 	if clientID == "" || username == "" || strings.TrimSpace(confirmationCode) == "" {
 		return fmt.Errorf("%w: ClientId, Username, and ConfirmationCode required", ErrCognitoBadRequest)
 	}
-	var acct, poolID, status string
+	var acct, poolID, sub string
 	err := s.db.QueryRow(
-		`SELECT c.account_id, c.pool_id, u.user_status FROM cognito_user_pool_clients c
+		`SELECT c.account_id, c.pool_id, u.sub FROM cognito_user_pool_clients c
 		 JOIN cognito_users u ON u.account_id = c.account_id AND u.pool_id = c.pool_id
 		 WHERE c.client_id = ? AND u.username = ?`,
 		clientID, username,
-	).Scan(&acct, &poolID, &status)
+	).Scan(&acct, &poolID, &sub)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrCognitoUserNotFound
 	}
@@ -523,6 +582,12 @@ func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode st
 	)
 	if err != nil {
 		return fmt.Errorf("confirm signup update: %w", err)
+	}
+	if err := s.FireCognitoTriggerIfConfigured(
+		acct, poolID, clientID, username, sub, "CONFIRMED",
+		CognitoTriggerPostConfirmation, "PostConfirmation_ConfirmSignUp",
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -590,6 +655,12 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	if status != "CONFIRMED" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
 	}
+	if err := s.FireCognitoTriggerIfConfigured(
+		accountID, poolID, clientID, username, sub, status,
+		CognitoTriggerPreAuthentication, "PreAuthentication_Authentication",
+	); err != nil {
+		return CognitoAuthOutcome{}, err
+	}
 	if !checkPassword(hash, password) {
 		return CognitoAuthOutcome{}, ErrCognitoUnauthorized
 	}
@@ -600,11 +671,40 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	if mfaOn {
 		return s.createSOFTWARETokenMFAChallenge(accountID, poolID, clientID, username)
 	}
-	result, err := s.issueTokens(accountID, poolID, clientID, username, sub)
+	result, err := s.issueTokensAfterAuth(accountID, poolID, clientID, username, sub, status, true)
 	if err != nil {
 		return CognitoAuthOutcome{}, err
 	}
 	return CognitoAuthOutcome{CognitoAuthResult: result}, nil
+}
+
+// issueTokensAfterAuth runs PreTokenGeneration (and optional PostAuthentication) around token minting.
+func (s *Store) issueTokensAfterAuth(
+	accountID, poolID, clientID, username, sub, status string,
+	firePostAuth bool,
+) (CognitoAuthResult, error) {
+	if status == "" {
+		status = "CONFIRMED"
+	}
+	if err := s.FireCognitoTriggerIfConfigured(
+		accountID, poolID, clientID, username, sub, status,
+		CognitoTriggerPreTokenGeneration, "TokenGeneration_Authentication",
+	); err != nil {
+		return CognitoAuthResult{}, err
+	}
+	result, err := s.issueTokens(accountID, poolID, clientID, username, sub)
+	if err != nil {
+		return CognitoAuthResult{}, err
+	}
+	if firePostAuth {
+		if err := s.FireCognitoTriggerIfConfigured(
+			accountID, poolID, clientID, username, sub, status,
+			CognitoTriggerPostAuthentication, "PostAuthentication_Authentication",
+		); err != nil {
+			return CognitoAuthResult{}, err
+		}
+	}
+	return result, nil
 }
 
 func hashRefreshToken(raw string) string {
@@ -623,26 +723,26 @@ func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (
 	iat := now.Unix()
 
 	idClaims, _ := json.Marshal(map[string]any{
-		"sub":               sub,
-		"iss":               iss,
-		"aud":               clientID,
-		"token_use":         "id",
-		"auth_time":         iat,
-		"iat":               iat,
-		"exp":               exp,
-		"cognito:username":  username,
-		"email_verified":    false,
+		"sub":              sub,
+		"iss":              iss,
+		"aud":              clientID,
+		"token_use":        "id",
+		"auth_time":        iat,
+		"iat":              iat,
+		"exp":              exp,
+		"cognito:username": username,
+		"email_verified":   false,
 	})
 	accessClaims, _ := json.Marshal(map[string]any{
-		"sub":        sub,
-		"iss":        iss,
-		"client_id":  clientID,
-		"token_use":  "access",
-		"scope":      "openid",
-		"auth_time":  iat,
-		"iat":        iat,
-		"exp":        exp,
-		"username":   username,
+		"sub":       sub,
+		"iss":       iss,
+		"client_id": clientID,
+		"token_use": "access",
+		"scope":     "openid",
+		"auth_time": iat,
+		"iat":       iat,
+		"exp":       exp,
+		"username":  username,
 	})
 	idToken, err := jwtutil.SignRS256(idClaims, key, kid)
 	if err != nil {
@@ -713,6 +813,12 @@ func (s *Store) RefreshCognitoTokens(accountID, clientID, refreshToken string) (
 	// Rotate: invalidate presented refresh token before issuing a new one.
 	if _, err := s.db.Exec(`DELETE FROM cognito_refresh_tokens WHERE token_hash = ?`, tokenHash); err != nil {
 		return CognitoAuthResult{}, fmt.Errorf("rotate refresh token: %w", err)
+	}
+	if err := s.FireCognitoTriggerIfConfigured(
+		acct, poolID, clientID, username, sub, status,
+		CognitoTriggerPreTokenGeneration, "TokenGeneration_RefreshTokens",
+	); err != nil {
+		return CognitoAuthResult{}, err
 	}
 	return s.issueTokens(acct, poolID, clientID, username, sub)
 }

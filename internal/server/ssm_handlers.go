@@ -172,6 +172,11 @@ func (s *Server) ssmPutParameter(
 		return
 	}
 	if err != nil {
+		if strings.Contains(err.Error(), "ValidationException") {
+			s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put parameter.", readOnly, eventID, verified)
 		return
@@ -235,7 +240,7 @@ func (s *Server) ssmGetParameter(
 		}
 	}
 
-	includeValue := p.Type == store.ParamTypeString || withDecryption
+	includeValue := store.ParameterValueIncluded(p.Type, withDecryption)
 	payload, err := ssmsvc.GetParameterJSON(p, includeValue)
 	if err != nil {
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",

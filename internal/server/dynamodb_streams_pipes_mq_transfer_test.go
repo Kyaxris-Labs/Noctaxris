@@ -26,6 +26,71 @@ func mustDynamoStreamsJSON(t *testing.T, handler http.Handler, target string, pa
 	return rec
 }
 
+func TestDynamoDBStreamsOldAndNewImages(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustDynamoJSON(t, handler, "CreateTable", map[string]any{
+		"TableName":            "stream-old-new",
+		"AttributeDefinitions": []map[string]string{{"AttributeName": "pk", "AttributeType": "S"}},
+		"KeySchema":            []map[string]string{{"AttributeName": "pk", "KeyType": "HASH"}},
+		"BillingMode":          "PAY_PER_REQUEST",
+		"StreamSpecification": map[string]any{
+			"StreamEnabled":  true,
+			"StreamViewType": "NEW_AND_OLD_IMAGES",
+		},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateTable status=%d body=%q", create.Code, create.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(create.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	desc, _ := createOut["TableDescription"].(map[string]any)
+	streamARN, _ := desc["LatestStreamArn"].(string)
+
+	put1 := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "stream-old-new",
+		"Item":      map[string]any{"pk": map[string]string{"S": "1"}, "v": map[string]string{"S": "old"}},
+	}, now)
+	if put1.Code != http.StatusOK {
+		t.Fatalf("PutItem1 status=%d body=%q", put1.Code, put1.Body.String())
+	}
+	put2 := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "stream-old-new",
+		"Item":      map[string]any{"pk": map[string]string{"S": "1"}, "v": map[string]string{"S": "new"}},
+	}, now)
+	if put2.Code != http.StatusOK {
+		t.Fatalf("PutItem2 status=%d body=%q", put2.Code, put2.Body.String())
+	}
+
+	itRec := mustDynamoStreamsJSON(t, handler, "GetShardIterator", map[string]any{
+		"StreamArn":         streamARN,
+		"ShardId":           store.LabDynamoStreamShardID,
+		"ShardIteratorType": "TRIM_HORIZON",
+	}, now)
+	var itOut map[string]any
+	if err := json.Unmarshal(itRec.Body.Bytes(), &itOut); err != nil {
+		t.Fatal(err)
+	}
+	get := mustDynamoStreamsJSON(t, handler, "GetRecords", map[string]any{
+		"ShardIterator": itOut["ShardIterator"],
+		"Limit":         10,
+	}, now)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GetRecords status=%d body=%q", get.Code, get.Body.String())
+	}
+	body := get.Body.String()
+	if !strings.Contains(body, `"MODIFY"`) || !strings.Contains(body, `"OldImage"`) || !strings.Contains(body, `"old"`) {
+		t.Fatalf("want MODIFY with OldImage, body=%q", body)
+	}
+	if !strings.Contains(body, `"NewImage"`) || !strings.Contains(body, `"new"`) {
+		t.Fatalf("want NewImage, body=%q", body)
+	}
+}
+
 func TestDynamoDBStreamsRoundTrip(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

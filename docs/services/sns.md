@@ -11,10 +11,10 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 | Topics | `CreateTopic`, `DeleteTopic`, `ListTopics`, `GetTopicAttributes`, `SetTopicAttributes`. `CreateTopic` seeds a default owner-root `Policy` (valid JSON; no `AWS:SourceOwner` condition). Tags: `ListTagsForResource`, `TagResource`, `UntagResource` |
 | FIFO | Topic names ending in `.fifo` (or `FifoTopic=true`). Publish requires `MessageGroupId`. Dedup via `MessageDeduplicationId` or `ContentBasedDeduplication` within a 5-minute window (same as SQS FIFO). SQS FIFO subscriptions receive group and dedup ids |
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
-| Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |
+| Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes`, `SetSubscriptionAttributes` (`FilterPolicy` / `FilterPolicyScope` lab exact-match subset, `RawMessageDelivery`, persisted `DeliveryPolicy` / `RedrivePolicy`) |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
 | Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolve to public hosts (private/loopback/metadata rejected; no redirect follow; outbound dial uses a pinned safe DialContext). Arbitrary loopback ports are rejected |
-| Delivery | Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
+| Delivery | Confirmed subscriptions apply lab `FilterPolicy` before fan-out (`MessageAttributes` default; `MessageBody` for JSON bodies). Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope, or the raw message body when `RawMessageDelivery=true`, when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
 Topic and subscription metadata live in SQLite.
@@ -82,9 +82,12 @@ aws sns set-topic-attributes --topic-arn "$TOPIC_ARN" --endpoint-url "$EP" --pro
 aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP" --profile account-a
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full SNS SAR beyond the lab set (SMS, email, filter policy depth, raw message delivery edge cases)
-- Open internet HTTP webhooks (egress remains deny-by-default outside loopback)
-- Exact AWS retry and jitter timing for delivery failures
-- High-throughput FIFO quotas
+- Full SNS SAR beyond the lab set (SMS, email, nested filter-policy operators, RedrivePolicy DLQ delivery, delivery retry timing) (out of lab scope; lab FilterPolicy + RawMessageDelivery cover CFN/SDK pipelines)
+- Exact AWS retry and jitter timing for delivery failures (out of lab scope)
+- High-throughput FIFO quotas (out of lab scope)
+
+## Will not ship
+
+- Open-internet SNS HTTP(S) webhooks (will not ship; deny-by-default egress / no open SSRF; loopback catcher only)

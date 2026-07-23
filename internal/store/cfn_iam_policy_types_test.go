@@ -222,7 +222,7 @@ func TestCFNBucketPolicyAndLambdaPermission(t *testing.T) {
 	}
 }
 
-func TestCFNLambdaPermissionRejectsUnknownProperty(t *testing.T) {
+func TestCFNLambdaPermissionRejectsEventSourceToken(t *testing.T) {
 	st := openTestStore(t)
 	_, err := st.CreateCFNStack("000000000001", "us-east-1", "bad-perm", `{
 	  "Resources": {
@@ -232,12 +232,12 @@ func TestCFNLambdaPermissionRejectsUnknownProperty(t *testing.T) {
 	        "FunctionName": "missing",
 	        "Action": "lambda:InvokeFunction",
 	        "Principal": "s3.amazonaws.com",
-	        "PrincipalOrgID": "o-abc1234567"
+	        "EventSourceToken": "amzn1.ask.skill.example"
 	      }
 	    }
 	  }
 	}`, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported property") {
-		t.Fatalf("expected unknown property reject, err=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "EventSourceToken") {
+		t.Fatalf("expected EventSourceToken reject, err=%v", err)
 	}
 }

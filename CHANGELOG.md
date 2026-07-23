@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Cognito SRP, trigger PassRole, and sync Lambda Invoke
+
+- Cognito `InitiateAuth` `USER_SRP_AUTH` / `SRP_A` with `PASSWORD_VERIFIER` challenge (RFC 5054 3072-bit + Cognito HKDF); MFA still applies after a successful verifier
+- Cognito `UpdateUserPool` (and Create) lab `RoleArn` + `LambdaConfig` trigger ARNs; PassRole for `cognito-idp.amazonaws.com` with pool `aws:SourceArn`
+- Sync Lambda trigger Invoke for configured `PreSignUp`, `PostConfirmation`, `PreAuthentication`, `PostAuthentication`, and `PreTokenGeneration` (fail closed with `UnexpectedLambdaException`)
+
+### Secrets RotationRules schedule, SSM StringList, RDS Data shapes
+
+- Secrets Manager `RotationRules` (`AutomaticallyAfterDays` or lab `ScheduleExpression`: `rate(N days)`, `rate(N hours)` N≥4, `cron(0 H D M Dow *)`) plus optional `Duration` (`Nh`), `RotateImmediately=false` deferral, in-process due ticker, and `DescribeSecret` schedule fields
+- SSM Parameter Store `StringList` type (comma-separated Value)
+- RDS Data API `formatRecordsAs=JSON` and Batch `generatedFields` from `RETURNING` (`pgx`)
+
+### ECR chunked PATCH, Lambda XA service principals, HTTP API CORS
+
+- ECR Registry V2 chunked blob `PATCH` uploads (session under data root; finalize `PUT?digest=`; sequential `Content-Range` validated)
+- Lambda function policies: service-principal grants with foreign-lab `SourceAccount` / `SourceArn` for XA S3/SNS/EventBridge notify (delivery Condition keys enforced)
+- API Gateway HTTP API `CorsConfiguration` on CreateApi/UpdateApi (`AllowOrigins` / `AllowMethods` / `AllowHeaders` / `ExposeHeaders` / `MaxAge` / `AllowCredentials`); OPTIONS preflight without an OPTIONS route; CORS headers on invoke responses
+
+### Cloud Control / CFN / Logs / SNS lab depth
+
+- Cloud Control `UpdateResource`: IAM User (`Policies` / `ManagedPolicyArns` / `Groups`), Group (`Policies` / `ManagedPolicyArns`), ManagedPolicy (`PolicyDocument` + re-attach), EventBus `Policy`, LogGroup `RetentionInDays`
+- CloudFormation: `AWS::Lambda::Permission` `FunctionUrlAuthType` / `InvokedViaFunctionUrl` (wildcard Principal requires FunctionUrlAuthType; `PrincipalOrgID` / `EventSourceToken` fail closed); `AWS::SNS::Subscription` `FilterPolicy` / `FilterPolicyScope` / `RawMessageDelivery` (+ persisted Delivery/Redrive attrs); `AWS::Logs::LogGroup` `RetentionInDays`
+- CloudWatch Logs: `PutRetentionPolicy` / `DeleteRetentionPolicy`; DescribeLogGroups reports `retentionInDays`; expired events purged on put/get/describe
+- SNS: subscription attributes + lab FilterPolicy match before fan-out; RawMessageDelivery for SQS
+
+### DynamoDB Streams view types and TransactWrite fidelity
+
+- DynamoDB Streams `StreamViewType`: `OLD_IMAGE` and `NEW_AND_OLD_IMAGES` (with `NEW_IMAGE` / `KEYS_ONLY`); GetRecords and Lambda ESM events include `OldImage` when present; ESM FilterCriteria matches `dynamodb.OldImage`
+- `TransactWriteItems` appends stream records for successful Put/Delete/Update when the table stream is enabled
+- `TransactWriteItems` `ClientRequestToken` idempotency (10-minute window; `IdempotentParameterMismatchException` on parameter change)
+
+### PassRole `aws:SourceArn` on remaining configure paths
+
+- Scheduler `CreateSchedule`/`UpdateSchedule`, Pipes `CreatePipe`, Secrets Manager Lambda `RotateSecret`, and API Gateway HTTP `CredentialsArn` / `AuthorizerCredentialsArn` PassRole now set trust `aws:SourceArn` to the schedule / pipe / secret / HTTP API ARN (alongside existing Lambda, EventBridge PutTargets, ECS, and Cognito trigger RoleArn paths).
+
+### Out of lab scope and will-not-ship disposition
+
+- Reclassified infinite-SAR / second-port / Insights-engine leftovers and recorded Blocked non-goals (host DB ports, open SNS HTTPS, APIGW HTTP_PROXY, non-lab private registries) as out of lab scope or will-not-ship on service docs and README; no Implement coding in this change
+
 ### Core leftovers (Cognito MFA, Transact Update, multi-shard Kinesis, Logs filter subset, Secrets four-step, EventBridge resource-policy delivery)
 
 - Cognito TOTP MFA: `AssociateSoftwareToken` / `VerifySoftwareToken` / `RespondToAuthChallenge` (`SOFTWARE_TOKEN_MFA`); password `InitiateAuth` returns challenge session until TOTP succeeds

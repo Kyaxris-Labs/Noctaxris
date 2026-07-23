@@ -16,7 +16,7 @@ Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or S
 
 ### Authz notes
 
-Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present. At poll time source actions require RoleArn session Allow (DynamoDB/EventBridge sources require RoleArn with a session Allow; SQS may use a source queue policy Allow for `pipes.amazonaws.com` instead). Enrichment Invoke always requires RoleArn. Target delivery mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root). Foreign targets with RoleArn also require the destination resource policy.
+Identity `EvaluateFull` on `pipes:*`. PassRole requires trust for `pipes.amazonaws.com` when `RoleArn` is present; configure-time PassRole sets trust `aws:SourceArn` to the pipe ARN. At poll time source actions require RoleArn session Allow (DynamoDB/EventBridge sources require RoleArn with a session Allow; SQS may use a source queue policy Allow for `pipes.amazonaws.com` instead). Enrichment Invoke always requires RoleArn. Target delivery mints a role session when `RoleArn` is set; without `RoleArn`, the SQS or Lambda target policy must Allow `pipes.amazonaws.com` (or account root). Foreign targets with RoleArn also require the destination resource policy.
 
 ## How to verify / CLI smoke
 
@@ -46,7 +46,7 @@ Use the `QueueUrl` returned by `create-queue` (Noctaxris path-style URL). Do not
 
 Skip live Compose smoke when Docker is unavailable.
 
-## Not yet / deferred
+## Out of lab scope
 
-- Filter partner matrix and enrichment HTTP/API destinations
-- Cross-account bus sources beyond RoleArn session Allow on `events:PutEvents`
+- Filter partner matrix and enrichment HTTP/API destinations (out of lab scope; SQS / DynamoDB Streams / bus → Lambda/SQS core is shipped)
+- Cross-account bus-source depth beyond RoleArn session Allow on `events:PutEvents` (out of lab scope)

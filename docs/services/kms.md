@@ -63,10 +63,10 @@ aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
   --endpoint-url "$EP" --profile account-a
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, full pagination parity, `RotateKeyOnDemand` API shape)
-- Grant `Constraints` / distinct `GrantToken` / `GrantTokens` on crypto APIs
-- Cross-account grant flows beyond key policy dual eval
-- True AWS-owned managed key types beyond the lab convenience aliases above
-- AWS-faithful annual rotation calendar and multi-Region material replication
+- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, full pagination parity, `RotateKeyOnDemand` API shape) (out of lab scope; symmetric CMK lab core is shipped, including tags)
+- Grant `Constraints` / distinct `GrantToken` / `GrantTokens` on crypto APIs (out of lab scope)
+- Cross-account grant flows beyond key policy dual eval (out of lab scope)
+- True AWS-owned managed key types beyond the lab convenience aliases above (out of lab scope)
+- AWS-faithful annual rotation calendar and multi-Region material replication (out of lab scope)

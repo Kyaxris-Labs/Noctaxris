@@ -200,11 +200,23 @@ func lambdaAction(action string) string {
 }
 
 func (s *Server) authorizeLambda(verified *authn.Verified, action, resource, resourcePolicy string) bool {
+	return s.authorizeLambdaWithKeys(verified, action, resource, resourcePolicy, nil)
+}
+
+func (s *Server) authorizeLambdaWithKeys(verified *authn.Verified, action, resource, resourcePolicy string, extraKeys map[string]string) bool {
 	resourceAccountID := resourceAccountIDFromARN(resource)
 	if resourceAccountID == "" {
 		resourceAccountID = verified.AccountID
 	}
 	return s.authorizeDataplaneOR(verified, action, resource, resourceAccountID, func(caller authz.RequestContext, identityDocs []string, resourceAccountID string) authz.Decision {
+		if len(extraKeys) > 0 {
+			if caller.ConditionKeys == nil {
+				caller.ConditionKeys = map[string]string{}
+			}
+			for k, v := range extraKeys {
+				caller.ConditionKeys[k] = v
+			}
+		}
 		return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
 			Caller:            caller,
 			IdentityDocs:      identityDocs,
@@ -1810,7 +1822,24 @@ func (s *Server) lambdaAddPermission(
 	principal, _ := params["Principal"].(string)
 	sourceAccount, _ := params["SourceAccount"].(string)
 	sourceARN, _ := params["SourceArn"].(string)
-	statement, err := s.store.AddFunctionPermission(verified.AccountID, name, statementID, action, principal, sourceAccount, sourceARN)
+	authType, _ := params["FunctionUrlAuthType"].(string)
+	opts := store.AddFunctionPermissionOpts{
+		StatementID:         statementID,
+		Action:              action,
+		Principal:           principal,
+		SourceAccount:       sourceAccount,
+		SourceARN:           sourceARN,
+		FunctionUrlAuthType: authType,
+	}
+	if raw, ok := params["InvokedViaFunctionUrl"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case bool:
+			opts.InvokedViaFunctionUrl = v
+		case string:
+			opts.InvokedViaFunctionUrl = strings.EqualFold(strings.TrimSpace(v), "true")
+		}
+	}
+	statement, err := s.store.AddFunctionPermissionWithOpts(verified.AccountID, name, opts)
 	if errors.Is(err, store.ErrLambdaPolicyStatementExists) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusConflict, "ResourceConflictException",
 			"The statement id specified already exists.", readOnly, eventID, verified)

@@ -12,6 +12,7 @@ const (
 	DefaultSSMRegion = "us-east-1"
 
 	ParamTypeString       = "String"
+	ParamTypeStringList   = "StringList"
 	ParamTypeSecureString = "SecureString"
 
 	// AliasAWSSSM is the lab convenience alias for SSM SecureString defaults.
@@ -95,6 +96,32 @@ func normalizeParameterName(name string) string {
 	return name
 }
 
+// validateStringListValue enforces AWS StringList Value: comma-separated members, no empties.
+func validateStringListValue(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("ValidationException: StringList Value is required")
+	}
+	parts := strings.Split(value, ",")
+	for _, p := range parts {
+		if p == "" {
+			return fmt.Errorf("ValidationException: StringList Value members must not be empty")
+		}
+	}
+	return nil
+}
+
+// ParameterValueIncluded reports whether Get* responses include Value without WithDecryption.
+func ParameterValueIncluded(paramType string, withDecryption bool) bool {
+	switch paramType {
+	case ParamTypeString, ParamTypeStringList:
+		return true
+	case ParamTypeSecureString:
+		return withDecryption
+	default:
+		return withDecryption
+	}
+}
+
 // EnsureSSMAlias seeds alias/aws/ssm for the account, creating a lab CMK when missing.
 // Idempotent: returns the target key id when the alias already exists.
 func (s *Store) EnsureSSMAlias(accountID string) (string, error) {
@@ -138,8 +165,9 @@ func (s *Store) resolveSSMKeyID(accountID, keyIDOrAlias string) (string, error) 
 	return s.ResolveSSMKeyID(accountID, keyIDOrAlias)
 }
 
-// PutParameter stores a String or SecureString parameter. keyID is optional for
-// SecureString and defaults to alias/aws/ssm. overwrite replaces an existing name.
+// PutParameter stores a String, StringList, or SecureString parameter. keyID is
+// optional for SecureString and defaults to alias/aws/ssm. overwrite replaces an existing name.
+// StringList Value is a comma-separated list (AWS Parameter Store shape).
 func (s *Store) PutParameter(
 	accountID, region, name, paramType, value, keyID string, overwrite bool,
 ) (Parameter, error) {
@@ -148,9 +176,14 @@ func (s *Store) PutParameter(
 		return Parameter{}, fmt.Errorf("put parameter: name is required")
 	}
 	switch paramType {
-	case ParamTypeString, ParamTypeSecureString:
+	case ParamTypeString, ParamTypeStringList, ParamTypeSecureString:
 	default:
-		return Parameter{}, fmt.Errorf("put parameter: unsupported type %q", paramType)
+		return Parameter{}, fmt.Errorf("ValidationException: unsupported type %q", paramType)
+	}
+	if paramType == ParamTypeStringList {
+		if err := validateStringListValue(value); err != nil {
+			return Parameter{}, err
+		}
 	}
 	if region == "" {
 		region = DefaultSSMRegion
@@ -181,7 +214,7 @@ func (s *Store) PutParameter(
 	)
 
 	switch paramType {
-	case ParamTypeString:
+	case ParamTypeString, ParamTypeStringList:
 		plain = value
 	case ParamTypeSecureString:
 		resolvedKeyID, err := s.resolveSSMKeyID(accountID, keyID)

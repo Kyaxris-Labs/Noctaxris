@@ -101,10 +101,10 @@ aws logs get-log-events --log-group-name "$GROUP" --log-stream-name eventbridge 
 | `numeric` | Comparisons `=`, `>`, `>=`, `<`, `<=` (paired arrays) |
 | `equals-ignore-case` | Case-insensitive string equality |
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full EventBridge SAR (partner buses, archive and replay, API Destinations). Pipes lab core: [pipes.md](pipes.md)
-- Legacy scheduled rules (`ScheduleExpression` on Rules). Prefer the Scheduler service for time-based labs
-- Pattern operators: `wildcard`, `$or`, IP/`cidr`, `anything-but`+`wildcard`, and `prefix`/`suffix` nested `equals-ignore-case` combos (`PutRule` rejects these)
-- InputPath / InputTransformer bracket and wildcard notation
-- Exact AWS retry and jitter timing for delivery failures
+- Full EventBridge SAR (partner buses, archive and replay, API Destinations) (out of lab scope). Pipes lab core: [pipes.md](pipes.md)
+- Legacy scheduled rules (`ScheduleExpression` on Rules) (out of lab scope; prefer Scheduler; CFN fails closed)
+- Pattern operators: `wildcard`, `$or`, IP/`cidr`, `anything-but`+`wildcard`, and `prefix`/`suffix` nested `equals-ignore-case` combos (`PutRule` rejects these) (out of lab scope; shipped content filters cover lab-core)
+- InputPath / InputTransformer bracket and wildcard notation (out of lab scope)
+- Exact AWS retry and jitter timing for delivery failures (out of lab scope)

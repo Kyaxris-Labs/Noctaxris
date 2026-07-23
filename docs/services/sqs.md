@@ -73,6 +73,6 @@ aws sqs set-queue-attributes --queue-url "$QUEUE_URL" --endpoint-url "$EP" --pro
 aws sqs send-message --queue-url "$QUEUE_URL" --message-body hello-xa --endpoint-url "$EP" --profile account-a
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full SQS SAR beyond the lab set (high-throughput FIFO quotas, tags beyond basics, StartMessageMoveTask parity)
+- Full SQS SAR beyond the lab set (high-throughput FIFO quotas, tags beyond basics, StartMessageMoveTask parity) (out of lab scope; Standard/FIFO + redrive + policies cover lab-fullstack)

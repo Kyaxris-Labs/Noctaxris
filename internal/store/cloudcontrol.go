@@ -511,7 +511,40 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		props, _ := json.Marshal(map[string]any{"KeyId": identifier})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Events::EventBus":
-		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s (no mutable lab properties)", ErrCloudControlBadRequest, typeName)
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Policy", "Tags"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		if _, err := s.GetEventBus(accountID, identifier); err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		if raw, ok := patch["Policy"]; ok {
+			policyJSON := ""
+			if raw != nil {
+				var pErr error
+				policyJSON, pErr = cfnPolicyDocumentJSON(raw)
+				if pErr != nil {
+					return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, pErr)
+				}
+			}
+			if err := s.PutEventBusPolicy(accountID, identifier, policyJSON); err != nil {
+				return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+			}
+		}
+		bus, err := s.DescribeEventBus(accountID, identifier)
+		if err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		out := map[string]any{"Name": bus.Name, "Arn": bus.ARN}
+		if strings.TrimSpace(bus.Policy) != "" {
+			var pol any
+			if json.Unmarshal([]byte(bus.Policy), &pol) == nil {
+				out["Policy"] = pol
+			} else {
+				out["Policy"] = bus.Policy
+			}
+		}
+		props, _ := json.Marshal(out)
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::KMS::Alias":
 		if err := cloudControlRejectUnknownPatchKeys(patch, "TargetKeyId"); err != nil {
 			return CloudControlResource{}, "", err
@@ -526,13 +559,70 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		props, _ := json.Marshal(map[string]any{"AliasName": identifier, "TargetKeyId": target})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Logs::LogGroup":
-		if err := cloudControlRejectUnknownPatchKeys(patch); err != nil {
+		if err := cloudControlRejectUnknownPatchKeys(patch, "RetentionInDays"); err != nil {
 			return CloudControlResource{}, "", err
 		}
-		props, _ := json.Marshal(map[string]any{"LogGroupName": identifier})
+		if _, err := s.getLogGroup(accountID, identifier); err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		out := map[string]any{"LogGroupName": identifier}
+		if _, ok := patch["RetentionInDays"]; ok {
+			days := cfnIntProp(patch, "RetentionInDays", 0)
+			if days <= 0 {
+				if err := s.DeleteRetentionPolicy(accountID, identifier); err != nil {
+					return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+				}
+			} else if err := s.PutRetentionPolicy(accountID, identifier, days); err != nil {
+				return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+			} else {
+				out["RetentionInDays"] = days
+			}
+		}
+		props, _ := json.Marshal(out)
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
-	case "AWS::IAM::User", "AWS::IAM::Group", "AWS::IAM::ManagedPolicy":
-		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s", ErrCloudControlBadRequest, typeName)
+	case "AWS::IAM::User":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Policies", "ManagedPolicyArns", "Groups"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		u, err := s.GetUser(accountID, identifier)
+		if err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		if err := s.replaceCFNPrincipalPolicies(accountID, u.ARN, u.UserName, patch, s.AttachUserPolicy, s.DetachUserPolicy); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		if _, has := patch["Groups"]; has {
+			if err := s.replaceCFNUserGroups(accountID, u.UserName, patch); err != nil {
+				return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+			}
+		}
+		props, _ := json.Marshal(map[string]any{"UserName": u.UserName, "Arn": u.ARN})
+		return s.cloudControlPersistUpdate(accountID, typeName, u.UserName, props)
+	case "AWS::IAM::Group":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "Policies", "ManagedPolicyArns"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		g, err := s.GetGroup(accountID, identifier)
+		if err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		if err := s.replaceCFNPrincipalPolicies(accountID, g.ARN, g.GroupName, patch, s.AttachGroupPolicy, s.DetachGroupPolicy); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"GroupName": g.GroupName, "Arn": g.ARN})
+		return s.cloudControlPersistUpdate(accountID, typeName, g.GroupName, props)
+	case "AWS::IAM::ManagedPolicy":
+		if err := cloudControlRejectUnknownPatchKeys(patch, "PolicyDocument", "Roles", "Users", "Groups", "Description"); err != nil {
+			return CloudControlResource{}, "", err
+		}
+		if _, err := s.GetManagedPolicy(identifier); err != nil {
+			return CloudControlResource{}, "", ErrCloudControlNotFound
+		}
+		if err := s.modifyCFNManagedPolicyDocument(accountID, identifier, map[string]any{}, patch); err != nil {
+			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		}
+		props, _ := json.Marshal(map[string]any{"Arn": identifier, "PolicyDocument": patch["PolicyDocument"]})
+		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	default:
 		return CloudControlResource{}, "", fmt.Errorf("%w: UpdateResource not supported for %s", ErrCloudControlBadRequest, typeName)
 	}

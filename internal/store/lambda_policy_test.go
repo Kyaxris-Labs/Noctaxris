@@ -131,6 +131,51 @@ func TestLambdaAddFunctionPermissionRejectsUnknownAccountPrincipal(t *testing.T)
 	}
 }
 
+func TestLambdaAddFunctionPermissionServicePrincipalForeignSourceAccount(t *testing.T) {
+	st := openLambdaStore(t)
+	fnOwner := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	if _, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    fnOwner,
+		FunctionName: "svc-xa",
+		RoleARN:      "arn:aws:iam::" + fnOwner + ":role/exec",
+		Runtime:      "python3.12",
+		Handler:      "app.handler",
+		Timeout:      3,
+		Memory:       128,
+		Zip:          zip,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sourceAccount := "000000000002"
+	if err := st.EnsureRoot(sourceAccount, "AKIAROOT000000000002", "secret-b"); err != nil {
+		t.Fatal(err)
+	}
+	sourceARN := "arn:aws:events:us-east-1:" + sourceAccount + ":rule/default/xa-lab"
+	stmt, err := st.AddFunctionPermission(fnOwner, "svc-xa", "eb-xa", "lambda:InvokeFunction",
+		"events.amazonaws.com", sourceAccount, sourceARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stmt, `"Service":"events.amazonaws.com"`) {
+		t.Fatalf("statement missing service principal: %s", stmt)
+	}
+	if !strings.Contains(stmt, `"aws:SourceAccount"`) || !strings.Contains(stmt, sourceAccount) {
+		t.Fatalf("statement missing foreign SourceAccount: %s", stmt)
+	}
+	if !strings.Contains(stmt, `"aws:SourceArn"`) || !strings.Contains(stmt, sourceARN) {
+		t.Fatalf("statement missing SourceArn: %s", stmt)
+	}
+	fnARN := "arn:aws:lambda:us-east-1:" + fnOwner + ":function:svc-xa"
+	if !st.DeliveryTargetResourcePolicyAllows(sourceAccount, fnARN, "lambda:InvokeFunction", "events.amazonaws.com", sourceARN) {
+		t.Fatal("foreign source with matching SourceArn must Allow")
+	}
+	wrong := "arn:aws:events:us-east-1:" + sourceAccount + ":rule/default/other"
+	if st.DeliveryTargetResourcePolicyAllows(sourceAccount, fnARN, "lambda:InvokeFunction", "events.amazonaws.com", wrong) {
+		t.Fatal("mismatched SourceArn must Deny")
+	}
+}
+
 func TestLambdaAddFunctionPermissionNormalizesAccountIDPrincipal(t *testing.T) {
 	st := openLambdaStore(t)
 	account := "000000000001"

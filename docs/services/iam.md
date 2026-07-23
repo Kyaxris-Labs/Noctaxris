@@ -29,7 +29,7 @@ Group-attached and inline policies feed identity documents for authorization. Ac
 
 IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection. Assumed-role sessions resolve identity documents from the IAM role ARN (attachments and inline role policies), not the STS session ARN.
 
-Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Request context populates username, userid, PrincipalType, SecureTransport, and clock keys; see [index.md](index.md#cross-cutting) for the operator matrix. PassRole trust evaluation sets `aws:SourceAccount` and, for Lambda / EventBridge PutTargets / ECS task-definition configure paths, `aws:SourceArn` from the resource being configured. `CreateRole` accepts `MaxSessionDuration` (default 3600). OIDC providers persist the full `ClientIDList` and thumbprint list.
+Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Request context populates username, userid, PrincipalType, SecureTransport, and clock keys; see [index.md](index.md#cross-cutting) for the operator matrix. PassRole trust evaluation sets `aws:SourceAccount` and `aws:SourceArn` from the resource being configured on Lambda, EventBridge `PutTargets`, ECS task-definition, Scheduler `CreateSchedule`/`UpdateSchedule`, Pipes `CreatePipe`, Secrets Manager Lambda `RotateSecret`, API Gateway HTTP `CredentialsArn` / `AuthorizerCredentialsArn`, and Cognito user-pool trigger RoleArn (pool ARN). `CreateRole` accepts `MaxSessionDuration` (default 3600). OIDC providers persist the full `ClientIDList` and thumbprint list.
 
 ## How to verify / CLI smoke
 
@@ -114,9 +114,8 @@ aws iam enable-mfa-device \
   --endpoint-url "$EP"
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Service-linked roles
-- Full IAM pagination, tagging, and API parity beyond the lab subset
-- IgnoreCase string operators; Binary*; PrincipalTag / RequestTag population on tagging APIs
-- PassRole `aws:SourceArn` on configure paths beyond Lambda, EventBridge PutTargets, and ECS
+- Service-linked roles (out of lab scope)
+- Full IAM pagination, tagging, and API parity beyond the lab subset (out of lab scope)
+- IgnoreCase string operators; Binary*; PrincipalTag / RequestTag population on tagging APIs (out of lab scope; see [index.md](index.md) condition-key notes)

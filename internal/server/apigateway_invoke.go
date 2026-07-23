@@ -46,7 +46,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	accountID, _, err := s.store.GetAPIGatewayAPIByID(apiID)
+	accountID, api, err := s.store.GetAPIGatewayAPIByID(apiID)
 	if errors.Is(err, store.ErrAPIGatewayNotFound) {
 		http.Error(w, "API not found", http.StatusNotFound)
 		return
@@ -66,6 +66,11 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 
 	region := store.DefaultAPIGatewayRegion
 	if !s.enforceAssociatedWAF(w, accountID, httpAPIWAFCandidateARNs(region, accountID, apiID, stage)) {
+		return
+	}
+
+	// AWS-shaped: configured CORS answers OPTIONS preflight without an OPTIONS route.
+	if writeHTTPAPICORSPreflight(w, r, api.CORS) {
 		return
 	}
 
@@ -220,6 +225,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 	writeHTTPAPIProxyResponseOpts(w, result, s.cfg.HTTPAPIAllowSetCookie)
+	applyHTTPAPICORSHeaders(w, r, api.CORS)
 	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "Invoke", readOnly)
 }
 

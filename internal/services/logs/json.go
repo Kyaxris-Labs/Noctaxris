@@ -34,13 +34,17 @@ func DescribeLogStreamsJSON(streams []store.LogStream) ([]byte, error) {
 func DescribeLogGroupsJSON(groups []store.LogGroup) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(groups))
 	for _, g := range groups {
-		entries = append(entries, map[string]any{
+		entry := map[string]any{
 			"logGroupName":      g.LogGroupName,
 			"arn":               g.Arn,
 			"creationTime":      g.CreationTime,
 			"storedBytes":       g.StoredBytes,
 			"metricFilterCount": g.MetricFilterCount,
-		})
+		}
+		if g.RetentionInDays > 0 {
+			entry["retentionInDays"] = g.RetentionInDays
+		}
+		entries = append(entries, entry)
 	}
 	return json.Marshal(map[string]any{"logGroups": entries})
 }

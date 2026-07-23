@@ -423,7 +423,7 @@ func (s *Store) RespondToSOFTWARETokenMFAChallenge(clientID, username, session, 
 		return CognitoAuthResult{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
 	}
 	_, _ = s.db.Exec(`DELETE FROM cognito_mfa_sessions WHERE session_id = ?`, session)
-	return s.issueTokens(row.AccountID, row.PoolID, clientID, username, sub)
+	return s.issueTokensAfterAuth(row.AccountID, row.PoolID, clientID, username, sub, status, true)
 }
 
 type cognitoMFASessionRow struct {

@@ -12,7 +12,7 @@ Lab-complete ECR core: repository CRUD, authorization tokens, repository policie
 | Auth | `GetAuthorizationToken` (base64 `AWS:password`, lab proxy endpoint on loopback) |
 | Repository policy | `GetRepositoryPolicy`, `SetRepositoryPolicy`, `DeleteRepositoryPolicy` |
 | Images | `PutImage`, `BatchGetImage`, `ListImages`, `BatchDeleteImage` |
-| Registry V2 | `GET /v2/`, blob upload (monolithic PUT), manifest GET/PUT/HEAD, tags list. `GET`/`POST` `/v2/token` returns Docker Registry token JSON (`token` / `access_token`) for the `GetAuthorizationToken` password. `WWW-Authenticate` Bearer realm points at `/v2/token` |
+| Registry V2 | `GET /v2/`, blob upload (monolithic PUT or chunked `PATCH` then finalize `PUT` with `digest`), manifest GET/PUT/HEAD, tags list. `GET`/`POST` `/v2/token` returns Docker Registry token JSON (`token` / `access_token`) for the `GetAuthorizationToken` password. `WWW-Authenticate` Bearer realm points at `/v2/token` |
 | DinD sync | On manifest PUT with a tag, pull the image into `noctaxris-engine` so ECS and Lambda Image paths can use lab registry refs |
 
 Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (account from `sts get-caller-identity`). Blobs and manifests persist under the data volume.
@@ -71,9 +71,8 @@ aws ecr describe-repositories --registry-id ACCOUNT_B --repository-names "$REPO"
   --endpoint-url "$EP" --profile account-a
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Image scanning, replication, lifecycle policies, public galleries
-- OCI referrers and multi-arch index depth beyond single manifest
-- Chunked blob PATCH uploads (monolithic PUT only today)
-- Rootless / deprivileged nested engine
+- Image scanning, replication, lifecycle policies, public galleries (out of lab scope; repo + Registry V2 + DinD sync cover lab Image/ECS pulls)
+- OCI referrers and multi-arch index depth beyond single manifest (out of lab scope)
+- Fully rootless nested engine (out of lab scope; restricted DinD is the default; see [security-defaults.md](../security-defaults.md))

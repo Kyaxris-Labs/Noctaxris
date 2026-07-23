@@ -79,8 +79,8 @@ AWS_ACCESS_KEY_ID="$MFA_AKID" AWS_SECRET_ACCESS_KEY="$MFA_SECRET" \
 
 Expect a session with temporary credentials. `GetSessionToken` does not require an IAM `sts:GetSessionToken` permission after SigV4.
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full AssumeRoot parity with AWS Organizations / IAM Identity Center style flows
-- Rich DecodeAuthorizationMessage payloads generated from every deny path
-- Production-grade GetDelegatedAccessToken and GetWebIdentityToken parity
+- Full AssumeRoot parity with AWS Organizations / IAM Identity Center style flows (out of lab scope; lab STS covers the 11-action core)
+- Rich DecodeAuthorizationMessage payloads generated from every deny path (out of lab scope)
+- Production-grade GetDelegatedAccessToken and GetWebIdentityToken parity (out of lab scope)

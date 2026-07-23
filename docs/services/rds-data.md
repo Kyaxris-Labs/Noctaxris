@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and real SQL transactions (`BeginTransaction` / `CommitTransaction` / `RollbackTransaction`). Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager).
+HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and real SQL transactions (`BeginTransaction` / `CommitTransaction` / `RollbackTransaction`). Supports `formatRecordsAs=JSON` and Batch `generatedFields` from `RETURNING` via `pgx`. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager).
 
 ## Implemented
 
@@ -15,7 +15,7 @@ HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and r
 | Authz | Identity `EvaluateFull` on `rds-data:*` |
 | Secrets | Rejects missing or mismatched `secretArn` (fail closed) |
 | Unavailable | No nested Postgres / pgx dial failure for Begin or txn sessions → `DatabaseUnavailableException` (no canned SELECT success) |
-| Result shape | `pgx`: OID-mapped fields (boolean / long / double / string / blob). nested-psql: SELECT cells as `stringValue` / `VARCHAR`; DML uses command-tag update counts. Batch returns AWS-shaped `updateResults[].generatedFields` |
+| Result shape | `pgx`: OID-mapped fields (boolean / long / double / string / blob). nested-psql: SELECT cells as `stringValue` / `VARCHAR`; DML uses command-tag update counts. `formatRecordsAs=JSON` returns simplified row objects in `formattedRecords` (clears `records` / `columnMetadata`). Batch `updateResults[].generatedFields` populated from `RETURNING` (first row) via `pgx` |
 | Parameters | Named `:name` binds via `pgx` when the nested DSN dials; nested-psql fallback rewrites to typed SQL literals |
 
 ### Executor selection
@@ -55,7 +55,17 @@ aws rds-data execute-statement \
   --parameters '[{"name":"id","value":{"longValue":7}}]' \
   --endpoint-url "$EP"
 
+aws rds-data execute-statement \
+  --resource-arn "$DB_ARN" \
+  --secret-arn "$SECRET_ARN" \
+  --database postgres \
+  --sql 'SELECT 1 AS n' \
+  --format-records-as JSON \
+  --endpoint-url "$EP"
+# formattedRecords is a JSON array of objects; records/columnMetadata empty
+
 # Batch (auto-commit). Requires nested engine reachable for SQL.
+# INSERT ... RETURNING populates updateResults[].generatedFields (pgx).
 aws rds-data batch-execute-statement \
   --resource-arn "$DB_ARN" \
   --secret-arn "$SECRET_ARN" \
@@ -96,8 +106,10 @@ NOCTAXRIS_TEST_PGX_DSN='postgres://USER:PASS@HOST:5432/DB?sslmode=disable' \
 
 ## Not yet / deferred
 
-- `ExecuteSql` legacy
-- Full result type matrix and `formatRecordsAs=JSON`
-- Batch `generatedFields` population from `RETURNING` / identity columns
-- AWS 3-minute idle timeout (lab uses 5 minutes)
-- Cross-process transaction resume (held sessions are process-local)
+- Full result type matrix beyond OID-mapped / VARCHAR cells (array types, nested structures)
+
+## Out of lab scope
+
+- `ExecuteSql` legacy (out of lab scope)
+- AWS 3-minute idle timeout (out of lab scope; lab uses 5 minutes)
+- Cross-process transaction resume (out of lab scope; held `pgx` sessions are process-local)

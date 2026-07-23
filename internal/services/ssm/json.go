@@ -28,7 +28,7 @@ func GetParameterJSON(p store.Parameter, includeValue bool) ([]byte, error) {
 func GetParametersJSON(params []store.Parameter, invalid []string, withDecryption bool) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(params))
 	for _, p := range params {
-		includeValue := p.Type == store.ParamTypeString || withDecryption
+		includeValue := store.ParameterValueIncluded(p.Type, withDecryption)
 		entry, err := parameterJSON(p, includeValue)
 		if err != nil {
 			return nil, err
@@ -48,7 +48,7 @@ func GetParametersJSON(params []store.Parameter, invalid []string, withDecryptio
 func GetParametersByPathJSON(params []store.Parameter, withDecryption bool) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(params))
 	for _, p := range params {
-		includeValue := p.Type == store.ParamTypeString || withDecryption
+		includeValue := store.ParameterValueIncluded(p.Type, withDecryption)
 		entry, err := parameterJSON(p, includeValue)
 		if err != nil {
 			return nil, err

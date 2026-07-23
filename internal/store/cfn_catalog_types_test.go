@@ -222,7 +222,7 @@ func TestCFNKMSAliasAndIAMUserGroup(t *testing.T) {
 	}
 }
 
-func TestCFNRejectsScheduleExpressionAndRetention(t *testing.T) {
+func TestCFNRejectsScheduleExpression(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 
@@ -241,21 +241,6 @@ func TestCFNRejectsScheduleExpressionAndRetention(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ScheduleExpression") {
 		t.Fatalf("want ScheduleExpression reject, got %v", err)
 	}
-
-	_, err = st.CreateCFNStack(account, "us-east-1", "bad-retention", `{
-	  "Resources": {
-	    "G": {
-	      "Type": "AWS::Logs::LogGroup",
-	      "Properties": {
-	        "LogGroupName": "/cfn/bad",
-	        "RetentionInDays": 7
-	      }
-	    }
-	  }
-	}`, "")
-	if err == nil || !strings.Contains(err.Error(), "RetentionInDays") {
-		t.Fatalf("want RetentionInDays reject, got %v", err)
-	}
 }
 
 func TestCFNSubscriptionRejectsUnknownProperty(t *testing.T) {
@@ -270,12 +255,12 @@ func TestCFNSubscriptionRejectsUnknownProperty(t *testing.T) {
 	        "TopicArn": {"Ref": "T"},
 	        "Protocol": "sqs",
 	        "Endpoint": "arn:aws:sqs:us-east-1:000000000001:missing",
-	        "FilterPolicy": {"a": ["b"]}
+	        "SubscriptionRoleArn": "arn:aws:iam::000000000001:role/missing"
 	      }
 	    }
 	  }
 	}`, "")
-	if err == nil || !strings.Contains(err.Error(), "FilterPolicy") {
-		t.Fatalf("want FilterPolicy reject, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "SubscriptionRoleArn") {
+		t.Fatalf("want SubscriptionRoleArn reject, got %v", err)
 	}
 }

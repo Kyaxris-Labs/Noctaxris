@@ -62,7 +62,7 @@ func pipesAction(action string) string {
 	}
 }
 
-func (s *Server) checkPipesPassRole(verified *authn.Verified, roleARN string) error {
+func (s *Server) checkPipesPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("roleARN must be a valid IAM role ARN")
@@ -82,10 +82,17 @@ func (s *Server) checkPipesPassRole(verified *authn.Verified, roleARN string) er
 		return errors.New("not authorized to pass role to Pipes")
 	}
 	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
 		EvalInputs:       in,
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalPipes,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to Pipes")
@@ -117,7 +124,7 @@ func (s *Server) pipesCreate(
 		return
 	}
 	if roleARN != "" {
-		if err := s.checkPipesPassRole(verified, roleARN); err != nil {
+		if err := s.checkPipesPassRole(verified, roleARN, arn); err != nil {
 			s.writePipesError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				err.Error(), readOnly, eventID, verified)
 			return

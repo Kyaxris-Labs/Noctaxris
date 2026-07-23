@@ -6,22 +6,34 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func userPoolObject(p store.CognitoUserPool) map[string]any {
+	up := map[string]any{
+		"Id":           p.PoolID,
+		"Name":         p.Name,
+		"Arn":          p.ARN,
+		"CreationDate": float64(p.CreatedAt) / 1000.0,
+	}
+	if p.RoleArn != "" {
+		up["RoleArn"] = p.RoleArn
+	}
+	if lc := store.CognitoLambdaConfigToAPI(p.LambdaConfig); lc != nil {
+		up["LambdaConfig"] = lc
+	}
+	return up
+}
+
 // CreateUserPoolJSON builds CreateUserPool response.
 func CreateUserPoolJSON(p store.CognitoUserPool) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"UserPool": map[string]any{
-			"Id":       p.PoolID,
-			"Name":     p.Name,
-			"Arn":      p.ARN,
-			"CreationDate": float64(p.CreatedAt) / 1000.0,
-		},
-	})
+	return json.Marshal(map[string]any{"UserPool": userPoolObject(p)})
 }
 
 // DescribeUserPoolJSON builds DescribeUserPool response.
 func DescribeUserPoolJSON(p store.CognitoUserPool) ([]byte, error) {
 	return CreateUserPoolJSON(p)
 }
+
+// UpdateUserPoolJSON is an empty OK body (AWS UpdateUserPool returns {}).
+func UpdateUserPoolJSON() ([]byte, error) { return []byte(`{}`), nil }
 
 // ListUserPoolsJSON builds ListUserPools response.
 func ListUserPoolsJSON(pools []store.CognitoUserPool) ([]byte, error) {

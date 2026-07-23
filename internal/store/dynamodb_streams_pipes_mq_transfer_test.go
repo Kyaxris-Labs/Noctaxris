@@ -40,7 +40,7 @@ func TestDynamoDBStreamsLite(t *testing.T) {
 	if err := st.PutItemBytes(account, table.TableName, "1", "", "", "", item, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keys, item); err != nil {
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keys, item, nil); err != nil {
 		t.Fatal(err)
 	}
 	streams, err := st.ListDynamoStreams(account, table.TableName)

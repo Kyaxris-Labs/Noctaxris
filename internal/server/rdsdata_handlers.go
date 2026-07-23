@@ -97,16 +97,23 @@ func (s *Server) rdsDataExecute(
 		return
 	}
 	req := store.RDSDataExecuteRequest{
-		ResourceARN:   stringParam(params["resourceArn"]),
-		SecretARN:     stringParam(params["secretArn"]),
-		Database:      stringParam(params["database"]),
-		SQL:           stringParam(params["sql"]),
-		TransactionID: stringParam(params["transactionId"]),
-		Parameters:    parseRDSDataParameters(params["parameters"]),
+		ResourceARN:     stringParam(params["resourceArn"]),
+		SecretARN:       stringParam(params["secretArn"]),
+		Database:        stringParam(params["database"]),
+		SQL:             stringParam(params["sql"]),
+		TransactionID:   stringParam(params["transactionId"]),
+		Parameters:      parseRDSDataParameters(params["parameters"]),
+		FormatRecordsAs: stringParam(params["formatRecordsAs"]),
 	}
 	if req.SQL == "" {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
 			"sql is required.", readOnly, eventID, verified)
+		return
+	}
+	if format := strings.TrimSpace(req.FormatRecordsAs); format != "" &&
+		!strings.EqualFold(format, "NONE") && !strings.EqualFold(format, "JSON") {
+		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"formatRecordsAs must be NONE or JSON.", readOnly, eventID, verified)
 		return
 	}
 	var (
@@ -138,6 +145,14 @@ func (s *Server) rdsDataExecute(
 		return
 	}
 	_ = s.store.RecordRDSDataStatement(verified.AccountID, req)
+	if rdsdatasvc.WantsFormatRecordsAsJSON(req.FormatRecordsAs) {
+		res, err = rdsdatasvc.ApplyFormatRecordsAsJSON(res)
+		if err != nil {
+			s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",
+				"Unable to format records as JSON.", readOnly, eventID, verified)
+			return
+		}
+	}
 	payload, err := rdsdatasvc.ExecuteStatementJSON(res)
 	if err != nil {
 		s.writeRDSDataError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerErrorException",

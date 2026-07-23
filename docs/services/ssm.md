@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete Parameter Store core: String and SecureString parameters, Put/Get/GetParameters/Delete/Describe, KMS encryption for SecureString via KeyId or lab `alias/aws/ssm`, and identity-only authz.
+Lab-complete Parameter Store core: String, StringList, and SecureString parameters, Put/Get/GetParameters/Delete/Describe, KMS encryption for SecureString via KeyId or lab `alias/aws/ssm`, and identity-only authz.
 
 ## Implemented
 
@@ -10,7 +10,7 @@ Lab-complete Parameter Store core: String and SecureString parameters, Put/Get/G
 |------|---------|
 | Parameters | `PutParameter`, `GetParameter`, `GetParameters`, `GetParametersByPath`, `DeleteParameter`, `DescribeParameters` |
 | Tags | `ListTagsForResource`, `AddTagsToResource`, `RemoveTagsFromResource` (Parameter resources) |
-| Types | `String` (plaintext at rest), `SecureString` (sealed under KMS) |
+| Types | `String` / `StringList` (plaintext at rest; StringList Value is comma-separated), `SecureString` (sealed under KMS) |
 | Hierarchy | `GetParametersByPath` with `Path`, optional `Recursive`, and `WithDecryption` |
 | KMS | Optional `KeyId` on Put. Defaults to lab `alias/aws/ssm` (per-account CMK seeded on first use) |
 | Describe filters | `ParameterFilters` with `Key=Name`, `Option=Equals` (exact name) or `BeginsWith` (optional; prefix), and `Values` |
@@ -23,7 +23,7 @@ SSM uses identity `EvaluateFull` on parameter ARNs (or `*` for `DescribeParamete
 
 SecureString paths also call `EvaluateKMS` on the parameter CMK: `kms:Encrypt` on `PutParameter`, and `kms:Decrypt` on decrypted `GetParameter` / `GetParameters` / `GetParametersByPath` (`WithDecryption=true`). Seal/unseal and KMS authz bind EncryptionContext `PARAMETER_ARN` (parameter ARN). String parameters stay identity-only. An `ssm:GetParameter` Allow alone cannot decrypt a SecureString when KMS denies.
 
-Cross-account parameter access beyond same-account lab paths is deferred.
+Cross-account parameter access beyond same-account lab paths is out of lab scope.
 
 ## How to verify / CLI smoke
 
@@ -39,6 +39,21 @@ aws ssm put-parameter \
 
 aws ssm get-parameter \
   --name "$PARAM" \
+  --endpoint-url "$EP"
+```
+
+StringList (comma-separated Value):
+
+```bash
+LIST="/noctaxris-list-$RANDOM"
+aws ssm put-parameter \
+  --name "$LIST" \
+  --value 'Monday,Wednesday,Friday' \
+  --type StringList \
+  --endpoint-url "$EP"
+
+aws ssm get-parameter \
+  --name "$LIST" \
   --endpoint-url "$EP"
 ```
 
@@ -84,8 +99,8 @@ aws ssm delete-parameter --name "$PARAM" --endpoint-url "$EP"
 aws ssm delete-parameter --name "$SECURE" --endpoint-url "$EP"
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Full SSM SAR beyond the lab set (StringList types, parameter policies, labels, tags, documents, sessions, automation, associations, OpsCenter, full pagination parity)
-- Cross-account parameter access beyond same-account lab paths
-- True AWS-owned `alias/aws/ssm` key (lab convenience alias is a per-account CMK approximation)
+- Full SSM SAR beyond the lab set (parameter policies, labels, tags, documents, sessions, automation, associations, OpsCenter, full pagination parity) (out of lab scope; String/StringList/SecureString + path hierarchy cover TF/SDK)
+- Cross-account parameter access beyond same-account lab paths (out of lab scope)
+- True AWS-owned `alias/aws/ssm` key (out of lab scope; lab convenience alias is a per-account CMK approximation)

@@ -494,6 +494,8 @@ const (
 	ActionLogsGetResourcePolicy           = "logs:GetResourcePolicy"
 	ActionLogsDeleteResourcePolicy        = "logs:DeleteResourcePolicy"
 	ActionLogsDescribeResourcePolicies    = "logs:DescribeResourcePolicies"
+	ActionLogsPutRetentionPolicy          = "logs:PutRetentionPolicy"
+	ActionLogsDeleteRetentionPolicy       = "logs:DeleteRetentionPolicy"
 )
 
 // Resource Groups Tagging API lab actions.
@@ -694,6 +696,7 @@ const (
 const (
 	ActionAPIGatewayV2CreateApi         = "apigatewayv2:CreateApi"
 	ActionAPIGatewayV2GetApi            = "apigatewayv2:GetApi"
+	ActionAPIGatewayV2UpdateApi         = "apigatewayv2:UpdateApi"
 	ActionAPIGatewayV2DeleteApi         = "apigatewayv2:DeleteApi"
 	ActionAPIGatewayV2GetApis           = "apigatewayv2:GetApis"
 	ActionAPIGatewayV2CreateIntegration = "apigatewayv2:CreateIntegration"
@@ -712,6 +715,7 @@ const ActionExecuteAPIInvoke = "execute-api:Invoke"
 const (
 	ActionCognitoCreateUserPool         = "cognito-idp:CreateUserPool"
 	ActionCognitoDescribeUserPool       = "cognito-idp:DescribeUserPool"
+	ActionCognitoUpdateUserPool         = "cognito-idp:UpdateUserPool"
 	ActionCognitoListUserPools          = "cognito-idp:ListUserPools"
 	ActionCognitoDeleteUserPool         = "cognito-idp:DeleteUserPool"
 	ActionCognitoCreateUserPoolClient   = "cognito-idp:CreateUserPoolClient"
@@ -1262,6 +1266,8 @@ func KnownAction(action string) bool {
 		ActionLogsGetResourcePolicy,
 		ActionLogsDeleteResourcePolicy,
 		ActionLogsDescribeResourcePolicies,
+		ActionLogsPutRetentionPolicy,
+		ActionLogsDeleteRetentionPolicy,
 		ActionTaggingTagResources,
 		ActionTaggingUntagResources,
 		ActionTaggingGetResources,
@@ -1394,6 +1400,7 @@ func KnownAction(action string) bool {
 		ActionAppSyncGraphQL,
 		ActionAPIGatewayV2CreateApi,
 		ActionAPIGatewayV2GetApi,
+		ActionAPIGatewayV2UpdateApi,
 		ActionAPIGatewayV2DeleteApi,
 		ActionAPIGatewayV2GetApis,
 		ActionAPIGatewayV2CreateIntegration,
@@ -1406,6 +1413,7 @@ func KnownAction(action string) bool {
 		ActionExecuteAPIInvoke,
 		ActionCognitoCreateUserPool,
 		ActionCognitoDescribeUserPool,
+		ActionCognitoUpdateUserPool,
 		ActionCognitoListUserPools,
 		ActionCognitoDeleteUserPool,
 		ActionCognitoCreateUserPoolClient,

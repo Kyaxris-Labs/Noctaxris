@@ -55,6 +55,7 @@ type Subscription struct {
 	Confirmed       bool
 	Owner           string
 	ConfirmToken    string
+	Attributes      map[string]string
 }
 
 // PublishResult is the outcome of Publish (message id for fan-out and delivery).
@@ -134,6 +135,7 @@ func EnsureSNSSchema(db *sql.DB) error {
 		`ALTER TABLE sns_published_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_published_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_subscriptions ADD COLUMN confirm_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sns_subscriptions ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}'`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
 			return fmt.Errorf("ensure sns schema: migrate: %w", err)
@@ -546,6 +548,9 @@ func (s *Store) fanOutTopicPublish(topic Topic, msg PublishedMessage) error {
 		return err
 	}
 	for _, sub := range subs {
+		if !snsSubscriptionFilterMatches(sub, msg) {
+			continue
+		}
 		s.deliverSNSSubscription(msg, sub)
 	}
 	return nil
@@ -553,7 +558,7 @@ func (s *Store) fanOutTopicPublish(topic Topic, msg PublishedMessage) error {
 
 func (s *Store) listConfirmedSubscriptions(topicARN string) ([]Subscription, error) {
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
 		 FROM sns_subscriptions WHERE topic_arn = ? AND confirmed = 1 ORDER BY subscription_arn`,
 		topicARN,
 	)
@@ -605,9 +610,19 @@ func (s *Store) deliverSNSToSQS(sub Subscription, msg PublishedMessage) error {
 	if !s.deliveryTargetResourcePolicyAllows(queueAccount, queueARN, actionSQSSendMessage, authz.ServicePrincipalSNS, sub.TopicARN) {
 		return fmt.Errorf("sns sqs delivery: queue policy does not Allow sns.amazonaws.com")
 	}
-	body, err := json.Marshal(snsNotificationEnvelope(msg))
-	if err != nil {
-		return fmt.Errorf("marshal sns sqs envelope: %w", err)
+	var body []byte
+	rawDelivery := ""
+	if sub.Attributes != nil {
+		rawDelivery = sub.Attributes["RawMessageDelivery"]
+	}
+	if strings.EqualFold(strings.TrimSpace(rawDelivery), "true") {
+		body = []byte(msg.Body)
+	} else {
+		var mErr error
+		body, mErr = json.Marshal(snsNotificationEnvelope(msg))
+		if mErr != nil {
+			return fmt.Errorf("marshal sns sqs envelope: %w", mErr)
+		}
 	}
 	var opts *SendMessageOpts
 	q, qerr := s.GetQueue(queueAccount, queueName)
@@ -755,8 +770,9 @@ func scanSubscription(row *sql.Row) (Subscription, error) {
 	var (
 		sub       Subscription
 		confirmed int
+		attrsJSON string
 	)
-	err := row.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken)
+	err := row.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken, &attrsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Subscription{}, ErrNoSuchSubscription
 	}
@@ -764,6 +780,13 @@ func scanSubscription(row *sql.Row) (Subscription, error) {
 		return Subscription{}, fmt.Errorf("scan subscription: %w", err)
 	}
 	sub.Confirmed = confirmed == 1
+	sub.Attributes, err = unmarshalAttributes(attrsJSON)
+	if err != nil {
+		return Subscription{}, err
+	}
+	if sub.Attributes == nil {
+		sub.Attributes = map[string]string{}
+	}
 	return sub, nil
 }
 
@@ -818,8 +841,8 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO sns_subscriptions
-		 (subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, confirm_token)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 (subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, confirm_token, attributes_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`,
 		subARN, topic.TopicARN, protocol, endpoint, confirmed, accountID, token,
 	)
 	if err != nil {
@@ -833,6 +856,7 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 		Confirmed:       confirmed == 1,
 		Owner:           accountID,
 		ConfirmToken:    token,
+		Attributes:      map[string]string{},
 	}
 	if token != "" {
 		_ = s.deliverSNSHTTPConfirmation(sub)
@@ -847,7 +871,7 @@ func (s *Store) ConfirmSubscription(topicARN, token string) (Subscription, error
 		return Subscription{}, fmt.Errorf("%w: Token is required", ErrSNSInvalidParameter)
 	}
 	row := s.db.QueryRow(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
 		 FROM sns_subscriptions WHERE confirm_token = ?`,
 		token,
 	)
@@ -884,7 +908,7 @@ func (s *Store) Unsubscribe(subscriptionARN string) error {
 // GetSubscription returns a subscription by ARN.
 func (s *Store) GetSubscription(subscriptionARN string) (Subscription, error) {
 	row := s.db.QueryRow(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
 		 FROM sns_subscriptions WHERE subscription_arn = ?`,
 		subscriptionARN,
 	)
@@ -896,7 +920,7 @@ func subscriptionAttributes(sub Subscription) map[string]string {
 	if sub.Confirmed {
 		confirmed = "true"
 	}
-	return map[string]string{
+	out := map[string]string{
 		"SubscriptionArn":              sub.SubscriptionARN,
 		"TopicArn":                     sub.TopicARN,
 		"Protocol":                     sub.Protocol,
@@ -904,9 +928,13 @@ func subscriptionAttributes(sub Subscription) map[string]string {
 		"Owner":                        sub.Owner,
 		"ConfirmationWasAuthenticated": confirmed,
 	}
+	for k, v := range sub.Attributes {
+		out[k] = v
+	}
+	return out
 }
 
-// GetSubscriptionAttributes returns lab-minimum subscription attributes.
+// GetSubscriptionAttributes returns lab subscription attributes including filter/delivery attrs.
 func (s *Store) GetSubscriptionAttributes(subscriptionARN string) (map[string]string, error) {
 	sub, err := s.GetSubscription(subscriptionARN)
 	if err != nil {
@@ -915,10 +943,122 @@ func (s *Store) GetSubscriptionAttributes(subscriptionARN string) (map[string]st
 	return subscriptionAttributes(sub), nil
 }
 
+// SetSubscriptionAttributes merges lab-supported subscription attributes.
+func (s *Store) SetSubscriptionAttributes(subscriptionARN string, attrs map[string]string) error {
+	sub, err := s.GetSubscription(subscriptionARN)
+	if err != nil {
+		return err
+	}
+	if sub.Attributes == nil {
+		sub.Attributes = map[string]string{}
+	}
+	for k, v := range attrs {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		switch key {
+		case "FilterPolicy", "FilterPolicyScope", "RawMessageDelivery", "DeliveryPolicy", "RedrivePolicy":
+			if key == "FilterPolicyScope" {
+				scope := strings.TrimSpace(v)
+				if scope != "" && scope != "MessageAttributes" && scope != "MessageBody" {
+					return fmt.Errorf("%w: FilterPolicyScope must be MessageAttributes or MessageBody", ErrSNSInvalidParameter)
+				}
+			}
+			if key == "FilterPolicy" && strings.TrimSpace(v) != "" && !json.Valid([]byte(v)) {
+				return fmt.Errorf("%w: FilterPolicy must be JSON", ErrSNSInvalidParameter)
+			}
+			if strings.TrimSpace(v) == "" {
+				delete(sub.Attributes, key)
+			} else {
+				sub.Attributes[key] = v
+			}
+		default:
+			return fmt.Errorf("%w: unsupported subscription attribute %q", ErrSNSInvalidParameter, key)
+		}
+	}
+	raw, err := marshalAttributes(sub.Attributes)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`UPDATE sns_subscriptions SET attributes_json = ? WHERE subscription_arn = ?`,
+		raw, subscriptionARN,
+	)
+	if err != nil {
+		return fmt.Errorf("set subscription attributes: %w", err)
+	}
+	return nil
+}
+
+func snsSubscriptionFilterMatches(sub Subscription, msg PublishedMessage) bool {
+	if sub.Attributes == nil {
+		return true
+	}
+	raw := strings.TrimSpace(sub.Attributes["FilterPolicy"])
+	if raw == "" {
+		return true
+	}
+	var policy map[string]any
+	if err := json.Unmarshal([]byte(raw), &policy); err != nil || len(policy) == 0 {
+		return true
+	}
+	scope := strings.TrimSpace(sub.Attributes["FilterPolicyScope"])
+	if scope == "" {
+		scope = "MessageAttributes"
+	}
+	switch scope {
+	case "MessageBody":
+		var body map[string]any
+		if err := json.Unmarshal([]byte(msg.Body), &body); err != nil {
+			return false
+		}
+		return snsFilterPolicyMatchMap(policy, body)
+	default:
+		attrs := map[string]any{}
+		for k, v := range msg.Attributes {
+			attrs[k] = v
+		}
+		return snsFilterPolicyMatchMap(policy, attrs)
+	}
+}
+
+// snsFilterPolicyMatchMap implements a lab FilterPolicy subset: each key must match
+// an exact string (or any of a string list). Nested operators are fail-closed (no match).
+func snsFilterPolicyMatchMap(policy map[string]any, values map[string]any) bool {
+	for key, want := range policy {
+		got, ok := values[key]
+		if !ok {
+			return false
+		}
+		gotStr := strings.TrimSpace(fmt.Sprint(got))
+		switch w := want.(type) {
+		case string:
+			if gotStr != w {
+				return false
+			}
+		case []any:
+			matched := false
+			for _, item := range w {
+				if gotStr == strings.TrimSpace(fmt.Sprint(item)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ListSubscriptions returns all subscriptions owned by the account.
 func (s *Store) ListSubscriptions(accountID string) ([]Subscription, error) {
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
 		 FROM sns_subscriptions WHERE owner = ? ORDER BY subscription_arn`,
 		accountID,
 	)
@@ -936,7 +1076,7 @@ func (s *Store) ListSubscriptionsByTopic(accountID, topicName string) ([]Subscri
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,'')
+		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
 		 FROM sns_subscriptions WHERE topic_arn = ? ORDER BY subscription_arn`,
 		topic.TopicARN,
 	)
@@ -953,11 +1093,20 @@ func scanSubscriptionRows(rows *sql.Rows) ([]Subscription, error) {
 		var (
 			sub       Subscription
 			confirmed int
+			attrsJSON string
 		)
-		if err := rows.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken); err != nil {
+		if err := rows.Scan(&sub.SubscriptionARN, &sub.TopicARN, &sub.Protocol, &sub.Endpoint, &confirmed, &sub.Owner, &sub.ConfirmToken, &attrsJSON); err != nil {
 			return nil, fmt.Errorf("scan subscriptions: %w", err)
 		}
 		sub.Confirmed = confirmed == 1
+		attrs, err := unmarshalAttributes(attrsJSON)
+		if err != nil {
+			return nil, err
+		}
+		if attrs == nil {
+			attrs = map[string]string{}
+		}
+		sub.Attributes = attrs
 		out = append(out, sub)
 	}
 	return out, rows.Err()

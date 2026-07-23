@@ -26,12 +26,14 @@ Identity `EvaluateFull` on `cloudcontrol:*`.
 | `AWS::KMS::Key` | Key id | Update: `KeyPolicy`, `EnableKeyRotation` (`Description` accepted/ignored) |
 | `AWS::KMS::Alias` | Alias name | Update: `TargetKeyId` |
 | `AWS::SNS::Topic` | Topic ARN | Update: `DisplayName`, `KmsMasterKeyId` |
-| `AWS::Events::EventBus` | Bus name | Update rejected (no mutable lab props) |
+| `AWS::Events::EventBus` | Bus name | Update: `Policy` (`Tags` accepted/ignored) |
 | `AWS::Events::Rule` | `bus\|rule` | Update: `EventPattern`, `State`, `Description` |
 | `AWS::SSM::Parameter` | Parameter name | Update: `Value`, `Type`, `KeyId` |
 | `AWS::SecretsManager::Secret` | Secret name | Update: `Description`, `KmsKeyId` |
-| `AWS::Logs::LogGroup` | Log group name | Update: empty patch only (no-op) |
-| `AWS::IAM::User` / `AWS::IAM::Group` / `AWS::IAM::ManagedPolicy` | — | Create/Get/List/Delete; Update rejected |
+| `AWS::Logs::LogGroup` | Log group name | Update: `RetentionInDays` (empty patch no-op) |
+| `AWS::IAM::User` | User name | Update: `Policies`, `ManagedPolicyArns`, `Groups` |
+| `AWS::IAM::Group` | Group name | Update: `Policies`, `ManagedPolicyArns` |
+| `AWS::IAM::ManagedPolicy` | Policy ARN | Update: `PolicyDocument` (+ re-attach `Roles` / `Users` / `Groups`); `Description` accepted/ignored |
 
 Lab `PatchDocument` is a JSON object of property keys (CreateResource DesiredState shape), not RFC6902. Unknown patch keys fail closed with `InvalidRequestException`.
 
@@ -48,9 +50,8 @@ aws cloudcontrol list-resources --type-name AWS::S3::Bucket --endpoint-url "$EP"
 aws cloudcontrol delete-resource --type-name AWS::S3::Bucket --identifier lab-cc-bucket --endpoint-url "$EP"
 ```
 
-## Not yet / deferred
+## Out of lab scope
 
-- Async ProgressEvent polling depth beyond recorded SUCCESS tokens
-- RFC6902 JSON Patch `PatchDocument` parity (lab uses property-object patches)
-- UpdateResource for IAM User/Group/ManagedPolicy and EventBus mutable depth
-- Private registry types
+- Async ProgressEvent polling depth beyond recorded SUCCESS tokens (out of lab scope; sync SUCCESS tokens cover lab CC)
+- RFC6902 JSON Patch `PatchDocument` parity (out of lab scope; lab uses property-object patches)
+- Private registry types (out of lab scope)

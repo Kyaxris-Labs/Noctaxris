@@ -2,15 +2,15 @@
 
 **Status:** shipped (lab core)
 
-Table streams with `NEW_IMAGE` or `KEYS_ONLY`, a single lab shard, and GetRecords iterators. Change records persist on PutItem, UpdateItem, and DeleteItem when the stream is enabled. Identity authz only.
+Table streams with `NEW_IMAGE`, `OLD_IMAGE`, `NEW_AND_OLD_IMAGES`, or `KEYS_ONLY`, a single lab shard, and GetRecords iterators. Change records persist on PutItem, UpdateItem, DeleteItem, and successful `TransactWriteItems` Put/Delete/Update when the stream is enabled. Identity authz only.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
-| Enable | `CreateTable` / `UpdateTable` `StreamSpecification` (`StreamEnabled`, `StreamViewType`) |
+| Enable | `CreateTable` / `UpdateTable` `StreamSpecification` (`StreamEnabled`, `StreamViewType`: `NEW_IMAGE`, `OLD_IMAGE`, `NEW_AND_OLD_IMAGES`, `KEYS_ONLY`) |
 | Control | `ListStreams`, `DescribeStream` |
-| Consume | `GetShardIterator` (`TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER`), `GetRecords` |
+| Consume | `GetShardIterator` (`TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER`), `GetRecords` (Keys plus NewImage and/or OldImage per view type) |
 
 Stream ARN: `arn:aws:dynamodb:REGION:ACCOUNT:table/NAME/stream/LABEL`. Lab shard id: `shardId-000000000000`. API target prefix: `DynamoDBStreams_20120810`.
 
@@ -55,6 +55,9 @@ aws dynamodbstreams get-records --shard-iterator "$IT" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Global tables and parallel shard fan-out
-- OLD_IMAGE / NEW_AND_OLD_IMAGE view types
-- Parallelization factor and OLD_IMAGE-shaped filter depth on Lambda ESM (DynamoDB Streams ESM with FilterCriteria ships in [lambda.md](lambda.md))
+None for lab-core stream views (Lambda ESM FilterCriteria on `dynamodb.OldImage` ships in [lambda.md](lambda.md)).
+
+## Out of lab scope
+
+- Global tables and parallel shard fan-out (out of lab scope; sequential multi-shard ESM is the lab path)
+- `ParallelizationFactor` / Enhanced Fan-Out style fan-out (out of lab scope)

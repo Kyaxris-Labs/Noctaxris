@@ -612,6 +612,36 @@ func (s *Server) secretsRotateSecret(
 		}
 	}
 
+	rotateImmediately := true
+	if v, ok := params["RotateImmediately"]; ok {
+		switch t := v.(type) {
+		case bool:
+			rotateImmediately = t
+		case string:
+			rotateImmediately = !strings.EqualFold(strings.TrimSpace(t), "false")
+		}
+	}
+	rules, hasRules, rulesErr := parseSecretRotationRules(params["RotationRules"])
+	if rulesErr != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			rulesErr.Error(), readOnly, eventID, verified)
+		return
+	}
+	now := s.now().UTC()
+	if hasRules {
+		if err := s.store.SetSecretRotationRules(secretAccountID, secretID, rules, now, rotateImmediately); err != nil {
+			if strings.Contains(err.Error(), "ValidationException") {
+				s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					err.Error(), readOnly, eventID, verified)
+				return
+			}
+			s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to configure rotation rules.", readOnly, eventID, verified)
+			return
+		}
+		s.StartSecretsRotationTicker()
+	}
+
 	described, err := s.store.DescribeSecret(secretAccountID, secretID)
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -620,7 +650,14 @@ func (s *Server) secretsRotateSecret(
 	}
 
 	var sec store.Secret
-	if strings.TrimSpace(described.RotationLambdaARN) == "" {
+	if !rotateImmediately {
+		// Configure-only: return current AWSCURRENT without rotating (lab deferral).
+		sec = described
+		if cur, getErr := s.store.GetSecretValue(secretAccountID, secretID); getErr == nil {
+			sec.VersionID = cur.VersionID
+			sec.Version = cur.Version
+		}
+	} else if strings.TrimSpace(described.RotationLambdaARN) == "" {
 		sec, err = s.store.RotateSecret(secretAccountID, secretID)
 	} else {
 		sec, err = s.secretsRotateViaLambda(r.Context(), verified, secretAccountID, secretID, described, clientToken)
@@ -655,6 +692,9 @@ func (s *Server) secretsRotateSecret(
 			"Unable to rotate secret.", readOnly, eventID, verified)
 		return
 	}
+	if rotateImmediately && (hasRules || described.RotationEnabled) {
+		_ = s.store.MarkSecretRotated(secretAccountID, secretID, now)
+	}
 	payload, err := sm.RotateSecretJSON(sec)
 	if err != nil {
 		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
@@ -663,6 +703,44 @@ func (s *Server) secretsRotateSecret(
 	}
 	s.writeSecretsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RotateSecret", readOnly)
+}
+
+func parseSecretRotationRules(raw any) (store.SecretRotationRules, bool, error) {
+	if raw == nil {
+		return store.SecretRotationRules{}, false, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return store.SecretRotationRules{}, false, fmt.Errorf("ValidationException: RotationRules must be an object")
+	}
+	var rules store.SecretRotationRules
+	switch v := m["AutomaticallyAfterDays"].(type) {
+	case float64:
+		rules.AutomaticallyAfterDays = int64(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return store.SecretRotationRules{}, false, fmt.Errorf("ValidationException: AutomaticallyAfterDays is invalid")
+		}
+		rules.AutomaticallyAfterDays = n
+	case int:
+		rules.AutomaticallyAfterDays = int64(v)
+	case int64:
+		rules.AutomaticallyAfterDays = v
+	}
+	if s, ok := m["ScheduleExpression"].(string); ok {
+		rules.ScheduleExpression = strings.TrimSpace(s)
+	}
+	if s, ok := m["Duration"].(string); ok {
+		rules.Duration = strings.TrimSpace(s)
+	}
+	if rules.AutomaticallyAfterDays == 0 && rules.ScheduleExpression == "" && rules.Duration == "" {
+		return store.SecretRotationRules{}, false, nil
+	}
+	if err := store.ValidateSecretRotationRules(rules); err != nil {
+		return store.SecretRotationRules{}, false, err
+	}
+	return rules, true, nil
 }
 
 // secretsRotateViaLambda enforces PassRole for secretsmanager.amazonaws.com, then runs

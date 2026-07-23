@@ -294,3 +294,96 @@ func TestCheckPassRoleTrustSourceArnCondition(t *testing.T) {
 		t.Fatalf("SourceArn mismatch got %v, want Deny", got)
 	}
 }
+
+// TestCheckPassRoleConfigureSourceArnMatrix covers trust aws:SourceArn locks for
+// each lab configure-path service principal (Lambda / EventBridge / ECS already
+// wired; Scheduler / Pipes / Secrets / APIGW / Cognito complete the matrix).
+func TestCheckPassRoleConfigureSourceArnMatrix(t *testing.T) {
+	cases := []struct {
+		name      string
+		principal string
+		sourceARN string
+		mismatch  string
+	}{
+		{
+			name:      "lambda",
+			principal: authz.ServicePrincipalLambda,
+			sourceARN: "arn:aws:lambda:us-east-1:" + passRoleAccountID + ":function:lab",
+			mismatch:  "arn:aws:lambda:us-east-1:" + passRoleAccountID + ":function:other",
+		},
+		{
+			name:      "events",
+			principal: authz.ServicePrincipalEvents,
+			sourceARN: "arn:aws:events:us-east-1:" + passRoleAccountID + ":rule/default/lab",
+			mismatch:  "arn:aws:events:us-east-1:" + passRoleAccountID + ":rule/default/other",
+		},
+		{
+			name:      "ecs",
+			principal: authz.ServicePrincipalECSTasks,
+			sourceARN: "arn:aws:ecs:us-east-1:" + passRoleAccountID + ":task-definition/lab",
+			mismatch:  "arn:aws:ecs:us-east-1:" + passRoleAccountID + ":task-definition/other",
+		},
+		{
+			name:      "scheduler",
+			principal: authz.ServicePrincipalScheduler,
+			sourceARN: "arn:aws:scheduler:us-east-1:" + passRoleAccountID + ":schedule/default/lab",
+			mismatch:  "arn:aws:scheduler:us-east-1:" + passRoleAccountID + ":schedule/default/other",
+		},
+		{
+			name:      "pipes",
+			principal: authz.ServicePrincipalPipes,
+			sourceARN: "arn:aws:pipes:us-east-1:" + passRoleAccountID + ":pipe/lab",
+			mismatch:  "arn:aws:pipes:us-east-1:" + passRoleAccountID + ":pipe/other",
+		},
+		{
+			name:      "secretsmanager",
+			principal: authz.ServicePrincipalSecretsManager,
+			sourceARN: "arn:aws:secretsmanager:us-east-1:" + passRoleAccountID + ":secret:lab-abcdef",
+			mismatch:  "arn:aws:secretsmanager:us-east-1:" + passRoleAccountID + ":secret:other-abcdef",
+		},
+		{
+			name:      "apigateway",
+			principal: authz.ServicePrincipalAPIGateway,
+			sourceARN: "arn:aws:apigateway:us-east-1::/apis/abc123",
+			mismatch:  "arn:aws:apigateway:us-east-1::/apis/other",
+		},
+		{
+			name:      "cognito-idp",
+			principal: authz.ServicePrincipalCognitoIDP,
+			sourceARN: "arn:aws:cognito-idp:us-east-1:" + passRoleAccountID + ":userpool/us-east-1_LabPool",
+			mismatch:  "arn:aws:cognito-idp:us-east-1:" + passRoleAccountID + ":userpool/us-east-1_Other",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			trust := `{
+				"Version":"2012-10-17",
+				"Statement":[{
+					"Effect":"Allow",
+					"Principal":{"Service":"` + tc.principal + `"},
+					"Action":"sts:AssumeRole",
+					"Condition":{"ArnEquals":{"aws:SourceArn":"` + tc.sourceARN + `"}}
+				}]
+			}`
+			req := authz.PassRoleRequest{
+				Caller: authz.RequestContext{
+					Principal: identity.RootPrincipal(passRoleAccountID, "AKIAROOT"),
+				},
+				RoleARN:          lambdaExecRoleARN,
+				TrustPolicyDoc:   trust,
+				ServicePrincipal: tc.principal,
+			}
+			if got := authz.CheckPassRole(req); got != authz.Deny {
+				t.Fatalf("missing SourceArn got %v, want Deny", got)
+			}
+			req.SourceArn = tc.sourceARN
+			if got := authz.CheckPassRole(req); got != authz.Allow {
+				t.Fatalf("SourceArn match got %v, want Allow", got)
+			}
+			req.SourceArn = tc.mismatch
+			if got := authz.CheckPassRole(req); got != authz.Deny {
+				t.Fatalf("SourceArn mismatch got %v, want Deny", got)
+			}
+		})
+	}
+}

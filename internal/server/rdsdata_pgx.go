@@ -84,13 +84,25 @@ func executeRDSDataPgxWithConn(
 ) (store.RDSDataExecuteResult, error) {
 	sqlText := rewriteDataAPINamedParams(req.SQL)
 	args := buildRDSDataNamedArgs(req.Parameters)
-	if isPostgresSelectSQL(sqlText) {
+	selectLike := isPostgresSelectSQL(sqlText)
+	returning := hasPostgresReturning(sqlText)
+	if selectLike || returning {
 		rows, err := conn.Query(ctx, sqlText, args)
 		if err != nil {
 			return store.RDSDataExecuteResult{}, err
 		}
 		defer rows.Close()
-		return mapPgxRows(rows)
+		res, err := mapPgxRows(rows)
+		if err != nil {
+			return store.RDSDataExecuteResult{}, err
+		}
+		if returning && !selectLike {
+			res.NumberOfRecordsUpdated = int64(len(res.Records))
+			if len(res.Records) > 0 {
+				res.GeneratedFields = append([]store.RDSDataField(nil), res.Records[0]...)
+			}
+		}
+		return res, nil
 	}
 	tag, err := conn.Exec(ctx, sqlText, args)
 	if err != nil {
@@ -366,6 +378,37 @@ func anyToFloat64(v any) (float64, bool) {
 func isPostgresSelectSQL(sqlText string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(sqlText))
 	return strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "WITH")
+}
+
+// hasPostgresReturning detects a RETURNING clause so DML can return generatedFields/records.
+func hasPostgresReturning(sqlText string) bool {
+	upper := strings.ToUpper(sqlText)
+	const token = "RETURNING"
+	for i := 0; i < len(upper); {
+		rel := strings.Index(upper[i:], token)
+		if rel < 0 {
+			return false
+		}
+		idx := i + rel
+		if idx > 0 {
+			prev := upper[idx-1]
+			if isSQLIdentChar(prev) {
+				i = idx + 1
+				continue
+			}
+		}
+		end := idx + len(token)
+		if end < len(upper) && isSQLIdentChar(upper[end]) {
+			i = idx + 1
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func isSQLIdentChar(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
 // isRDSDataPgxDialFailure reports whether err means the nested wire endpoint was unreachable

@@ -55,9 +55,9 @@ func (s *Store) applyCFNModify(accountID, region, stackName, stackID, logicalID,
 	case "AWS::KMS::Key":
 		return s.modifyCFNKMSKey(physicalID, oldProps, newProps)
 	case "AWS::Logs::LogGroup":
-		return s.modifyCFNLogGroup(physicalID, oldProps, newProps)
+		return s.modifyCFNLogGroup(accountID, physicalID, oldProps, newProps)
 	case "AWS::Events::EventBus":
-		return s.modifyCFNEventBus(physicalID, oldProps, newProps)
+		return s.modifyCFNEventBus(accountID, physicalID, oldProps, newProps)
 	default:
 		return fmt.Errorf("%w: Modify not supported for type %s (fail-closed); logical id %s", ErrCFNBadTemplate, resType, logicalID)
 	}
@@ -160,6 +160,104 @@ func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProp
 		}
 	}
 	return s.replaceCFNRolePolicies(accountID, roleARN, roleName, newProps)
+}
+
+func (s *Store) replaceCFNPrincipalPolicies(
+	accountID, principalARN, entityName string,
+	props map[string]any,
+	attachManaged func(accountID, name, policyARN string) error,
+	detachManaged func(accountID, name, policyARN string) error,
+) error {
+	wantInline := map[string]string{}
+	if raw, ok := props["Policies"].([]any); ok {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := cfnStringProp(m, "PolicyName")
+			if name == "" {
+				return fmt.Errorf("%w: Policies.PolicyName required", ErrCFNBadTemplate)
+			}
+			docRaw, ok := m["PolicyDocument"]
+			if !ok {
+				return fmt.Errorf("%w: Policies.PolicyDocument required", ErrCFNBadTemplate)
+			}
+			docBytes, err := json.Marshal(docRaw)
+			if err != nil {
+				return fmt.Errorf("%w: Policies.PolicyDocument", ErrCFNBadTemplate)
+			}
+			wantInline[name] = string(docBytes)
+		}
+	}
+	if _, has := props["Policies"]; has {
+		existing, err := s.ListInlinePolicies(principalARN)
+		if err != nil {
+			return fmt.Errorf("%w: list inline policies: %v", ErrCFNBadTemplate, err)
+		}
+		for _, p := range existing {
+			if _, ok := wantInline[p.PolicyName]; !ok {
+				if err := s.DeleteInlinePolicy(principalARN, p.PolicyName); err != nil {
+					return fmt.Errorf("%w: delete inline policy: %v", ErrCFNBadTemplate, err)
+				}
+			}
+		}
+		for name, doc := range wantInline {
+			if err := s.PutInlinePolicy(principalARN, name, doc); err != nil {
+				return fmt.Errorf("%w: put inline policy: %v", ErrCFNBadTemplate, err)
+			}
+		}
+	}
+	if _, has := props["ManagedPolicyArns"]; has {
+		want := map[string]struct{}{}
+		for _, arn := range cfnStringListProp(props, "ManagedPolicyArns") {
+			want[arn] = struct{}{}
+		}
+		attached, err := s.ListAttachedPolicyRefs(principalARN)
+		if err != nil {
+			return fmt.Errorf("%w: list attached policies: %v", ErrCFNBadTemplate, err)
+		}
+		for _, ref := range attached {
+			if _, ok := want[ref.PolicyARN]; !ok {
+				if err := detachManaged(accountID, entityName, ref.PolicyARN); err != nil {
+					return fmt.Errorf("%w: DetachPolicy: %v", ErrCFNBadTemplate, err)
+				}
+			}
+		}
+		for arn := range want {
+			if err := attachManaged(accountID, entityName, arn); err != nil {
+				return fmt.Errorf("%w: AttachPolicy: %v", ErrCFNBadTemplate, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) replaceCFNUserGroups(accountID, userName string, props map[string]any) error {
+	want := map[string]struct{}{}
+	for _, g := range cfnStringListProp(props, "Groups") {
+		name := cfnIAMEntityName(g)
+		if name != "" {
+			want[name] = struct{}{}
+		}
+	}
+	current, err := s.ListGroupsForUser(accountID, userName)
+	if err != nil {
+		return fmt.Errorf("%w: ListGroupsForUser: %v", ErrCFNBadTemplate, err)
+	}
+	for _, g := range current {
+		if _, ok := want[g.GroupName]; !ok {
+			if err := s.RemoveUserFromGroup(accountID, g.GroupName, userName); err != nil {
+				return fmt.Errorf("%w: RemoveUserFromGroup: %v", ErrCFNBadTemplate, err)
+			}
+		}
+	}
+	for name := range want {
+		if err := s.AddUserToGroup(accountID, name, userName); err != nil {
+			return fmt.Errorf("%w: AddUserToGroup: %v", ErrCFNBadTemplate, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) replaceCFNRolePolicies(accountID, roleARN, roleName string, props map[string]any) error {
@@ -537,8 +635,7 @@ func (s *Store) modifyCFNKMSKey(physicalID string, oldProps, newProps map[string
 	return nil
 }
 
-func (s *Store) modifyCFNLogGroup(physicalID string, oldProps, newProps map[string]any) error {
-	_ = s
+func (s *Store) modifyCFNLogGroup(accountID, physicalID string, oldProps, newProps map[string]any) error {
 	if err := cfnRejectImmutablePropChange("AWS::Logs::LogGroup", physicalID, oldProps, newProps, "LogGroupName"); err != nil {
 		return err
 	}
@@ -546,22 +643,37 @@ func (s *Store) modifyCFNLogGroup(physicalID string, oldProps, newProps map[stri
 	if name != "" && name != physicalID {
 		return fmt.Errorf("%w: LogGroupName cannot change on Modify (fail-closed)", ErrCFNBadTemplate)
 	}
+	if _, ok := newProps["RetentionInDays"]; ok {
+		days := cfnIntProp(newProps, "RetentionInDays", 0)
+		if days <= 0 {
+			return s.DeleteRetentionPolicy(accountID, physicalID)
+		}
+		return s.PutRetentionPolicy(accountID, physicalID, days)
+	}
 	return nil
 }
 
-func (s *Store) modifyCFNEventBus(physicalID string, oldProps, newProps map[string]any) error {
-	_ = s
+func (s *Store) modifyCFNEventBus(accountID, physicalID string, oldProps, newProps map[string]any) error {
 	if err := cfnRejectImmutablePropChange("AWS::Events::EventBus", physicalID, oldProps, newProps, "Name"); err != nil {
 		return err
 	}
-	// No mutable lab properties beyond Tags (ignored).
 	for key := range newProps {
-		if key == "Name" || key == "Tags" {
+		if key == "Name" || key == "Tags" || key == "Policy" {
 			continue
 		}
 		if !cfnPropJSONEqual(oldProps, newProps, key) {
 			return fmt.Errorf("%w: EventBus Modify property %q is not supported (fail-closed)", ErrCFNBadTemplate, key)
 		}
+	}
+	if raw, ok := newProps["Policy"]; ok {
+		if raw == nil {
+			return s.PutEventBusPolicy(accountID, physicalID, "")
+		}
+		policyJSON, err := cfnPolicyDocumentJSON(raw)
+		if err != nil {
+			return fmt.Errorf("%w: EventBus Policy on Modify: %v", ErrCFNBadTemplate, err)
+		}
+		return s.PutEventBusPolicy(accountID, physicalID, policyJSON)
 	}
 	return nil
 }

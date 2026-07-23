@@ -135,7 +135,7 @@ func filterDynamoStreamRecords(fc LambdaESMFilterCriteria, records []DynamoStrea
 }
 
 // esmDynamoRecordForFilter builds the DynamoDB Streams filter evaluation record
-// (eventName plus dynamodb.Keys / dynamodb.NewImage when present).
+// (eventName plus dynamodb.Keys / NewImage / OldImage when present).
 func esmDynamoRecordForFilter(rec DynamoStreamRecord) map[string]any {
 	m := map[string]any{"eventName": rec.EventName}
 	ddb := map[string]any{}
@@ -149,6 +149,12 @@ func esmDynamoRecordForFilter(rec DynamoStreamRecord) map[string]any {
 		var img any
 		if err := json.Unmarshal([]byte(rec.NewImageJSON), &img); err == nil {
 			ddb["NewImage"] = img
+		}
+	}
+	if strings.TrimSpace(rec.OldImageJSON) != "" {
+		var img any
+		if err := json.Unmarshal([]byte(rec.OldImageJSON), &img); err == nil {
+			ddb["OldImage"] = img
 		}
 	}
 	if len(ddb) > 0 {

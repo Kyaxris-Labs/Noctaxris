@@ -103,6 +103,57 @@ func TestS3NotifyDispatchDenyWithoutPolicyOnEmit(t *testing.T) {
 	}
 }
 
+func TestS3NotifyForeignLambdaServicePrincipalXA(t *testing.T) {
+	st := openS3Store(t)
+	bucketOwner := "000000000001"
+	fnOwner := "000000000002"
+	if err := st.EnsureRoot(bucketOwner, "AKIAROOT000000000001", "secret-bucket"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureRoot(fnOwner, "AKIAROOT000000000002", "secret-fn"); err != nil {
+		t.Fatal(err)
+	}
+	bucket := "xa-notify-bucket"
+	if _, err := st.CreateBucket(bucketOwner, bucket); err != nil {
+		t.Fatal(err)
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    fnOwner,
+		Region:       "us-east-1",
+		FunctionName: "xa-s3-notify",
+		RoleARN:      "arn:aws:iam::" + fnOwner + ":role/exec",
+		Runtime:      "python3.12",
+		Handler:      "app.handler",
+		Zip:          zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddFunctionPermission(fnOwner, fn.FunctionName, "s3-xa", "lambda:InvokeFunction",
+		"s3.amazonaws.com", bucketOwner, store.BucketARN(bucket)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutBucketNotificationConfiguration(bucketOwner, bucket, store.S3NotificationConfig{
+		LambdaConfigs: []store.S3LambdaFunctionConfig{{
+			Events:      []string{"s3:ObjectCreated:Put"},
+			FunctionARN: fn.FunctionARN,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(bucketOwner, bucket, "xa.bin", store.PutObjectMeta{Data: []byte("1"), PlainSize: 1}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.LatestAsyncInvocation(fnOwner, fn.FunctionName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(job.EventJSON, `"eventName":"ObjectCreated:Put"`) || !strings.Contains(job.EventJSON, bucket) {
+		t.Fatalf("async event=%s", job.EventJSON)
+	}
+}
+
 func TestS3NotifyDispatchLambdaAsync(t *testing.T) {
 	st := openS3Store(t)
 	account := "000000000001"

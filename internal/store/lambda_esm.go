@@ -749,10 +749,14 @@ func buildDynamoLambdaEventJSON(streamARN, streamViewType string, records []Dyna
 	}
 	out := make([]map[string]any, 0, len(records))
 	for i, rec := range records {
+		view := streamViewType
+		if rec.StreamViewType != "" {
+			view = rec.StreamViewType
+		}
 		ddb := map[string]any{
-			"SequenceNumber":  rec.SequenceNumber,
-			"StreamViewType":  streamViewType,
-			"SizeBytes":       len(rec.KeysJSON) + len(rec.NewImageJSON),
+			"SequenceNumber":              rec.SequenceNumber,
+			"StreamViewType":              view,
+			"SizeBytes":                   len(rec.KeysJSON) + len(rec.NewImageJSON) + len(rec.OldImageJSON),
 			"ApproximateCreationDateTime": float64(rec.ArrivalMS) / 1000.0,
 		}
 		if rec.KeysJSON != "" {
@@ -760,6 +764,9 @@ func buildDynamoLambdaEventJSON(streamARN, streamViewType string, records []Dyna
 		}
 		if rec.NewImageJSON != "" {
 			ddb["NewImage"] = json.RawMessage(rec.NewImageJSON)
+		}
+		if rec.OldImageJSON != "" {
+			ddb["OldImage"] = json.RawMessage(rec.OldImageJSON)
 		}
 		out = append(out, map[string]any{
 			"eventID":        fmt.Sprintf("%d", i+1),

@@ -8,6 +8,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	cognitosvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/cognito"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -74,6 +76,8 @@ func (s *Server) handleCognito(
 		s.cognitoCreateUserPool(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoDescribeUserPool:
 		s.cognitoDescribeUserPool(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoUpdateUserPool:
+		s.cognitoUpdateUserPool(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoListUserPools:
 		s.cognitoListUserPools(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoDeleteUserPool:
@@ -119,6 +123,8 @@ func cognitoAction(action string) string {
 		return catalog.ActionCognitoCreateUserPool
 	case "DescribeUserPool":
 		return catalog.ActionCognitoDescribeUserPool
+	case "UpdateUserPool":
+		return catalog.ActionCognitoUpdateUserPool
 	case "ListUserPools":
 		return catalog.ActionCognitoListUserPools
 	case "DeleteUserPool":
@@ -154,6 +160,54 @@ func cognitoAction(action string) string {
 	}
 }
 
+func cognitoRoleArnFromParams(params map[string]any) string {
+	roleARN, _ := params["RoleArn"].(string)
+	return strings.TrimSpace(roleARN)
+}
+
+func cognitoLambdaConfigFromParams(params map[string]any) store.CognitoLambdaConfig {
+	raw, _ := params["LambdaConfig"].(map[string]any)
+	return store.CognitoLambdaConfigFromAPI(raw)
+}
+
+func (s *Server) checkCognitoPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok {
+		return errors.New("RoleArn must be a valid IAM role ARN")
+	}
+	if accountID != verified.AccountID {
+		return errors.New("RoleArn must be in the same account")
+	}
+	storedARN, trust, err := s.store.GetRole(accountID, roleName)
+	if err != nil {
+		return errors.New("RoleArn not found")
+	}
+	if storedARN != "" {
+		roleARN = storedARN
+	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to Cognito")
+	}
+	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
+		EvalInputs:       in,
+		RoleARN:          roleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: authz.ServicePrincipalCognitoIDP,
+		SourceArn:        sourceARN,
+	})
+	if decision != authz.Allow {
+		return errors.New("not authorized to pass role to Cognito")
+	}
+	return nil
+}
+
 func (s *Server) cognitoCreateUserPool(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -168,6 +222,8 @@ func (s *Server) cognitoCreateUserPool(
 	if region == "" {
 		region = store.DefaultCognitoRegion
 	}
+	roleARN := cognitoRoleArnFromParams(params)
+	lambdaCfg := cognitoLambdaConfigFromParams(params)
 	pool, err := s.store.CreateCognitoUserPool(verified.AccountID, region, name)
 	if errors.Is(err, store.ErrCognitoBadRequest) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
@@ -179,9 +235,78 @@ func (s *Server) cognitoCreateUserPool(
 			"Unable to create user pool.", readOnly, eventID, verified)
 		return
 	}
+	if roleARN != "" {
+		if err := s.checkCognitoPassRole(verified, roleARN, pool.ARN); err != nil {
+			_ = s.store.DeleteCognitoUserPool(verified.AccountID, pool.PoolID)
+			s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	if roleARN != "" || lambdaCfg.HasTriggers() {
+		pool, err = s.store.SetCognitoUserPoolTriggers(verified.AccountID, pool.PoolID, roleARN, lambdaCfg)
+		if err != nil {
+			_ = s.store.DeleteCognitoUserPool(verified.AccountID, pool.PoolID)
+			s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to configure user pool triggers.", readOnly, eventID, verified)
+			return
+		}
+	}
 	payload, _ := cognitosvc.CreateUserPoolJSON(pool)
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "CreateUserPool", readOnly)
+}
+
+func (s *Server) cognitoUpdateUserPool(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	poolID, _ := params["UserPoolId"].(string)
+	if !s.authorize(verified, catalog.ActionCognitoUpdateUserPool, "*") {
+		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform cognito-idp:UpdateUserPool.", readOnly, eventID, verified)
+		return
+	}
+	pool, err := s.store.DescribeCognitoUserPool(verified.AccountID, poolID)
+	if errors.Is(err, store.ErrCognitoNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"User pool not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update user pool.", readOnly, eventID, verified)
+		return
+	}
+	roleARN := cognitoRoleArnFromParams(params)
+	lambdaCfg := cognitoLambdaConfigFromParams(params)
+	// AWS UpdateUserPool replace semantics for LambdaConfig: omitted/empty clears triggers.
+	if _, hasLC := params["LambdaConfig"]; !hasLC {
+		lambdaCfg = store.CognitoLambdaConfig{}
+	}
+	if _, hasRole := params["RoleArn"]; !hasRole {
+		roleARN = ""
+	}
+	if roleARN != "" {
+		if err := s.checkCognitoPassRole(verified, roleARN, pool.ARN); err != nil {
+			s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	if _, err := s.store.SetCognitoUserPoolTriggers(verified.AccountID, pool.PoolID, roleARN, lambdaCfg); err != nil {
+		if errors.Is(err, store.ErrCognitoNotFound) {
+			s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"User pool not found.", readOnly, eventID, verified)
+			return
+		}
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update user pool.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.UpdateUserPoolJSON()
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "UpdateUserPool", readOnly)
 }
 
 func (s *Server) cognitoDescribeUserPool(
@@ -431,6 +556,10 @@ func (s *Server) cognitoSignUp(
 			"User already exists.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
 	if errors.Is(err, store.ErrCognitoBadRequest) || errors.Is(err, store.ErrCognitoInvalidPass) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			err.Error(), readOnly, eventID, verified)
@@ -464,6 +593,10 @@ func (s *Server) cognitoConfirmSignUp(
 			"User not found.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			err.Error(), readOnly, eventID, verified)
@@ -479,15 +612,28 @@ func (s *Server) cognitoConfirmSignUp(
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ConfirmSignUp", readOnly)
 }
 
-func cognitoAuthParams(params map[string]any) (username, password, refreshToken string) {
+func (s *Server) writeCognitoTriggerError(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, err error,
+) {
+	msg := "Configured Lambda trigger failed."
+	if err != nil {
+		msg = err.Error()
+	}
+	s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UnexpectedLambdaException",
+		msg, readOnly, eventID, verified)
+}
+
+func cognitoAuthParams(params map[string]any) (username, password, refreshToken, srpA string) {
 	raw, _ := params["AuthParameters"].(map[string]any)
 	if raw == nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	username, _ = raw["USERNAME"].(string)
 	password, _ = raw["PASSWORD"].(string)
 	refreshToken, _ = raw["REFRESH_TOKEN"].(string)
-	return username, password, refreshToken
+	srpA, _ = raw["SRP_A"].(string)
+	return username, password, refreshToken, srpA
 }
 
 func cognitoIsRefreshFlow(flow string) bool {
@@ -501,7 +647,7 @@ func (s *Server) cognitoInitiateAuth(
 ) {
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
-	username, password, refreshToken := cognitoAuthParams(params)
+	username, password, refreshToken, srpA := cognitoAuthParams(params)
 	// InitiateAuth is a public Cognito IdP API (no IAM / SigV4 on AWS).
 	flowNorm := strings.ToUpper(strings.TrimSpace(flow))
 	var outcome store.CognitoAuthOutcome
@@ -509,13 +655,15 @@ func (s *Server) cognitoInitiateAuth(
 	switch {
 	case flowNorm == "USER_PASSWORD_AUTH":
 		outcome, err = s.store.InitiateCognitoAuth(clientID, username, password)
+	case flowNorm == "USER_SRP_AUTH":
+		outcome, err = s.store.InitiateCognitoSRPAuth(clientID, username, srpA)
 	case cognitoIsRefreshFlow(flow):
 		result, refreshErr := s.store.RefreshCognitoTokens("", clientID, refreshToken)
 		err = refreshErr
 		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only USER_PASSWORD_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
+			"Only USER_PASSWORD_AUTH, USER_SRP_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoUnauthorized) {
@@ -530,6 +678,10 @@ func (s *Server) cognitoInitiateAuth(
 	if errors.Is(err, store.ErrCognitoNotFound) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Client not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {
@@ -554,7 +706,7 @@ func (s *Server) cognitoAdminInitiateAuth(
 	poolID, _ := params["UserPoolId"].(string)
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
-	username, password, refreshToken := cognitoAuthParams(params)
+	username, password, refreshToken, _ := cognitoAuthParams(params)
 	if !s.authorize(verified, catalog.ActionCognitoAdminInitiateAuth, "*") {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminInitiateAuth.", readOnly, eventID, verified)
@@ -588,6 +740,10 @@ func (s *Server) cognitoAdminInitiateAuth(
 	if errors.Is(err, store.ErrCognitoNotFound) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Pool or client not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {
@@ -728,14 +884,23 @@ func (s *Server) cognitoRespondToAuthChallenge(
 	session, _ := params["Session"].(string)
 	responses := cognitoChallengeResponses(params)
 	// Public IdP: no IAM evaluation.
-	if strings.ToUpper(strings.TrimSpace(challengeName)) != "SOFTWARE_TOKEN_MFA" {
+	challengeNorm := strings.ToUpper(strings.TrimSpace(challengeName))
+	var outcome store.CognitoAuthOutcome
+	var err error
+	switch challengeNorm {
+	case "SOFTWARE_TOKEN_MFA":
+		username := responses["USERNAME"]
+		totpCode := responses["SOFTWARE_TOKEN_MFA_CODE"]
+		result, mfaErr := s.store.RespondToSOFTWARETokenMFAChallenge(clientID, username, session, totpCode)
+		err = mfaErr
+		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
+	case "PASSWORD_VERIFIER":
+		outcome, err = s.store.RespondToCognitoPASSWORDVerifierChallenge(clientID, session, responses)
+	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only SOFTWARE_TOKEN_MFA challenge is supported.", readOnly, eventID, verified)
+			"Only PASSWORD_VERIFIER or SOFTWARE_TOKEN_MFA challenge is supported.", readOnly, eventID, verified)
 		return
 	}
-	username := responses["USERNAME"]
-	totpCode := responses["SOFTWARE_TOKEN_MFA_CODE"]
-	result, err := s.store.RespondToSOFTWARETokenMFAChallenge(clientID, username, session, totpCode)
 	if errors.Is(err, store.ErrCognitoCodeMismatch) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "CodeMismatchException",
 			"Invalid code provided, please request a code again.", readOnly, eventID, verified)
@@ -744,6 +909,10 @@ func (s *Server) cognitoRespondToAuthChallenge(
 	if errors.Is(err, store.ErrCognitoUnauthorized) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
 			"Invalid session or challenge response.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {
@@ -756,7 +925,7 @@ func (s *Server) cognitoRespondToAuthChallenge(
 			"Unable to respond to auth challenge.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := cognitosvc.AuthResultJSON(result)
+	payload, _ := cognitosvc.AuthOutcomeJSON(outcome)
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "RespondToAuthChallenge", readOnly)
 }

@@ -100,6 +100,7 @@ type APIGatewayAPI struct {
 	ProtocolType string
 	APIEndpoint  string
 	CreatedAt    int64
+	CORS         APIGatewayCORS
 }
 
 // APIGatewayIntegration is a Lambda AWS_PROXY integration.
@@ -173,6 +174,7 @@ func EnsureAPIGatewayV2Schema(db *sql.DB) error {
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_credentials_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_payload_format_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN enable_simple_responses INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE apigwv2_apis ADD COLUMN cors_json TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil {
@@ -197,6 +199,11 @@ func APIGatewayAPIEndpoint(apiID string) string {
 
 // CreateAPIGatewayAPI creates an HTTP API.
 func (s *Store) CreateAPIGatewayAPI(accountID, region, name, protocolType string) (APIGatewayAPI, error) {
+	return s.CreateAPIGatewayAPIWithCORS(accountID, region, name, protocolType, APIGatewayCORS{})
+}
+
+// CreateAPIGatewayAPIWithCORS creates an HTTP API with optional CorsConfiguration.
+func (s *Store) CreateAPIGatewayAPIWithCORS(accountID, region, name, protocolType string, cors APIGatewayCORS) (APIGatewayAPI, error) {
 	name = strings.TrimSpace(name)
 	protocolType = strings.ToUpper(strings.TrimSpace(protocolType))
 	if name == "" {
@@ -212,53 +219,102 @@ func (s *Store) CreateAPIGatewayAPI(accountID, region, name, protocolType string
 		region = DefaultAPIGatewayRegion
 	}
 	_ = region
+	norm, err := NormalizeAPIGatewayCORS(cors)
+	if err != nil {
+		return APIGatewayAPI{}, err
+	}
+	corsJSON, err := marshalAPIGatewayCORS(norm)
+	if err != nil {
+		return APIGatewayAPI{}, err
+	}
 	apiID := uuid.NewString()
 	endpoint := APIGatewayAPIEndpoint(apiID)
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.db.Exec(
-		`INSERT INTO apigwv2_apis (account_id, api_id, name, protocol_type, api_endpoint, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		accountID, apiID, name, protocolType, endpoint, now,
+	_, err = s.db.Exec(
+		`INSERT INTO apigwv2_apis (account_id, api_id, name, protocol_type, api_endpoint, created_at, cors_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, apiID, name, protocolType, endpoint, now, corsJSON,
 	)
 	if err != nil {
-		return APIGatewayAPI{}, fmt.Errorf("create api: %w", err)
+		// Older volumes without cors_json column: migrate then retry once.
+		if strings.Contains(strings.ToLower(err.Error()), "no such column: cors_json") {
+			if mErr := EnsureAPIGatewayV2Schema(s.db); mErr != nil {
+				return APIGatewayAPI{}, fmt.Errorf("create api: %w", err)
+			}
+			_, err = s.db.Exec(
+				`INSERT INTO apigwv2_apis (account_id, api_id, name, protocol_type, api_endpoint, created_at, cors_json)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				accountID, apiID, name, protocolType, endpoint, now, corsJSON,
+			)
+		}
+		if err != nil {
+			return APIGatewayAPI{}, fmt.Errorf("create api: %w", err)
+		}
 	}
 	return APIGatewayAPI{
 		APIID: apiID, Name: name, ProtocolType: protocolType,
-		APIEndpoint: endpoint, CreatedAt: now,
+		APIEndpoint: endpoint, CreatedAt: now, CORS: norm,
 	}, nil
+}
+
+// UpdateAPIGatewayAPICORS replaces CorsConfiguration on an existing API.
+func (s *Store) UpdateAPIGatewayAPICORS(accountID, apiID string, cors APIGatewayCORS) (APIGatewayAPI, error) {
+	api, err := s.GetAPIGatewayAPI(accountID, apiID)
+	if err != nil {
+		return APIGatewayAPI{}, err
+	}
+	norm, err := NormalizeAPIGatewayCORS(cors)
+	if err != nil {
+		return APIGatewayAPI{}, err
+	}
+	corsJSON, err := marshalAPIGatewayCORS(norm)
+	if err != nil {
+		return APIGatewayAPI{}, err
+	}
+	if _, err := s.db.Exec(
+		`UPDATE apigwv2_apis SET cors_json = ? WHERE account_id = ? AND api_id = ?`,
+		corsJSON, accountID, apiID,
+	); err != nil {
+		return APIGatewayAPI{}, fmt.Errorf("update api cors: %w", err)
+	}
+	api.CORS = norm
+	return api, nil
 }
 
 // GetAPIGatewayAPI returns an API by id.
 func (s *Store) GetAPIGatewayAPI(accountID, apiID string) (APIGatewayAPI, error) {
 	var a APIGatewayAPI
+	var corsJSON string
 	err := s.db.QueryRow(
-		`SELECT api_id, name, protocol_type, api_endpoint, created_at FROM apigwv2_apis
+		`SELECT api_id, name, protocol_type, api_endpoint, created_at, COALESCE(cors_json,'') FROM apigwv2_apis
 		 WHERE account_id = ? AND api_id = ?`,
 		accountID, apiID,
-	).Scan(&a.APIID, &a.Name, &a.ProtocolType, &a.APIEndpoint, &a.CreatedAt)
+	).Scan(&a.APIID, &a.Name, &a.ProtocolType, &a.APIEndpoint, &a.CreatedAt, &corsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIGatewayAPI{}, ErrAPIGatewayNotFound
 	}
 	if err != nil {
 		return APIGatewayAPI{}, fmt.Errorf("get api: %w", err)
 	}
+	a.CORS = unmarshalAPIGatewayCORS(corsJSON)
 	return a, nil
 }
 
 // GetAPIGatewayAPIByID returns API and owning account (lab: api_id globally unique).
 func (s *Store) GetAPIGatewayAPIByID(apiID string) (accountID string, api APIGatewayAPI, err error) {
+	var corsJSON string
 	err = s.db.QueryRow(
-		`SELECT account_id, api_id, name, protocol_type, api_endpoint, created_at FROM apigwv2_apis
+		`SELECT account_id, api_id, name, protocol_type, api_endpoint, created_at, COALESCE(cors_json,'') FROM apigwv2_apis
 		 WHERE api_id = ?`,
 		apiID,
-	).Scan(&accountID, &api.APIID, &api.Name, &api.ProtocolType, &api.APIEndpoint, &api.CreatedAt)
+	).Scan(&accountID, &api.APIID, &api.Name, &api.ProtocolType, &api.APIEndpoint, &api.CreatedAt, &corsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", APIGatewayAPI{}, ErrAPIGatewayNotFound
 	}
 	if err != nil {
 		return "", APIGatewayAPI{}, fmt.Errorf("get api by id: %w", err)
 	}
+	api.CORS = unmarshalAPIGatewayCORS(corsJSON)
 	return accountID, api, nil
 }
 

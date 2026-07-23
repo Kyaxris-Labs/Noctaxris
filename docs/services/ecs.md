@@ -78,9 +78,9 @@ aws ecs list-services --cluster default --endpoint-url "$EP"
 
 Expect `register-task-definition` to fail without both role ARNs. Expect `run-task` to return a task ARN when DinD is up. Expect `list-tasks` to include the task. After a short-lived command exits, `describe-tasks` should show `STOPPED` without calling `stop-task`.
 
-## Not yet / deferred
+## Out of lab scope
 
-- Load balancers, `awsvpc` networking, capacity providers, ECS Exec, Service Connect
-- Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix
-- Cross-account or multi-cluster depth beyond same-account `default`
-- Fully rootless nested engine (default Compose already uses restricted DinD without `privileged: true`; privileged opt-in is `compose.engine-privileged.yaml` — see [security-defaults.md](../security-defaults.md))
+- Load balancers, `awsvpc` networking, capacity providers, ECS Exec, Service Connect (out of lab scope; task def + RunTask + DesiredCount reconciler is marketed light ECS)
+- Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix (out of lab scope)
+- Cross-account or multi-cluster depth beyond same-account `default` (out of lab scope)
+- Fully rootless nested engine (out of lab scope; default Compose already uses restricted DinD without `privileged: true`; privileged opt-in is `compose.engine-privileged.yaml` — see [security-defaults.md](../security-defaults.md))

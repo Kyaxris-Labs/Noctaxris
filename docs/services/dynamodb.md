@@ -15,7 +15,7 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
 | Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`; optional `FilterExpression` with the same lab subset as `ConditionExpression`, fail-closed on unsupported operators) |
 | Batch | `BatchGetItem`, `BatchWriteItem` (lab soft cap 25; overflow returned in `UnprocessedKeys` / `UnprocessedItems`) |
-| Transactions | `TransactWriteItems` (`Put` / `Delete` / `Update` SET/REMOVE / `ConditionCheck` existence), `TransactGetItems` (same-account tables; lab soft cap 25; duplicate item keys cancel the write) |
+| Transactions | `TransactWriteItems` (`Put` / `Delete` / `Update` SET/REMOVE / `ConditionCheck` existence; optional `ClientRequestToken` idempotency, 10-minute window; stream append on successful Put/Delete/Update), `TransactGetItems` (same-account tables; lab soft cap 25; duplicate item keys cancel the write) |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | TTL | `UpdateTimeToLive`, `DescribeTimeToLive` (lazy expiry on `GetItem`, `Query`, `Scan`, and `BatchGetItem`; `Query`/`Scan` over-fetch until `Limit` live items) |
 | Encryption | Table SSE with AWS-owned or customer-managed KMS |
@@ -32,7 +32,7 @@ Pass a full table ARN as `TableName` for cross-account `GetItem` and similar ite
 
 `TransactWriteItems` and `TransactGetItems` run against same-account lab tables only (cross-account table ARNs fail closed). Writes are all-or-nothing in a SQLite transaction; failed `ConditionCheck`, failed `ConditionExpression` on `Put`/`Delete`/`Update`, or duplicate primary keys in one request return `TransactionCanceledException` with `CancellationReasons`. Lab cap is 25 actions (AWS allows 100).
 
-`Update` uses the same lab `UpdateExpression` SET/REMOVE subset as standalone `UpdateItem`. `Put` / `Delete` / `Update` honor the lab `ConditionExpression` subset (`attribute_exists` / `attribute_not_exists`, top-level comparisons, AND/OR); unsupported operators return `ValidationException` before apply. `ConditionCheck` remains existence / `attribute_exists(...)` only. Transact `Update` and body-reading conditions require unsealed (non-SSE-KMS ciphertext) items in this lab. ClientRequestToken idempotency, AWS 100-item limit, cross-account transact targets, and stream append on transact writes stay fail-closed / deferred.
+`Update` uses the same lab `UpdateExpression` SET/REMOVE subset as standalone `UpdateItem`. `Put` / `Delete` / `Update` honor the lab `ConditionExpression` subset (`attribute_exists` / `attribute_not_exists`, top-level comparisons, AND/OR); unsupported operators return `ValidationException` before apply. `ConditionCheck` remains existence / `attribute_exists(...)` only. Transact `Update` and body-reading conditions require unsealed (non-SSE-KMS ciphertext) items in this lab. Optional `ClientRequestToken` makes a successful write idempotent for 10 minutes; reuse with different parameters returns `IdempotentParameterMismatchException`. Successful Put/Delete/Update append DynamoDB Streams records when the table stream is enabled (see [dynamodbstreams.md](dynamodbstreams.md)). AWS 100-item limit and cross-account / XA transact targets are out of lab scope (lab soft cap 25; same-account only).
 
 ## How to verify / CLI smoke
 
@@ -120,6 +120,9 @@ aws dynamodb transact-get-items --endpoint-url "$EP" --transact-items "[
 
 ## Not yet / deferred
 
-- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity)
-- ClientRequestToken idempotency, AWS 100-item TransactItems limit (lab soft cap 25), cross-account transact, stream append on transact writes, Transact Update/conditions on SSE-KMS sealed items, richer `ConditionCheck` beyond existence
-- Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views; DynamoDB Streams Lambda ESM ships in [lambda.md](lambda.md))
+None for lab-core TransactWrite (stream view types and ESM OldImage filters: see [dynamodbstreams.md](dynamodbstreams.md) and [lambda.md](lambda.md)).
+
+## Out of lab scope
+
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity) (out of lab scope; Transact lab subset + two GSIs cover marketed core)
+- AWS 100-item TransactItems limit (lab soft cap 25), cross-account / XA transact, Transact Update/conditions on SSE-KMS sealed items, richer `ConditionCheck` beyond existence (out of lab scope)

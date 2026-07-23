@@ -231,6 +231,98 @@ func TestRegistryV2ManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRegistryV2ChunkedBlobPatchUpload(t *testing.T) {
+	srv, _, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustECRJSON(t, handler, "CreateRepository", map[string]any{
+		"repositoryName": "chunked-lab",
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateRepository status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	token := issueRegistryToken(t, handler, now)
+	auth := registryAuthHeader(token)
+	account := testAccountID
+	repo := "chunked-lab"
+
+	part1 := []byte("noctaxris-chunk-one-")
+	part2 := []byte("and-chunk-two")
+	full := append(append([]byte{}, part1...), part2...)
+	digest := "sha256:" + sha256Hex(full)
+
+	uploadReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:4566/v2/%s/%s/blobs/uploads/", account, repo), nil)
+	uploadReq.Header.Set("Authorization", auth)
+	uploadRec := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRec, uploadReq)
+	if uploadRec.Code != http.StatusAccepted {
+		t.Fatalf("blob upload start status=%d body=%q", uploadRec.Code, uploadRec.Body.String())
+	}
+	location := uploadRec.Header().Get("Location")
+	if location == "" {
+		t.Fatal("missing upload Location")
+	}
+
+	patch1 := httptest.NewRequest(http.MethodPatch, "http://127.0.0.1:4566"+location, bytes.NewReader(part1))
+	patch1.Header.Set("Authorization", auth)
+	patch1.Header.Set("Content-Type", "application/octet-stream")
+	patch1.Header.Set("Content-Range", fmt.Sprintf("0-%d", len(part1)-1))
+	patch1Rec := httptest.NewRecorder()
+	handler.ServeHTTP(patch1Rec, patch1)
+	if patch1Rec.Code != http.StatusAccepted {
+		t.Fatalf("PATCH chunk1 status=%d body=%q", patch1Rec.Code, patch1Rec.Body.String())
+	}
+	if got := patch1Rec.Header().Get("Range"); got != fmt.Sprintf("0-%d", len(part1)-1) {
+		t.Fatalf("PATCH chunk1 Range=%q want 0-%d", got, len(part1)-1)
+	}
+	location = patch1Rec.Header().Get("Location")
+	if location == "" {
+		t.Fatal("missing Location after PATCH chunk1")
+	}
+
+	patch2 := httptest.NewRequest(http.MethodPatch, "http://127.0.0.1:4566"+location, bytes.NewReader(part2))
+	patch2.Header.Set("Authorization", auth)
+	patch2.Header.Set("Content-Type", "application/octet-stream")
+	patch2.Header.Set("Content-Range", fmt.Sprintf("%d-%d", len(part1), len(full)-1))
+	patch2Rec := httptest.NewRecorder()
+	handler.ServeHTTP(patch2Rec, patch2)
+	if patch2Rec.Code != http.StatusAccepted {
+		t.Fatalf("PATCH chunk2 status=%d body=%q", patch2Rec.Code, patch2Rec.Body.String())
+	}
+	if got := patch2Rec.Header().Get("Range"); got != fmt.Sprintf("0-%d", len(full)-1) {
+		t.Fatalf("PATCH chunk2 Range=%q want 0-%d", got, len(full)-1)
+	}
+	location = patch2Rec.Header().Get("Location")
+
+	putReq := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:4566"+location+"?digest="+digest, nil)
+	putReq.Header.Set("Authorization", auth)
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusCreated {
+		t.Fatalf("PUT finalize status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+	if putRec.Header().Get("Docker-Content-Digest") != digest {
+		t.Fatalf("digest header=%q want %q", putRec.Header().Get("Docker-Content-Digest"), digest)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:4566/v2/%s/%s/blobs/%s", account, repo, digest), nil)
+	getReq.Header.Set("Authorization", auth)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET blob status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+	got, err := io.ReadAll(getRec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatalf("blob bytes mismatch got=%q want=%q", got, full)
+	}
+}
+
 func TestRegistryV2RejectsMaliciousDigest(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

@@ -69,6 +69,10 @@ func (s *Server) handleLogs(
 		s.logsDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsDescribeResourcePolicies:
 		s.logsDescribeResourcePolicies(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionLogsPutRetentionPolicy:
+		s.logsPutRetentionPolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteRetentionPolicy:
+		s.logsDeleteRetentionPolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLogsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CloudWatch Logs action is not implemented.", readOnly, eventID, verified)
@@ -118,6 +122,10 @@ func logsAction(action string) string {
 		return catalog.ActionLogsDeleteResourcePolicy
 	case "DescribeResourcePolicies":
 		return catalog.ActionLogsDescribeResourcePolicies
+	case "PutRetentionPolicy":
+		return catalog.ActionLogsPutRetentionPolicy
+	case "DeleteRetentionPolicy":
+		return catalog.ActionLogsDeleteRetentionPolicy
 	default:
 		return action
 	}
@@ -584,6 +592,93 @@ func (s *Server) logsDescribeLogGroups(
 	}
 	s.writeLogsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeLogGroups", readOnly)
+}
+
+func (s *Server) logsPutRetentionPolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["logGroupName"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, name)
+	if !s.authorize(verified, catalog.ActionLogsPutRetentionPolicy, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:PutRetentionPolicy.", readOnly, eventID, verified)
+		return
+	}
+	days := 0
+	switch v := params["retentionInDays"].(type) {
+	case float64:
+		days = int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		days = int(n)
+	case int:
+		days = v
+	}
+	if err := s.store.PutRetentionPolicy(verified.AccountID, name, days); err != nil {
+		if errors.Is(err, store.ErrLogGroupNotFound) {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"The specified log group does not exist.", readOnly, eventID, verified)
+			return
+		}
+		if strings.Contains(err.Error(), "InvalidParameterException") {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+				"retentionInDays must be a valid CloudWatch Logs retention value.", readOnly, eventID, verified)
+			return
+		}
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to put retention policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := logssvc.EmptyOKJSON()
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "PutRetentionPolicy", readOnly)
+}
+
+func (s *Server) logsDeleteRetentionPolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["logGroupName"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"logGroupName is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := store.LogGroupARN(s.logsRegion(verified), verified.AccountID, name)
+	if !s.authorize(verified, catalog.ActionLogsDeleteRetentionPolicy, arn) {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteRetentionPolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteRetentionPolicy(verified.AccountID, name); err != nil {
+		if errors.Is(err, store.ErrLogGroupNotFound) {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"The specified log group does not exist.", readOnly, eventID, verified)
+			return
+		}
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to delete retention policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := logssvc.EmptyOKJSON()
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteRetentionPolicy", readOnly)
 }
 
 func (s *Server) logsPutSubscriptionFilter(

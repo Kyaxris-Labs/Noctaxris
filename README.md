@@ -90,79 +90,79 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
       <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA.</td>
-      <td>Service-linked roles, full pagination and tagging parity.</td>
+      <td>Out of lab scope: service-linked roles, full pagination and tagging parity. PassRole trust <code>aws:SourceArn</code> on Lambda, EventBridge PutTargets, ECS, Scheduler, Pipes, Secrets rotate, API Gateway CredentialsArn, and Cognito trigger RoleArn.</td>
     </tr>
     <tr>
       <td>STS</td>
       <td>All 11 actions (lab MFA on GetSessionToken).</td>
-      <td>Deeper AssumeRoot, DecodeAuthorizationMessage, GetDelegatedAccessToken, and GetWebIdentityToken parity.</td>
+      <td>Out of lab scope: deeper AssumeRoot, DecodeAuthorizationMessage, GetDelegatedAccessToken, and GetWebIdentityToken parity.</td>
     </tr>
     <tr>
       <td>Organizations</td>
       <td>CreateAccount, ListAccounts, OUs, MoveAccount, EnablePolicyType, SCP and RCP create/attach/detach/describe. SCP/RCP collection walks account, OU path to root, and root. Identity, boundary, SCP, and RCP apply on shared authorize and dataplane paths.</td>
-      <td>Account invites and handshake control-plane beyond MoveAccount.</td>
+      <td>Out of lab scope: account invites and handshake control-plane beyond MoveAccount.</td>
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code> <code>SOFTWARE_TOKEN_MFA</code>), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
-      <td>Identity Pools, Hosted UI, full SRP, SMS MFA.</td>
+      <td>Pool and app client CRUD (UpdateUserPool), AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH / USER_SRP_AUTH (PASSWORD_VERIFIER) plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code>), lab <code>RoleArn</code> + <code>LambdaConfig</code> with PassRole for cognito-idp.amazonaws.com and sync Invoke of PreSignUp / PostConfirmation / PreAuthentication / PostAuthentication / PreTokenGeneration, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Out of lab scope: Identity Pools, Hosted UI, SMS/email MFA, Adaptive auth / UI customization. Open: PreTokenGeneration claim overrides; UserMigration / custom-auth / CustomMessage Invoke.</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
       <td>KMS</td>
-      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
-      <td>Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, tags, cross-account grant flows, true AWS-owned managed keys.</td>
+      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ListResourceTags/TagResource/UntagResource and CreateKey Tags, ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
+      <td>Out of lab scope: Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, cross-account grant flows, true AWS-owned managed keys. (Resource tags ship: ListResourceTags / TagResource / UntagResource / CreateKey Tags.)</td>
     </tr>
     <tr>
       <td rowspan="15" align="center" valign="middle">Data</td>
       <td>S3</td>
       <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite), Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked).</td>
-      <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign, exact AWS notification retry timing.</td>
+      <td>Out of lab scope: lifecycle, CORS/website, Object Lock, replication, access points, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign, exact AWS notification retry timing.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/Update SET/REMOVE/ConditionCheck lab subset with ConditionExpression, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
-      <td>More than two GSIs, LSI, PartiQL, global tables, cross-account transact.</td>
+      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/Update SET/REMOVE/ConditionCheck lab subset with ConditionExpression, ClientRequestToken idempotency, stream append on success, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
+      <td>Out of lab scope: more than two GSIs, LSI, PartiQL, global tables, cross-account / XA transact, live PITR, billing depth.</td>
     </tr>
     <tr>
       <td>DynamoDB Streams</td>
-      <td>Enable stream on table (NEW_IMAGE or KEYS_ONLY), ListStreams/DescribeStream, GetShardIterator/GetRecords. Change records on Put/Update/DeleteItem when enabled. Lambda ESM + FilterCriteria for streams: see Lambda row.</td>
-      <td>OLD_IMAGE views, parallel shard fan-out.</td>
+      <td>Enable stream on table (NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES, or KEYS_ONLY), ListStreams/DescribeStream, GetShardIterator/GetRecords. Change records on Put/Update/DeleteItem and TransactWrite Put/Delete/Update when enabled. Lambda ESM + FilterCriteria (Keys/NewImage/OldImage) for streams: see Lambda row.</td>
+      <td>Out of lab scope: global tables, parallel shard fan-out / ParallelizationFactor.</td>
     </tr>
     <tr>
       <td>SQS</td>
       <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies (same-account or, cross-account and), SSE-SQS and SSE-KMS, RedrivePolicy to DLQ with RedriveAllowPolicy enforcement, DelaySeconds (queue and per-message).</td>
-      <td>High-throughput FIFO quotas, StartMessageMoveTask parity.</td>
+      <td>Out of lab scope: high-throughput FIFO quotas, StartMessageMoveTask parity, tags beyond basics.</td>
     </tr>
     <tr>
       <td>SSM Parameter Store</td>
-      <td>String and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz.</td>
-      <td>StringList types, parameter policies, labels, tags, full pagination parity.</td>
+      <td>String, StringList, and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz.</td>
+      <td>Out of lab scope: parameter policies, labels, tags, documents/sessions/automation, full pagination parity, cross-account parameter access.</td>
     </tr>
     <tr>
       <td>Secrets Manager</td>
-      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, multi-version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS, UpdateSecretVersionStage), RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then four-step createSecret/setSecret/testSecret/finishSecret Invokes).</td>
-      <td>Automatic RotationRules schedules, tags, replication.</td>
+      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, multi-version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS, UpdateSecretVersionStage), RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then four-step createSecret/setSecret/testSecret/finishSecret Invokes), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression + optional Duration) with RotateImmediately=false deferral and in-process due ticker.</td>
+      <td>Open: Secrets cron wildcards beyond lab digit/<code>*</code>/<code>?</code>; random rotate time inside Duration window. Out of lab scope: tags, replication, ListSecrets filtering, random-password APIs, true AWS-owned alias, service-linked grant that skips caller KMS.</td>
     </tr>
     <tr>
       <td>SNS</td>
-      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe (including XA Subscribe to foreign topic ARNs), List*, Get/SetTopicAttributes, Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com; foreign SQS and Lambda ARNs supported) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
-      <td>SMS, email, open-internet webhooks, filter policy depth, exact AWS retry timing.</td>
+      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe (including XA Subscribe to foreign topic ARNs), List*, Get/SetTopicAttributes, Get/SetSubscriptionAttributes (lab FilterPolicy + RawMessageDelivery), Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com; foreign SQS and Lambda ARNs supported) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
+      <td>Out of lab scope: SMS, email, nested filter-policy operators, RedrivePolicy DLQ delivery, HT FIFO quotas, exact AWS retry timing. Will not ship: open-internet HTTP(S) webhooks (loopback catcher only).</td>
     </tr>
     <tr>
       <td>EventBridge</td>
       <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
-      <td>Archive and replay, legacy scheduled rules, full pattern language, InputPath bracket/wildcard notation.</td>
+      <td>Out of lab scope: partner buses, archive/replay, API Destinations, legacy scheduled rules, remaining pattern ops (wildcard/$or/cidr), InputPath bracket/wildcard notation, exact retry timing.</td>
     </tr>
     <tr>
       <td>EventBridge Scheduler</td>
       <td>Distinct Scheduler API: Create/Get/Update/Delete/ListSchedules. Rate plus small cron subset and optional <code>at(...)</code>. Targets Lambda, SQS, SNS, Step Functions. PassRole for scheduler.amazonaws.com. Foreign targets use ARN account I/O and RoleArn plus resource policy AND. In-process ticker.</td>
-      <td>Flexible windows, full retry/DLQ matrix, schedule groups depth, universal targets beyond Lambda/SQS/SNS/SFN.</td>
+      <td>Out of lab scope: flexible windows, full retry/DLQ matrix, schedule groups depth, universal targets beyond Lambda/SQS/SNS/SFN.</td>
     </tr>
     <tr>
       <td>EventBridge Pipes</td>
       <td>Create/Describe/Delete/ListPipes. Source SQS, DynamoDB Streams, or EventBridge bus to target Lambda or SQS. Optional Lambda Enrichment. PassRole for pipes.amazonaws.com when RoleArn set. Continuous in-process ticker plus PollPipeOnce. Bus sources require RoleArn session Allow on events:PutEvents. RoleArn session or target resource policy on deliver (foreign AND).</td>
-      <td>Filter partner matrix, enrichment HTTP destinations, cross-account bus source depth.</td>
+      <td>Out of lab scope: filter partner matrix, enrichment HTTP/API destinations, cross-account bus source depth beyond RoleArn.</td>
     </tr>
     <tr>
       <td>S3 Vectors</td>
@@ -172,12 +172,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>RDS</td>
       <td>CreateDBInstance / DescribeDBInstances / DeleteDBInstance for engine <code>postgres</code>. Nested Postgres via DinD data-plane helper when engine is up. Nested-network endpoint only. Master credentials in Secrets Manager.</td>
-      <td>MySQL, Multi-AZ, read replicas, Aurora full cluster matrix, host-published Postgres ports.</td>
+      <td>Out of lab scope: MySQL, Multi-AZ, read replicas, Aurora full cluster matrix, IAM DB auth tokens. Will not ship: host-published Postgres ports (Data API on <code>:4566</code> only).</td>
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT).</td>
-      <td>Full result type matrix, <code>ExecuteSql</code> legacy, cross-process transaction resume, API process on DinD data network for default <code>pgx</code> dial.</td>
+      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT). <code>formatRecordsAs=JSON</code>; Batch <code>generatedFields</code> from <code>RETURNING</code> via <code>pgx</code>.</td>
+      <td>Out of lab scope: <code>ExecuteSql</code> legacy, AWS 3-minute idle (lab 5m), cross-process transaction resume. Nested <code>pgx</code> dial still needs API reachability to the DinD data network.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
@@ -197,8 +197,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>CloudWatch Logs</td>
-      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
-      <td>Insights query engine, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose destinations.</td>
+      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutRetentionPolicy/DeleteRetentionPolicy (AWS-allowed day values; expired events purged), PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
+      <td>Out of lab scope: Insights query engine, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose/OpenSearch subscription destinations, full pagination parity.</td>
     </tr>
     <tr>
       <td>Resource Groups Tagging API</td>
@@ -244,13 +244,13 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
-      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet Add/Remove plus allowlisted in-place Modify (unknown Modify types or immutable props fail closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission), KMS Key/Alias, SNS(+TopicPolicy/Subscription), Logs LogGroup, Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
-      <td>Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog.</td>
+      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet Add/Remove plus allowlisted in-place Modify (unknown Modify types or immutable props fail closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission with FunctionUrlAuthType), KMS Key/Alias, SNS(+TopicPolicy/Subscription FilterPolicy), Logs LogGroup(+RetentionInDays), Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
+      <td>Out of lab scope: Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog, custom IAM Path ≠ <code>/</code>, Events Rule ScheduleExpression, Lambda Permission PrincipalOrgID/EventSourceToken, SNS RedrivePolicy DLQ delivery.</td>
     </tr>
     <tr>
       <td>Cloud Control</td>
-      <td>Create/Get/List/Update/Delete + GetResourceRequestStatus for CFN-aligned allowlist (no Stack/QueuePolicy). UpdateResource property-object PatchDocument for documented mutable subsets. Sync ProgressEvent SUCCESS with recorded tokens. Unknown types and unknown patch keys fail closed.</td>
-      <td>Update depth for every type, RFC6902 PatchDocument, async polling beyond recorded SUCCESS.</td>
+      <td>Create/Get/List/Update/Delete + GetResourceRequestStatus for CFN-aligned allowlist (no Stack/QueuePolicy). UpdateResource property-object PatchDocument for documented mutable subsets (including IAM User/Group/ManagedPolicy, EventBus Policy, LogGroup RetentionInDays). Sync ProgressEvent SUCCESS with recorded tokens. Unknown types and unknown patch keys fail closed.</td>
+      <td>Out of lab scope: RFC6902 PatchDocument, async ProgressEvent polling beyond recorded SUCCESS, private registry types.</td>
     </tr>
     <tr>
       <td>Glue</td>
@@ -295,18 +295,18 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, and Kinesis event source mappings (in-process poller walks all stream shards sequentially), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Enhanced fan-out / ParallelizationFactor Kinesis ESM, MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, and Kinesis event source mappings (in-process poller walks all stream shards sequentially), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys, NewImage, and OldImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign IAM principals and service-principal XA grants with SourceAccount/SourceArn), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM, MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
     </tr>
     <tr>
       <td>ECR</td>
-      <td>Create/Describe/DeleteRepository, GetAuthorizationToken, repository policies (same-account or, cross-account and), PutImage/BatchGetImage/ListImages/BatchDeleteImage, Registry V2 on <code>127.0.0.1:4566</code> with token auth, DinD sync on manifest put for ECS and Lambda Image.</td>
-      <td>Scanning, replication, lifecycle, OCI referrers depth, chunked PATCH uploads, public galleries.</td>
+      <td>Create/Describe/DeleteRepository, GetAuthorizationToken, repository policies (same-account or, cross-account and), PutImage/BatchGetImage/ListImages/BatchDeleteImage, Registry V2 on <code>127.0.0.1:4566</code> with token auth (monolithic PUT and chunked PATCH blob uploads), DinD sync on manifest put for ECS and Lambda Image.</td>
+      <td>Out of lab scope: scanning, replication, lifecycle, OCI referrers / multi-arch index depth, public galleries, fully rootless nested engine.</td>
     </tr>
     <tr>
       <td>ECS</td>
       <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+      <td>Out of lab scope: load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, autoscaling/circuit breakers/placement/EBS/Firelens, multi-cluster, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>CodeBuild</td>
@@ -336,8 +336,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="1" align="center" valign="middle">API edge</td>
       <td>API Gateway HTTP API</td>
-      <td>CreateApi/GetApi/GetApis/DeleteApi, CreateIntegration, GetIntegrations, CreateAuthorizer, GetAuthorizers, CreateRoute, GetRoutes, CreateStage. REST <code>/v2/apis...</code> is routed before lab ECR Registry <code>/v2/</code>. Lambda AWS_PROXY only. Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (simple <code>isAuthorized</code> / IAM policy; Deny short-circuits before integration). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
-      <td>REST API v1, WebSocket, HTTP_PROXY, REST TOKEN authorizers, authorizer result caching, HTTP API resource policies.</td>
+      <td>CreateApi/GetApi/UpdateApi/GetApis/DeleteApi, CreateIntegration, GetIntegrations, CreateAuthorizer, GetAuthorizers, CreateRoute, GetRoutes, CreateStage. REST <code>/v2/apis...</code> is routed before lab ECR Registry <code>/v2/</code>. Lambda AWS_PROXY only. Optional <code>CorsConfiguration</code> (origins/methods/headers/MaxAge/credentials; OPTIONS preflight without an OPTIONS route). Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (simple <code>isAuthorized</code> / IAM policy; Deny short-circuits before integration). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
+      <td>Out of lab scope: REST API v1, WebSocket, REST TOKEN authorizers, authorizer result caching, custom domains beyond ACM string link, HTTP API resource policies. Will not ship: HTTP_PROXY / VPC link integrations.</td>
     </tr>
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>

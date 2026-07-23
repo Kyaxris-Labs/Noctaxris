@@ -56,17 +56,26 @@ func GetRecordsJSON(records []store.DynamoStreamRecord, nextIterator string) ([]
 	for _, r := range records {
 		var keys any
 		_ = json.Unmarshal([]byte(r.KeysJSON), &keys)
+		view := r.StreamViewType
+		if view == "" {
+			view = store.StreamViewNewImage
+		}
 		dynamodb := map[string]any{
-			"Keys":           keys,
+			"Keys":                        keys,
 			"ApproximateCreationDateTime": float64(r.ArrivalMS) / 1000.0,
-			"SequenceNumber": r.SequenceNumber,
-			"SizeBytes":      len(r.KeysJSON) + len(r.NewImageJSON),
-			"StreamViewType": store.StreamViewNewImage,
+			"SequenceNumber":              r.SequenceNumber,
+			"SizeBytes":                   len(r.KeysJSON) + len(r.NewImageJSON) + len(r.OldImageJSON),
+			"StreamViewType":              view,
 		}
 		if r.NewImageJSON != "" {
 			var img any
 			_ = json.Unmarshal([]byte(r.NewImageJSON), &img)
 			dynamodb["NewImage"] = img
+		}
+		if r.OldImageJSON != "" {
+			var img any
+			_ = json.Unmarshal([]byte(r.OldImageJSON), &img)
+			dynamodb["OldImage"] = img
 		}
 		out = append(out, map[string]any{
 			"eventID":      r.SequenceNumber,
@@ -78,7 +87,7 @@ func GetRecordsJSON(records []store.DynamoStreamRecord, nextIterator string) ([]
 		})
 	}
 	return json.Marshal(map[string]any{
-		"Records":            out,
-		"NextShardIterator":  nextIterator,
+		"Records":           out,
+		"NextShardIterator": nextIterator,
 	})
 }

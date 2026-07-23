@@ -43,3 +43,35 @@ func TestSSMStringParameterRoundTrip(t *testing.T) {
 		t.Fatalf("DeleteParameter: %v", err)
 	}
 }
+
+func TestSSMStringListParameterRoundTrip(t *testing.T) {
+	requireReady(t)
+	cfg := loadAWSConfig(t)
+	client := newSSM(t, cfg)
+	ctx := context.Background()
+	prefix := uniquePrefix(t)
+	name := "/lab/" + prefix + "/days"
+	value := "Monday,Wednesday,Friday"
+
+	_, err := client.PutParameter(ctx, &ssm.PutParameterInput{
+		Name:  aws.String(name),
+		Type:  types.ParameterTypeStringList,
+		Value: aws.String(value),
+	})
+	if err != nil {
+		t.Fatalf("PutParameter StringList: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = client.DeleteParameter(ctx, &ssm.DeleteParameterInput{Name: aws.String(name)})
+	})
+
+	got, err := client.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(name)})
+	if err != nil {
+		t.Fatalf("GetParameter: %v", err)
+	}
+	if got.Parameter == nil ||
+		got.Parameter.Type != types.ParameterTypeStringList ||
+		aws.ToString(got.Parameter.Value) != value {
+		t.Fatalf("GetParameter unexpected: %+v", got.Parameter)
+	}
+}

@@ -9,18 +9,14 @@ import (
 )
 
 // checkAPIGatewayPassRole enforces iam:PassRole plus apigateway.amazonaws.com trust
-// when Gateway configure APIs supply RoleArn (integrations / credentials).
-func (s *Server) checkAPIGatewayPassRole(verified *authn.Verified, roleARN string) error {
-	return s.checkEdgePassRole(verified, roleARN, authz.ServicePrincipalAPIGateway, "API Gateway")
+// when Gateway configure APIs supply CredentialsArn. sourceARN is the HTTP API ARN
+// (arn:aws:apigateway:region::/apis/api-id) for trust aws:SourceArn.
+// Cognito trigger PassRole is checkCognitoPassRole in cognito_handlers.go (pool ARN SourceArn).
+func (s *Server) checkAPIGatewayPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	return s.checkEdgePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalAPIGateway, "API Gateway")
 }
 
-// checkCognitoPassRole enforces iam:PassRole plus cognito-idp.amazonaws.com trust
-// when Cognito configure APIs supply RoleArn.
-func (s *Server) checkCognitoPassRole(verified *authn.Verified, roleARN string) error {
-	return s.checkEdgePassRole(verified, roleARN, authz.ServicePrincipalCognitoIDP, "Cognito")
-}
-
-func (s *Server) checkEdgePassRole(verified *authn.Verified, roleARN, servicePrincipal, label string) error {
+func (s *Server) checkEdgePassRole(verified *authn.Verified, roleARN, sourceARN, servicePrincipal, label string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("roleARN must be a valid IAM role ARN")
@@ -50,6 +46,7 @@ func (s *Server) checkEdgePassRole(verified *authn.Verified, roleARN, servicePri
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: servicePrincipal,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to " + label)

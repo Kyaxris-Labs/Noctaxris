@@ -1,15 +1,22 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
-const maxLabTransactItems = 25
+const (
+	maxLabTransactItems = 25
+	// labTransactClientTokenTTL matches AWS ClientRequestToken validity (10 minutes).
+	labTransactClientTokenTTL = 10 * time.Minute
+)
 
 var (
 	// ErrDynamoTransactUnsupported is returned for fail-closed TransactWrite ops.
@@ -20,7 +27,24 @@ var (
 	ErrDynamoTransactEmpty = errors.New("ValidationException: TransactItems is required")
 	// ErrDynamoTransactSealed is returned when Update/conditions need plaintext of a sealed item.
 	ErrDynamoTransactSealed = errors.New("ValidationException: TransactWriteItems Update and ConditionExpression require unsealed items in this lab")
+	// ErrDynamoTransactIdempotentMismatch is returned when ClientRequestToken is reused with different parameters.
+	ErrDynamoTransactIdempotentMismatch = errors.New("IdempotentParameterMismatchException")
 )
+
+const dynamodbTransactTokenSchema = `
+CREATE TABLE IF NOT EXISTS dynamodb_transact_tokens (
+  account_id TEXT NOT NULL,
+  client_request_token TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, client_request_token)
+);
+`
+
+type pendingDynamoStreamAppend struct {
+	tableName, eventName       string
+	keysJSON, newImage, oldImage []byte
+}
 
 // DynamoAVMap is an AttributeValue map used by registered Transact expression helpers.
 type DynamoAVMap map[string]map[string]any
@@ -98,11 +122,24 @@ type TransactGetKey struct {
 	ItemPK, ItemSK string
 }
 
+// EnsureDynamoDBTransactSchema creates ClientRequestToken idempotency storage.
+func EnsureDynamoDBTransactSchema(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("ensure dynamodb transact schema: db is nil")
+	}
+	if _, err := db.Exec(dynamodbTransactTokenSchema); err != nil {
+		return fmt.Errorf("ensure dynamodb transact schema: %w", err)
+	}
+	return nil
+}
+
 // TransactWriteItems applies Put/Delete/ConditionCheck/Update atomically (SQLite BEGIN).
 // Same-account tables only. Duplicate primary keys cancel the entire request.
 // Put/Delete/Update honor the lab ConditionExpression subset; unsupported operators
 // fail closed with ValidationException before the transaction applies.
-func (s *Store) TransactWriteItems(accountID string, actions []TransactWriteAction) error {
+// Optional clientRequestToken provides lab idempotency (10-minute window; mismatch → ErrDynamoTransactIdempotentMismatch).
+// Successful Put/Delete/Update append stream records when the table stream is enabled.
+func (s *Store) TransactWriteItems(accountID string, actions []TransactWriteAction, clientRequestToken string) error {
 	if len(actions) == 0 {
 		return ErrDynamoTransactEmpty
 	}
@@ -126,6 +163,19 @@ func (s *Store) TransactWriteItems(accountID string, actions []TransactWriteActi
 		return err
 	}
 
+	token := strings.TrimSpace(clientRequestToken)
+	reqHash := ""
+	if token != "" {
+		reqHash = transactActionsHash(actions)
+		replay, err := s.checkTransactClientToken(accountID, token, reqHash)
+		if err != nil {
+			return err
+		}
+		if replay {
+			return nil
+		}
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transact write: %w", err)
@@ -136,8 +186,10 @@ func (s *Store) TransactWriteItems(accountID string, actions []TransactWriteActi
 	for i := range reasons {
 		reasons[i] = CancellationReason{Code: "None"}
 	}
+	pending := make([]pendingDynamoStreamAppend, 0, len(actions))
 	for i, a := range actions {
-		if err := s.applyTransactWriteAction(tx, accountID, a); err != nil {
+		streamRec, err := s.applyTransactWriteAction(tx, accountID, a)
+		if err != nil {
 			if errors.Is(err, ErrDynamoTransactSealed) || errors.Is(err, ErrDynamoTransactUnsupported) ||
 				strings.HasPrefix(err.Error(), "ValidationException:") {
 				return err
@@ -146,9 +198,94 @@ func (s *Store) TransactWriteItems(accountID string, actions []TransactWriteActi
 			reasons[i] = CancellationReason{Code: code, Message: msg}
 			return &TransactionCanceledError{Reasons: reasons}
 		}
+		if streamRec != nil {
+			pending = append(pending, *streamRec)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transact write: %w", err)
+	}
+	for _, rec := range pending {
+		if err := s.AppendDynamoStreamRecord(accountID, rec.tableName, rec.eventName, rec.keysJSON, rec.newImage, rec.oldImage); err != nil {
+			return fmt.Errorf("transact stream append: %w", err)
+		}
+	}
+	if token != "" {
+		if err := s.storeTransactClientToken(accountID, token, reqHash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func transactActionsHash(actions []TransactWriteAction) string {
+	type wire struct {
+		Kind, TableName, ItemPK, ItemSK string
+		ItemJSON                        string
+		GSIPK, GSISK, GSI2PK, GSI2SK    string
+		Sealed                          bool
+		ConditionEmpty                  bool
+		ConditionExpression             string
+		ExpressionAttributeNames        map[string]any
+		ExpressionAttributeValues       map[string]any
+		UpdateExpression                string
+		KeyJSON                         string
+	}
+	out := make([]wire, 0, len(actions))
+	for _, a := range actions {
+		out = append(out, wire{
+			Kind: a.Kind, TableName: a.TableName, ItemPK: a.ItemPK, ItemSK: a.ItemSK,
+			ItemJSON: string(a.ItemJSON), GSIPK: a.GSIPK, GSISK: a.GSISK, GSI2PK: a.GSI2PK, GSI2SK: a.GSI2SK,
+			Sealed: a.Sealed, ConditionEmpty: a.ConditionEmpty,
+			ConditionExpression: a.ConditionExpression,
+			ExpressionAttributeNames: a.ExpressionAttributeNames, ExpressionAttributeValues: a.ExpressionAttributeValues,
+			UpdateExpression: a.UpdateExpression, KeyJSON: string(a.KeyJSON),
+		})
+	}
+	raw, _ := json.Marshal(out)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Store) checkTransactClientToken(accountID, token, reqHash string) (replay bool, err error) {
+	var storedHash string
+	var createdAt int64
+	err = s.db.QueryRow(
+		`SELECT request_hash, created_at FROM dynamodb_transact_tokens
+		 WHERE account_id = ? AND client_request_token = ?`,
+		accountID, token,
+	).Scan(&storedHash, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check transact client token: %w", err)
+	}
+	if time.Now().UTC().Unix()-createdAt > int64(labTransactClientTokenTTL.Seconds()) {
+		_, _ = s.db.Exec(
+			`DELETE FROM dynamodb_transact_tokens WHERE account_id = ? AND client_request_token = ?`,
+			accountID, token,
+		)
+		return false, nil
+	}
+	if storedHash != reqHash {
+		return false, ErrDynamoTransactIdempotentMismatch
+	}
+	return true, nil
+}
+
+func (s *Store) storeTransactClientToken(accountID, token, reqHash string) error {
+	now := time.Now().UTC().Unix()
+	_, err := s.db.Exec(
+		`INSERT INTO dynamodb_transact_tokens (account_id, client_request_token, request_hash, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(account_id, client_request_token) DO UPDATE SET
+		   request_hash = excluded.request_hash,
+		   created_at = excluded.created_at`,
+		accountID, token, reqHash, now,
+	)
+	if err != nil {
+		return fmt.Errorf("store transact client token: %w", err)
 	}
 	return nil
 }
@@ -257,23 +394,23 @@ func validateTransactExpressions(actions []TransactWriteAction) error {
 	return nil
 }
 
-func (s *Store) applyTransactWriteAction(tx *sql.Tx, accountID string, a TransactWriteAction) error {
+func (s *Store) applyTransactWriteAction(tx *sql.Tx, accountID string, a TransactWriteAction) (*pendingDynamoStreamAppend, error) {
 	var n int
 	err := tx.QueryRow(
 		`SELECT COUNT(1) FROM dynamodb_tables WHERE account_id = ? AND table_name = ?`,
 		accountID, a.TableName,
 	).Scan(&n)
 	if err != nil {
-		return fmt.Errorf("lookup table: %w", err)
+		return nil, fmt.Errorf("lookup table: %w", err)
 	}
 	if n == 0 {
-		return ErrNoSuchTable
+		return nil, ErrNoSuchTable
 	}
 
 	switch a.Kind {
 	case "ConditionCheck":
 		if !a.ConditionEmpty {
-			return fmt.Errorf("%w: ConditionCheck requires lab existence check", ErrDynamoTransactUnsupported)
+			return nil, fmt.Errorf("%w: ConditionCheck requires lab existence check", ErrDynamoTransactUnsupported)
 		}
 		var exists int
 		err := tx.QueryRow(
@@ -282,38 +419,50 @@ func (s *Store) applyTransactWriteAction(tx *sql.Tx, accountID string, a Transac
 			accountID, a.TableName, a.ItemPK, a.ItemSK,
 		).Scan(&exists)
 		if err != nil {
-			return fmt.Errorf("condition check: %w", err)
+			return nil, fmt.Errorf("condition check: %w", err)
 		}
 		if exists == 0 {
-			return errTransactConditionalCheckFailed
+			return nil, errTransactConditionalCheckFailed
 		}
-		return nil
+		return nil, nil
 	case "Delete":
 		if strings.TrimSpace(a.ConditionExpression) != "" {
 			if err := s.evalTransactConditionOnRow(tx, accountID, a); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		_, err := tx.Exec(
+		oldRaw, oldSealed, err := loadTransactItemRaw(tx, accountID, a.TableName, a.ItemPK, a.ItemSK)
+		if err != nil {
+			return nil, err
+		}
+		_, err = tx.Exec(
 			`DELETE FROM dynamodb_items
 			 WHERE account_id = ? AND table_name = ? AND item_pk = ? AND item_sk = ?`,
 			accountID, a.TableName, a.ItemPK, a.ItemSK,
 		)
 		if err != nil {
-			return fmt.Errorf("transact delete: %w", err)
+			return nil, fmt.Errorf("transact delete: %w", err)
 		}
-		return nil
+		return s.transactStreamPending(accountID, a, "REMOVE", nil, oldRaw, oldSealed)
 	case "Put":
 		if strings.TrimSpace(a.ConditionExpression) != "" {
 			if err := s.evalTransactConditionOnRow(tx, accountID, a); err != nil {
-				return err
+				return nil, err
 			}
+		}
+		oldRaw, oldSealed, err := loadTransactItemRaw(tx, accountID, a.TableName, a.ItemPK, a.ItemSK)
+		if err != nil {
+			return nil, err
+		}
+		eventName := "INSERT"
+		if len(oldRaw) > 0 || oldSealed {
+			eventName = "MODIFY"
 		}
 		sealedFlag := 0
 		if a.Sealed {
 			sealedFlag = 1
 		}
-		_, err := tx.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO dynamodb_items
 			 (account_id, table_name, item_pk, item_sk, gsi_pk, gsi_sk, gsi2_pk, gsi2_sk, item_json, sealed, sealed_dek)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -330,59 +479,71 @@ func (s *Store) applyTransactWriteAction(tx *sql.Tx, accountID string, a Transac
 			a.ItemJSON, sealedFlag, a.SealedDEK,
 		)
 		if err != nil {
-			return fmt.Errorf("transact put: %w", err)
+			return nil, fmt.Errorf("transact put: %w", err)
 		}
-		return nil
+		newImg := a.ItemJSON
+		if a.Sealed {
+			newImg = nil
+		}
+		return s.transactStreamPending(accountID, a, eventName, newImg, oldRaw, oldSealed)
 	case "Update":
 		return s.applyTransactUpdate(tx, accountID, a)
 	default:
-		return ErrDynamoTransactUnsupported
+		return nil, ErrDynamoTransactUnsupported
 	}
 }
 
-func (s *Store) applyTransactUpdate(tx *sql.Tx, accountID string, a TransactWriteAction) error {
+func (s *Store) applyTransactUpdate(tx *sql.Tx, accountID string, a TransactWriteAction) (*pendingDynamoStreamAppend, error) {
 	fns, err := getTransactExprFns()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	key, err := unmarshalDynamoAVMap(a.KeyJSON)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrDynamoTransactUnsupported, err)
+		return nil, fmt.Errorf("%w: %v", ErrDynamoTransactUnsupported, err)
 	}
 	existing, sealed, err := loadTransactItemMap(tx, accountID, a.TableName, a.ItemPK, a.ItemSK)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if sealed {
-		return ErrDynamoTransactSealed
+		return nil, ErrDynamoTransactSealed
+	}
+	hadItem := len(existing) > 0
+	var oldRaw []byte
+	if hadItem {
+		oldRaw, err = json.Marshal(existing)
+		if err != nil {
+			return nil, fmt.Errorf("marshal old item: %w", err)
+		}
 	}
 	if strings.TrimSpace(a.ConditionExpression) != "" {
 		if err := fns.evalCondition(existing, a.ConditionExpression, a.ExpressionAttributeNames, a.ExpressionAttributeValues); err != nil {
 			if isTransactConditionalErr(err) {
-				return errTransactConditionalCheckFailed
+				return nil, errTransactConditionalCheckFailed
 			}
-			return fmt.Errorf("ValidationException: %v", err)
+			return nil, fmt.Errorf("ValidationException: %v", err)
 		}
 	}
 	updated, err := fns.applyUpdate(existing, key, a.UpdateExpression, a.ExpressionAttributeNames, a.ExpressionAttributeValues)
 	if err != nil {
-		return fmt.Errorf("ValidationException: %v", err)
+		return nil, fmt.Errorf("ValidationException: %v", err)
 	}
 	payload, err := json.Marshal(updated)
 	if err != nil {
-		return fmt.Errorf("marshal updated item: %w", err)
+		return nil, fmt.Errorf("marshal updated item: %w", err)
 	}
 	table, err := s.GetTable(accountID, a.TableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	gsiPK, gsiSK, err := transactGSIKeys(table, updated, 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	gsi2PK, gsi2SK, err := transactGSIKeys(table, updated, 2)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	_, err = tx.Exec(
 		`INSERT INTO dynamodb_items
@@ -400,9 +561,56 @@ func (s *Store) applyTransactUpdate(tx *sql.Tx, accountID string, a TransactWrit
 		gsiPK, gsiSK, gsi2PK, gsi2SK, payload,
 	)
 	if err != nil {
-		return fmt.Errorf("transact update: %w", err)
+		return nil, fmt.Errorf("transact update: %w", err)
 	}
-	return nil
+	eventName := "INSERT"
+	if hadItem {
+		eventName = "MODIFY"
+	}
+	return s.transactStreamPending(accountID, a, eventName, payload, oldRaw, false)
+}
+
+func (s *Store) transactStreamPending(
+	accountID string, a TransactWriteAction, eventName string, newImage, oldRaw []byte, oldSealed bool,
+) (*pendingDynamoStreamAppend, error) {
+	table, err := s.GetTable(accountID, a.TableName)
+	if err != nil {
+		return nil, err
+	}
+	if !table.StreamEnabled {
+		return nil, nil
+	}
+	keysJSON, err := DynamoStreamKeysJSON(table, a.ItemPK, a.ItemSK)
+	if err != nil {
+		return nil, err
+	}
+	var oldImage []byte
+	if !oldSealed && len(oldRaw) > 0 {
+		oldImage = oldRaw
+	}
+	return &pendingDynamoStreamAppend{
+		tableName: a.TableName,
+		eventName: eventName,
+		keysJSON:  keysJSON,
+		newImage:  newImage,
+		oldImage:  oldImage,
+	}, nil
+}
+
+func loadTransactItemRaw(tx *sql.Tx, accountID, tableName, itemPK, itemSK string) (raw []byte, sealed bool, err error) {
+	var sealedInt int
+	err = tx.QueryRow(
+		`SELECT item_json, sealed FROM dynamodb_items
+		 WHERE account_id = ? AND table_name = ? AND item_pk = ? AND item_sk = ?`,
+		accountID, tableName, itemPK, itemSK,
+	).Scan(&raw, &sealedInt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load transact item raw: %w", err)
+	}
+	return raw, sealedInt == 1, nil
 }
 
 func (s *Store) evalTransactConditionOnRow(tx *sql.Tx, accountID string, a TransactWriteAction) error {

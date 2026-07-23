@@ -78,7 +78,7 @@ func (s *Server) schedulerARN(verified *authn.Verified, group, name string) stri
 	return store.ScheduleARN(s.schedulerRegion(verified), verified.AccountID, group, name)
 }
 
-func (s *Server) checkSchedulerPassRole(verified *authn.Verified, roleARN string) error {
+func (s *Server) checkSchedulerPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
 	if !ok {
 		return errors.New("RoleArn must be a valid IAM role ARN")
@@ -108,6 +108,7 @@ func (s *Server) checkSchedulerPassRole(verified *authn.Verified, roleARN string
 		RoleARN:          roleARN,
 		TrustPolicyDoc:   trust,
 		ServicePrincipal: authz.ServicePrincipalScheduler,
+		SourceArn:        sourceARN,
 	})
 	if decision != authz.Allow {
 		return errors.New("not authorized to pass role to Scheduler")
@@ -144,7 +145,7 @@ func (s *Server) schedulerCreate(
 		return
 	}
 	if roleARN != "" {
-		if err := s.checkSchedulerPassRole(verified, roleARN); err != nil {
+		if err := s.checkSchedulerPassRole(verified, roleARN, resource); err != nil {
 			s.writeSchedulerError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				err.Error(), readOnly, eventID, verified)
 			return
@@ -242,7 +243,7 @@ func (s *Server) schedulerUpdate(
 		in.RoleARN = &roleARN
 		in.Input = &input
 		if roleARN != "" {
-			if err := s.checkSchedulerPassRole(verified, roleARN); err != nil {
+			if err := s.checkSchedulerPassRole(verified, roleARN, resource); err != nil {
 				s.writeSchedulerError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 					err.Error(), readOnly, eventID, verified)
 				return

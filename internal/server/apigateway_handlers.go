@@ -33,6 +33,8 @@ func (s *Server) handleAPIGatewayV2(
 		s.apigwCreateApi(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2GetApi:
 		s.apigwGetApi(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayV2UpdateApi:
+		s.apigwUpdateApi(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2DeleteApi:
 		s.apigwDeleteApi(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayV2GetApis:
@@ -66,6 +68,8 @@ func apiGatewayV2Action(action string) string {
 		return catalog.ActionAPIGatewayV2CreateApi
 	case "GetApi":
 		return catalog.ActionAPIGatewayV2GetApi
+	case "UpdateApi":
+		return catalog.ActionAPIGatewayV2UpdateApi
 	case "DeleteApi":
 		return catalog.ActionAPIGatewayV2DeleteApi
 	case "GetApis":
@@ -137,6 +141,10 @@ func resolveAPIGatewayV2REST(r *http.Request, body []byte) (action string, outBo
 		if len(parts) == 3 {
 			return catalog.ActionAPIGatewayV2DeleteApi, injectJSONStringField(body, "ApiId", parts[2])
 		}
+	case http.MethodPatch:
+		if len(parts) == 3 {
+			return catalog.ActionAPIGatewayV2UpdateApi, injectJSONStringField(body, "ApiId", parts[2])
+		}
 	}
 	return "", body
 }
@@ -162,7 +170,13 @@ func (s *Server) apigwCreateApi(
 	if region == "" {
 		region = store.DefaultAPIGatewayRegion
 	}
-	api, err := s.store.CreateAPIGatewayAPI(verified.AccountID, region, name, proto)
+	cors, _, corsErr := store.ParseAPIGatewayCORSFromParams(params)
+	if corsErr != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			corsErr.Error(), readOnly, eventID, verified)
+		return
+	}
+	api, err := s.store.CreateAPIGatewayAPIWithCORS(verified.AccountID, region, name, proto, cors)
 	if errors.Is(err, store.ErrAPIGatewayBadRequest) {
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
 			err.Error(), readOnly, eventID, verified)
@@ -176,6 +190,51 @@ func (s *Server) apigwCreateApi(
 	payload, _ := apigwv2.CreateApiJSON(api)
 	s.writeAPIGatewayOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "CreateApi", readOnly)
+}
+
+func (s *Server) apigwUpdateApi(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAPIGatewayV2UpdateApi, "*") {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform apigatewayv2:UpdateApi.", readOnly, eventID, verified)
+		return
+	}
+	cors, hasCORS, corsErr := store.ParseAPIGatewayCORSFromParams(params)
+	if corsErr != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			corsErr.Error(), readOnly, eventID, verified)
+		return
+	}
+	if !hasCORS {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"CorsConfiguration is required for lab UpdateApi", readOnly, eventID, verified)
+		return
+	}
+	api, err := s.store.UpdateAPIGatewayAPICORS(verified.AccountID, apiID, cors)
+	if errors.Is(err, store.ErrAPIGatewayNotFound) {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"API not found", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAPIGatewayBadRequest) {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAPIGatewayError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update API.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := apigwv2.CreateApiJSON(api)
+	s.writeAPIGatewayOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "UpdateApi", readOnly)
 }
 
 func (s *Server) apigwGetApi(
@@ -344,6 +403,17 @@ func (s *Server) apigwGetAuthorizers(
 	s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "GetAuthorizers", readOnly)
 }
 
+func (s *Server) apiGatewayAPIARN(verified *authn.Verified, apiID string) string {
+	region := ""
+	if verified != nil {
+		region = verified.Region
+	}
+	if region == "" {
+		region = store.DefaultAPIGatewayRegion
+	}
+	return "arn:aws:apigateway:" + region + "::/apis/" + apiID
+}
+
 func (s *Server) apigwCreateIntegration(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -362,7 +432,7 @@ func (s *Server) apigwCreateIntegration(
 		return
 	}
 	if credentialsArn != "" {
-		if err := s.checkAPIGatewayPassRole(verified, credentialsArn); err != nil {
+		if err := s.checkAPIGatewayPassRole(verified, credentialsArn, s.apiGatewayAPIARN(verified, apiID)); err != nil {
 			s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				err.Error(), readOnly, eventID, verified)
 			return
@@ -442,7 +512,7 @@ func (s *Server) apigwCreateAuthorizer(
 		return
 	}
 	if credARN != "" {
-		if err := s.checkAPIGatewayPassRole(verified, credARN); err != nil {
+		if err := s.checkAPIGatewayPassRole(verified, credARN, s.apiGatewayAPIARN(verified, apiID)); err != nil {
 			s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				err.Error(), readOnly, eventID, verified)
 			return

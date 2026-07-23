@@ -50,6 +50,35 @@ func TestSSMPutGetStringRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSSMPutGetStringListRoundTrip(t *testing.T) {
+	st := openSSMStore(t)
+	account := "000000000001"
+
+	put, err := st.PutParameter(account, "us-east-1", "/app/days", store.ParamTypeStringList, "Monday,Wednesday,Friday", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if put.Type != store.ParamTypeStringList || put.Value != "Monday,Wednesday,Friday" || put.Version != 1 {
+		t.Fatalf("put=%+v", put)
+	}
+
+	got, err := st.GetParameter(account, "/app/days", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value != "Monday,Wednesday,Friday" || got.Type != store.ParamTypeStringList {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestSSMPutStringListRejectsEmptyMember(t *testing.T) {
+	st := openSSMStore(t)
+	_, err := st.PutParameter("000000000001", "us-east-1", "/app/bad", store.ParamTypeStringList, "a,,b", "", false)
+	if err == nil {
+		t.Fatal("expected validation error for empty StringList member")
+	}
+}
+
 func TestSSMPutGetSecureStringRoundTrip(t *testing.T) {
 	st := openSSMStore(t)
 	account := "000000000001"

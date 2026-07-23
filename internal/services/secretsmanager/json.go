@@ -101,6 +101,36 @@ func DescribeSecretJSON(sec store.Secret) ([]byte, error) {
 	if sec.RotationLambdaARN != "" {
 		out["RotationLambdaARN"] = sec.RotationLambdaARN
 	}
+	if sec.RotationEnabled {
+		out["RotationEnabled"] = true
+		rules := map[string]any{}
+		if sec.RotationRules.AutomaticallyAfterDays > 0 {
+			rules["AutomaticallyAfterDays"] = sec.RotationRules.AutomaticallyAfterDays
+		}
+		if sec.RotationRules.ScheduleExpression != "" {
+			rules["ScheduleExpression"] = sec.RotationRules.ScheduleExpression
+		}
+		if sec.RotationRules.Duration != "" {
+			rules["Duration"] = sec.RotationRules.Duration
+		}
+		if len(rules) > 0 {
+			out["RotationRules"] = rules
+		}
+	}
+	if sec.NextRotationDate != "" {
+		next, err := dateUnix(sec.NextRotationDate)
+		if err != nil {
+			return nil, err
+		}
+		out["NextRotationDate"] = next
+	}
+	if sec.LastRotatedDate != "" {
+		last, err := dateUnix(sec.LastRotatedDate)
+		if err != nil {
+			return nil, err
+		}
+		out["LastRotatedDate"] = last
+	}
 	return json.Marshal(out)
 }
 

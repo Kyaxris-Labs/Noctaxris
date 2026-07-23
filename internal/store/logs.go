@@ -24,6 +24,8 @@ type LogGroup struct {
 	CreationTime      int64 // epoch millis
 	StoredBytes       int64
 	MetricFilterCount int
+	// RetentionInDays is 0 when unset (never expire). AWS-shaped values otherwise.
+	RetentionInDays int
 }
 
 // LogStream is a CloudWatch Logs log stream row.
@@ -88,6 +90,73 @@ func EnsureLogsSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(logsSchema); err != nil {
 		return fmt.Errorf("ensure logs schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE logs_groups ADD COLUMN retention_in_days INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("ensure logs schema: retention column: %w", err)
+		}
+	}
+	return nil
+}
+
+var allowedLogRetentionDays = map[int]struct{}{
+	1: {}, 3: {}, 5: {}, 7: {}, 14: {}, 30: {}, 60: {}, 90: {}, 120: {}, 150: {}, 180: {},
+	365: {}, 400: {}, 545: {}, 731: {}, 1096: {}, 1827: {}, 2192: {}, 2557: {}, 2922: {}, 3288: {}, 3653: {},
+}
+
+// PutRetentionPolicy sets RetentionInDays on a log group (AWS-allowed values only).
+func (s *Store) PutRetentionPolicy(accountID, name string, retentionInDays int) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("put retention policy: name is required")
+	}
+	if _, err := s.getLogGroup(accountID, name); err != nil {
+		return err
+	}
+	if _, ok := allowedLogRetentionDays[retentionInDays]; !ok {
+		return fmt.Errorf("InvalidParameterException: RetentionInDays must be a valid CloudWatch Logs retention value")
+	}
+	_, err := s.db.Exec(
+		`UPDATE logs_groups SET retention_in_days = ? WHERE account_id = ? AND log_group_name = ?`,
+		retentionInDays, accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("put retention policy: %w", err)
+	}
+	_ = s.purgeExpiredLogEvents(accountID, name, retentionInDays)
+	return nil
+}
+
+// DeleteRetentionPolicy clears retention so events never expire.
+func (s *Store) DeleteRetentionPolicy(accountID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("delete retention policy: name is required")
+	}
+	if _, err := s.getLogGroup(accountID, name); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE logs_groups SET retention_in_days = 0 WHERE account_id = ? AND log_group_name = ?`,
+		accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("delete retention policy: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) purgeExpiredLogEvents(accountID, group string, retentionInDays int) error {
+	if retentionInDays <= 0 {
+		return nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(retentionInDays) * 24 * time.Hour).UnixMilli()
+	_, err := s.db.Exec(
+		`DELETE FROM logs_events WHERE account_id = ? AND log_group_name = ? AND timestamp < ?`,
+		accountID, group, cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("purge expired log events: %w", err)
 	}
 	return nil
 }
@@ -282,7 +351,8 @@ func (s *Store) DescribeLogStreams(accountID, group, prefix string) ([]LogStream
 // DescribeLogGroups lists log groups, optional prefix filter.
 func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) {
 	rows, err := s.db.Query(
-		`SELECT log_group_name, arn, creation_time FROM logs_groups WHERE account_id = ? ORDER BY log_group_name`,
+		`SELECT log_group_name, arn, creation_time, COALESCE(retention_in_days, 0)
+		 FROM logs_groups WHERE account_id = ? ORDER BY log_group_name`,
 		accountID,
 	)
 	if err != nil {
@@ -291,7 +361,7 @@ func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) 
 	var out []LogGroup
 	for rows.Next() {
 		var g LogGroup
-		if err := rows.Scan(&g.LogGroupName, &g.Arn, &g.CreationTime); err != nil {
+		if err := rows.Scan(&g.LogGroupName, &g.Arn, &g.CreationTime, &g.RetentionInDays); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("describe log groups: scan: %w", err)
 		}
@@ -310,6 +380,9 @@ func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) 
 	// Sum bytes after closing the listing cursor so nested queries cannot deadlock
 	// a single-connection pool.
 	for i := range out {
+		if out[i].RetentionInDays > 0 {
+			_ = s.purgeExpiredLogEvents(accountID, out[i].LogGroupName, out[i].RetentionInDays)
+		}
 		bytes, err := s.sumLogGroupBytes(accountID, out[i].LogGroupName)
 		if err != nil {
 			return nil, err
@@ -329,6 +402,9 @@ func (s *Store) DescribeLogGroups(accountID, prefix string) ([]LogGroup, error) 
 func (s *Store) PutLogEvents(
 	accountID, group, stream, sequenceToken string, events []LogEvent,
 ) (nextToken string, rejected []LogEvent, err error) {
+	if g, gerr := s.getLogGroup(accountID, group); gerr == nil && g.RetentionInDays > 0 {
+		_ = s.purgeExpiredLogEvents(accountID, group, g.RetentionInDays)
+	}
 	st, err := s.getLogStream(accountID, group, stream)
 	if err != nil {
 		return "", nil, err
@@ -401,6 +477,9 @@ func (s *Store) PutLogEvents(
 func (s *Store) GetLogEvents(
 	accountID, group, stream string, startTime, endTime int64, startFromHead bool, limit int,
 ) ([]LogEvent, error) {
+	if g, err := s.getLogGroup(accountID, group); err == nil && g.RetentionInDays > 0 {
+		_ = s.purgeExpiredLogEvents(accountID, group, g.RetentionInDays)
+	}
 	if _, err := s.getLogStream(accountID, group, stream); err != nil {
 		return nil, err
 	}
@@ -450,9 +529,10 @@ func (s *Store) GetLogEvents(
 func (s *Store) getLogGroup(accountID, name string) (LogGroup, error) {
 	var g LogGroup
 	err := s.db.QueryRow(
-		`SELECT log_group_name, arn, creation_time FROM logs_groups WHERE account_id = ? AND log_group_name = ?`,
+		`SELECT log_group_name, arn, creation_time, COALESCE(retention_in_days, 0)
+		 FROM logs_groups WHERE account_id = ? AND log_group_name = ?`,
 		accountID, name,
-	).Scan(&g.LogGroupName, &g.Arn, &g.CreationTime)
+	).Scan(&g.LogGroupName, &g.Arn, &g.CreationTime, &g.RetentionInDays)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LogGroup{}, ErrLogGroupNotFound
 	}

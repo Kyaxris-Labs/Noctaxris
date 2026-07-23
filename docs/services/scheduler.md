@@ -18,7 +18,7 @@ Schedule metadata lives in SQLite under the default group when `GroupName` is om
 
 ### Authz notes
 
-PassRole uses service principal `scheduler.amazonaws.com`. Target delivery with RoleArn mints a role session and evaluates identity policies for the target action. Same-account RoleArn-only delivery remains the lab path for SQS/Lambda/SNS; foreign targets also require the destination resource policy. Without RoleArn, delivery checks the SQS, Lambda, or SNS resource policy for the Scheduler service principal. Step Functions targets require RoleArn (`states:StartExecution`).
+PassRole uses service principal `scheduler.amazonaws.com`. Configure-time PassRole sets trust `aws:SourceArn` to the schedule ARN (`arn:aws:scheduler:region:account:schedule/group/name`). Target delivery with RoleArn mints a role session and evaluates identity policies for the target action. Same-account RoleArn-only delivery remains the lab path for SQS/Lambda/SNS; foreign targets also require the destination resource policy. Without RoleArn, delivery checks the SQS, Lambda, or SNS resource policy for the Scheduler service principal. Step Functions targets require RoleArn (`states:StartExecution`).
 
 ## How to verify / CLI smoke
 
@@ -47,10 +47,10 @@ aws scheduler list-schedules --endpoint-url "$EP"
 
 Skip live ticker wait in CI when Docker is unavailable. Unit tests call `ProcessDueSchedules` directly.
 
-## Not yet / deferred
+## Out of lab scope
 
-- Flexible time windows beyond Mode=OFF
-- Full retry and DLQ matrix
-- Schedule groups beyond the default group depth
-- Universal targets beyond Lambda, SQS, SNS, and Step Functions
-- Legacy EventBridge scheduled rules (`ScheduleExpression` on Rules)
+- Flexible time windows beyond Mode=OFF (out of lab scope)
+- Full retry and DLQ matrix (out of lab scope)
+- Schedule groups beyond the default group depth (out of lab scope)
+- Universal targets beyond Lambda, SQS, SNS, and Step Functions (out of lab scope; rate/cron/at + those four targets is lab-complete)
+- Legacy EventBridge scheduled rules (`ScheduleExpression` on Rules) (out of lab scope; use this Scheduler API)

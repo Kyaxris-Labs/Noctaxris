@@ -26,7 +26,7 @@ func TestTransactWriteItemsAtomicPutPair(t *testing.T) {
 			Kind: "Put", TableName: "Orders",
 			ItemPK: `{"S":"b"}`, ItemJSON: []byte(`{"pk":{"S":"b"},"v":{"S":"2"}}`),
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestTransactWriteItemsCancelMissingConditionCheck(t *testing.T) {
 			Kind: "ConditionCheck", TableName: "Orders",
 			ItemPK: `{"S":"missing"}`, ConditionEmpty: true,
 		},
-	})
+	}, "")
 	var canceled *store.TransactionCanceledError
 	if !errors.As(err, &canceled) {
 		t.Fatalf("want TransactionCanceledError, got %v", err)
@@ -89,7 +89,7 @@ func TestTransactWriteItemsDuplicateKeyCancels(t *testing.T) {
 			Kind: "Delete", TableName: "Orders",
 			ItemPK: `{"S":"dup"}`,
 		},
-	})
+	}, "")
 	var canceled *store.TransactionCanceledError
 	if !errors.As(err, &canceled) {
 		t.Fatalf("want TransactionCanceledError, got %v", err)
@@ -119,7 +119,7 @@ func TestTransactWriteUpdateWithCondition(t *testing.T) {
 				":old": map[string]any{"N": "10"},
 			},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestTransactWriteUpdateWithCondition(t *testing.T) {
 				":old": map[string]any{"N": "10"},
 			},
 		},
-	})
+	}, "")
 	var canceled *store.TransactionCanceledError
 	if !errors.As(err, &canceled) {
 		t.Fatalf("want TransactionCanceledError, got %v", err)
@@ -174,7 +174,7 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"1"}}`),
 			ConditionExpression: "attribute_not_exists(pk)",
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"2"}}`),
 			ConditionExpression: "attribute_not_exists(pk)",
 		},
-	})
+	}, "")
 	var canceled *store.TransactionCanceledError
 	if !errors.As(err, &canceled) {
 		t.Fatalf("want TransactionCanceledError, got %v", err)
@@ -201,12 +201,93 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 				":want": map[string]any{"S": "1"},
 			},
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.GetItemBytes(account, "Orders", `{"S":"new"}`, ""); !errors.Is(err, store.ErrNoSuchItem) {
 		t.Fatalf("want deleted, got %v", err)
+	}
+}
+
+func TestTransactWriteAppendsStreamRecords(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	table, err := st.CreateTable(account, "us-east-1", "StreamTxn", "pk", store.KeyTypeString, "", "", "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateTableStreamSpec(account, table.TableName, true, store.StreamViewNewAndOldImages); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Put", TableName: table.TableName,
+			ItemPK:   `{"S":"a"}`,
+			ItemJSON: []byte(`{"pk":{"S":"a"},"v":{"S":"1"}}`),
+		},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Put", TableName: table.TableName,
+			ItemPK:   `{"S":"a"}`,
+			ItemJSON: []byte(`{"pk":{"S":"a"},"v":{"S":"2"}}`),
+		},
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	it, err := st.GetDynamoStreamShardIterator(account, table.TableName, store.LabDynamoStreamShardID, "TRIM_HORIZON", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, _, err := st.GetDynamoStreamRecords(it, 10)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("recs=%v err=%v", recs, err)
+	}
+	if recs[0].EventName != "INSERT" || !bytes.Contains([]byte(recs[0].NewImageJSON), []byte(`"1"`)) {
+		t.Fatalf("insert=%+v", recs[0])
+	}
+	if recs[1].EventName != "MODIFY" ||
+		!bytes.Contains([]byte(recs[1].NewImageJSON), []byte(`"2"`)) ||
+		!bytes.Contains([]byte(recs[1].OldImageJSON), []byte(`"1"`)) {
+		t.Fatalf("modify=%+v", recs[1])
+	}
+}
+
+func TestTransactWriteClientRequestTokenIdempotent(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTable(account, "us-east-1", "TokOrders", "pk", store.KeyTypeString, "", "", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	actions := []store.TransactWriteAction{{
+		Kind: "Put", TableName: "TokOrders",
+		ItemPK:   `{"S":"a"}`,
+		ItemJSON: []byte(`{"pk":{"S":"a"},"v":{"S":"1"}}`),
+	}}
+	if err := st.TransactWriteItems(account, actions, "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TransactWriteItems(account, actions, "tok-1"); err != nil {
+		t.Fatalf("replay same token: %v", err)
+	}
+	got, err := st.GetItemBytes(account, "TokOrders", `{"S":"a"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.ItemJSON, []byte(`"1"`)) {
+		t.Fatalf("item=%s", got.ItemJSON)
+	}
+	mismatch := []store.TransactWriteAction{{
+		Kind: "Put", TableName: "TokOrders",
+		ItemPK:   `{"S":"a"}`,
+		ItemJSON: []byte(`{"pk":{"S":"a"},"v":{"S":"other"}}`),
+	}}
+	err = st.TransactWriteItems(account, mismatch, "tok-1")
+	if !errors.Is(err, store.ErrDynamoTransactIdempotentMismatch) {
+		t.Fatalf("want IdempotentParameterMismatch, got %v", err)
 	}
 }
 

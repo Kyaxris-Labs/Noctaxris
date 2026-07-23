@@ -81,7 +81,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | docker-nightly (separate workflow) | UTC cron + `workflow_dispatch`: build `docker/Dockerfile`, push `kyaxris/noctaxris:nightly` (+ dated / sha tags). Canonical repo + Hub secrets required |
 | release (separate workflow) | Push tag `v*`: push semver + `latest` (+ sha). Same secrets. See [release.md](release.md) |
 
-A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via the weekly schedule, Actions `workflow_dispatch`, or the script below before relying on those paths. Any Compose change that touches `noctaxris-engine` privilege, devices, seccomp, or compute mounts must pass `docker/smoke-nested.sh` before merge; green `smoke-core` is not enough.
+A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Nested smoke on every PR and default-suite Lambda Invoke are out of lab scope as required gates (keep opt-in flags). Run nested smoke via the weekly schedule, Actions `workflow_dispatch`, or the script below before relying on those paths. Any Compose change that touches `noctaxris-engine` privilege, devices, seccomp, or compute mounts must pass `docker/smoke-nested.sh` before merge; green `smoke-core` is not enough.
 
 Operator shortcut (same script as the manual CI job):
 

@@ -57,7 +57,7 @@ func TestDynamoStreamsEventSourceMappingPoll(t *testing.T) {
 	}
 	keys, _ := store.DynamoStreamKeysJSON(table, "1", "")
 	item, _ := json.Marshal(map[string]any{"pk": map[string]string{"S": "1"}, "v": map[string]string{"S": "hello"}})
-	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keys, item); err != nil {
+	if err := st.AppendDynamoStreamRecord(account, table.TableName, "INSERT", keys, item, nil); err != nil {
 		t.Fatal(err)
 	}
 	streamARN := table.StreamARN("us-east-1")

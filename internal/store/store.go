@@ -324,20 +324,20 @@ const (
 
 // AccessKey is a long-lived or temporary credential record.
 type AccessKey struct {
-	AccessKeyID         string
-	AccountID           string
-	Secret              string
-	IsRoot              bool
-	UserName            string // set for IAM user keys; empty for root/temp
-	Status              string // Active or Inactive; empty treated as Active for legacy rows
-	SessionToken        string // plaintext; empty if long-lived
-	RoleARN             string
-	SessionName         string
-	FederatedUser       string
-	SessionPolicy       string
-	ExpiresAt           time.Time // zero if none
-	MFAAuthenticated    bool
-	MFAAuthenticatedAt  time.Time // zero if MFA not presented
+	AccessKeyID        string
+	AccountID          string
+	Secret             string
+	IsRoot             bool
+	UserName           string // set for IAM user keys; empty for root/temp
+	Status             string // Active or Inactive; empty treated as Active for legacy rows
+	SessionToken       string // plaintext; empty if long-lived
+	RoleARN            string
+	SessionName        string
+	FederatedUser      string
+	SessionPolicy      string
+	ExpiresAt          time.Time // zero if none
+	MFAAuthenticated   bool
+	MFAAuthenticatedAt time.Time // zero if MFA not presented
 }
 
 type Store struct {
@@ -347,6 +347,9 @@ type Store struct {
 
 	asyncEnqueueMu sync.Mutex
 	onAsyncEnqueue func(job LambdaAsyncInvocation)
+
+	cognitoTriggerMu      sync.Mutex
+	cognitoTriggerInvoker CognitoTriggerInvoker
 
 	sfnTaskMu      sync.Mutex
 	sfnTaskInvoker SFNTaskInvoker
@@ -541,6 +544,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureDynamoDBStreamsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureDynamoDBTransactSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}

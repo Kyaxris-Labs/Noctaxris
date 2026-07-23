@@ -395,7 +395,7 @@ func (s *Server) dynamoCreateTable(
 			table, err = s.store.UpdateTableStreamSpec(verified.AccountID, tableName, true, viewType)
 			if errors.Is(err, store.ErrDynamoStreamBadView) {
 				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-					"StreamViewType must be NEW_IMAGE or KEYS_ONLY.", readOnly, eventID, verified)
+					"StreamViewType must be NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES, or KEYS_ONLY.", readOnly, eventID, verified)
 				return
 			}
 			if err != nil {
@@ -613,7 +613,7 @@ func (s *Server) dynamoUpdateTable(
 		table, err = s.store.UpdateTableStreamSpec(verified.AccountID, tableName, enabled, viewType)
 		if errors.Is(err, store.ErrDynamoStreamBadView) {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				"StreamViewType must be NEW_IMAGE or KEYS_ONLY.", readOnly, eventID, verified)
+				"StreamViewType must be NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES, or KEYS_ONLY.", readOnly, eventID, verified)
 			return
 		}
 		if err != nil {
@@ -1020,12 +1020,20 @@ func (s *Server) dynamoDeleteItem(
 			"Unable to build stream keys.", readOnly, eventID, verified)
 		return
 	}
+	var oldImage []byte
+	if table.StreamEnabled {
+		if existing, found, loadErr := s.dynamoLoadItem(w, r, body, requestID, eventID, verified, readOnly, table, key); loadErr != nil {
+			return
+		} else if found {
+			oldImage, _ = ddb.MarshalItemJSON(existing)
+		}
+	}
 	if err := s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to delete item.", readOnly, eventID, verified)
 		return
 	}
-	if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, "REMOVE", keysJSON, nil); err != nil {
+	if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, "REMOVE", keysJSON, nil, oldImage); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to append stream record.", readOnly, eventID, verified)
 		return
@@ -1479,10 +1487,19 @@ func (s *Server) dynamoTransactWriteItems(
 		return
 	}
 
-	if err := s.store.TransactWriteItems(verified.AccountID, actions); err != nil {
+	clientToken, _ := params["ClientRequestToken"].(string)
+	if clientToken == "" {
+		clientToken, _ = params["clientRequestToken"].(string)
+	}
+	if err := s.store.TransactWriteItems(verified.AccountID, actions, clientToken); err != nil {
 		var canceled *store.TransactionCanceledError
 		if errors.As(err, &canceled) {
 			s.writeDynamoTransactionCanceled(w, r, body, requestID, canceled, readOnly, eventID, verified)
+			return
+		}
+		if errors.Is(err, store.ErrDynamoTransactIdempotentMismatch) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "IdempotentParameterMismatchException",
+				"ClientRequestToken was reused with different parameters.", readOnly, eventID, verified)
 			return
 		}
 		if errors.Is(err, store.ErrDynamoTransactUnsupported) ||
@@ -2077,13 +2094,19 @@ func (s *Server) dynamoStoreItem(
 		return err
 	}
 	eventName := "INSERT"
+	var oldImage []byte
 	if table.StreamEnabled {
-		if _, err := s.store.GetItemBytes(table.AccountID, table.TableName, itemPK, itemSK); err == nil {
+		keyMap := ddb.ItemMap{}
+		for k, v := range item {
+			if k == table.HashKeyName || k == table.RangeKeyName {
+				keyMap[k] = v
+			}
+		}
+		if existing, found, loadErr := s.dynamoLoadItem(w, r, body, requestID, eventID, verified, readOnly, table, keyMap); loadErr != nil {
+			return loadErr
+		} else if found {
 			eventName = "MODIFY"
-		} else if !errors.Is(err, store.ErrNoSuchItem) {
-			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-				"Unable to put item.", readOnly, eventID, verified)
-			return err
+			oldImage, _ = ddb.MarshalItemJSON(existing)
 		}
 	}
 	plain, err := ddb.MarshalItemJSON(item)
@@ -2130,7 +2153,7 @@ func (s *Server) dynamoStoreItem(
 				"Unable to build stream keys.", readOnly, eventID, verified)
 			return keysErr
 		}
-		if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, eventName, keysJSON, plain); err != nil {
+		if err := s.store.AppendDynamoStreamRecord(table.AccountID, table.TableName, eventName, keysJSON, plain, oldImage); err != nil {
 			s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to append stream record.", readOnly, eventID, verified)
 			return err

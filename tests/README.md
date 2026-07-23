@@ -31,7 +31,7 @@ Optional overrides: `NOCTAXRIS_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCES
 | Suite | Tools |
 |-------|--------|
 | SDK (Go) | Go 1.22+ (module under `tests/sdk/go`) |
-| SDK (Node.js) | Node 18+; `npm install` under `tests/sdk/nodejs` |
+| SDK (Node.js) | Node.js 24+; `npm install` under `tests/sdk/nodejs` |
 | SDK (Python) | Python 3.10+; `pip install -r requirements.txt` under `tests/sdk/python` |
 | Terraform | Terraform CLI 1.5+, AWS provider resolved on `init` |
 | CloudFormation | Go SDK suite and/or AWS CLI v2 |

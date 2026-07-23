@@ -127,6 +127,18 @@ func TestMapPgxValueTyped(t *testing.T) {
 	}
 }
 
+func TestHasPostgresReturning(t *testing.T) {
+	if !hasPostgresReturning(`INSERT INTO t(x) VALUES (1) RETURNING id`) {
+		t.Fatal("expected RETURNING")
+	}
+	if hasPostgresReturning(`SELECT returning_col FROM t`) {
+		t.Fatal("column name must not match")
+	}
+	if hasPostgresReturning(`UPDATE t SET x=1`) {
+		t.Fatal("no RETURNING")
+	}
+}
+
 func TestIsRDSDataPgxDialFailure(t *testing.T) {
 	if !isRDSDataPgxDialFailure(store.ErrRDSDataUnavailable) {
 		t.Fatal("unavailable should be dial failure")
@@ -170,6 +182,41 @@ func TestExecuteRDSDataPgxWithConnLive(t *testing.T) {
 	}
 	if res.Records[0][1].BooleanValue == nil || !*res.Records[0][1].BooleanValue {
 		t.Fatalf("bool cell=%v", res.Records[0][1])
+	}
+}
+
+func TestExecuteRDSDataPgxReturningGeneratedFieldsLive(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("NOCTAXRIS_TEST_PGX_DSN"))
+	if dsn == "" {
+		t.Skip("set NOCTAXRIS_TEST_PGX_DSN to run live pgx RETURNING smoke")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.Close(context.Background())
+
+	tbl := "noctaxris_rdsdata_ret_" + strings.ReplaceAll(t.Name(), "/", "_")
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE `+tbl+` (id BIGSERIAL PRIMARY KEY, name TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	name := "alice"
+	res, err := executeRDSDataPgxWithConn(ctx, conn, store.RDSDataExecuteRequest{
+		SQL: "INSERT INTO " + tbl + " (name) VALUES (:name) RETURNING id",
+		Parameters: []store.RDSDataSqlParameter{
+			{Name: "name", StringValue: &name},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.GeneratedFields) != 1 || res.GeneratedFields[0].LongValue == nil {
+		t.Fatalf("generatedFields=%v", res.GeneratedFields)
+	}
+	if res.NumberOfRecordsUpdated != 1 {
+		t.Fatalf("updated=%d", res.NumberOfRecordsUpdated)
 	}
 }
 

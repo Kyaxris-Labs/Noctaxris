@@ -25,10 +25,32 @@ func EnsureLambdaPolicySchema(db *sql.DB) error {
 	return nil
 }
 
+// AddFunctionPermissionOpts carries AddPermission fields including Function URL conditions.
+type AddFunctionPermissionOpts struct {
+	StatementID           string
+	Action                string
+	Principal             string
+	SourceAccount         string
+	SourceARN             string
+	FunctionUrlAuthType   string
+	InvokedViaFunctionUrl bool
+}
+
 // AddFunctionPermission appends an Allow statement to the function resource policy.
 // sourceAccount / sourceArn are persisted as Condition keys (aws:SourceAccount /
 // aws:SourceArn) for service-principal confused-deputy locks.
 func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, action, principal, sourceAccount, sourceARN string) (string, error) {
+	return s.AddFunctionPermissionWithOpts(accountID, nameOrARN, AddFunctionPermissionOpts{
+		StatementID:   statementID,
+		Action:        action,
+		Principal:     principal,
+		SourceAccount: sourceAccount,
+		SourceARN:     sourceARN,
+	})
+}
+
+// AddFunctionPermissionWithOpts is AddPermission with optional Function URL condition keys.
+func (s *Store) AddFunctionPermissionWithOpts(accountID, nameOrARN string, opts AddFunctionPermissionOpts) (string, error) {
 	name, err := resolveFunctionName(accountID, nameOrARN)
 	if err != nil {
 		return "", err
@@ -37,20 +59,31 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	if err != nil {
 		return "", err
 	}
-	statementID = strings.TrimSpace(statementID)
+	statementID := strings.TrimSpace(opts.StatementID)
 	if statementID == "" {
 		return "", fmt.Errorf("validation: StatementId is required")
 	}
-	action = strings.TrimSpace(action)
+	action := strings.TrimSpace(opts.Action)
 	if action == "" {
 		return "", fmt.Errorf("validation: Action is required")
 	}
-	principal = strings.TrimSpace(principal)
+	principal := strings.TrimSpace(opts.Principal)
 	if principal == "" {
 		return "", fmt.Errorf("validation: Principal is required")
 	}
-	sourceAccount = strings.TrimSpace(sourceAccount)
-	sourceARN = strings.TrimSpace(sourceARN)
+	sourceAccount := strings.TrimSpace(opts.SourceAccount)
+	sourceARN := strings.TrimSpace(opts.SourceARN)
+	authType := strings.TrimSpace(opts.FunctionUrlAuthType)
+	if authType != "" {
+		normalized, nerr := normalizeFunctionURLAuthType(authType)
+		if nerr != nil {
+			return "", fmt.Errorf("validation: FunctionUrlAuthType must be NONE or AWS_IAM")
+		}
+		authType = normalized
+	}
+	if principal == "*" && authType == "" {
+		return "", fmt.Errorf("validation: wildcard principal requires FunctionUrlAuthType")
+	}
 	if sourceAccount != "" {
 		if sourceAccount != accountID && !s.AccountExists(sourceAccount) {
 			return "", fmt.Errorf("validation: SourceAccount is not a lab account")
@@ -69,7 +102,16 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	}
 
 	var stmt map[string]any
-	if isLabServicePrincipal(principal) {
+	switch {
+	case principal == "*":
+		stmt = map[string]any{
+			"Sid":       statementID,
+			"Effect":    "Allow",
+			"Principal": "*",
+			"Action":    action,
+			"Resource":  fn.FunctionARN,
+		}
+	case isLabServicePrincipal(principal):
 		stmt = map[string]any{
 			"Sid":       statementID,
 			"Effect":    "Allow",
@@ -77,7 +119,7 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 			"Action":    action,
 			"Resource":  fn.FunctionARN,
 		}
-	} else {
+	default:
 		normalized, nerr := normalizeLambdaPrincipal(s, accountID, principal)
 		if nerr != nil {
 			return "", nerr
@@ -90,7 +132,7 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 			"Resource":  fn.FunctionARN,
 		}
 	}
-	if cond := lambdaPermissionCondition(sourceAccount, sourceARN); cond != nil {
+	if cond := lambdaPermissionCondition(sourceAccount, sourceARN, authType, opts.InvokedViaFunctionUrl); cond != nil {
 		stmt["Condition"] = cond
 	}
 	statements, err := lambdaPolicyStatements(doc)
@@ -114,16 +156,26 @@ func (s *Store) AddFunctionPermission(accountID, nameOrARN string, statementID, 
 	return string(rawStmt), nil
 }
 
-func lambdaPermissionCondition(sourceAccount, sourceARN string) map[string]any {
-	if sourceAccount == "" && sourceARN == "" {
+func lambdaPermissionCondition(sourceAccount, sourceARN, functionURLAuthType string, invokedViaFunctionURL bool) map[string]any {
+	if sourceAccount == "" && sourceARN == "" && functionURLAuthType == "" && !invokedViaFunctionURL {
 		return nil
 	}
 	cond := map[string]any{}
+	stringEquals := map[string]string{}
 	if sourceAccount != "" {
-		cond["StringEquals"] = map[string]string{"aws:SourceAccount": sourceAccount}
+		stringEquals["aws:SourceAccount"] = sourceAccount
+	}
+	if functionURLAuthType != "" {
+		stringEquals["lambda:FunctionUrlAuthType"] = functionURLAuthType
+	}
+	if len(stringEquals) > 0 {
+		cond["StringEquals"] = stringEquals
 	}
 	if sourceARN != "" {
 		cond["ArnLike"] = map[string]string{"aws:SourceArn": sourceARN}
+	}
+	if invokedViaFunctionURL {
+		cond["Bool"] = map[string]string{"lambda:InvokedViaFunctionUrl": "true"}
 	}
 	return cond
 }
