@@ -80,6 +80,10 @@ func (s *Store) PutMetricFilter(accountID, group, filterName, pattern, metricNam
 	if strings.TrimSpace(metricValue) == "" {
 		metricValue = "1"
 	}
+	pattern = strings.TrimSpace(pattern)
+	if _, err := MatchLogFilterPattern(pattern, ""); err != nil {
+		return LogsMetricFilter{}, err
+	}
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
 		`INSERT INTO logs_metric_filters
@@ -90,7 +94,7 @@ func (s *Store) PutMetricFilter(accountID, group, filterName, pattern, metricNam
 		   metric_name = excluded.metric_name,
 		   metric_namespace = excluded.metric_namespace,
 		   metric_value = excluded.metric_value`,
-		accountID, group, filterName, strings.TrimSpace(pattern), metricName, metricNamespace, metricValue, now,
+		accountID, group, filterName, pattern, metricName, metricNamespace, metricValue, now,
 	)
 	if err != nil {
 		return LogsMetricFilter{}, fmt.Errorf("put metric filter: %w", err)

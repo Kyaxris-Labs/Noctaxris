@@ -45,37 +45,63 @@ func (s *Store) pollKinesisEventSourceMappingOnce(m LambdaEventSourceMapping, in
 	if !ok || acct != m.AccountID {
 		return ErrInvalidEventSourceARN
 	}
-	if _, err := s.DescribeKinesisStream(acct, streamName); err != nil {
+	stream, err := s.DescribeKinesisStream(acct, streamName)
+	if err != nil {
 		return err
 	}
-	// SourceCursor stores the last successfully processed sequence number (not a
-	// shard iterator). GetRecords consumes iterators, so sequence cursors keep
-	// invoke-failure redelivery reliable.
+	// SourceCursor is a JSON map shardId → last successfully processed sequence
+	// (not a shard iterator). Legacy plain sequence strings mean shard 0 only.
+	cursors := parseKinesisESMCursor(m.SourceCursor)
+	shardIDs := LabKinesisShardIDs(stream.ShardCount)
+	remaining := m.BatchSize
+	if remaining <= 0 {
+		remaining = 10
+	}
 	var (
-		iterator string
-		err      error
+		batch       []KinesisRecord
+		nextCursors = cloneKinesisESMCursor(cursors)
 	)
-	if strings.TrimSpace(m.SourceCursor) == "" {
-		iterator, err = s.GetKinesisShardIterator(acct, streamName, LabKinesisShardID, "TRIM_HORIZON", "")
-	} else {
-		iterator, err = s.GetKinesisShardIterator(acct, streamName, LabKinesisShardID, "AFTER_SEQUENCE_NUMBER", m.SourceCursor)
+	for _, shardID := range shardIDs {
+		if remaining <= 0 {
+			break
+		}
+		var iterator string
+		if seq := strings.TrimSpace(cursors[shardID]); seq == "" {
+			iterator, err = s.GetKinesisShardIterator(acct, streamName, shardID, "TRIM_HORIZON", "")
+		} else {
+			iterator, err = s.GetKinesisShardIterator(acct, streamName, shardID, "AFTER_SEQUENCE_NUMBER", seq)
+		}
+		if err != nil {
+			return err
+		}
+		recs, _, err := s.GetKinesisRecords(iterator, remaining)
+		if err != nil {
+			return err
+		}
+		if len(recs) == 0 {
+			continue
+		}
+		for i := range recs {
+			if recs[i].ShardID == "" {
+				recs[i].ShardID = shardID
+			}
+		}
+		batch = append(batch, recs...)
+		nextCursors[shardID] = recs[len(recs)-1].SequenceNumber
+		remaining -= len(recs)
 	}
-	if err != nil {
-		return err
-	}
-	records, _, err := s.GetKinesisRecords(iterator, m.BatchSize)
-	if err != nil {
-		return err
-	}
-	if len(records) == 0 {
+	if len(batch) == 0 {
 		return nil
 	}
-	batchEndSeq := records[len(records)-1].SequenceNumber
+	cursorJSON, err := marshalKinesisESMCursor(nextCursors)
+	if err != nil {
+		return err
+	}
 	fc, _ := parseESMFilterCriteriaJSON(m.FilterCriteriaJSON)
-	matched := filterKinesisRecords(fc, records)
+	matched := filterKinesisRecords(fc, batch)
 	if len(matched) == 0 {
 		// Advance cursor past filtered records (lab: no invoke, no redelivery).
-		return s.setESMSourceCursor(m.UUID, batchEndSeq)
+		return s.setESMSourceCursor(m.UUID, cursorJSON)
 	}
 	eventJSON, err := buildKinesisLambdaEventJSON(m.EventSourceARN, matched)
 	if err != nil {
@@ -99,7 +125,48 @@ func (s *Store) pollKinesisEventSourceMappingOnce(m LambdaEventSourceMapping, in
 			return nil
 		}
 	}
-	return s.setESMSourceCursor(m.UUID, batchEndSeq)
+	return s.setESMSourceCursor(m.UUID, cursorJSON)
+}
+
+func parseKinesisESMCursor(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	out := map[string]string{}
+	if raw == "" {
+		return out
+	}
+	if strings.HasPrefix(raw, "{") {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(raw), &m); err == nil && m != nil {
+			for k, v := range m {
+				if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+					out[k] = v
+				}
+			}
+			return out
+		}
+	}
+	// Legacy single-shard cursor: plain sequence on shard 0.
+	out[LabKinesisShardID(0)] = raw
+	return out
+}
+
+func cloneKinesisESMCursor(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func marshalKinesisESMCursor(cursors map[string]string) (string, error) {
+	if len(cursors) == 0 {
+		return "", nil
+	}
+	raw, err := json.Marshal(cursors)
+	if err != nil {
+		return "", fmt.Errorf("marshal kinesis esm cursor: %w", err)
+	}
+	return string(raw), nil
 }
 
 func filterKinesisRecords(fc LambdaESMFilterCriteria, records []KinesisRecord) []KinesisRecord {
@@ -149,8 +216,12 @@ func buildKinesisLambdaEventJSON(streamARN string, records []KinesisRecord) (str
 	}
 	out := make([]map[string]any, 0, len(records))
 	for _, rec := range records {
+		shardID := rec.ShardID
+		if shardID == "" {
+			shardID = LabKinesisShardID(0)
+		}
 		out = append(out, map[string]any{
-			"eventID":        LabKinesisShardID + ":" + rec.SequenceNumber,
+			"eventID":        shardID + ":" + rec.SequenceNumber,
 			"eventName":      "aws:kinesis:record",
 			"eventVersion":   "1.0",
 			"eventSource":    "aws:kinesis",

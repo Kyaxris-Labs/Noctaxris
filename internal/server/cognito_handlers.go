@@ -98,6 +98,12 @@ func (s *Server) handleCognito(
 		s.cognitoAdminInitiateAuth(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoRevokeToken:
 		s.cognitoRevokeToken(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoAssociateSoftwareToken:
+		s.cognitoAssociateSoftwareToken(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoVerifySoftwareToken:
+		s.cognitoVerifySoftwareToken(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoRespondToAuthChallenge:
+		s.cognitoRespondToAuthChallenge(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This Cognito action is not implemented.", readOnly, eventID, verified)
@@ -137,6 +143,12 @@ func cognitoAction(action string) string {
 		return catalog.ActionCognitoAdminInitiateAuth
 	case "RevokeToken":
 		return catalog.ActionCognitoRevokeToken
+	case "AssociateSoftwareToken":
+		return catalog.ActionCognitoAssociateSoftwareToken
+	case "VerifySoftwareToken":
+		return catalog.ActionCognitoVerifySoftwareToken
+	case "RespondToAuthChallenge":
+		return catalog.ActionCognitoRespondToAuthChallenge
 	default:
 		return action
 	}
@@ -492,13 +504,15 @@ func (s *Server) cognitoInitiateAuth(
 	username, password, refreshToken := cognitoAuthParams(params)
 	// InitiateAuth is a public Cognito IdP API (no IAM / SigV4 on AWS).
 	flowNorm := strings.ToUpper(strings.TrimSpace(flow))
-	var result store.CognitoAuthResult
+	var outcome store.CognitoAuthOutcome
 	var err error
 	switch {
 	case flowNorm == "USER_PASSWORD_AUTH":
-		result, err = s.store.InitiateCognitoAuth(clientID, username, password)
+		outcome, err = s.store.InitiateCognitoAuth(clientID, username, password)
 	case cognitoIsRefreshFlow(flow):
-		result, err = s.store.RefreshCognitoTokens("", clientID, refreshToken)
+		result, refreshErr := s.store.RefreshCognitoTokens("", clientID, refreshToken)
+		err = refreshErr
+		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			"Only USER_PASSWORD_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
@@ -528,7 +542,7 @@ func (s *Server) cognitoInitiateAuth(
 			"Unable to initiate auth.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := cognitosvc.AuthResultJSON(result)
+	payload, _ := cognitosvc.AuthOutcomeJSON(outcome)
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "InitiateAuth", readOnly)
 }
@@ -547,13 +561,15 @@ func (s *Server) cognitoAdminInitiateAuth(
 		return
 	}
 	flowNorm := strings.ToUpper(strings.TrimSpace(flow))
-	var result store.CognitoAuthResult
+	var outcome store.CognitoAuthOutcome
 	var err error
 	switch {
 	case flowNorm == "USER_PASSWORD_AUTH" || flowNorm == "ADMIN_USER_PASSWORD_AUTH" || flowNorm == "ADMIN_NO_SRP_AUTH":
-		result, err = s.store.AdminInitiateCognitoAuth(verified.AccountID, poolID, clientID, username, password)
+		outcome, err = s.store.AdminInitiateCognitoAuth(verified.AccountID, poolID, clientID, username, password)
 	case cognitoIsRefreshFlow(flow):
-		result, err = s.store.RefreshCognitoTokens(verified.AccountID, clientID, refreshToken)
+		result, refreshErr := s.store.RefreshCognitoTokens(verified.AccountID, clientID, refreshToken)
+		err = refreshErr
+		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			"Only USER_PASSWORD_AUTH, ADMIN_USER_PASSWORD_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.",
@@ -584,7 +600,7 @@ func (s *Server) cognitoAdminInitiateAuth(
 			"Unable to initiate auth.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := cognitosvc.AuthResultJSON(result)
+	payload, _ := cognitosvc.AuthOutcomeJSON(outcome)
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "AdminInitiateAuth", readOnly)
 }
@@ -615,6 +631,134 @@ func (s *Server) cognitoRevokeToken(
 	payload, _ := cognitosvc.RevokeTokenJSON()
 	s.writeCognitoOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "RevokeToken", readOnly)
+}
+
+func (s *Server) cognitoAssociateSoftwareToken(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	accessToken, _ := params["AccessToken"].(string)
+	session, _ := params["Session"].(string)
+	sessionOrAccess := strings.TrimSpace(accessToken)
+	if sessionOrAccess == "" {
+		sessionOrAccess = strings.TrimSpace(session)
+	}
+	// Public IdP: no IAM evaluation (access token or session authorizes).
+	secretCode, outSession, err := s.store.AssociateSoftwareTokenMFA("", "", "", sessionOrAccess)
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid access token or session.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to associate software token.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.AssociateSoftwareTokenJSON(secretCode, outSession)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "AssociateSoftwareToken", readOnly)
+}
+
+func (s *Server) cognitoVerifySoftwareToken(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	session, _ := params["Session"].(string)
+	userCode, _ := params["UserCode"].(string)
+	accessToken, _ := params["AccessToken"].(string)
+	// Lab: Session from AssociateSoftwareToken is required; AccessToken alone is not enough
+	// without a pending associate session (AWS allows either).
+	if strings.TrimSpace(session) == "" && strings.TrimSpace(accessToken) != "" {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"Session from AssociateSoftwareToken is required.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.VerifySoftwareTokenMFA("", "", "", session, userCode)
+	if errors.Is(err, store.ErrCognitoCodeMismatch) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "CodeMismatchException",
+			"Invalid code provided, please request a code again.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid session.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to verify software token.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.VerifySoftwareTokenJSON("SUCCESS")
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "VerifySoftwareToken", readOnly)
+}
+
+func cognitoChallengeResponses(params map[string]any) map[string]string {
+	raw, _ := params["ChallengeResponses"].(map[string]any)
+	if raw == nil {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func (s *Server) cognitoRespondToAuthChallenge(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	clientID, _ := params["ClientId"].(string)
+	challengeName, _ := params["ChallengeName"].(string)
+	session, _ := params["Session"].(string)
+	responses := cognitoChallengeResponses(params)
+	// Public IdP: no IAM evaluation.
+	if strings.ToUpper(strings.TrimSpace(challengeName)) != "SOFTWARE_TOKEN_MFA" {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"Only SOFTWARE_TOKEN_MFA challenge is supported.", readOnly, eventID, verified)
+		return
+	}
+	username := responses["USERNAME"]
+	totpCode := responses["SOFTWARE_TOKEN_MFA_CODE"]
+	result, err := s.store.RespondToSOFTWARETokenMFAChallenge(clientID, username, session, totpCode)
+	if errors.Is(err, store.ErrCognitoCodeMismatch) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "CodeMismatchException",
+			"Invalid code provided, please request a code again.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid session or challenge response.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to respond to auth challenge.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.AuthResultJSON(result)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "RespondToAuthChallenge", readOnly)
 }
 
 func (s *Server) writeCognitoOK(w http.ResponseWriter, payload []byte) {

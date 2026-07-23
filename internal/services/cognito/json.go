@@ -109,5 +109,37 @@ func AuthResultJSON(a store.CognitoAuthResult) ([]byte, error) {
 	return json.Marshal(map[string]any{"AuthenticationResult": result})
 }
 
+// AuthOutcomeJSON builds InitiateAuth / AdminInitiateAuth / RespondToAuthChallenge body.
+// Challenge responses include ChallengeName + Session; success includes AuthenticationResult.
+func AuthOutcomeJSON(o store.CognitoAuthOutcome) ([]byte, error) {
+	if o.ChallengeName != "" {
+		out := map[string]any{
+			"ChallengeName": o.ChallengeName,
+			"Session":       o.Session,
+		}
+		if len(o.ChallengeParameters) > 0 {
+			out["ChallengeParameters"] = o.ChallengeParameters
+		}
+		return json.Marshal(out)
+	}
+	return AuthResultJSON(o.CognitoAuthResult)
+}
+
+// AssociateSoftwareTokenJSON builds AssociateSoftwareToken response.
+func AssociateSoftwareTokenJSON(secretCode, session string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"SecretCode": secretCode,
+		"Session":    session,
+	})
+}
+
+// VerifySoftwareTokenJSON builds VerifySoftwareToken response.
+func VerifySoftwareTokenJSON(status string) ([]byte, error) {
+	if status == "" {
+		status = "SUCCESS"
+	}
+	return json.Marshal(map[string]any{"Status": status})
+}
+
 // RevokeTokenJSON is an empty OK body.
 func RevokeTokenJSON() ([]byte, error) { return []byte(`{}`), nil }

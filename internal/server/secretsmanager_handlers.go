@@ -47,6 +47,8 @@ func (s *Server) handleSecretsManager(
 		s.secretsRestoreSecret(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsRotateSecret:
 		s.secretsRotateSecret(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsUpdateSecretVersionStage:
+		s.secretsUpdateSecretVersionStage(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsDescribeSecret:
 		s.secretsDescribeSecret(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsListSecrets:
@@ -86,6 +88,8 @@ func secretsAction(action string) string {
 		return catalog.ActionSecretsRestoreSecret
 	case "RotateSecret":
 		return catalog.ActionSecretsRotateSecret
+	case "UpdateSecretVersionStage":
+		return catalog.ActionSecretsUpdateSecretVersionStage
 	case "DescribeSecret":
 		return catalog.ActionSecretsDescribeSecret
 	case "ListSecrets":
@@ -304,12 +308,29 @@ func (s *Server) secretsGetSecretValue(
 			"User is not authorized to perform secretsmanager:GetSecretValue.", readOnly, eventID, verified)
 		return
 	}
-	encCtx := store.SecretsEncryptionContext(meta.ARN, meta.VersionID)
+	versionStage, _ := params["VersionStage"].(string)
+	versionID, _ := params["VersionId"].(string)
+	lookupVersionID := strings.TrimSpace(versionID)
+	if lookupVersionID == "" {
+		stage := strings.TrimSpace(versionStage)
+		if stage != "" && stage != store.SecretVersionStageCurrent {
+			for vid, stages := range meta.VersionIdsToStages {
+				if secretsStagesContain(stages, stage) {
+					lookupVersionID = vid
+					break
+				}
+			}
+		}
+	}
+	if lookupVersionID == "" {
+		lookupVersionID = meta.VersionID
+	}
+	encCtx := store.SecretsEncryptionContext(meta.ARN, lookupVersionID)
 	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSDecrypt, encCtx) {
 		return
 	}
 
-	sec, err := s.store.GetSecretValue(secretAccountID, secretID)
+	sec, err := s.store.GetSecretValueByStage(secretAccountID, secretID, versionStage, versionID)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -355,7 +376,13 @@ func (s *Server) secretsPutSecretValue(
 			"User is not authorized to perform secretsmanager:PutSecretValue.", readOnly, eventID, verified)
 		return
 	}
-	nextVersionID := fmt.Sprintf("%d", meta.Version+1)
+	clientToken, _ := params["ClientRequestToken"].(string)
+	clientToken = strings.TrimSpace(clientToken)
+	versionStages := secretsStringSliceParam(params["VersionStages"])
+	nextVersionID := clientToken
+	if nextVersionID == "" {
+		nextVersionID = fmt.Sprintf("%d", meta.Version+1)
+	}
 	encCtx := store.SecretsEncryptionContext(meta.ARN, nextVersionID)
 	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt, encCtx) {
 		return
@@ -374,7 +401,12 @@ func (s *Server) secretsPutSecretValue(
 		return
 	}
 
-	sec, err := s.store.PutSecretValue(secretAccountID, secretID, secretString, secretBinary)
+	var sec store.Secret
+	if len(versionStages) > 0 {
+		sec, err = s.store.PutSecretValueWithStages(secretAccountID, secretID, secretString, secretBinary, clientToken, versionStages)
+	} else {
+		sec, err = s.store.PutSecretValue(secretAccountID, secretID, secretString, secretBinary)
+	}
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
@@ -549,7 +581,12 @@ func (s *Server) secretsRotateSecret(
 			"User is not authorized to perform secretsmanager:RotateSecret.", readOnly, eventID, verified)
 		return
 	}
-	nextVersionID := fmt.Sprintf("%d", meta.Version+1)
+	clientToken, _ := params["ClientRequestToken"].(string)
+	clientToken = strings.TrimSpace(clientToken)
+	nextVersionID := clientToken
+	if nextVersionID == "" {
+		nextVersionID = fmt.Sprintf("%d", meta.Version+1)
+	}
 	encCtx := store.SecretsEncryptionContext(meta.ARN, nextVersionID)
 	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, secretAccountID, meta.KmsKeyID, catalog.ActionKMSEncrypt, encCtx) {
 		return
@@ -559,7 +596,6 @@ func (s *Server) secretsRotateSecret(
 	rotationLambdaARN = strings.TrimSpace(rotationLambdaARN)
 	rotationRoleARN, _ := params["RotationRoleARN"].(string)
 	rotationRoleARN = strings.TrimSpace(rotationRoleARN)
-	clientToken, _ := params["ClientRequestToken"].(string)
 	if rotationLambdaARN != "" || rotationRoleARN != "" {
 		persistLambda := rotationLambdaARN
 		if persistLambda == "" {
@@ -604,6 +640,11 @@ func (s *Server) secretsRotateSecret(
 			"RotationLambdaARN is invalid or the function was not found.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrSecretRotationInProgress) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"A previous rotation is still in progress.", readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "not authorized to pass role") {
 			s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
@@ -624,9 +665,9 @@ func (s *Server) secretsRotateSecret(
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "RotateSecret", readOnly)
 }
 
-// secretsRotateViaLambda enforces PassRole for secretsmanager.amazonaws.com, enqueues a
-// quiet async Invoke with Step=finishSecret, invokes the rotator, and only then applies
-// lab finishSecret (random PutSecretValue). Invoke failure leaves the secret unchanged.
+// secretsRotateViaLambda enforces PassRole for secretsmanager.amazonaws.com, then runs
+// createSecret → setSecret → testSecret → finishSecret invokes. AWSPENDING is created
+// before the first invoke; finishSecret promote runs only after all four succeed.
 func (s *Server) secretsRotateViaLambda(
 	ctx context.Context,
 	verified *authn.Verified,
@@ -644,33 +685,118 @@ func (s *Server) secretsRotateViaLambda(
 	if err := s.checkSecretsManagerPassRole(verified, passRoleARN, meta.ARN); err != nil {
 		return store.Secret{}, err
 	}
-	job, err := s.store.EnqueueSecretRotationInvoke(secretAccountID, secretID, clientRequestToken)
-	if err != nil {
-		return store.Secret{}, err
-	}
-	if err := s.store.ProcessAsyncInvocation(job.InvocationID, 0, func() error {
-		fn, resolvedVersion, resolveErr := s.store.ResolveFunction(fnAccount, functionName, qualifier)
-		if resolveErr != nil {
-			return resolveErr
+	return s.store.RotateSecretFourStep(secretAccountID, secretID, clientRequestToken, func(eventJSON string) error {
+		job, err := s.store.EnqueueAsyncInvokeQuiet(fnAccount, functionName, qualifier, eventJSON)
+		if err != nil {
+			return err
 		}
-		_, execErr := s.executeLambdaInvoke(ctx, fnAccount, functionName, fn, resolvedVersion, job.EventJSON)
-		return execErr
-	}); err != nil {
-		return store.Secret{}, fmt.Errorf("rotation lambda invoke failed: %w", err)
-	}
-	// ProcessAsyncInvocation records failures on the job without always returning them.
-	done, err := s.store.GetAsyncInvocation(job.InvocationID)
-	if err != nil {
-		return store.Secret{}, err
-	}
-	if done.Status != "succeeded" {
-		msg := strings.TrimSpace(done.LastError)
-		if msg == "" {
-			msg = "rotation lambda invoke failed"
+		if err := s.store.ProcessAsyncInvocation(job.InvocationID, 0, func() error {
+			fn, resolvedVersion, resolveErr := s.store.ResolveFunction(fnAccount, functionName, qualifier)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			_, execErr := s.executeLambdaInvoke(ctx, fnAccount, functionName, fn, resolvedVersion, job.EventJSON)
+			return execErr
+		}); err != nil {
+			return fmt.Errorf("rotation lambda invoke failed: %w", err)
 		}
-		return store.Secret{}, fmt.Errorf("%s", msg)
+		done, err := s.store.GetAsyncInvocation(job.InvocationID)
+		if err != nil {
+			return err
+		}
+		if done.Status != "succeeded" {
+			msg := strings.TrimSpace(done.LastError)
+			if msg == "" {
+				msg = "rotation lambda invoke failed"
+			}
+			return fmt.Errorf("%s", msg)
+		}
+		return nil
+	})
+}
+
+func (s *Server) secretsUpdateSecretVersionStage(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
 	}
-	return s.store.FinishSecretRotation(secretAccountID, secretID)
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsUpdateSecretVersionStage, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:UpdateSecretVersionStage.", readOnly, eventID, verified)
+		return
+	}
+	stage, _ := params["VersionStage"].(string)
+	moveTo, _ := params["MoveToVersionId"].(string)
+	removeFrom, _ := params["RemoveFromVersionId"].(string)
+	if err := s.store.UpdateSecretVersionStage(secretAccountID, secretID, moveTo, removeFrom, stage); err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"Secrets Manager can't find the specified secret.", readOnly, eventID, verified)
+			return
+		}
+		if errors.Is(err, store.ErrSecretScheduledDeletion) {
+			s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+				"Secret is scheduled for deletion.", readOnly, eventID, verified)
+			return
+		}
+		if strings.Contains(err.Error(), "ValidationException") {
+			s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update secret version stage.", readOnly, eventID, verified)
+		return
+	}
+	described, err := s.store.DescribeSecret(secretAccountID, secretID)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe secret after stage update.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.UpdateSecretVersionStageJSON(described)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "UpdateSecretVersionStage", readOnly)
+}
+
+func secretsStringSliceParam(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return append([]string{}, t...)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func secretsStagesContain(stages []string, want string) bool {
+	for _, s := range stages {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func secretsBoolParam(v any, def bool) bool {

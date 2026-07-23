@@ -66,15 +66,17 @@ func DescribeSecretJSON(sec store.Secret) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	stages := sec.VersionIdsToStages
+	if len(stages) == 0 && sec.VersionID != "" {
+		stages = map[string][]string{sec.VersionID: {"AWSCURRENT"}}
+	}
 	out := map[string]any{
-		"ARN":              sec.ARN,
-		"Name":             sec.Name,
-		"VersionIdsToStages": map[string]any{
-			sec.VersionID: []string{"AWSCURRENT"},
-		},
-		"CreatedDate":      created,
-		"LastChangedDate":  changed,
-		"LastAccessedDate": changed,
+		"ARN":                sec.ARN,
+		"Name":               sec.Name,
+		"VersionIdsToStages": stages,
+		"CreatedDate":        created,
+		"LastChangedDate":    changed,
+		"LastAccessedDate":   changed,
 	}
 	if sec.Description != "" {
 		out["Description"] = sec.Description
@@ -104,6 +106,15 @@ func DescribeSecretJSON(sec store.Secret) ([]byte, error) {
 
 // RotateSecretJSON builds a RotateSecret response.
 func RotateSecretJSON(sec store.Secret) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ARN":       sec.ARN,
+		"Name":      sec.Name,
+		"VersionId": sec.VersionID,
+	})
+}
+
+// UpdateSecretVersionStageJSON builds an UpdateSecretVersionStage response.
+func UpdateSecretVersionStageJSON(sec store.Secret) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"ARN":       sec.ARN,
 		"Name":      sec.Name,
@@ -185,10 +196,10 @@ func listSecretJSON(sec store.Secret) (map[string]any, error) {
 		return nil, err
 	}
 	out := map[string]any{
-		"ARN":             sec.ARN,
-		"Name":            sec.Name,
-		"CreatedDate":     created,
-		"LastChangedDate": changed,
+		"ARN":              sec.ARN,
+		"Name":             sec.Name,
+		"CreatedDate":      created,
+		"LastChangedDate":  changed,
 		"LastAccessedDate": changed,
 	}
 	if sec.Description != "" {

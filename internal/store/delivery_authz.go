@@ -46,7 +46,10 @@ func deliveryTargetSupportsResourcePolicy(targetARN string) bool {
 	case strings.HasPrefix(targetARN, "arn:aws:sqs:"),
 		strings.HasPrefix(targetARN, "arn:aws:lambda:"),
 		strings.HasPrefix(targetARN, "arn:aws:sns:"),
-		strings.HasPrefix(targetARN, "arn:aws:s3:::"):
+		strings.HasPrefix(targetARN, "arn:aws:s3:::"),
+		strings.HasPrefix(targetARN, "arn:aws:logs:"),
+		strings.HasPrefix(targetARN, "arn:aws:kinesis:"),
+		strings.Contains(targetARN, ":stateMachine:"):
 		return true
 	default:
 		return false
@@ -139,11 +142,15 @@ func (s *Store) DeliveryTargetResourcePolicyAllows(accountID, targetARN, action,
 // deliveryTargetResourcePolicyAllows reports whether the target resource policy
 // Allows action for the given service principal (or account root).
 // sourceARN populates aws:SourceArn / aws:SourceAccount for Condition evaluation.
-// For SQS/Lambda/SNS ARNs, policy is loaded under the resource owner account.
+// For SQS/Lambda/SNS/Logs/Kinesis/SFN ARNs, policy is loaded under the resource owner account.
+// Empty or missing policy denies (fail-closed; not an open proxy).
 func (s *Store) deliveryTargetResourcePolicyAllows(accountID, targetARN, action, servicePrincipal, sourceARN string) bool {
 	policyAccount := accountID
 	if owner := resourceOwnerAccountFromARN(targetARN); owner != "" {
 		policyAccount = owner
+	}
+	if strings.HasPrefix(targetARN, "arn:aws:logs:") {
+		return s.logsResourcePolicyAllowsDelivery(policyAccount, targetARN, action, servicePrincipal, sourceARN)
 	}
 	policyDoc, err := s.deliveryTargetResourcePolicyDoc(policyAccount, targetARN)
 	if err != nil {
@@ -224,6 +231,28 @@ func (s *Store) deliveryTargetResourcePolicyDoc(accountID, targetARN string) (st
 			return "", err
 		}
 		return doc, nil
+	case strings.HasPrefix(targetARN, "arn:aws:kinesis:"):
+		name, err := parseKinesisStreamNameFromARN(targetARN)
+		if err != nil {
+			return "", err
+		}
+		doc, err := s.GetKinesisResourcePolicy(accountID, name)
+		if err != nil {
+			if errors.Is(err, ErrNoSuchResourcePolicy) {
+				return "", nil
+			}
+			return "", err
+		}
+		return doc, nil
+	case strings.Contains(targetARN, ":stateMachine:"):
+		doc, err := s.GetSFNResourcePolicy(accountID, targetARN)
+		if err != nil {
+			if errors.Is(err, ErrNoSuchResourcePolicy) {
+				return "", nil
+			}
+			return "", err
+		}
+		return doc, nil
 	default:
 		return "", fmt.Errorf("delivery target: unsupported arn %s", targetARN)
 	}
@@ -239,6 +268,12 @@ func deliveryActionForARN(targetARN string) (string, bool) {
 		return actionSNSPublish, true
 	case strings.HasPrefix(targetARN, "arn:aws:s3:::"):
 		return actionS3PutObject, true
+	case strings.HasPrefix(targetARN, "arn:aws:logs:"):
+		return actionLogsPutLogEvents, true
+	case strings.HasPrefix(targetARN, "arn:aws:kinesis:"):
+		return actionKinesisPutRecord, true
+	case strings.Contains(targetARN, ":stateMachine:"):
+		return actionSFNStartExecution, true
 	default:
 		return "", false
 	}

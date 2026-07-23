@@ -1442,11 +1442,6 @@ func (s *Server) dynamoTransactWriteItems(
 				"Each TransactItems entry must contain exactly one of Put, Delete, ConditionCheck, or Update.", readOnly, eventID, verified)
 			return
 		}
-		if _, hasUpdate := entry["Update"]; hasUpdate {
-			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-				"TransactWriteItems Update is not supported in this lab; use Put or Delete.", readOnly, eventID, verified)
-			return
-		}
 		if put, ok := entry["Put"].(map[string]any); ok {
 			action, ok := s.dynamoBuildTransactPut(w, r, body, requestID, eventID, verified, readOnly, put)
 			if !ok {
@@ -1471,6 +1466,14 @@ func (s *Server) dynamoTransactWriteItems(
 			actions = append(actions, action)
 			continue
 		}
+		if upd, ok := entry["Update"].(map[string]any); ok {
+			action, ok := s.dynamoBuildTransactUpdate(w, r, body, requestID, eventID, verified, readOnly, upd)
+			if !ok {
+				return
+			}
+			actions = append(actions, action)
+			continue
+		}
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Unsupported TransactItems action.", readOnly, eventID, verified)
 		return
@@ -1483,8 +1486,10 @@ func (s *Server) dynamoTransactWriteItems(
 			return
 		}
 		if errors.Is(err, store.ErrDynamoTransactUnsupported) ||
+			errors.Is(err, store.ErrDynamoTransactSealed) ||
 			errors.Is(err, store.ErrDynamoTransactLimit) ||
-			errors.Is(err, store.ErrDynamoTransactEmpty) {
+			errors.Is(err, store.ErrDynamoTransactEmpty) ||
+			strings.HasPrefix(err.Error(), "ValidationException:") {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				err.Error(), readOnly, eventID, verified)
 			return
@@ -1668,11 +1673,6 @@ func (s *Server) dynamoBuildTransactPut(
 			"User is not authorized to perform dynamodb:TransactWriteItems.", readOnly, eventID, verified)
 		return store.TransactWriteAction{}, false
 	}
-	if cond, _ := put["ConditionExpression"].(string); strings.TrimSpace(cond) != "" {
-		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"ConditionExpression on TransactWriteItems Put is not supported in this lab.", readOnly, eventID, verified)
-		return store.TransactWriteAction{}, false
-	}
 	item, err := ddb.ParseItemMap(put["Item"])
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -1717,11 +1717,17 @@ func (s *Server) dynamoBuildTransactPut(
 			err.Error(), readOnly, eventID, verified)
 		return store.TransactWriteAction{}, false
 	}
+	cond, _ := put["ConditionExpression"].(string)
+	names, _ := put["ExpressionAttributeNames"].(map[string]any)
+	values, _ := put["ExpressionAttributeValues"].(map[string]any)
 	return store.TransactWriteAction{
 		Kind: "Put", TableName: table.TableName,
 		ItemPK: itemPK, ItemSK: itemSK,
 		ItemJSON: data, Sealed: sealed, SealedDEK: sealedDEK,
 		GSIPK: gsiPK, GSISK: gsiSK, GSI2PK: gsi2PK, GSI2SK: gsi2SK,
+		ConditionExpression:       strings.TrimSpace(cond),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
 	}, true
 }
 
@@ -1750,11 +1756,6 @@ func (s *Server) dynamoBuildTransactDelete(
 			"User is not authorized to perform dynamodb:TransactWriteItems.", readOnly, eventID, verified)
 		return store.TransactWriteAction{}, false
 	}
-	if cond, _ := del["ConditionExpression"].(string); strings.TrimSpace(cond) != "" {
-		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"ConditionExpression on TransactWriteItems Delete is not supported in this lab.", readOnly, eventID, verified)
-		return store.TransactWriteAction{}, false
-	}
 	key, err := ddb.ParseItemMap(del["Key"])
 	if err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
@@ -1767,9 +1768,77 @@ func (s *Server) dynamoBuildTransactDelete(
 			err.Error(), readOnly, eventID, verified)
 		return store.TransactWriteAction{}, false
 	}
+	cond, _ := del["ConditionExpression"].(string)
+	names, _ := del["ExpressionAttributeNames"].(map[string]any)
+	values, _ := del["ExpressionAttributeValues"].(map[string]any)
 	return store.TransactWriteAction{
 		Kind: "Delete", TableName: table.TableName,
 		ItemPK: itemPK, ItemSK: itemSK,
+		ConditionExpression:       strings.TrimSpace(cond),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
+	}, true
+}
+
+func (s *Server) dynamoBuildTransactUpdate(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	upd map[string]any,
+) (store.TransactWriteAction, bool) {
+	tableName, _ := upd["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return store.TransactWriteAction{}, false
+	}
+	if table.AccountID != verified.AccountID {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TransactWriteItems supports same-account tables only.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBUpdateItem, table.TableARN, table.ResourcePolicy) &&
+		!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTransactWriteItems, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:TransactWriteItems.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	key, err := ddb.ParseItemMap(upd["Key"])
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, key)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	keyJSON, err := ddb.MarshalItemJSON(key)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Unable to encode key.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	updateExpr, _ := upd["UpdateExpression"].(string)
+	if strings.TrimSpace(updateExpr) == "" {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"UpdateExpression is required.", readOnly, eventID, verified)
+		return store.TransactWriteAction{}, false
+	}
+	cond, _ := upd["ConditionExpression"].(string)
+	names, _ := upd["ExpressionAttributeNames"].(map[string]any)
+	values, _ := upd["ExpressionAttributeValues"].(map[string]any)
+	return store.TransactWriteAction{
+		Kind: "Update", TableName: table.TableName,
+		ItemPK: itemPK, ItemSK: itemSK, KeyJSON: keyJSON,
+		UpdateExpression:          strings.TrimSpace(updateExpr),
+		ConditionExpression:       strings.TrimSpace(cond),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
 	}, true
 }
 

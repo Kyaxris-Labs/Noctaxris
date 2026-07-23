@@ -44,11 +44,11 @@ func TestKinesisPutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seq == "" || shard != store.LabKinesisShardID {
+	if seq == "" || shard != store.LabKinesisShardID(0) {
 		t.Fatalf("seq=%q shard=%q", seq, shard)
 	}
 
-	it, err := st.GetKinesisShardIterator(account, "lab-stream", store.LabKinesisShardID, "TRIM_HORIZON", "")
+	it, err := st.GetKinesisShardIterator(account, "lab-stream", store.LabKinesisShardID(0), "TRIM_HORIZON", "")
 	if err != nil {
 		t.Fatal(err)
 	}

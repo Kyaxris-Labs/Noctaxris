@@ -464,11 +464,19 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureLogsResourcePolicySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureTaggingSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	if err := EnsureKinesisSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureKinesisResourcePolicySchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -481,6 +489,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureSFNSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSFNResourcePolicySchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}

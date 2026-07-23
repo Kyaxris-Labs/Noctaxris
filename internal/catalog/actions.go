@@ -76,15 +76,15 @@ const (
 
 // Managed policies
 const (
-	ActionIAMCreatePolicy             = "iam:CreatePolicy"
-	ActionIAMGetPolicy                = "iam:GetPolicy"
-	ActionIAMListPolicies             = "iam:ListPolicies"
-	ActionIAMDeletePolicy             = "iam:DeletePolicy"
-	ActionIAMCreatePolicyVersion      = "iam:CreatePolicyVersion"
-	ActionIAMGetPolicyVersion         = "iam:GetPolicyVersion"
-	ActionIAMListPolicyVersions       = "iam:ListPolicyVersions"
-	ActionIAMDeletePolicyVersion      = "iam:DeletePolicyVersion"
-	ActionIAMSetDefaultPolicyVersion  = "iam:SetDefaultPolicyVersion"
+	ActionIAMCreatePolicy            = "iam:CreatePolicy"
+	ActionIAMGetPolicy               = "iam:GetPolicy"
+	ActionIAMListPolicies            = "iam:ListPolicies"
+	ActionIAMDeletePolicy            = "iam:DeletePolicy"
+	ActionIAMCreatePolicyVersion     = "iam:CreatePolicyVersion"
+	ActionIAMGetPolicyVersion        = "iam:GetPolicyVersion"
+	ActionIAMListPolicyVersions      = "iam:ListPolicyVersions"
+	ActionIAMDeletePolicyVersion     = "iam:DeletePolicyVersion"
+	ActionIAMSetDefaultPolicyVersion = "iam:SetDefaultPolicyVersion"
 )
 
 // Attachments
@@ -243,27 +243,27 @@ const (
 
 // DynamoDB lab actions.
 const (
-	ActionDynamoDBCreateTable          = "dynamodb:CreateTable"
-	ActionDynamoDBDescribeTable        = "dynamodb:DescribeTable"
-	ActionDynamoDBDeleteTable          = "dynamodb:DeleteTable"
-	ActionDynamoDBListTables           = "dynamodb:ListTables"
-	ActionDynamoDBUpdateTable          = "dynamodb:UpdateTable"
-	ActionDynamoDBPutItem              = "dynamodb:PutItem"
-	ActionDynamoDBGetItem              = "dynamodb:GetItem"
-	ActionDynamoDBDeleteItem           = "dynamodb:DeleteItem"
-	ActionDynamoDBUpdateItem           = "dynamodb:UpdateItem"
-	ActionDynamoDBQuery                = "dynamodb:Query"
-	ActionDynamoDBScan                 = "dynamodb:Scan"
-	ActionDynamoDBBatchGetItem         = "dynamodb:BatchGetItem"
-	ActionDynamoDBBatchWriteItem       = "dynamodb:BatchWriteItem"
-	ActionDynamoDBTransactGetItems     = "dynamodb:TransactGetItems"
-	ActionDynamoDBTransactWriteItems   = "dynamodb:TransactWriteItems"
-	ActionDynamoDBConditionCheckItem   = "dynamodb:ConditionCheckItem"
-	ActionDynamoDBPutResourcePolicy    = "dynamodb:PutResourcePolicy"
-	ActionDynamoDBGetResourcePolicy    = "dynamodb:GetResourcePolicy"
-	ActionDynamoDBDeleteResourcePolicy = "dynamodb:DeleteResourcePolicy"
-	ActionDynamoDBUpdateTimeToLive         = "dynamodb:UpdateTimeToLive"
-	ActionDynamoDBDescribeTimeToLive       = "dynamodb:DescribeTimeToLive"
+	ActionDynamoDBCreateTable               = "dynamodb:CreateTable"
+	ActionDynamoDBDescribeTable             = "dynamodb:DescribeTable"
+	ActionDynamoDBDeleteTable               = "dynamodb:DeleteTable"
+	ActionDynamoDBListTables                = "dynamodb:ListTables"
+	ActionDynamoDBUpdateTable               = "dynamodb:UpdateTable"
+	ActionDynamoDBPutItem                   = "dynamodb:PutItem"
+	ActionDynamoDBGetItem                   = "dynamodb:GetItem"
+	ActionDynamoDBDeleteItem                = "dynamodb:DeleteItem"
+	ActionDynamoDBUpdateItem                = "dynamodb:UpdateItem"
+	ActionDynamoDBQuery                     = "dynamodb:Query"
+	ActionDynamoDBScan                      = "dynamodb:Scan"
+	ActionDynamoDBBatchGetItem              = "dynamodb:BatchGetItem"
+	ActionDynamoDBBatchWriteItem            = "dynamodb:BatchWriteItem"
+	ActionDynamoDBTransactGetItems          = "dynamodb:TransactGetItems"
+	ActionDynamoDBTransactWriteItems        = "dynamodb:TransactWriteItems"
+	ActionDynamoDBConditionCheckItem        = "dynamodb:ConditionCheckItem"
+	ActionDynamoDBPutResourcePolicy         = "dynamodb:PutResourcePolicy"
+	ActionDynamoDBGetResourcePolicy         = "dynamodb:GetResourcePolicy"
+	ActionDynamoDBDeleteResourcePolicy      = "dynamodb:DeleteResourcePolicy"
+	ActionDynamoDBUpdateTimeToLive          = "dynamodb:UpdateTimeToLive"
+	ActionDynamoDBDescribeTimeToLive        = "dynamodb:DescribeTimeToLive"
 	ActionDynamoDBDescribeContinuousBackups = "dynamodb:DescribeContinuousBackups"
 	ActionDynamoDBListTagsOfResource        = "dynamodb:ListTagsOfResource"
 	ActionDynamoDBTagResource               = "dynamodb:TagResource"
@@ -356,15 +356,15 @@ const (
 
 // SSM lab actions.
 const (
-	ActionSSMPutParameter        = "ssm:PutParameter"
-	ActionSSMGetParameter        = "ssm:GetParameter"
-	ActionSSMGetParameters       = "ssm:GetParameters"
-	ActionSSMGetParametersByPath = "ssm:GetParametersByPath"
-	ActionSSMDeleteParameter         = "ssm:DeleteParameter"
-	ActionSSMDescribeParameters      = "ssm:DescribeParameters"
-	ActionSSMListTagsForResource     = "ssm:ListTagsForResource"
-	ActionSSMAddTagsToResource       = "ssm:AddTagsToResource"
-	ActionSSMRemoveTagsFromResource  = "ssm:RemoveTagsFromResource"
+	ActionSSMPutParameter           = "ssm:PutParameter"
+	ActionSSMGetParameter           = "ssm:GetParameter"
+	ActionSSMGetParameters          = "ssm:GetParameters"
+	ActionSSMGetParametersByPath    = "ssm:GetParametersByPath"
+	ActionSSMDeleteParameter        = "ssm:DeleteParameter"
+	ActionSSMDescribeParameters     = "ssm:DescribeParameters"
+	ActionSSMListTagsForResource    = "ssm:ListTagsForResource"
+	ActionSSMAddTagsToResource      = "ssm:AddTagsToResource"
+	ActionSSMRemoveTagsFromResource = "ssm:RemoveTagsFromResource"
 )
 
 // SNS lab actions.
@@ -390,25 +390,25 @@ const (
 
 // EventBridge lab actions.
 const (
-	ActionEventsPutEvents         = "events:PutEvents"
-	ActionEventsCreateEventBus    = "events:CreateEventBus"
-	ActionEventsDeleteEventBus    = "events:DeleteEventBus"
-	ActionEventsDescribeEventBus  = "events:DescribeEventBus"
-	ActionEventsListEventBuses    = "events:ListEventBuses"
-	ActionEventsPutRule           = "events:PutRule"
-	ActionEventsDescribeRule      = "events:DescribeRule"
-	ActionEventsListRules         = "events:ListRules"
-	ActionEventsDeleteRule        = "events:DeleteRule"
-	ActionEventsEnableRule        = "events:EnableRule"
-	ActionEventsDisableRule       = "events:DisableRule"
-	ActionEventsPutTargets        = "events:PutTargets"
-	ActionEventsRemoveTargets     = "events:RemoveTargets"
-	ActionEventsListTargetsByRule = "events:ListTargetsByRule"
-	ActionEventsPutPermission        = "events:PutPermission"
-	ActionEventsRemovePermission     = "events:RemovePermission"
-	ActionEventsListTagsForResource  = "events:ListTagsForResource"
-	ActionEventsTagResource          = "events:TagResource"
-	ActionEventsUntagResource        = "events:UntagResource"
+	ActionEventsPutEvents           = "events:PutEvents"
+	ActionEventsCreateEventBus      = "events:CreateEventBus"
+	ActionEventsDeleteEventBus      = "events:DeleteEventBus"
+	ActionEventsDescribeEventBus    = "events:DescribeEventBus"
+	ActionEventsListEventBuses      = "events:ListEventBuses"
+	ActionEventsPutRule             = "events:PutRule"
+	ActionEventsDescribeRule        = "events:DescribeRule"
+	ActionEventsListRules           = "events:ListRules"
+	ActionEventsDeleteRule          = "events:DeleteRule"
+	ActionEventsEnableRule          = "events:EnableRule"
+	ActionEventsDisableRule         = "events:DisableRule"
+	ActionEventsPutTargets          = "events:PutTargets"
+	ActionEventsRemoveTargets       = "events:RemoveTargets"
+	ActionEventsListTargetsByRule   = "events:ListTargetsByRule"
+	ActionEventsPutPermission       = "events:PutPermission"
+	ActionEventsRemovePermission    = "events:RemovePermission"
+	ActionEventsListTagsForResource = "events:ListTagsForResource"
+	ActionEventsTagResource         = "events:TagResource"
+	ActionEventsUntagResource       = "events:UntagResource"
 )
 
 // ECR lab actions.
@@ -451,20 +451,21 @@ const (
 
 // Secrets Manager lab actions.
 const (
-	ActionSecretsCreateSecret         = "secretsmanager:CreateSecret"
-	ActionSecretsGetSecretValue       = "secretsmanager:GetSecretValue"
-	ActionSecretsPutSecretValue       = "secretsmanager:PutSecretValue"
-	ActionSecretsDeleteSecret         = "secretsmanager:DeleteSecret"
-	ActionSecretsRestoreSecret        = "secretsmanager:RestoreSecret"
-	ActionSecretsRotateSecret         = "secretsmanager:RotateSecret"
-	ActionSecretsDescribeSecret       = "secretsmanager:DescribeSecret"
-	ActionSecretsListSecrets          = "secretsmanager:ListSecrets"
-	ActionSecretsPutResourcePolicy    = "secretsmanager:PutResourcePolicy"
-	ActionSecretsGetResourcePolicy    = "secretsmanager:GetResourcePolicy"
-	ActionSecretsDeleteResourcePolicy = "secretsmanager:DeleteResourcePolicy"
-	ActionSecretsListTagsForResource  = "secretsmanager:ListTagsForResource"
-	ActionSecretsTagResource          = "secretsmanager:TagResource"
-	ActionSecretsUntagResource        = "secretsmanager:UntagResource"
+	ActionSecretsCreateSecret             = "secretsmanager:CreateSecret"
+	ActionSecretsGetSecretValue           = "secretsmanager:GetSecretValue"
+	ActionSecretsPutSecretValue           = "secretsmanager:PutSecretValue"
+	ActionSecretsDeleteSecret             = "secretsmanager:DeleteSecret"
+	ActionSecretsRestoreSecret            = "secretsmanager:RestoreSecret"
+	ActionSecretsRotateSecret             = "secretsmanager:RotateSecret"
+	ActionSecretsUpdateSecretVersionStage = "secretsmanager:UpdateSecretVersionStage"
+	ActionSecretsDescribeSecret           = "secretsmanager:DescribeSecret"
+	ActionSecretsListSecrets              = "secretsmanager:ListSecrets"
+	ActionSecretsPutResourcePolicy        = "secretsmanager:PutResourcePolicy"
+	ActionSecretsGetResourcePolicy        = "secretsmanager:GetResourcePolicy"
+	ActionSecretsDeleteResourcePolicy     = "secretsmanager:DeleteResourcePolicy"
+	ActionSecretsListTagsForResource      = "secretsmanager:ListTagsForResource"
+	ActionSecretsTagResource              = "secretsmanager:TagResource"
+	ActionSecretsUntagResource            = "secretsmanager:UntagResource"
 )
 
 // CloudTrail lab actions.
@@ -474,21 +475,25 @@ const (
 
 // CloudWatch Logs lab actions.
 const (
-	ActionLogsCreateLogGroup     = "logs:CreateLogGroup"
-	ActionLogsCreateLogStream    = "logs:CreateLogStream"
-	ActionLogsDeleteLogGroup     = "logs:DeleteLogGroup"
-	ActionLogsDeleteLogStream    = "logs:DeleteLogStream"
-	ActionLogsDescribeLogStreams = "logs:DescribeLogStreams"
-	ActionLogsPutLogEvents             = "logs:PutLogEvents"
-	ActionLogsGetLogEvents             = "logs:GetLogEvents"
-	ActionLogsFilterLogEvents          = "logs:FilterLogEvents"
-	ActionLogsDescribeLogGroups        = "logs:DescribeLogGroups"
-	ActionLogsPutSubscriptionFilter    = "logs:PutSubscriptionFilter"
-	ActionLogsDeleteSubscriptionFilter = "logs:DeleteSubscriptionFilter"
+	ActionLogsCreateLogGroup              = "logs:CreateLogGroup"
+	ActionLogsCreateLogStream             = "logs:CreateLogStream"
+	ActionLogsDeleteLogGroup              = "logs:DeleteLogGroup"
+	ActionLogsDeleteLogStream             = "logs:DeleteLogStream"
+	ActionLogsDescribeLogStreams          = "logs:DescribeLogStreams"
+	ActionLogsPutLogEvents                = "logs:PutLogEvents"
+	ActionLogsGetLogEvents                = "logs:GetLogEvents"
+	ActionLogsFilterLogEvents             = "logs:FilterLogEvents"
+	ActionLogsDescribeLogGroups           = "logs:DescribeLogGroups"
+	ActionLogsPutSubscriptionFilter       = "logs:PutSubscriptionFilter"
+	ActionLogsDeleteSubscriptionFilter    = "logs:DeleteSubscriptionFilter"
 	ActionLogsDescribeSubscriptionFilters = "logs:DescribeSubscriptionFilters"
-	ActionLogsPutMetricFilter          = "logs:PutMetricFilter"
-	ActionLogsDeleteMetricFilter       = "logs:DeleteMetricFilter"
-	ActionLogsDescribeMetricFilters    = "logs:DescribeMetricFilters"
+	ActionLogsPutMetricFilter             = "logs:PutMetricFilter"
+	ActionLogsDeleteMetricFilter          = "logs:DeleteMetricFilter"
+	ActionLogsDescribeMetricFilters       = "logs:DescribeMetricFilters"
+	ActionLogsPutResourcePolicy           = "logs:PutResourcePolicy"
+	ActionLogsGetResourcePolicy           = "logs:GetResourcePolicy"
+	ActionLogsDeleteResourcePolicy        = "logs:DeleteResourcePolicy"
+	ActionLogsDescribeResourcePolicies    = "logs:DescribeResourcePolicies"
 )
 
 // Resource Groups Tagging API lab actions.
@@ -500,14 +505,17 @@ const (
 
 // Kinesis lab actions.
 const (
-	ActionKinesisCreateStream     = "kinesis:CreateStream"
-	ActionKinesisDeleteStream     = "kinesis:DeleteStream"
-	ActionKinesisDescribeStream   = "kinesis:DescribeStream"
-	ActionKinesisListStreams      = "kinesis:ListStreams"
-	ActionKinesisPutRecord        = "kinesis:PutRecord"
-	ActionKinesisPutRecords       = "kinesis:PutRecords"
-	ActionKinesisGetShardIterator = "kinesis:GetShardIterator"
-	ActionKinesisGetRecords       = "kinesis:GetRecords"
+	ActionKinesisCreateStream         = "kinesis:CreateStream"
+	ActionKinesisDeleteStream         = "kinesis:DeleteStream"
+	ActionKinesisDescribeStream       = "kinesis:DescribeStream"
+	ActionKinesisListStreams          = "kinesis:ListStreams"
+	ActionKinesisPutRecord            = "kinesis:PutRecord"
+	ActionKinesisPutRecords           = "kinesis:PutRecords"
+	ActionKinesisGetShardIterator     = "kinesis:GetShardIterator"
+	ActionKinesisGetRecords           = "kinesis:GetRecords"
+	ActionKinesisPutResourcePolicy    = "kinesis:PutResourcePolicy"
+	ActionKinesisGetResourcePolicy    = "kinesis:GetResourcePolicy"
+	ActionKinesisDeleteResourcePolicy = "kinesis:DeleteResourcePolicy"
 )
 
 // AppConfig lab actions.
@@ -523,11 +531,11 @@ const (
 
 // SES lab actions.
 const (
-	ActionSESVerifyEmailIdentity = "ses:VerifyEmailIdentity"
-	ActionSESListIdentities      = "ses:ListIdentities"
-	ActionSESSendEmail           = "ses:SendEmail"
-	ActionSESSendRawEmail        = "ses:SendRawEmail"
-	ActionSESGetSendStatistics   = "ses:GetSendStatistics"
+	ActionSESVerifyEmailIdentity          = "ses:VerifyEmailIdentity"
+	ActionSESListIdentities               = "ses:ListIdentities"
+	ActionSESSendEmail                    = "ses:SendEmail"
+	ActionSESSendRawEmail                 = "ses:SendRawEmail"
+	ActionSESGetSendStatistics            = "ses:GetSendStatistics"
 	ActionSESSetIdentityNotificationTopic = "ses:SetIdentityNotificationTopic"
 )
 
@@ -540,6 +548,9 @@ const (
 	ActionSFNStartExecution       = "states:StartExecution"
 	ActionSFNDescribeExecution    = "states:DescribeExecution"
 	ActionSFNGetExecutionHistory  = "states:GetExecutionHistory"
+	ActionSFNPutResourcePolicy    = "states:PutResourcePolicy"
+	ActionSFNGetResourcePolicy    = "states:GetResourcePolicy"
+	ActionSFNDeleteResourcePolicy = "states:DeleteResourcePolicy"
 )
 
 // CloudFormation lab actions.
@@ -713,6 +724,9 @@ const (
 	ActionCognitoInitiateAuth           = "cognito-idp:InitiateAuth"
 	ActionCognitoAdminInitiateAuth      = "cognito-idp:AdminInitiateAuth"
 	ActionCognitoRevokeToken            = "cognito-idp:RevokeToken"
+	ActionCognitoAssociateSoftwareToken = "cognito-idp:AssociateSoftwareToken"
+	ActionCognitoVerifySoftwareToken    = "cognito-idp:VerifySoftwareToken"
+	ActionCognitoRespondToAuthChallenge = "cognito-idp:RespondToAuthChallenge"
 )
 
 // Cloud Control API lab actions.
@@ -811,10 +825,10 @@ const (
 
 // EMR (Elastic MapReduce) lab actions.
 const (
-	ActionEMRRunJobFlow         = "elasticmapreduce:RunJobFlow"
-	ActionEMRDescribeCluster    = "elasticmapreduce:DescribeCluster"
-	ActionEMRListClusters       = "elasticmapreduce:ListClusters"
-	ActionEMRTerminateJobFlows  = "elasticmapreduce:TerminateJobFlows"
+	ActionEMRRunJobFlow        = "elasticmapreduce:RunJobFlow"
+	ActionEMRDescribeCluster   = "elasticmapreduce:DescribeCluster"
+	ActionEMRListClusters      = "elasticmapreduce:ListClusters"
+	ActionEMRTerminateJobFlows = "elasticmapreduce:TerminateJobFlows"
 )
 
 // CodeBuild lab actions.
@@ -839,39 +853,39 @@ const (
 
 // Lambda lab actions.
 const (
-	ActionLambdaCreateFunction              = "lambda:CreateFunction"
-	ActionLambdaGetFunction                 = "lambda:GetFunction"
-	ActionLambdaDeleteFunction              = "lambda:DeleteFunction"
-	ActionLambdaListFunctions               = "lambda:ListFunctions"
-	ActionLambdaUpdateFunctionCode          = "lambda:UpdateFunctionCode"
-	ActionLambdaUpdateFunctionConfiguration = "lambda:UpdateFunctionConfiguration"
-	ActionLambdaInvoke                      = "lambda:InvokeFunction"
-	ActionLambdaPublishVersion              = "lambda:PublishVersion"
-	ActionLambdaListVersionsByFunction      = "lambda:ListVersionsByFunction"
-	ActionLambdaCreateAlias                 = "lambda:CreateAlias"
-	ActionLambdaUpdateAlias                 = "lambda:UpdateAlias"
-	ActionLambdaDeleteAlias                 = "lambda:DeleteAlias"
-	ActionLambdaGetAlias                    = "lambda:GetAlias"
-	ActionLambdaListAliases                 = "lambda:ListAliases"
-	ActionLambdaPublishLayerVersion         = "lambda:PublishLayerVersion"
-	ActionLambdaGetLayerVersion             = "lambda:GetLayerVersion"
-	ActionLambdaListLayerVersions           = "lambda:ListLayerVersions"
-	ActionLambdaDeleteLayerVersion          = "lambda:DeleteLayerVersion"
-	ActionLambdaAddPermission               = "lambda:AddPermission"
-	ActionLambdaRemovePermission            = "lambda:RemovePermission"
-	ActionLambdaGetPolicy                   = "lambda:GetPolicy"
-	ActionLambdaCreateEventSourceMapping    = "lambda:CreateEventSourceMapping"
-	ActionLambdaGetEventSourceMapping       = "lambda:GetEventSourceMapping"
-	ActionLambdaListEventSourceMappings     = "lambda:ListEventSourceMappings"
-	ActionLambdaUpdateEventSourceMapping    = "lambda:UpdateEventSourceMapping"
-	ActionLambdaDeleteEventSourceMapping    = "lambda:DeleteEventSourceMapping"
-	ActionLambdaCreateFunctionUrlConfig     = "lambda:CreateFunctionUrlConfig"
-	ActionLambdaGetFunctionUrlConfig        = "lambda:GetFunctionUrlConfig"
-	ActionLambdaDeleteFunctionUrlConfig     = "lambda:DeleteFunctionUrlConfig"
-	ActionLambdaListFunctionUrlConfigs      = "lambda:ListFunctionUrlConfigs"
-	ActionLambdaInvokeFunctionUrl           = "lambda:InvokeFunctionUrl"
-	ActionLambdaListTags                     = "lambda:ListTags"
-	ActionLambdaGetFunctionCodeSigningConfig = "lambda:GetFunctionCodeSigningConfig"
+	ActionLambdaCreateFunction                  = "lambda:CreateFunction"
+	ActionLambdaGetFunction                     = "lambda:GetFunction"
+	ActionLambdaDeleteFunction                  = "lambda:DeleteFunction"
+	ActionLambdaListFunctions                   = "lambda:ListFunctions"
+	ActionLambdaUpdateFunctionCode              = "lambda:UpdateFunctionCode"
+	ActionLambdaUpdateFunctionConfiguration     = "lambda:UpdateFunctionConfiguration"
+	ActionLambdaInvoke                          = "lambda:InvokeFunction"
+	ActionLambdaPublishVersion                  = "lambda:PublishVersion"
+	ActionLambdaListVersionsByFunction          = "lambda:ListVersionsByFunction"
+	ActionLambdaCreateAlias                     = "lambda:CreateAlias"
+	ActionLambdaUpdateAlias                     = "lambda:UpdateAlias"
+	ActionLambdaDeleteAlias                     = "lambda:DeleteAlias"
+	ActionLambdaGetAlias                        = "lambda:GetAlias"
+	ActionLambdaListAliases                     = "lambda:ListAliases"
+	ActionLambdaPublishLayerVersion             = "lambda:PublishLayerVersion"
+	ActionLambdaGetLayerVersion                 = "lambda:GetLayerVersion"
+	ActionLambdaListLayerVersions               = "lambda:ListLayerVersions"
+	ActionLambdaDeleteLayerVersion              = "lambda:DeleteLayerVersion"
+	ActionLambdaAddPermission                   = "lambda:AddPermission"
+	ActionLambdaRemovePermission                = "lambda:RemovePermission"
+	ActionLambdaGetPolicy                       = "lambda:GetPolicy"
+	ActionLambdaCreateEventSourceMapping        = "lambda:CreateEventSourceMapping"
+	ActionLambdaGetEventSourceMapping           = "lambda:GetEventSourceMapping"
+	ActionLambdaListEventSourceMappings         = "lambda:ListEventSourceMappings"
+	ActionLambdaUpdateEventSourceMapping        = "lambda:UpdateEventSourceMapping"
+	ActionLambdaDeleteEventSourceMapping        = "lambda:DeleteEventSourceMapping"
+	ActionLambdaCreateFunctionUrlConfig         = "lambda:CreateFunctionUrlConfig"
+	ActionLambdaGetFunctionUrlConfig            = "lambda:GetFunctionUrlConfig"
+	ActionLambdaDeleteFunctionUrlConfig         = "lambda:DeleteFunctionUrlConfig"
+	ActionLambdaListFunctionUrlConfigs          = "lambda:ListFunctionUrlConfigs"
+	ActionLambdaInvokeFunctionUrl               = "lambda:InvokeFunctionUrl"
+	ActionLambdaListTags                        = "lambda:ListTags"
+	ActionLambdaGetFunctionCodeSigningConfig    = "lambda:GetFunctionCodeSigningConfig"
 	ActionLambdaPutFunctionEventInvokeConfig    = "lambda:PutFunctionEventInvokeConfig"
 	ActionLambdaGetFunctionEventInvokeConfig    = "lambda:GetFunctionEventInvokeConfig"
 	ActionLambdaDeleteFunctionEventInvokeConfig = "lambda:DeleteFunctionEventInvokeConfig"
@@ -1153,6 +1167,7 @@ func KnownAction(action string) bool {
 		ActionSecretsDeleteSecret,
 		ActionSecretsRestoreSecret,
 		ActionSecretsRotateSecret,
+		ActionSecretsUpdateSecretVersionStage,
 		ActionSecretsDescribeSecret,
 		ActionSecretsListSecrets,
 		ActionSecretsPutResourcePolicy,
@@ -1243,6 +1258,10 @@ func KnownAction(action string) bool {
 		ActionLogsPutMetricFilter,
 		ActionLogsDeleteMetricFilter,
 		ActionLogsDescribeMetricFilters,
+		ActionLogsPutResourcePolicy,
+		ActionLogsGetResourcePolicy,
+		ActionLogsDeleteResourcePolicy,
+		ActionLogsDescribeResourcePolicies,
 		ActionTaggingTagResources,
 		ActionTaggingUntagResources,
 		ActionTaggingGetResources,
@@ -1254,6 +1273,9 @@ func KnownAction(action string) bool {
 		ActionKinesisPutRecords,
 		ActionKinesisGetShardIterator,
 		ActionKinesisGetRecords,
+		ActionKinesisPutResourcePolicy,
+		ActionKinesisGetResourcePolicy,
+		ActionKinesisDeleteResourcePolicy,
 		ActionAppConfigCreateApplication,
 		ActionAppConfigCreateEnvironment,
 		ActionAppConfigCreateConfigurationProfile,
@@ -1274,6 +1296,9 @@ func KnownAction(action string) bool {
 		ActionSFNStartExecution,
 		ActionSFNDescribeExecution,
 		ActionSFNGetExecutionHistory,
+		ActionSFNPutResourcePolicy,
+		ActionSFNGetResourcePolicy,
+		ActionSFNDeleteResourcePolicy,
 		ActionCodeBuildCreateProject,
 		ActionCodeBuildStartBuild,
 		ActionCodeBuildBatchGetBuilds,
@@ -1393,6 +1418,9 @@ func KnownAction(action string) bool {
 		ActionCognitoInitiateAuth,
 		ActionCognitoAdminInitiateAuth,
 		ActionCognitoRevokeToken,
+		ActionCognitoAssociateSoftwareToken,
+		ActionCognitoVerifySoftwareToken,
+		ActionCognitoRespondToAuthChallenge,
 		ActionCloudControlCreateResource,
 		ActionCloudControlGetResource,
 		ActionCloudControlListResources,

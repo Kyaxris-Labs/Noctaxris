@@ -79,8 +79,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
-      <td>Identity Pools, Hosted UI, full SRP, MFA depth.</td>
+      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code> <code>SOFTWARE_TOKEN_MFA</code>), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Identity Pools, Hosted UI, full SRP, SMS MFA.</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
@@ -96,8 +96,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/ConditionCheck lab subset, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
-      <td>More than two GSIs, LSI, TransactWrite Update expressions, PartiQL, global tables, cross-account transact.</td>
+      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/Update SET/REMOVE/ConditionCheck lab subset with ConditionExpression, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
+      <td>More than two GSIs, LSI, PartiQL, global tables, cross-account transact.</td>
     </tr>
     <tr>
       <td>DynamoDB Streams</td>
@@ -116,8 +116,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Secrets Manager</td>
-      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then async Invoke finishSecret).</td>
-      <td>AWS four-step rotation staging versions, automatic RotationRules schedules, tags, replication.</td>
+      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, multi-version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS, UpdateSecretVersionStage), RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then four-step createSecret/setSecret/testSecret/finishSecret Invokes).</td>
+      <td>Automatic RotationRules schedules, tags, replication.</td>
     </tr>
     <tr>
       <td>SNS</td>
@@ -126,8 +126,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS via RoleArn or destination resource policy (events.amazonaws.com + SourceArn); Logs/Kinesis/SFN require RoleArn at PutTargets; foreign SQS/Lambda/SNS RoleArn AND dest policy. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
-      <td>Archive and replay, legacy scheduled rules, full pattern language, InputPath bracket/wildcard notation, resource-policy delivery for Logs/Kinesis/SFN.</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
+      <td>Archive and replay, legacy scheduled rules, full pattern language, InputPath bracket/wildcard notation.</td>
     </tr>
     <tr>
       <td>EventBridge Scheduler</td>
@@ -172,8 +172,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>CloudWatch Logs</td>
-      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, substring filterPattern, lab page cap), Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
-      <td>Insights, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose destinations.</td>
+      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
+      <td>Insights query engine, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose destinations.</td>
     </tr>
     <tr>
       <td>Resource Groups Tagging API</td>
@@ -183,8 +183,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="7" align="center" valign="middle">Streams and delivery</td>
       <td>Kinesis Data Streams</td>
-      <td>Create/Delete/Describe/ListStreams, PutRecord/PutRecords, GetShardIterator/GetRecords on a single lab shard. Lambda event source mapping for that shard: see Lambda row.</td>
-      <td>Multi-shard split/merge, enhanced fan-out, encryption depth, Kinesis Data Analytics.</td>
+      <td>Create/Delete/Describe/ListStreams with ShardCount 1..4, PutRecord/PutRecords (partition-key hash to shard), GetShardIterator/GetRecords per shard, stream Put/Get/DeleteResourcePolicy. Lambda event source mapping polls all shards sequentially: see Lambda row.</td>
+      <td>Shard split/merge APIs, enhanced fan-out, encryption depth, Kinesis Data Analytics.</td>
     </tr>
     <tr>
       <td>Firehose</td>
@@ -213,7 +213,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Step Functions</td>
-      <td>Create/Delete/Describe/List state machines, StartExecution/DescribeExecution/GetExecutionHistory. ASL Pass/Succeed/Fail and Task to Lambda (sync Invoke), SQS, SNS, or EventBridge bus. Task definitions require roleArn. EventBridge and Scheduler can StartExecution with RoleArn. PassRole with states.amazonaws.com when RoleArn set. Foreign Task targets AND destination resource policy; PutEvents dual-evals bus policy.</td>
+      <td>Create/Delete/Describe/List state machines, StartExecution/DescribeExecution/GetExecutionHistory. ASL Pass/Succeed/Fail and Task to Lambda (sync Invoke), SQS, SNS, or EventBridge bus. Task definitions require roleArn. EventBridge and Scheduler can StartExecution with RoleArn; EventBridge may omit RoleArn when a lab state-machine resource policy Allows events.amazonaws.com. PassRole with states.amazonaws.com when RoleArn set. Foreign Task targets AND destination resource policy; PutEvents dual-evals bus policy.</td>
       <td>Choice/Wait/Parallel/Map, Express workflows, InputPath/ResultPath depth.</td>
     </tr>
     <tr>
@@ -270,8 +270,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, and single-shard Kinesis event source mappings with in-process poller, FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Multi-shard / enhanced fan-out Kinesis ESM, MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, and Kinesis event source mappings (in-process poller walks all stream shards sequentially), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Enhanced fan-out / ParallelizationFactor Kinesis ESM, MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>

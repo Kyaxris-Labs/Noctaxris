@@ -61,6 +61,14 @@ func (s *Server) handleLogs(
 		s.logsDeleteMetricFilter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLogsDescribeMetricFilters:
 		s.logsDescribeMetricFilters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsPutResourcePolicy:
+		s.logsPutResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsGetResourcePolicy:
+		s.logsGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDeleteResourcePolicy:
+		s.logsDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLogsDescribeResourcePolicies:
+		s.logsDescribeResourcePolicies(w, r, body, requestID, eventID, verified, readOnly)
 	default:
 		s.writeLogsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CloudWatch Logs action is not implemented.", readOnly, eventID, verified)
@@ -102,6 +110,14 @@ func logsAction(action string) string {
 		return catalog.ActionLogsDeleteMetricFilter
 	case "DescribeMetricFilters":
 		return catalog.ActionLogsDescribeMetricFilters
+	case "PutResourcePolicy":
+		return catalog.ActionLogsPutResourcePolicy
+	case "GetResourcePolicy":
+		return catalog.ActionLogsGetResourcePolicy
+	case "DeleteResourcePolicy":
+		return catalog.ActionLogsDeleteResourcePolicy
+	case "DescribeResourcePolicies":
+		return catalog.ActionLogsDescribeResourcePolicies
 	default:
 		return action
 	}
@@ -514,6 +530,11 @@ func (s *Server) logsFilterLogEvents(
 			"The specified log group does not exist.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrLogFilterPatternInvalid) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid nextToken") || strings.Contains(err.Error(), "log group name is required") {
 			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
@@ -600,6 +621,11 @@ func (s *Server) logsPutSubscriptionFilter(
 		if errors.Is(err, store.ErrLogGroupNotFound) {
 			s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 				"Log group does not exist.", readOnly, eventID, verified)
+			return
+		}
+		if errors.Is(err, store.ErrLogFilterPatternInvalid) {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
 			return
 		}
 		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
@@ -707,6 +733,11 @@ func (s *Server) logsPutMetricFilter(
 				"Log group does not exist.", readOnly, eventID, verified)
 			return
 		}
+		if errors.Is(err, store.ErrLogFilterPatternInvalid) {
+			s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -789,6 +820,157 @@ func logsInt64Param(v any) int64 {
 	default:
 		return 0
 	}
+}
+
+func (s *Server) logsPutResourcePolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["policyName"].(string)
+	doc, _ := params["policyDocument"].(string)
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(doc) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"policyName and policyDocument are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionLogsPutResourcePolicy, "*") {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:PutResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	p, err := s.store.PutLogsResourcePolicy(verified.AccountID, name, doc)
+	if errors.Is(err, store.ErrLogsResourcePolicyLimit) {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "LimitExceededException",
+			"Resource policy limit exceeded.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"resourcePolicy": map[string]any{
+			"policyName":     p.PolicyName,
+			"policyDocument": p.PolicyDocument,
+			"lastUpdatedTime": p.LastUpdated,
+		},
+	})
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "PutResourcePolicy", readOnly)
+}
+
+func (s *Server) logsGetResourcePolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["policyName"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"policyName is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionLogsGetResourcePolicy, "*") {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:GetResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	p, err := s.store.GetLogsResourcePolicy(verified.AccountID, name)
+	if errors.Is(err, store.ErrLogsResourcePolicyNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Resource policy does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get resource policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"resourcePolicy": map[string]any{
+			"policyName":      p.PolicyName,
+			"policyDocument":  p.PolicyDocument,
+			"lastUpdatedTime": p.LastUpdated,
+		},
+	})
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "GetResourcePolicy", readOnly)
+}
+
+func (s *Server) logsDeleteResourcePolicy(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["policyName"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeLogsError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"policyName is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionLogsDeleteResourcePolicy, "*") {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DeleteResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteLogsResourcePolicy(verified.AccountID, name); errors.Is(err, store.ErrLogsResourcePolicyNotFound) {
+		s.writeLogsError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Resource policy does not exist.", readOnly, eventID, verified)
+		return
+	} else if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete resource policy.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLogsOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DeleteResourcePolicy", readOnly)
+}
+
+func (s *Server) logsDescribeResourcePolicies(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	_ = body
+	if !s.authorize(verified, catalog.ActionLogsDescribeResourcePolicies, "*") {
+		s.writeLogsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform logs:DescribeResourcePolicies.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.DescribeLogsResourcePolicies(verified.AccountID)
+	if err != nil {
+		s.writeLogsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe resource policies.", readOnly, eventID, verified)
+		return
+	}
+	policies := make([]map[string]any, 0, len(list))
+	for _, p := range list {
+		policies = append(policies, map[string]any{
+			"policyName":      p.PolicyName,
+			"policyDocument":  p.PolicyDocument,
+			"lastUpdatedTime": p.LastUpdated,
+		})
+	}
+	payload, _ := json.Marshal(map[string]any{"resourcePolicies": policies})
+	s.writeLogsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, logsEventSource, "DescribeResourcePolicies", readOnly)
 }
 
 func (s *Server) writeLogsOK(w http.ResponseWriter, requestID string, payload []byte) {

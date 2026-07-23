@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+
+	_ "github.com/Kyaxris-Labs/Noctaxris/internal/services/dynamodb" // register transact expr helpers
 )
 
 func TestTransactWriteItemsAtomicPutPair(t *testing.T) {
@@ -94,17 +96,117 @@ func TestTransactWriteItemsDuplicateKeyCancels(t *testing.T) {
 	}
 }
 
-func TestTransactWriteItemsUpdateFailsClosed(t *testing.T) {
+func TestTransactWriteUpdateWithCondition(t *testing.T) {
 	st := openDynamoStore(t)
 	account := "000000000001"
 	if _, err := st.CreateTable(account, "us-east-1", "Orders", "pk", store.KeyTypeString, "", "", "", "", nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.PutItemBytes(account, "Orders", `{"S":"acct"}`, "", "", "",
+		[]byte(`{"pk":{"S":"acct"},"balance":{"N":"10"}}`), false, nil); err != nil {
+		t.Fatal(err)
+	}
+
 	err := st.TransactWriteItems(account, []store.TransactWriteAction{
-		{Kind: "Update", TableName: "Orders", ItemPK: `{"S":"x"}`},
+		{
+			Kind: "Update", TableName: "Orders",
+			ItemPK:           `{"S":"acct"}`,
+			KeyJSON:          []byte(`{"pk":{"S":"acct"}}`),
+			UpdateExpression: "SET balance = :n",
+			ConditionExpression: "balance = :old",
+			ExpressionAttributeValues: map[string]any{
+				":n":   map[string]any{"N": "20"},
+				":old": map[string]any{"N": "10"},
+			},
+		},
 	})
-	if err == nil || !errors.Is(err, store.ErrDynamoTransactUnsupported) {
-		t.Fatalf("want ErrDynamoTransactUnsupported, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetItemBytes(account, "Orders", `{"S":"acct"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.ItemJSON, []byte(`"20"`)) {
+		t.Fatalf("balance not updated: %s", got.ItemJSON)
+	}
+
+	err = st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Update", TableName: "Orders",
+			ItemPK:           `{"S":"acct"}`,
+			KeyJSON:          []byte(`{"pk":{"S":"acct"}}`),
+			UpdateExpression: "SET balance = :n",
+			ConditionExpression: "balance = :old",
+			ExpressionAttributeValues: map[string]any{
+				":n":   map[string]any{"N": "30"},
+				":old": map[string]any{"N": "10"},
+			},
+		},
+	})
+	var canceled *store.TransactionCanceledError
+	if !errors.As(err, &canceled) {
+		t.Fatalf("want TransactionCanceledError, got %v", err)
+	}
+	if len(canceled.Reasons) != 1 || canceled.Reasons[0].Code != "ConditionalCheckFailed" {
+		t.Fatalf("reasons=%+v", canceled.Reasons)
+	}
+	got, err = st.GetItemBytes(account, "Orders", `{"S":"acct"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.ItemJSON, []byte(`"20"`)) {
+		t.Fatalf("balance must stay 20 after cancel: %s", got.ItemJSON)
+	}
+}
+
+func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
+	st := openDynamoStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTable(account, "us-east-1", "Orders", "pk", store.KeyTypeString, "", "", "", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err := st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Put", TableName: "Orders",
+			ItemPK:   `{"S":"new"}`,
+			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"1"}}`),
+			ConditionExpression: "attribute_not_exists(pk)",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Put", TableName: "Orders",
+			ItemPK:   `{"S":"new"}`,
+			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"2"}}`),
+			ConditionExpression: "attribute_not_exists(pk)",
+		},
+	})
+	var canceled *store.TransactionCanceledError
+	if !errors.As(err, &canceled) {
+		t.Fatalf("want TransactionCanceledError, got %v", err)
+	}
+
+	err = st.TransactWriteItems(account, []store.TransactWriteAction{
+		{
+			Kind: "Delete", TableName: "Orders",
+			ItemPK: `{"S":"new"}`,
+			ConditionExpression: "v = :want",
+			ExpressionAttributeValues: map[string]any{
+				":want": map[string]any{"S": "1"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetItemBytes(account, "Orders", `{"S":"new"}`, ""); !errors.Is(err, store.ErrNoSuchItem) {
+		t.Fatalf("want deleted, got %v", err)
 	}
 }
 

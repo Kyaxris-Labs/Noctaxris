@@ -121,6 +121,9 @@ func EnsureCognitoSchema(db *sql.DB) error {
 	if _, err := db.Exec(cognitoSchema); err != nil {
 		return fmt.Errorf("ensure cognito schema: %w", err)
 	}
+	if err := EnsureCognitoMFASchema(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -284,6 +287,7 @@ func (s *Store) DeleteCognitoUserPool(accountID, poolID string) error {
 	_, _ = tx.Exec(`DELETE FROM cognito_user_pool_clients WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_users WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_refresh_tokens WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_mfa_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	return tx.Commit()
 }
 
@@ -553,41 +557,54 @@ func (s *Store) getUser(accountID, poolID, username string) (sub, hash, status s
 }
 
 // InitiateCognitoAuth USER_PASSWORD_AUTH (client + username + password).
-func (s *Store) InitiateCognitoAuth(clientID, username, password string) (CognitoAuthResult, error) {
+// When the user has software-token MFA enabled, returns ChallengeName SOFTWARE_TOKEN_MFA
+// and a Session (no tokens) instead of AuthenticationResult.
+func (s *Store) InitiateCognitoAuth(clientID, username, password string) (CognitoAuthOutcome, error) {
 	accountID, poolID, err := s.lookupClient(clientID)
 	if err != nil {
-		return CognitoAuthResult{}, err
+		return CognitoAuthOutcome{}, err
 	}
 	return s.authenticateAndIssue(accountID, poolID, clientID, username, password)
 }
 
 // AdminInitiateCognitoAuth USER_PASSWORD_AUTH with explicit pool.
-func (s *Store) AdminInitiateCognitoAuth(accountID, poolID, clientID, username, password string) (CognitoAuthResult, error) {
+func (s *Store) AdminInitiateCognitoAuth(accountID, poolID, clientID, username, password string) (CognitoAuthOutcome, error) {
 	if _, err := s.DescribeCognitoUserPoolClient(accountID, poolID, clientID); err != nil {
-		return CognitoAuthResult{}, err
+		return CognitoAuthOutcome{}, err
 	}
 	return s.authenticateAndIssue(accountID, poolID, clientID, username, password)
 }
 
-func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, password string) (CognitoAuthResult, error) {
+func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, password string) (CognitoAuthOutcome, error) {
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
-		return CognitoAuthResult{}, fmt.Errorf("%w: USERNAME and PASSWORD required", ErrCognitoBadRequest)
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: USERNAME and PASSWORD required", ErrCognitoBadRequest)
 	}
 	sub, hash, status, err := s.getUser(accountID, poolID, username)
 	if err != nil {
 		if errors.Is(err, ErrCognitoUserNotFound) {
-			return CognitoAuthResult{}, ErrCognitoUnauthorized
+			return CognitoAuthOutcome{}, ErrCognitoUnauthorized
 		}
-		return CognitoAuthResult{}, err
+		return CognitoAuthOutcome{}, err
 	}
 	if status != "CONFIRMED" {
-		return CognitoAuthResult{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
 	}
 	if !checkPassword(hash, password) {
-		return CognitoAuthResult{}, ErrCognitoUnauthorized
+		return CognitoAuthOutcome{}, ErrCognitoUnauthorized
 	}
-	return s.issueTokens(accountID, poolID, clientID, username, sub)
+	mfaOn, err := s.userMFAEnabled(accountID, poolID, username)
+	if err != nil {
+		return CognitoAuthOutcome{}, err
+	}
+	if mfaOn {
+		return s.createSOFTWARETokenMFAChallenge(accountID, poolID, clientID, username)
+	}
+	result, err := s.issueTokens(accountID, poolID, clientID, username, sub)
+	if err != nil {
+		return CognitoAuthOutcome{}, err
+	}
+	return CognitoAuthOutcome{CognitoAuthResult: result}, nil
 }
 
 func hashRefreshToken(raw string) string {

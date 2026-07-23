@@ -15,7 +15,7 @@ const (
 type FilterLogEventsInput struct {
 	LogGroupName   string
 	LogStreamNames []string // optional; empty means all streams in the group
-	FilterPattern  string   // lab: substring match (same honesty as subscription filters)
+	FilterPattern  string   // lab filter-pattern subset (same matcher as subscription/metric filters)
 	StartTime      int64
 	EndTime        int64
 	Limit          int
@@ -32,13 +32,16 @@ type FilteredLogEvent struct {
 }
 
 // FilterLogEvents scans events across streams in a log group with optional
-// substring pattern, time bounds, stream names, and offset pagination.
+// filter-pattern subset, time bounds, stream names, and offset pagination.
 func (s *Store) FilterLogEvents(accountID string, in FilterLogEventsInput) ([]FilteredLogEvent, string, error) {
 	group := strings.TrimSpace(in.LogGroupName)
 	if group == "" {
 		return nil, "", fmt.Errorf("filter log events: log group name is required")
 	}
 	if _, err := s.getLogGroup(accountID, group); err != nil {
+		return nil, "", err
+	}
+	if _, err := MatchLogFilterPattern(in.FilterPattern, ""); err != nil {
 		return nil, "", err
 	}
 

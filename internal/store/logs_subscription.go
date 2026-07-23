@@ -69,6 +69,10 @@ func (s *Store) PutSubscriptionFilter(accountID, group, filterName, pattern, des
 	if !strings.HasPrefix(destinationARN, "arn:aws:lambda:") && !strings.HasPrefix(destinationARN, "arn:aws:sqs:") {
 		return LogsSubscriptionFilter{}, fmt.Errorf("put subscription filter: DestinationArn must be Lambda or SQS")
 	}
+	pattern = strings.TrimSpace(pattern)
+	if _, err := MatchLogFilterPattern(pattern, ""); err != nil {
+		return LogsSubscriptionFilter{}, err
+	}
 	// AWS Lambda subscription filters use destination resource policy, not roleArn.
 	if strings.HasPrefix(destinationARN, "arn:aws:lambda:") {
 		roleARN = ""
@@ -82,7 +86,7 @@ func (s *Store) PutSubscriptionFilter(accountID, group, filterName, pattern, des
 		   filter_pattern = excluded.filter_pattern,
 		   destination_arn = excluded.destination_arn,
 		   role_arn = excluded.role_arn`,
-		accountID, group, filterName, strings.TrimSpace(pattern), destinationARN, roleARN, now,
+		accountID, group, filterName, pattern, destinationARN, roleARN, now,
 	)
 	if err != nil {
 		return LogsSubscriptionFilter{}, fmt.Errorf("put subscription filter: %w", err)
@@ -155,12 +159,11 @@ func (s *Store) fanOutLogSubscriptionFilters(accountID, group string, events []L
 }
 
 func labLogFilterMatches(pattern, message string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
-		return true
+	ok, err := MatchLogFilterPattern(pattern, message)
+	if err != nil {
+		return false
 	}
-	// Lab lite: substring match (not CloudWatch Logs filter syntax).
-	return strings.Contains(message, pattern)
+	return ok
 }
 
 func (s *Store) deliverLogSubscription(accountID, group string, f LogsSubscriptionFilter, events []LogEvent) error {

@@ -101,7 +101,7 @@ func TestEventBridgeLogsAndKinesisTargets(t *testing.T) {
 	if err != nil || len(events) == 0 {
 		t.Fatalf("log events=%d err=%v", len(events), err)
 	}
-	it, err := st.GetKinesisShardIterator(account, "eb-stream", store.LabKinesisShardID, "TRIM_HORIZON", "")
+	it, err := st.GetKinesisShardIterator(account, "eb-stream", store.LabKinesisShardID(0), "TRIM_HORIZON", "")
 	if err != nil {
 		t.Fatal(err)
 	}

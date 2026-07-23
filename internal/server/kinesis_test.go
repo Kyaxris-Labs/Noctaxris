@@ -57,7 +57,7 @@ func TestKinesisRoundTrip(t *testing.T) {
 
 	itRec := mustKinesisJSON(t, handler, "GetShardIterator", map[string]any{
 		"StreamName":        "lab-k",
-		"ShardId":           store.LabKinesisShardID,
+		"ShardId":           store.LabKinesisShardID(0),
 		"ShardIteratorType": "TRIM_HORIZON",
 	}, now)
 	if itRec.Code != http.StatusOK {

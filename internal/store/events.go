@@ -46,8 +46,8 @@ var (
 	ErrNoSuchEventRule             = errors.New("ResourceNotFoundException")
 	ErrNoSuchEventTarget           = errors.New("ResourceNotFoundException")
 	ErrNoSuchEventEntry            = errors.New("EventNotFound")
-	// ErrEventTargetRoleArnRequired is returned when PutTargets omits RoleArn for
-	// Logs, Kinesis, or Step Functions targets (lab has no resource-policy path yet).
+	// ErrEventTargetRoleArnRequired is retained for API stability. PutTargets no longer
+	// requires RoleArn for Logs/Kinesis/SFN; delivery uses RoleArn or resource policy.
 	ErrEventTargetRoleArnRequired = errors.New("ValidationException: RoleArn is required for this target type")
 )
 
@@ -850,17 +850,21 @@ func (s *Store) deliverEventTargetToLogs(accountID, logGroupARN, body, source, c
 	if err != nil {
 		return err
 	}
-	if _, err := s.getLogGroup(accountID, group); err != nil {
+	logsAccount := accountID
+	if owner := resourceOwnerAccountFromARN(logGroupARN); owner != "" {
+		logsAccount = owner
+	}
+	if _, err := s.getLogGroup(logsAccount, group); err != nil {
 		return err
 	}
-	if _, err := s.getLogStream(accountID, group, LabEventBridgeLogStream); errors.Is(err, ErrLogStreamNotFound) {
-		if _, err := s.CreateLogStream(accountID, DefaultEventsRegion, group, LabEventBridgeLogStream); err != nil && !errors.Is(err, ErrLogStreamAlreadyExists) {
+	if _, err := s.getLogStream(logsAccount, group, LabEventBridgeLogStream); errors.Is(err, ErrLogStreamNotFound) {
+		if _, err := s.CreateLogStream(logsAccount, DefaultEventsRegion, group, LabEventBridgeLogStream); err != nil && !errors.Is(err, ErrLogStreamAlreadyExists) {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
-	st, err := s.getLogStream(accountID, group, LabEventBridgeLogStream)
+	st, err := s.getLogStream(logsAccount, group, LabEventBridgeLogStream)
 	if err != nil {
 		return err
 	}
@@ -873,7 +877,7 @@ func (s *Store) deliverEventTargetToLogs(accountID, logGroupARN, body, source, c
 		// AWS without InputTransformer uses event payload as message.
 		_ = source
 	}
-	_, _, err = s.PutLogEvents(accountID, group, LabEventBridgeLogStream, st.UploadSequenceToken, []LogEvent{{
+	_, _, err = s.PutLogEvents(logsAccount, group, LabEventBridgeLogStream, st.UploadSequenceToken, []LogEvent{{
 		Timestamp: ts,
 		Message:   msg,
 	}})
@@ -885,11 +889,15 @@ func (s *Store) deliverEventTargetToKinesis(accountID, streamARN, body, entryID 
 	if err != nil {
 		return err
 	}
+	streamAccount := accountID
+	if owner := resourceOwnerAccountFromARN(streamARN); owner != "" {
+		streamAccount = owner
+	}
 	partitionKey := entryID
 	if partitionKey == "" {
 		partitionKey = uuid.NewString()
 	}
-	_, _, err = s.PutKinesisRecord(accountID, name, partitionKey, []byte(body))
+	_, _, err = s.PutKinesisRecord(streamAccount, name, partitionKey, []byte(body))
 	return err
 }
 
@@ -942,9 +950,9 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt Eve
 		return false
 	}
 	roleARN := strings.TrimSpace(tgt.RoleARN)
-	// Without RoleArn: SQS/Lambda/SNS deliver only when the destination resource policy
-	// Allows events.amazonaws.com (or account root) with SourceArn/SourceAccount keys.
-	// Logs/Kinesis/SFN have no resource-policy delivery path in the lab (RoleArn required).
+	// Without RoleArn: SQS/Lambda/SNS/Logs/Kinesis/SFN deliver only when the destination
+	// resource policy Allows events.amazonaws.com (or account root) with SourceArn keys.
+	// Empty/missing policy skips delivery (fail-closed; not an open proxy).
 	if roleARN == "" {
 		if eventTargetRequiresRoleARN(arn) {
 			return false
@@ -956,17 +964,11 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt Eve
 	)
 }
 
-// eventTargetRequiresRoleARN reports target types that need RoleArn at PutTargets /
-// delivery (AWS identity-based for Kinesis/SFN; lab Logs until resource-policy path).
+// eventTargetRequiresRoleARN reports target types that still require RoleArn at PutTargets.
+// Logs/Kinesis/SFN authorize at delivery via RoleArn session or resource policy, like SQS.
 func eventTargetRequiresRoleARN(targetARN string) bool {
-	switch {
-	case strings.HasPrefix(targetARN, "arn:aws:logs:"),
-		strings.HasPrefix(targetARN, "arn:aws:kinesis:"),
-		strings.Contains(targetARN, ":stateMachine:"):
-		return true
-	default:
-		return false
-	}
+	_ = targetARN
+	return false
 }
 
 func (s *Store) identityPolicyDocsForRoleARN(roleARN string) ([]string, error) {

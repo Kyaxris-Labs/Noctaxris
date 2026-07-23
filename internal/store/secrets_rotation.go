@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,8 +18,13 @@ const (
 	minSecretRecoveryDays     = 7
 	maxSecretRecoveryDays     = 30
 
-	// SecretRotationStepFinishSecret is the lab single-step rotation event Step.
-	// Full AWS createSecret/setSecret/testSecret/finishSecret staging is deferred.
+	// SecretRotationStepCreateSecret is the first Lambda rotation step.
+	SecretRotationStepCreateSecret = "createSecret"
+	// SecretRotationStepSetSecret is the second Lambda rotation step.
+	SecretRotationStepSetSecret = "setSecret"
+	// SecretRotationStepTestSecret is the third Lambda rotation step.
+	SecretRotationStepTestSecret = "testSecret"
+	// SecretRotationStepFinishSecret is the fourth Lambda rotation step.
 	SecretRotationStepFinishSecret = "finishSecret"
 )
 
@@ -27,6 +33,10 @@ var ErrSecretScheduledDeletion = fmt.Errorf("InvalidRequestException: secret is 
 
 // ErrSecretRotationLambdaInvalid is returned when RotationLambdaARN does not resolve.
 var ErrSecretRotationLambdaInvalid = fmt.Errorf("InvalidRequestException: RotationLambdaARN is invalid or the function was not found")
+
+// SecretRotationInvoker invokes the rotator Lambda once with the given event JSON.
+// Store tests inject a fake; the server enqueues quiet async Invoke and processes it.
+type SecretRotationInvoker func(eventJSON string) error
 
 // EnsureSecretsRecoverySchema adds recovery-window columns.
 func EnsureSecretsRecoverySchema(db *sql.DB) error {
@@ -40,7 +50,10 @@ func EnsureSecretsRecoverySchema(db *sql.DB) error {
 			return fmt.Errorf("ensure secrets recovery schema: %w", err)
 		}
 	}
-	return EnsureSecretsRotationSchema(db)
+	if err := EnsureSecretsRotationSchema(db); err != nil {
+		return err
+	}
+	return EnsureSecretsVersionsSchema(db)
 }
 
 func (s *Store) EnsureSecretsRecoverySchema() error {
@@ -137,6 +150,32 @@ func (s *Store) SweepExpiredSecrets(now time.Time) (int, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	rows, err := s.db.Query(
+		`SELECT account_id, name FROM secretsmanager_secrets
+		 WHERE deletion_date != '' AND deletion_date <= ?`,
+		now.Format(time.RFC3339),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sweep secrets: query: %w", err)
+	}
+	defer rows.Close()
+	type pair struct{ accountID, name string }
+	var doomed []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.accountID, &p.name); err != nil {
+			return 0, fmt.Errorf("sweep secrets: scan: %w", err)
+		}
+		doomed = append(doomed, p)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, p := range doomed {
+		if err := s.deleteSecretVersions(p.accountID, p.name); err != nil {
+			return 0, err
+		}
+	}
 	res, err := s.db.Exec(
 		`DELETE FROM secretsmanager_secrets
 		 WHERE deletion_date != '' AND deletion_date <= ?`,
@@ -173,16 +212,25 @@ func (s *Store) SetSecretRotationConfig(accountID, nameOrARN, lambdaARN, roleARN
 	return nil
 }
 
-// SecretRotationEventJSON builds the lab single-step rotator payload.
+// SecretRotationEventJSON builds a rotator payload for finishSecret (compat helper).
 func SecretRotationEventJSON(secretID, clientRequestToken string) (string, error) {
+	return SecretRotationEventJSONForStep(secretID, clientRequestToken, SecretRotationStepFinishSecret)
+}
+
+// SecretRotationEventJSONForStep builds the Lambda rotation event for one step.
+func SecretRotationEventJSONForStep(secretID, clientRequestToken, step string) (string, error) {
 	token := strings.TrimSpace(clientRequestToken)
 	if token == "" {
 		token = uuid.NewString()
 	}
+	step = strings.TrimSpace(step)
+	if step == "" {
+		step = SecretRotationStepFinishSecret
+	}
 	raw, err := json.Marshal(map[string]string{
 		"SecretId":           strings.TrimSpace(secretID),
 		"ClientRequestToken": token,
-		"Step":               SecretRotationStepFinishSecret,
+		"Step":               step,
 	})
 	if err != nil {
 		return "", err
@@ -224,9 +272,13 @@ func (s *Store) ResolveSecretRotationLambda(accountID, nameOrARN string) (fnAcco
 	return fnAccount, baseName, qualifier, passRoleARN, nil
 }
 
-// EnqueueSecretRotationInvoke records a quiet async Invoke for the configured rotator.
-// Callers must ProcessAsyncInvocation and only then call FinishSecretRotation on success.
+// EnqueueSecretRotationInvoke records a quiet async Invoke for one rotation step.
 func (s *Store) EnqueueSecretRotationInvoke(accountID, nameOrARN, clientRequestToken string) (LambdaAsyncInvocation, error) {
+	return s.EnqueueSecretRotationInvokeStep(accountID, nameOrARN, clientRequestToken, SecretRotationStepFinishSecret)
+}
+
+// EnqueueSecretRotationInvokeStep records a quiet async Invoke for the configured rotator step.
+func (s *Store) EnqueueSecretRotationInvokeStep(accountID, nameOrARN, clientRequestToken, step string) (LambdaAsyncInvocation, error) {
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {
 		return LambdaAsyncInvocation{}, err
@@ -245,20 +297,99 @@ func (s *Store) EnqueueSecretRotationInvoke(accountID, nameOrARN, clientRequestT
 	if functionName == "" {
 		return LambdaAsyncInvocation{}, ErrSecretRotationLambdaInvalid
 	}
-	eventJSON, err := SecretRotationEventJSON(row.ARN, clientRequestToken)
+	eventJSON, err := SecretRotationEventJSONForStep(row.ARN, clientRequestToken, step)
 	if err != nil {
 		return LambdaAsyncInvocation{}, err
 	}
 	return s.EnqueueAsyncInvokeQuiet(fnAccount, functionName, qualifier, eventJSON)
 }
 
-// FinishSecretRotation applies lab finishSecret: random secret string replacement.
-// Only call after a successful rotator Invoke.
-func (s *Store) FinishSecretRotation(accountID, nameOrARN string) (Secret, error) {
-	return s.RotateSecret(accountID, nameOrARN)
+// RotateSecretFourStep runs createSecret → setSecret → testSecret → finishSecret.
+// createSecret creates an AWSPENDING version; finishSecret promotes it to AWSCURRENT.
+// invoke is called once per step with the Lambda event JSON (inject a fake in store tests).
+func (s *Store) RotateSecretFourStep(accountID, nameOrARN, clientRequestToken string, invoke SecretRotationInvoker) (Secret, error) {
+	if invoke == nil {
+		return Secret{}, fmt.Errorf("rotation invoker is required")
+	}
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return Secret{}, err
+	}
+	row, err := s.getSecretRow(accountID, name)
+	if err != nil {
+		return Secret{}, err
+	}
+	if strings.TrimSpace(row.DeletionDate) != "" {
+		return Secret{}, ErrSecretScheduledDeletion
+	}
+	if err := s.ensureSecretVersionsBackfilled(accountID, name); err != nil {
+		return Secret{}, err
+	}
+	orphan, err := s.HasPendingRotationOrphan(accountID, name)
+	if err != nil {
+		return Secret{}, err
+	}
+	if orphan {
+		return Secret{}, ErrSecretRotationInProgress
+	}
+
+	token := strings.TrimSpace(clientRequestToken)
+	if token == "" {
+		token = uuid.NewString()
+	}
+
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return Secret{}, fmt.Errorf("rotate secret: %w", err)
+	}
+	pendingValue := hex.EncodeToString(b[:])
+	if _, err := s.createAWSPENDINGVersion(accountID, name, token, pendingValue, nil); err != nil {
+		return Secret{}, err
+	}
+
+	steps := []string{
+		SecretRotationStepCreateSecret,
+		SecretRotationStepSetSecret,
+		SecretRotationStepTestSecret,
+		SecretRotationStepFinishSecret,
+	}
+	for _, step := range steps {
+		eventJSON, err := SecretRotationEventJSONForStep(row.ARN, token, step)
+		if err != nil {
+			return Secret{}, err
+		}
+		if err := invoke(eventJSON); err != nil {
+			return Secret{}, fmt.Errorf("rotation step %s: %w", step, err)
+		}
+	}
+	if err := s.promoteSecretVersionCurrent(accountID, name, token); err != nil {
+		return Secret{}, err
+	}
+	return s.GetSecretValue(accountID, name)
 }
 
-// RotateSecret lab-rotates the secret string to a new random value (no Lambda).
+// FinishSecretRotation promotes an existing AWSPENDING version to AWSCURRENT.
+// Prefer RotateSecretFourStep for new Lambda-backed rotates.
+func (s *Store) FinishSecretRotation(accountID, nameOrARN string) (Secret, error) {
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return Secret{}, err
+	}
+	pending, err := s.findSecretVersionByStage(accountID, name, SecretVersionStagePending)
+	if err != nil {
+		if errors.Is(err, ErrSecretNotFound) {
+			// Legacy path: no staging row — random put as before.
+			return s.RotateSecret(accountID, nameOrARN)
+		}
+		return Secret{}, err
+	}
+	if err := s.promoteSecretVersionCurrent(accountID, name, pending.VersionID); err != nil {
+		return Secret{}, err
+	}
+	return s.GetSecretValue(accountID, name)
+}
+
+// RotateSecret lab-rotates the secret string to a new random AWSCURRENT value (no Lambda).
 func (s *Store) RotateSecret(accountID, nameOrARN string) (Secret, error) {
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {

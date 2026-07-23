@@ -20,8 +20,6 @@ var (
 const (
 	// DefaultKinesisRegion is the lab region embedded in Kinesis ARNs.
 	DefaultKinesisRegion = "us-east-1"
-	// LabKinesisShardID is the single shard id for every lab stream.
-	LabKinesisShardID = "shardId-000000000000"
 )
 
 // KinesisStream is a data stream row.
@@ -33,12 +31,13 @@ type KinesisStream struct {
 	CreatedAt    int64
 }
 
-// KinesisRecord is one put record on the lab shard.
+// KinesisRecord is one put record on a lab shard.
 type KinesisRecord struct {
-	SequenceNumber string
-	PartitionKey   string
-	Data           []byte
+	SequenceNumber              string
+	PartitionKey                string
+	Data                        []byte
 	ApproximateArrivalTimestamp int64 // epoch millis
+	ShardID                     string
 }
 
 const kinesisSchema = `
@@ -59,9 +58,11 @@ CREATE TABLE IF NOT EXISTS kinesis_records (
   data BLOB NOT NULL,
   arrival_ms INTEGER NOT NULL,
   seq_ord INTEGER NOT NULL,
+  shard_id TEXT NOT NULL DEFAULT 'shardId-000000000000',
   PRIMARY KEY (account_id, stream_name, sequence_number)
 );
 CREATE INDEX IF NOT EXISTS idx_kinesis_records_ord ON kinesis_records(account_id, stream_name, seq_ord);
+CREATE INDEX IF NOT EXISTS idx_kinesis_records_shard ON kinesis_records(account_id, stream_name, shard_id, seq_ord);
 CREATE TABLE IF NOT EXISTS kinesis_iterators (
   iterator_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
@@ -80,6 +81,19 @@ func EnsureKinesisSchema(db *sql.DB) error {
 	if _, err := db.Exec(kinesisSchema); err != nil {
 		return fmt.Errorf("ensure kinesis schema: %w", err)
 	}
+	if _, err := db.Exec(
+		`ALTER TABLE kinesis_records ADD COLUMN shard_id TEXT NOT NULL DEFAULT 'shardId-000000000000'`,
+	); err != nil {
+		msg := strings.ToLower(err.Error())
+		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
+			return fmt.Errorf("ensure kinesis schema: shard_id: %w", err)
+		}
+	}
+	if _, err := db.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_kinesis_records_shard ON kinesis_records(account_id, stream_name, shard_id, seq_ord)`,
+	); err != nil {
+		return fmt.Errorf("ensure kinesis schema: shard index: %w", err)
+	}
 	return nil
 }
 
@@ -96,7 +110,8 @@ func KinesisStreamARN(region, accountID, name string) string {
 	return fmt.Sprintf("arn:aws:kinesis:%s:%s:stream/%s", region, accountID, name)
 }
 
-// CreateKinesisStream creates an ACTIVE stream with a single lab shard.
+// CreateKinesisStream creates an ACTIVE stream with 1..MaxLabKinesisShardCount shards.
+// ShardCount above the lab cap returns ErrKinesisInvalidShard (ValidationException at the API).
 func (s *Store) CreateKinesisStream(accountID, region, name string, shardCount int) (KinesisStream, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -105,9 +120,8 @@ func (s *Store) CreateKinesisStream(accountID, region, name string, shardCount i
 	if shardCount <= 0 {
 		shardCount = 1
 	}
-	if shardCount > 1 {
-		// Lab bar: single shard only. Accept request but force one shard.
-		shardCount = 1
+	if shardCount > MaxLabKinesisShardCount {
+		return KinesisStream{}, fmt.Errorf("%w: ShardCount must be 1..%d", ErrKinesisInvalidShard, MaxLabKinesisShardCount)
 	}
 	if _, err := s.getKinesisStream(accountID, name); err == nil {
 		return KinesisStream{}, ErrKinesisStreamExists
@@ -189,13 +203,16 @@ func (s *Store) ListKinesisStreams(accountID, prefix string) ([]string, error) {
 
 // PutKinesisRecord appends one record and returns sequence number + shard id.
 func (s *Store) PutKinesisRecord(accountID, name, partitionKey string, data []byte) (seq, shardID string, err error) {
-	if _, err := s.getKinesisStream(accountID, name); err != nil {
+	st, err := s.getKinesisStream(accountID, name)
+	if err != nil {
 		return "", "", err
 	}
 	partitionKey = strings.TrimSpace(partitionKey)
 	if partitionKey == "" {
 		return "", "", fmt.Errorf("put kinesis record: PartitionKey is required")
 	}
+	shardIdx := HashPartitionKeyToShard(partitionKey, st.ShardCount)
+	shardID = LabKinesisShardID(shardIdx)
 	seqOrd, err := s.nextKinesisSeqOrd(accountID, name)
 	if err != nil {
 		return "", "", err
@@ -203,14 +220,14 @@ func (s *Store) PutKinesisRecord(accountID, name, partitionKey string, data []by
 	now := time.Now().UTC().UnixMilli()
 	seq = strconv.FormatInt(now, 10) + strconv.FormatInt(int64(seqOrd), 10)
 	_, err = s.db.Exec(
-		`INSERT INTO kinesis_records (account_id, stream_name, sequence_number, partition_key, data, arrival_ms, seq_ord)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		accountID, name, seq, partitionKey, data, now, seqOrd,
+		`INSERT INTO kinesis_records (account_id, stream_name, sequence_number, partition_key, data, arrival_ms, seq_ord, shard_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, name, seq, partitionKey, data, now, seqOrd, shardID,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("put kinesis record: %w", err)
 	}
-	return seq, LabKinesisShardID, nil
+	return seq, shardID, nil
 }
 
 // PutKinesisRecordsEntry is one PutRecords request entry.
@@ -251,26 +268,31 @@ func (s *Store) PutKinesisRecords(accountID, name string, entries []PutKinesisRe
 
 // GetKinesisShardIterator creates a short-lived iterator. Types: TRIM_HORIZON, LATEST, AT_SEQUENCE_NUMBER.
 func (s *Store) GetKinesisShardIterator(accountID, name, shardID, iteratorType, startingSequenceNumber string) (string, error) {
-	if _, err := s.getKinesisStream(accountID, name); err != nil {
+	st, err := s.getKinesisStream(accountID, name)
+	if err != nil {
 		return "", err
 	}
-	if shardID != "" && shardID != LabKinesisShardID {
+	if !validLabKinesisShardID(shardID, st.ShardCount) {
 		return "", ErrKinesisInvalidShard
 	}
+	shardID = normalizeLabKinesisShardID(shardID)
 	nextOrd := 0
 	switch strings.ToUpper(strings.TrimSpace(iteratorType)) {
 	case "TRIM_HORIZON", "":
 		nextOrd = 0
 	case "LATEST":
-		max, err := s.maxKinesisSeqOrd(accountID, name)
+		max, err := s.maxKinesisSeqOrdForShard(accountID, name, shardID)
 		if err != nil {
 			return "", err
 		}
 		nextOrd = max + 1
 	case "AT_SEQUENCE_NUMBER", "AFTER_SEQUENCE_NUMBER":
-		ord, err := s.seqOrdForSequence(accountID, name, startingSequenceNumber)
+		ord, recShard, err := s.seqOrdAndShardForSequence(accountID, name, startingSequenceNumber)
 		if err != nil {
 			return "", err
+		}
+		if recShard != shardID {
+			return "", ErrKinesisInvalidShard
 		}
 		nextOrd = ord
 		if strings.EqualFold(iteratorType, "AFTER_SEQUENCE_NUMBER") {
@@ -281,10 +303,10 @@ func (s *Store) GetKinesisShardIterator(accountID, name, shardID, iteratorType, 
 	}
 	id := fmt.Sprintf("%s-%d", name, time.Now().UTC().UnixNano())
 	expires := time.Now().UTC().Add(5 * time.Minute).Unix()
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO kinesis_iterators (iterator_id, account_id, stream_name, shard_id, next_seq_ord, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		id, accountID, name, LabKinesisShardID, nextOrd, expires,
+		id, accountID, name, shardID, nextOrd, expires,
 	)
 	if err != nil {
 		return "", fmt.Errorf("get shard iterator: %w", err)
@@ -319,10 +341,10 @@ func (s *Store) GetKinesisRecords(iterator string, limit int) (records []Kinesis
 		limit = 1000
 	}
 	rows, err := s.db.Query(
-		`SELECT sequence_number, partition_key, data, arrival_ms, seq_ord FROM kinesis_records
-		 WHERE account_id = ? AND stream_name = ? AND seq_ord >= ?
+		`SELECT sequence_number, partition_key, data, arrival_ms, seq_ord, COALESCE(shard_id, ?) FROM kinesis_records
+		 WHERE account_id = ? AND stream_name = ? AND COALESCE(shard_id, ?) = ? AND seq_ord >= ?
 		 ORDER BY seq_ord ASC LIMIT ?`,
-		accountID, name, nextOrd, limit,
+		LabKinesisShardID(0), accountID, name, LabKinesisShardID(0), shardID, nextOrd, limit,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("get records: query: %w", err)
@@ -333,8 +355,11 @@ func (s *Store) GetKinesisRecords(iterator string, limit int) (records []Kinesis
 	for rows.Next() {
 		var rec KinesisRecord
 		var ord int
-		if err := rows.Scan(&rec.SequenceNumber, &rec.PartitionKey, &rec.Data, &rec.ApproximateArrivalTimestamp, &ord); err != nil {
+		if err := rows.Scan(&rec.SequenceNumber, &rec.PartitionKey, &rec.Data, &rec.ApproximateArrivalTimestamp, &ord, &rec.ShardID); err != nil {
 			return nil, "", fmt.Errorf("get records: scan: %w", err)
+		}
+		if rec.ShardID == "" {
+			rec.ShardID = shardID
 		}
 		records = append(records, rec)
 		lastOrd = ord
@@ -409,19 +434,37 @@ func (s *Store) maxKinesisSeqOrd(accountID, name string) (int, error) {
 	return int(n.Int64), nil
 }
 
-func (s *Store) seqOrdForSequence(accountID, name, sequenceNumber string) (int, error) {
-	var ord int
+func (s *Store) maxKinesisSeqOrdForShard(accountID, name, shardID string) (int, error) {
+	var n sql.NullInt64
 	err := s.db.QueryRow(
-		`SELECT seq_ord FROM kinesis_records WHERE account_id = ? AND stream_name = ? AND sequence_number = ?`,
-		accountID, name, sequenceNumber,
-	).Scan(&ord)
+		`SELECT MAX(seq_ord) FROM kinesis_records
+		 WHERE account_id = ? AND stream_name = ? AND COALESCE(shard_id, ?) = ?`,
+		accountID, name, LabKinesisShardID(0), shardID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("max kinesis seq for shard: %w", err)
+	}
+	if !n.Valid {
+		return -1, nil
+	}
+	return int(n.Int64), nil
+}
+
+func (s *Store) seqOrdAndShardForSequence(accountID, name, sequenceNumber string) (int, string, error) {
+	var ord int
+	var shardID string
+	err := s.db.QueryRow(
+		`SELECT seq_ord, COALESCE(shard_id, ?) FROM kinesis_records
+		 WHERE account_id = ? AND stream_name = ? AND sequence_number = ?`,
+		LabKinesisShardID(0), accountID, name, sequenceNumber,
+	).Scan(&ord, &shardID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrKinesisInvalidShard
+		return 0, "", ErrKinesisInvalidShard
 	}
 	if err != nil {
-		return 0, fmt.Errorf("seq ord for sequence: %w", err)
+		return 0, "", fmt.Errorf("seq ord for sequence: %w", err)
 	}
-	return ord, nil
+	return ord, shardID, nil
 }
 
 // DecodeKinesisData decodes base64 Data from JSON API payloads.

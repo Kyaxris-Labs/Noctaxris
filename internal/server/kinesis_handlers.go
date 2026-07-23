@@ -45,6 +45,12 @@ func (s *Server) handleKinesis(
 		s.kinesisGetShardIterator(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionKinesisGetRecords:
 		s.kinesisGetRecords(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisPutResourcePolicy:
+		s.kinesisPutResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisGetResourcePolicy:
+		s.kinesisGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisDeleteResourcePolicy:
+		s.kinesisDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeKinesisError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Kinesis action is not implemented.", readOnly, eventID, verified)
@@ -72,6 +78,12 @@ func kinesisAction(action string) string {
 		return catalog.ActionKinesisGetShardIterator
 	case "GetRecords":
 		return catalog.ActionKinesisGetRecords
+	case "PutResourcePolicy":
+		return catalog.ActionKinesisPutResourcePolicy
+	case "GetResourcePolicy":
+		return catalog.ActionKinesisGetResourcePolicy
+	case "DeleteResourcePolicy":
+		return catalog.ActionKinesisDeleteResourcePolicy
 	default:
 		return action
 	}
@@ -108,6 +120,11 @@ func (s *Server) kinesisCreateStream(
 	if errors.Is(err, store.ErrKinesisStreamExists) {
 		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
 			"Stream already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrKinesisInvalidShard) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"ShardCount must be between 1 and 4.", readOnly, eventID, verified)
 		return
 	}
 	if err != nil {
@@ -390,6 +407,122 @@ func (s *Server) kinesisGetRecords(
 	}
 	s.writeKinesisOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "GetRecords", readOnly)
+}
+
+func (s *Server) kinesisPutResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	resourceARN, _ := params["ResourceArn"].(string)
+	if strings.TrimSpace(resourceARN) == "" {
+		resourceARN, _ = params["StreamName"].(string)
+	}
+	policy, _ := params["Policy"].(string)
+	if strings.TrimSpace(resourceARN) == "" || strings.TrimSpace(policy) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"ResourceArn and Policy are required.", readOnly, eventID, verified)
+		return
+	}
+	arn := resourceARN
+	if !strings.Contains(resourceARN, ":stream/") {
+		arn = store.KinesisStreamARN(s.kinesisRegion(verified), verified.AccountID, resourceARN)
+	}
+	if !s.authorize(verified, catalog.ActionKinesisPutResourcePolicy, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:PutResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.PutKinesisResourcePolicy(verified.AccountID, resourceARN, policy); err != nil {
+		if errors.Is(err, store.ErrKinesisStreamNotFound) {
+			s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"Stream not found.", readOnly, eventID, verified)
+			return
+		}
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "PutResourcePolicy", readOnly)
+}
+
+func (s *Server) kinesisGetResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	resourceARN, _ := params["ResourceArn"].(string)
+	if strings.TrimSpace(resourceARN) == "" {
+		resourceARN, _ = params["StreamName"].(string)
+	}
+	if strings.TrimSpace(resourceARN) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"ResourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := resourceARN
+	if !strings.Contains(resourceARN, ":stream/") {
+		arn = store.KinesisStreamARN(s.kinesisRegion(verified), verified.AccountID, resourceARN)
+	}
+	if !s.authorize(verified, catalog.ActionKinesisGetResourcePolicy, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:GetResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	policy, err := s.store.GetKinesisResourcePolicy(verified.AccountID, resourceARN)
+	if errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Stream not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrNoSuchResourcePolicy) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Resource policy not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get resource policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"Policy": policy})
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "GetResourcePolicy", readOnly)
+}
+
+func (s *Server) kinesisDeleteResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	resourceARN, _ := params["ResourceArn"].(string)
+	if strings.TrimSpace(resourceARN) == "" {
+		resourceARN, _ = params["StreamName"].(string)
+	}
+	if strings.TrimSpace(resourceARN) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"ResourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	arn := resourceARN
+	if !strings.Contains(resourceARN, ":stream/") {
+		arn = store.KinesisStreamARN(s.kinesisRegion(verified), verified.AccountID, resourceARN)
+	}
+	if !s.authorize(verified, catalog.ActionKinesisDeleteResourcePolicy, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:DeleteResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteKinesisResourcePolicy(verified.AccountID, resourceARN); err != nil {
+		if errors.Is(err, store.ErrKinesisStreamNotFound) {
+			s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+				"Stream not found.", readOnly, eventID, verified)
+			return
+		}
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete resource policy.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "DeleteResourcePolicy", readOnly)
 }
 
 func (s *Server) writeKinesisOK(w http.ResponseWriter, requestID string, payload []byte) {

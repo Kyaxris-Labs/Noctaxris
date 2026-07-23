@@ -225,7 +225,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		// AWS STS federation APIs authenticate via SAML/OIDC token, not SigV4.
 		verified = &authn.Verified{Region: federationRegion(r)}
 	} else if isUnauthenticatedCognitoAction(action) {
-		// Cognito InitiateAuth / RevokeToken are public IdP APIs; AWS CLI omits Authorization.
+		// Cognito public IdP APIs (InitiateAuth, RevokeToken, MFA associate/verify/challenge); AWS CLI omits Authorization.
 		verified = &authn.Verified{Region: federationRegion(r), Service: "cognito-idp"}
 	} else {
 		var err error
@@ -674,6 +674,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSecretsDeleteSecret, "DeleteSecret",
 		catalog.ActionSecretsRestoreSecret, "RestoreSecret",
 		catalog.ActionSecretsRotateSecret, "RotateSecret",
+		catalog.ActionSecretsUpdateSecretVersionStage, "UpdateSecretVersionStage",
 		catalog.ActionSecretsDescribeSecret, "DescribeSecret",
 		catalog.ActionSecretsListSecrets, "ListSecrets",
 		catalog.ActionSecretsPutResourcePolicy,
@@ -783,7 +784,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLogsDescribeSubscriptionFilters, "DescribeSubscriptionFilters",
 		catalog.ActionLogsPutMetricFilter, "PutMetricFilter",
 		catalog.ActionLogsDeleteMetricFilter, "DeleteMetricFilter",
-		catalog.ActionLogsDescribeMetricFilters, "DescribeMetricFilters":
+		catalog.ActionLogsDescribeMetricFilters, "DescribeMetricFilters",
+		catalog.ActionLogsPutResourcePolicy,
+		catalog.ActionLogsGetResourcePolicy,
+		catalog.ActionLogsDeleteResourcePolicy,
+		catalog.ActionLogsDescribeResourcePolicies, "DescribeResourcePolicies":
 		s.handleLogs(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionTaggingTagResources, "TagResources",
 		catalog.ActionTaggingUntagResources, "UntagResources",
@@ -796,7 +801,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKinesisPutRecord, "PutRecord",
 		catalog.ActionKinesisPutRecords, "PutRecords",
 		catalog.ActionKinesisGetShardIterator, "GetShardIterator",
-		catalog.ActionKinesisGetRecords, "GetRecords":
+		catalog.ActionKinesisGetRecords, "GetRecords",
+		catalog.ActionKinesisPutResourcePolicy,
+		catalog.ActionKinesisGetResourcePolicy,
+		catalog.ActionKinesisDeleteResourcePolicy:
 		s.handleKinesis(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionAppConfigCreateApplication, "CreateApplication",
 		catalog.ActionAppConfigCreateEnvironment, "CreateEnvironment",
@@ -812,7 +820,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSFNListStateMachines, "ListStateMachines",
 		catalog.ActionSFNStartExecution, "StartExecution",
 		catalog.ActionSFNDescribeExecution, "DescribeExecution",
-		catalog.ActionSFNGetExecutionHistory, "GetExecutionHistory":
+		catalog.ActionSFNGetExecutionHistory, "GetExecutionHistory",
+		catalog.ActionSFNPutResourcePolicy,
+		catalog.ActionSFNGetResourcePolicy,
+		catalog.ActionSFNDeleteResourcePolicy:
 		s.handleSFN(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCodeBuildCreateProject, "CreateProject",
 		catalog.ActionCodeBuildStartBuild, "StartBuild",
@@ -969,7 +980,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCognitoConfirmSignUp, "ConfirmSignUp",
 		catalog.ActionCognitoInitiateAuth, "InitiateAuth",
 		catalog.ActionCognitoAdminInitiateAuth, "AdminInitiateAuth",
-		catalog.ActionCognitoRevokeToken, "RevokeToken":
+		catalog.ActionCognitoRevokeToken, "RevokeToken",
+		catalog.ActionCognitoAssociateSoftwareToken, "AssociateSoftwareToken",
+		catalog.ActionCognitoVerifySoftwareToken, "VerifySoftwareToken",
+		catalog.ActionCognitoRespondToAuthChallenge, "RespondToAuthChallenge":
 		s.handleCognito(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudControlCreateResource,
 		catalog.ActionCloudControlGetResource,
@@ -1914,6 +1928,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionSecretsRestoreSecret
 	case "RotateSecret":
 		return catalog.ActionSecretsRotateSecret
+	case "UpdateSecretVersionStage":
+		return catalog.ActionSecretsUpdateSecretVersionStage
 	case "DescribeSecret":
 		return catalog.ActionSecretsDescribeSecret
 	case "ListSecrets":
@@ -2120,7 +2136,10 @@ func isUnauthenticatedSTSAction(action string) bool {
 func isUnauthenticatedCognitoAction(action string) bool {
 	switch action {
 	case catalog.ActionCognitoInitiateAuth, "InitiateAuth",
-		catalog.ActionCognitoRevokeToken, "RevokeToken":
+		catalog.ActionCognitoRevokeToken, "RevokeToken",
+		catalog.ActionCognitoAssociateSoftwareToken, "AssociateSoftwareToken",
+		catalog.ActionCognitoVerifySoftwareToken, "VerifySoftwareToken",
+		catalog.ActionCognitoRespondToAuthChallenge, "RespondToAuthChallenge":
 		return true
 	default:
 		return false

@@ -12,25 +12,32 @@ func EmptyOKJSON() ([]byte, error) {
 	return []byte(`{}`), nil
 }
 
-// DescribeStreamJSON builds a DescribeStream response.
+// DescribeStreamJSON builds a DescribeStream response with lab shard list (1..4).
 func DescribeStreamJSON(st store.KinesisStream) ([]byte, error) {
+	shardCount := st.ShardCount
+	if shardCount <= 0 {
+		shardCount = 1
+	}
+	shards := make([]map[string]any, 0, shardCount)
+	for i, shardID := range store.LabKinesisShardIDs(shardCount) {
+		start, end := store.LabKinesisHashKeyRange(i, shardCount)
+		shards = append(shards, map[string]any{
+			"ShardId": shardID,
+			"HashKeyRange": map[string]string{
+				"StartingHashKey": start,
+				"EndingHashKey":   end,
+			},
+			"SequenceNumberRange": map[string]string{
+				"StartingSequenceNumber": "0",
+			},
+		})
+	}
 	return json.Marshal(map[string]any{
 		"StreamDescription": map[string]any{
 			"StreamName":   st.StreamName,
 			"StreamARN":    st.StreamARN,
 			"StreamStatus": st.StreamStatus,
-			"Shards": []map[string]any{
-				{
-					"ShardId": store.LabKinesisShardID,
-					"HashKeyRange": map[string]string{
-						"StartingHashKey": "0",
-						"EndingHashKey":   "340282366920938463463374607431768211455",
-					},
-					"SequenceNumberRange": map[string]string{
-						"StartingSequenceNumber": "0",
-					},
-				},
-			},
+			"Shards":       shards,
 			"RetentionPeriodHours": 24,
 			"EnhancedMonitoring":   []any{},
 			"EncryptionType":       "NONE",

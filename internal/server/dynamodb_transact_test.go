@@ -132,7 +132,7 @@ func TestDynamoDBTransactWriteConditionCheckCancels(t *testing.T) {
 	}
 }
 
-func TestDynamoDBTransactWriteUpdateFailsClosed(t *testing.T) {
+func TestDynamoDBTransactWriteUpdateWithCondition(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -150,21 +150,62 @@ func TestDynamoDBTransactWriteUpdateFailsClosed(t *testing.T) {
 		t.Fatalf("CreateTable status=%d body=%q", create.Code, create.Body.String())
 	}
 
+	put := mustDynamoJSON(t, handler, "PutItem", map[string]any{
+		"TableName": "txn-update",
+		"Item": map[string]any{
+			"pk":      map[string]any{"S": "acct"},
+			"balance": map[string]any{"N": "10"},
+		},
+	}, now)
+	if put.Code != http.StatusOK {
+		t.Fatalf("PutItem status=%d body=%q", put.Code, put.Body.String())
+	}
+
 	write := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
 		"TransactItems": []any{
 			map[string]any{
 				"Update": map[string]any{
-					"TableName":        "txn-update",
-					"Key":              map[string]any{"pk": map[string]any{"S": "a"}},
-					"UpdateExpression": "SET v = :v",
+					"TableName":           "txn-update",
+					"Key":                 map[string]any{"pk": map[string]any{"S": "acct"}},
+					"UpdateExpression":    "SET balance = :n",
+					"ConditionExpression": "balance = :old",
 					"ExpressionAttributeValues": map[string]any{
-						":v": map[string]any{"S": "x"},
+						":n":   map[string]any{"N": "20"},
+						":old": map[string]any{"N": "10"},
 					},
 				},
 			},
 		},
 	}, now)
-	if write.Code != http.StatusBadRequest || !strings.Contains(write.Body.String(), "ValidationException") {
-		t.Fatalf("want ValidationException for Update, status=%d body=%q", write.Code, write.Body.String())
+	if write.Code != http.StatusOK {
+		t.Fatalf("TransactWriteItems Update status=%d body=%q", write.Code, write.Body.String())
+	}
+
+	get := mustDynamoJSON(t, handler, "GetItem", map[string]any{
+		"TableName": "txn-update",
+		"Key":       map[string]any{"pk": map[string]any{"S": "acct"}},
+	}, now)
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"20"`) {
+		t.Fatalf("want balance 20, status=%d body=%q", get.Code, get.Body.String())
+	}
+
+	cancel := mustDynamoJSON(t, handler, "TransactWriteItems", map[string]any{
+		"TransactItems": []any{
+			map[string]any{
+				"Update": map[string]any{
+					"TableName":           "txn-update",
+					"Key":                 map[string]any{"pk": map[string]any{"S": "acct"}},
+					"UpdateExpression":    "SET balance = :n",
+					"ConditionExpression": "balance = :old",
+					"ExpressionAttributeValues": map[string]any{
+						":n":   map[string]any{"N": "30"},
+						":old": map[string]any{"N": "10"},
+					},
+				},
+			},
+		},
+	}, now)
+	if cancel.Code != http.StatusBadRequest || !strings.Contains(cancel.Body.String(), "TransactionCanceledException") {
+		t.Fatalf("want TransactionCanceledException, status=%d body=%q", cancel.Code, cancel.Body.String())
 	}
 }

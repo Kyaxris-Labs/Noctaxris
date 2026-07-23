@@ -10,15 +10,31 @@ Lab log groups and streams with Put/GetLogEvents, FilterLogEvents, DescribeLogGr
 |------|---------|
 | Groups | `CreateLogGroup`, `DeleteLogGroup`, `DescribeLogGroups` (optional `logGroupNamePrefix`) |
 | Streams | `CreateLogStream`, `DeleteLogStream`, `DescribeLogStreams` (optional `logStreamNamePrefix`) |
-| Events | `PutLogEvents` (sequence token after first put), `GetLogEvents` (`startFromHead`, optional time bounds), and `FilterLogEvents` (optional `logStreamNames`, `startTime`/`endTime`, substring `filterPattern`, offset `nextToken`; lab page cap 1000) |
-| Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Lab filter pattern is substring match. Fan-out on PutLogEvents (best-effort). Delivery uses the destination ARN owner account. Destination resource policy must Allow `logs.amazonaws.com` (with log-group `aws:SourceArn`). Lambda destinations use the AWS `awslogs.data` gzip+base64 envelope; SQS destinations are lab-only raw `DATA_MESSAGE` JSON. Lambda ignores `roleArn` (resource-policy path). For SQS, optional `roleArn` requires PassRole + `logs.amazonaws.com` trust and AND with destination policy at deliver |
-| Metric filters | `PutMetricFilter` / `DeleteMetricFilter` / `DescribeMetricFilters`. `DescribeLogGroups` reports honest `metricFilterCount`. Matching PutLogEvents emit SQLite datapoints readable via store `GetMetricData` (no full CloudWatch Metrics API) |
+| Events | `PutLogEvents` (sequence token after first put), `GetLogEvents` (`startFromHead`, optional time bounds), and `FilterLogEvents` (optional `logStreamNames`, `startTime`/`endTime`, lab `filterPattern` subset below, offset `nextToken`; lab page cap 1000) |
+| Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Same lab `filterPattern` subset as `FilterLogEvents` (unsupported patterns rejected at put). Fan-out on PutLogEvents (best-effort). Delivery uses the destination ARN owner account. Destination resource policy must Allow `logs.amazonaws.com` (with log-group `aws:SourceArn`). Lambda destinations use the AWS `awslogs.data` gzip+base64 envelope; SQS destinations are lab-only raw `DATA_MESSAGE` JSON. Lambda ignores `roleArn` (resource-policy path). For SQS, optional `roleArn` requires PassRole + `logs.amazonaws.com` trust and AND with destination policy at deliver |
+| Metric filters | `PutMetricFilter` / `DeleteMetricFilter` / `DescribeMetricFilters`. Same lab `filterPattern` subset. `DescribeLogGroups` reports honest `metricFilterCount`. Matching PutLogEvents emit SQLite datapoints readable via store `GetMetricData` (no full CloudWatch Metrics API) |
+| Resource policy | Account-scoped `PutResourcePolicy` / `GetResourcePolicy` / `DeleteResourcePolicy` / `DescribeResourcePolicies` (AWS Logs shape; soft cap 10). EventBridge RoleArn-less Logs targets require Allow for `events.amazonaws.com` on `logs:PutLogEvents` / `logs:CreateLogStream` (empty policy skips delivery) |
+
+### Lab filter pattern subset
+
+Shared by `FilterLogEvents`, subscription filters, and metric filters. Case-sensitive. Matching is substring-within-message (not AWS word/token boundaries).
+
+| Syntax | Behavior |
+|--------|----------|
+| (empty) | Match all events |
+| `term` | Include: message contains term |
+| `a b` | AND: message contains each term |
+| `"exact phrase"` | Include exact substring |
+| `-term` / `-"phrase"` | Exclude: fail if message contains term/phrase |
+| `?` / `*` inside an unquoted term | Single-character / any-run wildcards within that term |
+
+Unsupported patterns return `ValidationException` (no silent fall-through): JSON `{$.field=…}`, space-delimited `[…]`, `%regex%`, `&&` / `||`, and Insights `|` query syntax. This is not CloudWatch Logs Insights (`StartQuery` / `GetQueryResults`).
 
 Log group ARN shape: `arn:aws:logs:REGION:ACCOUNT:log-group:NAME`. Stream ARN adds `:log-stream:STREAM`.
 
 ### Authz notes
 
-Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups). `FilterLogEvents` authorizes on the log group ARN. Org SCP/RCP filters apply. No log-group resource policy path. PutSubscriptionFilter with non-empty `roleArn` (SQS lab path) requires `iam:PassRole` plus `logs.amazonaws.com` trust.
+Identity `EvaluateFull` on `logs:*` actions against the log group or stream ARN (or `*` for DescribeLogGroups / resource-policy APIs). `FilterLogEvents` authorizes on the log group ARN. Org SCP/RCP filters apply. Account resource policies gate EventBridge service-principal delivery; empty policy denies. PutSubscriptionFilter with non-empty `roleArn` (SQS lab path) requires `iam:PassRole` plus `logs.amazonaws.com` trust.
 
 ## How to verify / CLI smoke
 
@@ -49,7 +65,7 @@ aws logs get-log-events \
 
 aws logs filter-log-events \
   --log-group-name "$GROUP" \
-  --filter-pattern hello \
+  --filter-pattern "hello -bye" \
   --endpoint-url "$EP"
 
 aws logs describe-log-groups \
@@ -70,9 +86,8 @@ aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 
 ## Not yet / deferred
 
-- Insights queries, export tasks
-- Full CloudWatch Logs filter syntax (`filterPattern` is substring match, same as subscription/metric filters)
+- Insights queries (`StartQuery` / `GetQueryResults` / query language), export tasks
+- Full CloudWatch Logs filter syntax beyond the lab subset (JSON object filters, space-delimited field patterns, `%regex%`, AWS optional `?term` OR semantics)
 - Full CloudWatch Metrics / Alarms surface (datapoints are store-lite only)
-- Log-group resource policies
 - Kinesis / Firehose / OpenSearch subscription destinations
 - Full pagination token parity (`FilterLogEvents` uses a lab offset token)

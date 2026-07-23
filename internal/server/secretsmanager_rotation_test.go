@@ -50,8 +50,8 @@ func TestRotateSecretLambdaPassRoleDeny(t *testing.T) {
 	}
 
 	rot := mustSecretsJSON(t, handler, "RotateSecret", map[string]any{
-		"SecretId":           "rot-deny-secret",
-		"RotationLambdaARN":  fnARN,
+		"SecretId":          "rot-deny-secret",
+		"RotationLambdaARN": fnARN,
 	}, now)
 	if rot.Code != http.StatusForbidden {
 		t.Fatalf("RotateSecret status=%d want 403 body=%q", rot.Code, rot.Body.String())
@@ -73,12 +73,19 @@ func TestRotateSecretLambdaPassRoleAllowFinish(t *testing.T) {
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
-	var seenEvent string
+	var seenSteps []string
 	srv.SetLambdaInvokeHookForTest(func(_ context.Context, _, name string, _ store.LambdaFunction, _, eventJSON string) ([]byte, error) {
 		if name != "rot-ok-fn" {
 			t.Errorf("unexpected function %q", name)
 		}
-		seenEvent = eventJSON
+		var evt map[string]string
+		if err := json.Unmarshal([]byte(eventJSON), &evt); err != nil {
+			t.Errorf("event json: %v", err)
+		}
+		seenSteps = append(seenSteps, evt["Step"])
+		if evt["ClientRequestToken"] != "client-tok-1" {
+			t.Errorf("token=%q", evt["ClientRequestToken"])
+		}
 		return []byte(`{"ok":true}`), nil
 	})
 
@@ -109,15 +116,21 @@ func TestRotateSecretLambdaPassRoleAllowFinish(t *testing.T) {
 	}
 
 	rot := mustSecretsJSON(t, handler, "RotateSecret", map[string]any{
-		"SecretId":          "rot-ok-secret",
-		"RotationLambdaARN": fnARN,
+		"SecretId":           "rot-ok-secret",
+		"RotationLambdaARN":  fnARN,
 		"ClientRequestToken": "client-tok-1",
 	}, now)
 	if rot.Code != http.StatusOK {
 		t.Fatalf("RotateSecret status=%d body=%q", rot.Code, rot.Body.String())
 	}
-	if seenEvent == "" || !strings.Contains(seenEvent, `"Step":"finishSecret"`) || !strings.Contains(seenEvent, "client-tok-1") {
-		t.Fatalf("event=%q", seenEvent)
+	wantSteps := []string{
+		store.SecretRotationStepCreateSecret,
+		store.SecretRotationStepSetSecret,
+		store.SecretRotationStepTestSecret,
+		store.SecretRotationStepFinishSecret,
+	}
+	if strings.Join(seenSteps, ",") != strings.Join(wantSteps, ",") {
+		t.Fatalf("steps=%v want %v", seenSteps, wantSteps)
 	}
 	job, err := st.LatestAsyncInvocation(testAccountID, "rot-ok-fn")
 	if err != nil {
@@ -139,6 +152,9 @@ func TestRotateSecretLambdaPassRoleAllowFinish(t *testing.T) {
 	}
 	if !strings.Contains(desc.Body.String(), fnARN) {
 		t.Fatalf("DescribeSecret missing RotationLambdaARN: %s", desc.Body.String())
+	}
+	if !strings.Contains(desc.Body.String(), "AWSCURRENT") || !strings.Contains(desc.Body.String(), "AWSPREVIOUS") {
+		t.Fatalf("DescribeSecret missing version stages: %s", desc.Body.String())
 	}
 }
 

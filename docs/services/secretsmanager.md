@@ -8,14 +8,15 @@ Lab-complete Secrets Manager core: create, read, update, delete, describe, and l
 
 | Area | Actions |
 |------|---------|
-| Secrets | `CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`, `RestoreSecret`, `RotateSecret`, `DescribeSecret`, `ListSecrets` |
+| Secrets | `CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`, `RestoreSecret`, `RotateSecret`, `UpdateSecretVersionStage`, `DescribeSecret`, `ListSecrets` |
 | Tags | `ListTagsForResource`, `TagResource`, `UntagResource` |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
 | Payload | `SecretString` and/or `SecretBinary` (base64 on wire). `CreateSecret` may omit both (metadata-only; use `PutSecretValue` for the first version, matching Terraform `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version`) |
 | KMS | Optional `KmsKeyId` on create. Defaults to lab `alias/aws/secretsmanager` (per-account CMK seeded on first use) |
 | Delete / recovery | `DeleteSecret` schedules deletion with `RecoveryWindowInDays` (7–30, default 30). `ForceDeleteWithoutRecovery` deletes immediately. `RestoreSecret` clears a scheduled deletion. On-read sweeper hard-deletes after `DeletionDate` |
-| Rotate (default) | Without a rotator, `RotateSecret` replaces the secret string with a new random value |
-| Rotate (Lambda) | Optional `RotationLambdaARN` on `RotateSecret` persists the rotator. Caller needs `secretsmanager:RotateSecret` plus `iam:PassRole` on the function role (or optional `RotationRoleARN`) with trust `secretsmanager.amazonaws.com`. Lab enqueues async Invoke with `Step=finishSecret`, then on invoke success applies server-side finishSecret (random `PutSecretValue`). Invoke failure leaves the value unchanged. `DescribeSecret` returns `RotationLambdaARN` when set |
+| Versions / stages | Multi-version rows with `AWSCURRENT`, `AWSPENDING`, and `AWSPREVIOUS`. `DescribeSecret` returns `VersionIdsToStages`. `GetSecretValue` accepts optional `VersionStage` / `VersionId`. `PutSecretValue` accepts optional `VersionStages` + `ClientRequestToken` (rotation `createSecret` path). `UpdateSecretVersionStage` moves or removes a label; moving `AWSCURRENT` clears `AWSPENDING` on the destination and labels the former current `AWSPREVIOUS` |
+| Rotate (default) | Without a rotator, `RotateSecret` writes a new `AWSCURRENT` version with a random secret string (former current becomes `AWSPREVIOUS`) |
+| Rotate (Lambda) | Optional `RotationLambdaARN` on `RotateSecret` persists the rotator. Caller needs `secretsmanager:RotateSecret` plus `iam:PassRole` on the function role (or optional `RotationRoleARN`) with trust `secretsmanager.amazonaws.com`. Lab runs four async Invokes: `createSecret` → `setSecret` → `testSecret` → `finishSecret`. Before the first invoke the lab creates an `AWSPENDING` version (`ClientRequestToken` as `VersionId`, random string). After all four succeed, `finishSecret` promotion moves `AWSCURRENT` onto that version. Mid-rotation failure leaves `AWSPENDING` and blocks a second `RotateSecret` until the label is cleared (`UpdateSecretVersionStage` or successful finish). `DescribeSecret` returns `RotationLambdaARN` when set |
 
 Secret metadata and sealed values live in SQLite. ARNs include a random six-character hex suffix (AWS-shaped).
 
@@ -27,7 +28,7 @@ Plaintext paths also call `EvaluateKMS` on the secret CMK: `kms:Encrypt` for `Cr
 
 Pass a full secret ARN as `SecretId` for cross-account `GetSecretValue`. Cross-account reads also need the trusting account key policy (and caller identity) to Allow `kms:Decrypt`.
 
-Lambda-backed rotate: PassRole uses service principal `secretsmanager.amazonaws.com` (not `lambda.amazonaws.com`). The function execution role typically trusts both so CreateFunction and RotateSecret configure succeed.
+Lambda-backed rotate: PassRole uses service principal `secretsmanager.amazonaws.com` (not `lambda.amazonaws.com`). The function execution role typically trusts both so CreateFunction and RotateSecret configure succeed. Lab `setSecret` / `testSecret` may no-op when the rotator returns success without updating an external system.
 
 ## How to verify / CLI smoke
 
@@ -100,6 +101,16 @@ aws secretsmanager rotate-secret \
   --secret-id "$SECRET" \
   --rotation-lambda-arn "$ROTATOR_ARN" \
   --endpoint-url "$EP"
+
+aws secretsmanager describe-secret \
+  --secret-id "$SECRET" \
+  --endpoint-url "$EP"
+# VersionIdsToStages: new VersionId has AWSCURRENT; prior has AWSPREVIOUS
+
+aws secretsmanager get-secret-value \
+  --secret-id "$SECRET" \
+  --version-stage AWSCURRENT \
+  --endpoint-url "$EP"
 ```
 
 Two-account cross-account GetSecretValue (member account B owns the secret, member account A user reads via dual eval):
@@ -114,7 +125,6 @@ aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --endpoint-url "$E
 
 ## Not yet / deferred
 
-- Full AWS four-step rotation staging (`createSecret` / `setSecret` / `testSecret` / `finishSecret` with AWSPENDING/AWSCURRENT version labels)
 - Automatic rotation schedules (`RotationRules` / cron) and `RotateImmediately` false deferral
 - Random password generation APIs
 - Replication, filtering on `ListSecrets`, full pagination parity

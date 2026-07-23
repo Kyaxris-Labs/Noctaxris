@@ -4,11 +4,107 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
+
+func TestESMPollsAllKinesisShards(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	if err := st.EnsureLambdaESMSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureKinesisSchema(); err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "lambda-kinesis-ms", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["kinesis:GetRecords","kinesis:GetShardIterator","kinesis:DescribeStream"],"Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "esm-kinesis", allowDoc); err != nil {
+		t.Fatal(err)
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "kinesis-esm-ms",
+		Runtime:      store.LambdaRuntimePython312,
+		RoleARN:      roleARN,
+		Handler:      "app.handler",
+		Zip:          zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := st.CreateKinesisStream(account, "us-east-1", "esm-ms-stream", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key0, key1 string
+	for i := 0; i < 1000; i++ {
+		pk := fmt.Sprintf("ms-pk-%d", i)
+		idx := store.HashPartitionKeyToShard(pk, 2)
+		if idx == 0 && key0 == "" {
+			key0 = pk
+		}
+		if idx == 1 && key1 == "" {
+			key1 = pk
+		}
+		if key0 != "" && key1 != "" {
+			break
+		}
+	}
+	if key0 == "" || key1 == "" {
+		t.Fatal("could not find keys for both shards")
+	}
+	if _, _, err := st.PutKinesisRecord(account, stream.StreamName, key0, []byte("from-0")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutKinesisRecord(account, stream.StreamName, key1, []byte("from-1")); err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
+		AccountID:      account,
+		FunctionName:   fn.FunctionName,
+		EventSourceARN: stream.StreamARN,
+		BatchSize:      10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(_, _, _, eventJSON string) (string, error) {
+		got = eventJSON
+		return "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, base64.StdEncoding.EncodeToString([]byte("from-0"))) {
+		t.Fatalf("missing shard0 payload: %s", got)
+	}
+	if !strings.Contains(got, base64.StdEncoding.EncodeToString([]byte("from-1"))) {
+		t.Fatalf("missing shard1 payload: %s", got)
+	}
+	if !strings.Contains(got, store.LabKinesisShardID(0)+":") || !strings.Contains(got, store.LabKinesisShardID(1)+":") {
+		t.Fatalf("want eventIDs from both shards: %s", got)
+	}
+	invoked := false
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
+		invoked = true
+		return "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if invoked {
+		t.Fatal("expected no redelivery after multi-shard cursor advance")
+	}
+}
 
 func TestKinesisESMPollInvokesLambda(t *testing.T) {
 	st := openLambdaStore(t)

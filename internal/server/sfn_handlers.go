@@ -46,6 +46,12 @@ func (s *Server) handleSFN(
 		s.sfnDescribeExecution(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSFNGetExecutionHistory:
 		s.sfnGetExecutionHistory(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNPutResourcePolicy:
+		s.sfnPutResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNGetResourcePolicy:
+		s.sfnGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNDeleteResourcePolicy:
+		s.sfnDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeSFNError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Step Functions action is not implemented.", readOnly, eventID, verified)
@@ -71,6 +77,12 @@ func sfnAction(action string) string {
 		return catalog.ActionSFNDescribeExecution
 	case "GetExecutionHistory":
 		return catalog.ActionSFNGetExecutionHistory
+	case "PutResourcePolicy":
+		return catalog.ActionSFNPutResourcePolicy
+	case "GetResourcePolicy":
+		return catalog.ActionSFNGetResourcePolicy
+	case "DeleteResourcePolicy":
+		return catalog.ActionSFNDeleteResourcePolicy
 	default:
 		return action
 	}
@@ -370,6 +382,131 @@ func (s *Server) sfnGetExecutionHistory(
 	payload, _ := sfnsvc.GetExecutionHistoryJSON(events)
 	s.writeSFNOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "GetExecutionHistory", readOnly)
+}
+
+func (s *Server) sfnPutResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	smARN, _ := params["stateMachineArn"].(string)
+	if strings.TrimSpace(smARN) == "" {
+		smARN, _ = params["ResourceArn"].(string)
+	}
+	policy, _ := params["policy"].(string)
+	if strings.TrimSpace(policy) == "" {
+		policy, _ = params["Policy"].(string)
+	}
+	if strings.TrimSpace(smARN) == "" || strings.TrimSpace(policy) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"stateMachineArn and policy are required.", readOnly, eventID, verified)
+		return
+	}
+	sm, err := s.store.GetSFNStateMachine(verified.AccountID, smARN)
+	if errors.Is(err, store.ErrSFNStateMachineNotFound) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "StateMachineDoesNotExist",
+			"State machine does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load state machine.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNPutResourcePolicy, sm.StateMachineARN) {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:PutResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.PutSFNResourcePolicy(verified.AccountID, sm.StateMachineARN, policy); err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeSFNOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "PutResourcePolicy", readOnly)
+}
+
+func (s *Server) sfnGetResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	smARN, _ := params["stateMachineArn"].(string)
+	if strings.TrimSpace(smARN) == "" {
+		smARN, _ = params["ResourceArn"].(string)
+	}
+	if strings.TrimSpace(smARN) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"stateMachineArn is required.", readOnly, eventID, verified)
+		return
+	}
+	sm, err := s.store.GetSFNStateMachine(verified.AccountID, smARN)
+	if errors.Is(err, store.ErrSFNStateMachineNotFound) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "StateMachineDoesNotExist",
+			"State machine does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load state machine.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNGetResourcePolicy, sm.StateMachineARN) {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:GetResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	policy, err := s.store.GetSFNResourcePolicy(verified.AccountID, sm.StateMachineARN)
+	if errors.Is(err, store.ErrNoSuchResourcePolicy) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Resource policy not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get resource policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"policy": policy})
+	s.writeSFNOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "GetResourcePolicy", readOnly)
+}
+
+func (s *Server) sfnDeleteResourcePolicy(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	smARN, _ := params["stateMachineArn"].(string)
+	if strings.TrimSpace(smARN) == "" {
+		smARN, _ = params["ResourceArn"].(string)
+	}
+	if strings.TrimSpace(smARN) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"stateMachineArn is required.", readOnly, eventID, verified)
+		return
+	}
+	sm, err := s.store.GetSFNStateMachine(verified.AccountID, smARN)
+	if errors.Is(err, store.ErrSFNStateMachineNotFound) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "StateMachineDoesNotExist",
+			"State machine does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load state machine.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNDeleteResourcePolicy, sm.StateMachineARN) {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:DeleteResourcePolicy.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.store.DeleteSFNResourcePolicy(verified.AccountID, sm.StateMachineARN); err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete resource policy.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSFNOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "DeleteResourcePolicy", readOnly)
 }
 
 func (s *Server) writeSFNOK(w http.ResponseWriter, requestID string, payload []byte) {

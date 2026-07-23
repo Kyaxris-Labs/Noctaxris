@@ -557,18 +557,187 @@ func TestPutEventsDeliversToLambdaWithResourcePolicy(t *testing.T) {
 	}
 }
 
-func TestPutTargetsRequiresRoleArnForKinesis(t *testing.T) {
+func TestPutTargetsAllowsOmitRoleArnForKinesis(t *testing.T) {
 	st := openEventsStore(t)
 	account := "000000000001"
 	if _, err := st.PutRule(account, "us-east-1", "default", "kinesis-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
 		t.Fatal(err)
 	}
-	err := st.PutTargets(account, "default", "kinesis-rule", []store.EventTargetInput{{
+	if err := st.PutTargets(account, "default", "kinesis-rule", []store.EventTargetInput{{
 		ID:  "1",
 		ARN: "arn:aws:kinesis:us-east-1:" + account + ":stream/lab",
+	}}); err != nil {
+		t.Fatalf("PutTargets without RoleArn should accept: %v", err)
+	}
+}
+
+func TestPutEventsLogsTargetWithoutRoleArnUsesResourcePolicy(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	if _, err := st.CreateLogGroup(account, "us-east-1", "/eb/policy"); err != nil {
+		t.Fatal(err)
+	}
+	logARN := store.LogGroupARN("us-east-1", account, "/eb/policy")
+	if _, err := st.PutRule(account, "us-east-1", "default", "logs-pol-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	ruleARN := store.EventRuleARN("us-east-1", account, "default", "logs-pol-rule")
+	if err := st.PutTargets(account, "default", "logs-pol-rule", []store.EventTargetInput{{
+		ID: "1", ARN: logARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without policy: PutEvents succeeds but no delivery.
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"no-policy"}`,
 	}})
-	if !errors.Is(err, store.ErrEventTargetRoleArnRequired) {
-		t.Fatalf("got %v want ErrEventTargetRoleArnRequired", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none without logs resource policy", matches)
+	}
+	events, err := st.GetLogEvents(account, "/eb/policy", store.LabEventBridgeLogStream, 0, 0, true, 10)
+	if err == nil && len(events) != 0 {
+		t.Fatalf("expected no log events without policy, got %d", len(events))
+	}
+
+	pol := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":["logs:PutLogEvents","logs:CreateLogStream"],"Resource":"` + logARN + `","Condition":{"ArnEquals":{"aws:SourceArn":"` + ruleARN + `"}}}]}`
+	if _, err := st.PutLogsResourcePolicy(account, "EventBridgeToLogs", pol); err != nil {
+		t.Fatal(err)
+	}
+	result, err = st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"logs-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err = st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v want 1 with logs resource policy", matches)
+	}
+	events, err = st.GetLogEvents(account, "/eb/policy", store.LabEventBridgeLogStream, 0, 0, true, 10)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("log events=%d err=%v", len(events), err)
+	}
+	if !strings.Contains(events[0].Message, "logs-policy") {
+		t.Fatalf("message=%q want payload", events[0].Message)
+	}
+}
+
+func TestPutEventsKinesisTargetWithoutRoleArnUsesResourcePolicy(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	stream, err := st.CreateKinesisStream(account, "us-east-1", "eb-pol-stream", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "kinesis-pol-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "kinesis-pol-rule", []store.EventTargetInput{{
+		ID: "1", ARN: stream.StreamARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"no-kinesis-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none without kinesis resource policy", matches)
+	}
+
+	pol := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"kinesis:PutRecord","Resource":"` + stream.StreamARN + `"}]}`
+	if err := st.PutKinesisResourcePolicy(account, stream.StreamName, pol); err != nil {
+		t.Fatal(err)
+	}
+	result, err = st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"kinesis-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err = st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v want 1 with kinesis resource policy", matches)
+	}
+	it, err := st.GetKinesisShardIterator(account, stream.StreamName, store.LabKinesisShardID(0), "TRIM_HORIZON", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, _, err := st.GetKinesisRecords(it, 10)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("kinesis recs=%d err=%v", len(recs), err)
+	}
+	if !strings.Contains(string(recs[0].Data), "kinesis-policy") {
+		t.Fatalf("data=%q want payload", recs[0].Data)
+	}
+}
+
+func TestPutEventsSFNTargetWithoutRoleArnUsesResourcePolicy(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	def := `{"StartAt":"Hello","States":{"Hello":{"Type":"Pass","Result":{"ok":true},"End":true}}}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "eb-pol-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "sfn-pol-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "sfn-pol-rule", []store.EventTargetInput{{
+		ID: "1", ARN: sm.StateMachineARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"no-sfn-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none without sfn resource policy", matches)
+	}
+
+	pol := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"events.amazonaws.com"},"Action":"states:StartExecution","Resource":"` + sm.StateMachineARN + `"}]}`
+	if err := st.PutSFNResourcePolicy(account, sm.StateMachineARN, pol); err != nil {
+		t.Fatal(err)
+	}
+	result, err = st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"sfn-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err = st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v want 1 with sfn resource policy", matches)
 	}
 }
 

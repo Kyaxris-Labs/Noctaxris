@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Core leftovers (Cognito MFA, Transact Update, multi-shard Kinesis, Logs filter subset, Secrets four-step, EventBridge resource-policy delivery)
+
+- Cognito TOTP MFA: `AssociateSoftwareToken` / `VerifySoftwareToken` / `RespondToAuthChallenge` (`SOFTWARE_TOKEN_MFA`); password `InitiateAuth` returns challenge session until TOTP succeeds
+- DynamoDB `TransactWriteItems` `Update` (SET/REMOVE via `ApplyUpdateExpression`) plus Put/Delete/Update/ConditionCheck `ConditionExpression` (lab subset; fail-closed on unknown operators)
+- Kinesis `CreateStream` `ShardCount` 1..4; partition-key hash routing; per-shard iterators/records; Lambda ESM polls all shards sequentially (no Enhanced Fan-Out)
+- CloudWatch Logs lab `filterPattern` subset for `FilterLogEvents` and subscription/metric filters (space-AND, quoted phrases, `?`/`*` globs, optional `-term` exclude); account Logs resource policies for EventBridge delivery
+- Secrets Manager multi-version stages (`AWSCURRENT` / `AWSPENDING` / `AWSPREVIOUS`), `UpdateSecretVersionStage`, and Lambda rotate `createSecret` → `setSecret` → `testSecret` → `finishSecret`
+- EventBridge `PutTargets` may omit `RoleArn` for Logs/Kinesis/SFN when the destination resource policy Allows `events.amazonaws.com` (+ SourceArn/SourceAccount); empty policy skips delivery (fail-closed). Lab SFN `PutResourcePolicy` for RoleArn-less StartExecution
+
 ### Cognito token lifecycle
 
 - Cognito `InitiateAuth` `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN` against hashed refresh tokens (lab rotation issues a new refresh token); `RevokeToken` public IdP; unsigned CLI/SDK shapes
@@ -17,16 +26,16 @@
 
 ### DynamoDB transactions, Kinesis Lambda ESM, Logs FilterLogEvents, Secrets Lambda rotate
 
-- DynamoDB `TransactWriteItems` (`Put` / `Delete` / `ConditionCheck` existence) and `TransactGetItems` (same-account; lab soft cap 25; duplicate keys cancel; SQLite all-or-nothing)
-- Lambda event source mapping for single-shard Kinesis stream ARNs; in-process poller with optional `FilterCriteria` on decoded `data` / `partitionKey`; function role needs `kinesis:GetRecords` / `GetShardIterator` / `DescribeStream`
-- CloudWatch Logs `FilterLogEvents` (optional stream names, time bounds, substring `filterPattern`, lab page cap)
-- Secrets Manager optional `RotationLambdaARN` on `RotateSecret`: PassRole for `secretsmanager.amazonaws.com`, async Invoke `finishSecret`, then server-side random `PutSecretValue` on invoke success (default random rotate unchanged)
+- DynamoDB `TransactWriteItems` (`Put` / `Delete` / `Update` / `ConditionCheck`) and `TransactGetItems` (same-account; lab soft cap 25; duplicate keys cancel; SQLite all-or-nothing)
+- Lambda event source mapping for Kinesis stream ARNs (all shards polled sequentially); in-process poller with optional `FilterCriteria` on decoded `data` / `partitionKey`; function role needs `kinesis:GetRecords` / `GetShardIterator` / `DescribeStream`
+- CloudWatch Logs `FilterLogEvents` (optional stream names, time bounds, lab `filterPattern` subset, lab page cap)
+- Secrets Manager optional `RotationLambdaARN` on `RotateSecret`: PassRole for `secretsmanager.amazonaws.com`, four-step async Invokes with `AWSPENDING` staging, then `finishSecret` promotion (default random rotate unchanged)
 
 ### Interservice depth (S3 notifications, EventBridge patterns, CFN policies)
 
 - S3 bucket notifications: Put/Get configuration plus emit on PutObject / DeleteObject / CompleteMultipartUpload to Lambda (async), SQS, EventBridge (`aws.s3`), and SNS Publish (HTTP subscribers remain allowlist/catcher-only); destination authz re-checked on emit
 - EventBridge content-based pattern operators: nested `detail`, `prefix` / `suffix`, `exists`, `anything-but`, `numeric`, `equals-ignore-case` (`wildcard` / `$or` / IP still rejected at PutRule)
-- EventBridge delivery without RoleArn for SQS/Lambda/SNS: destination resource policy must Allow `events.amazonaws.com` (or account root) with `aws:SourceArn` / `aws:SourceAccount`; RoleArn session path unchanged; `PutTargets` requires RoleArn for Logs/Kinesis/SFN
+- EventBridge delivery without RoleArn for SQS/Lambda/SNS/Logs/Kinesis/SFN: destination resource policy must Allow `events.amazonaws.com` (or account root) with `aws:SourceArn` / `aws:SourceAccount`; RoleArn session path unchanged
 - CloudFormation: `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::S3::BucketPolicy`, `AWS::Lambda::Permission`, and `AWS::S3::Bucket` `NotificationConfiguration`
 - CloudFormation catalog: `AWS::SNS::TopicPolicy`, `AWS::SNS::Subscription`, `AWS::Logs::LogGroup`, `AWS::KMS::Alias`, `AWS::IAM::User`, `AWS::IAM::Group`; SQS queue attribute props wired on create; `ScheduleExpression` on `AWS::Events::Rule` fail-closed
 - Lambda ESM `FilterCriteria`: Create/Update validate EventBridge-style patterns (max 5 Filters); SQS and DynamoDB Streams pollers apply filters before Invoke; SQS nested JSON `body` plus `messageId`; DynamoDB `eventName` / `Keys` / `NewImage`; operators `prefix` / `suffix` / `exists` / `anything-but` / `numeric` / `equals-ignore-case` (`$or` / `wildcard` / `cidr` rejected)

@@ -26,21 +26,23 @@ var (
 // Secret is a Secrets Manager secret metadata row. Value fields are populated
 // on create/get/put responses and omitted on describe/list.
 type Secret struct {
-	Name              string
-	ARN               string
-	SecretString      string
-	SecretBinary      []byte
-	Version           int
-	VersionID         string
-	KmsKeyID          string
-	Description       string
-	ResourcePolicy    string
-	CreatedDate       string
-	LastChangedDate   string
-	DeletedDate       string
-	DeletionDate      string
-	RotationLambdaARN string
-	RotationRoleARN   string
+	Name               string
+	ARN                string
+	SecretString       string
+	SecretBinary       []byte
+	Version            int
+	VersionID          string
+	VersionStages      []string
+	VersionIdsToStages map[string][]string
+	KmsKeyID           string
+	Description        string
+	ResourcePolicy     string
+	CreatedDate        string
+	LastChangedDate    string
+	DeletedDate        string
+	DeletionDate       string
+	RotationLambdaARN  string
+	RotationRoleARN    string
 }
 
 const secretsSchema = `
@@ -217,9 +219,9 @@ func (s *Store) resolveSecretName(accountID, nameOrARN string) (string, error) {
 func (s *Store) getSecretRow(accountID, name string) (secretRow, error) {
 	name = normalizeSecretLookup(name)
 	var (
-		row         secretRow
-		stringSeal  int
-		binarySeal  int
+		row          secretRow
+		stringSeal   int
+		binarySeal   int
 		stringSealed []byte
 		binaryPlain  []byte
 		binarySealed []byte
@@ -425,37 +427,34 @@ func (s *Store) CreateSecret(
 	}
 
 	row := secretRow{
-		Name:            name,
-		ARN:             arn,
-		ARNSuffix:       suffix,
-		Description:     description,
-		KMSKeyID:        kmsKeyID,
-		Version:         1,
-		CreatedDate:     now,
-		LastChangedDate: now,
-		StringSealed:    stringSealFlag == 1,
-		BinarySealed:    binarySealFlag == 1,
+		Name:               name,
+		ARN:                arn,
+		ARNSuffix:          suffix,
+		Description:        description,
+		KMSKeyID:           kmsKeyID,
+		Version:            1,
+		CreatedDate:        now,
+		LastChangedDate:    now,
+		StringSealed:       stringSealFlag == 1,
+		BinarySealed:       binarySealFlag == 1,
 		SecretStringSealed: stringSealed,
 		SecretBinarySealed: binarySealed,
 	}
-	return s.secretFromRow(row, true)
+	if err := s.insertSecretVersionRow(accountID, name, "1", 1, row, []string{SecretVersionStageCurrent}, now); err != nil {
+		return Secret{}, err
+	}
+	sec, err := s.secretFromRow(row, true)
+	if err != nil {
+		return Secret{}, err
+	}
+	sec.VersionStages = []string{SecretVersionStageCurrent}
+	sec.VersionIdsToStages = map[string][]string{"1": {SecretVersionStageCurrent}}
+	return sec, nil
 }
 
-// GetSecretValue returns the decrypted secret value for a name or ARN.
+// GetSecretValue returns the decrypted AWSCURRENT secret value for a name or ARN.
 func (s *Store) GetSecretValue(accountID, nameOrARN string) (Secret, error) {
-	_, _ = s.SweepExpiredSecrets(time.Time{})
-	name, err := s.resolveSecretName(accountID, nameOrARN)
-	if err != nil {
-		return Secret{}, err
-	}
-	row, err := s.getSecretRow(accountID, name)
-	if err != nil {
-		return Secret{}, err
-	}
-	if strings.TrimSpace(row.DeletionDate) != "" {
-		return Secret{}, ErrSecretScheduledDeletion
-	}
-	return s.secretFromRow(row, true)
+	return s.GetSecretValueByStage(accountID, nameOrARN, SecretVersionStageCurrent, "")
 }
 
 // PutSecretValue replaces the secret value and bumps the version.
@@ -504,15 +503,112 @@ func (s *Store) PutSecretValue(
 	row.BinarySealed = binarySealFlag == 1
 	row.SecretStringSealed = stringSealed
 	row.SecretBinarySealed = binarySealed
-	row.SecretStringPlain = ""
-	row.SecretBinaryPlain = nil
-	return s.secretFromRow(row, true)
+	row.SecretStringPlain = stringPlain
+	row.SecretBinaryPlain = binaryPlain
+	versionID := fmt.Sprintf("%d", version)
+	if err := s.recordPutSecretVersion(accountID, name, row, versionID, version, []string{SecretVersionStageCurrent}); err != nil {
+		return Secret{}, err
+	}
+	sec, err := s.secretFromRow(row, true)
+	if err != nil {
+		return Secret{}, err
+	}
+	stagesMap, err := s.VersionIdsToStages(accountID, name)
+	if err != nil {
+		return Secret{}, err
+	}
+	sec.VersionID = versionID
+	sec.VersionStages = []string{SecretVersionStageCurrent}
+	sec.VersionIdsToStages = stagesMap
+	return sec, nil
+}
+
+// PutSecretValueWithStages stores a new version with explicit VersionStages and optional VersionId
+// (ClientRequestToken). Used by rotation createSecret and UpdateSecretVersionStage choreography.
+func (s *Store) PutSecretValueWithStages(
+	accountID, nameOrARN, secretString string, secretBinary []byte, versionID string, stages []string,
+) (Secret, error) {
+	name, err := s.resolveSecretName(accountID, nameOrARN)
+	if err != nil {
+		return Secret{}, err
+	}
+	row, err := s.getSecretRow(accountID, name)
+	if err != nil {
+		return Secret{}, err
+	}
+	if strings.TrimSpace(row.DeletionDate) != "" {
+		return Secret{}, ErrSecretScheduledDeletion
+	}
+	if err := s.ensureSecretVersionsBackfilled(accountID, name); err != nil {
+		return Secret{}, err
+	}
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		versionID = fmt.Sprintf("%d", row.Version+1)
+	}
+	if len(stages) == 1 && stages[0] == SecretVersionStagePending {
+		vrow, err := s.createAWSPENDINGVersion(accountID, name, versionID, secretString, secretBinary)
+		if err != nil {
+			return Secret{}, err
+		}
+		return s.secretFromVersionRow(row, vrow, true)
+	}
+	if len(stages) == 0 || (len(stages) == 1 && stages[0] == SecretVersionStageCurrent) {
+		return s.PutSecretValue(accountID, name, secretString, secretBinary)
+	}
+	// Generic staged put: insert version without promoting unless AWSCURRENT is present.
+	versionNum := row.Version + 1
+	encCtx := SecretsEncryptionContext(row.ARN, versionID)
+	stringPlain, stringSealed, stringSealFlag, binaryPlain, binarySealed, binarySealFlag, kmsKeyID, err := s.storeSecretValues(
+		accountID, row.KMSKeyID, secretString, secretBinary, encCtx,
+	)
+	if err != nil {
+		return Secret{}, fmt.Errorf("put secret value with stages: %w", err)
+	}
+	vparent := secretRow{
+		SecretStringPlain:  stringPlain,
+		SecretStringSealed: stringSealed,
+		StringSealed:       stringSealFlag == 1,
+		SecretBinaryPlain:  binaryPlain,
+		SecretBinarySealed: binarySealed,
+		BinarySealed:       binarySealFlag == 1,
+		KMSKeyID:           kmsKeyID,
+	}
+	if err := s.recordPutSecretVersion(accountID, name, vparent, versionID, versionNum, stages); err != nil {
+		return Secret{}, err
+	}
+	if stagesContain(stages, SecretVersionStageCurrent) {
+		_, err = s.db.Exec(
+			`UPDATE secretsmanager_secrets
+			 SET secret_string_plain = ?, secret_string_sealed = ?, string_sealed = ?,
+			     secret_binary_plain = ?, secret_binary_sealed = ?, binary_sealed = ?,
+			     kms_key_id = ?, version = ?, last_changed_date = ?
+			 WHERE account_id = ? AND name = ?`,
+			stringPlain, stringSealed, stringSealFlag, binaryPlain, binarySealed, binarySealFlag,
+			kmsKeyID, versionNum, nowRFC3339(), accountID, name,
+		)
+		if err != nil {
+			return Secret{}, fmt.Errorf("put secret value with stages: parent: %w", err)
+		}
+	} else {
+		_, err = s.db.Exec(
+			`UPDATE secretsmanager_secrets SET version = ? WHERE account_id = ? AND name = ? AND version < ?`,
+			versionNum, accountID, name, versionNum,
+		)
+		if err != nil {
+			return Secret{}, fmt.Errorf("put secret value with stages: bump: %w", err)
+		}
+	}
+	return s.GetSecretValueByStage(accountID, name, "", versionID)
 }
 
 // DeleteSecret removes a secret immediately (force path / internal).
 func (s *Store) DeleteSecret(accountID, nameOrARN string) error {
 	name, err := s.resolveSecretName(accountID, nameOrARN)
 	if err != nil {
+		return err
+	}
+	if err := s.deleteSecretVersions(accountID, name); err != nil {
 		return err
 	}
 	res, err := s.db.Exec(`DELETE FROM secretsmanager_secrets WHERE account_id = ? AND name = ?`, accountID, name)
@@ -540,7 +636,21 @@ func (s *Store) DescribeSecret(accountID, nameOrARN string) (Secret, error) {
 	if err != nil {
 		return Secret{}, err
 	}
-	return s.secretFromRow(row, false)
+	sec, err := s.secretFromRow(row, false)
+	if err != nil {
+		return Secret{}, err
+	}
+	stagesMap, err := s.VersionIdsToStages(accountID, name)
+	if err != nil {
+		return Secret{}, err
+	}
+	sec.VersionIdsToStages = stagesMap
+	if current, err := s.findSecretVersionByStage(accountID, name, SecretVersionStageCurrent); err == nil {
+		sec.VersionID = current.VersionID
+		sec.Version = current.VersionNum
+		sec.VersionStages = append([]string{}, current.Stages...)
+	}
+	return sec, nil
 }
 
 // ListSecrets returns secret metadata for an account. Values are omitted.
