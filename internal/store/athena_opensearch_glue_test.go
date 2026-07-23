@@ -221,20 +221,24 @@ func TestOpenSearchDomainCRUD(t *testing.T) {
 	if err != nil || got.DomainName != "lab-domain" {
 		t.Fatalf("describe: %v %#v", err, got)
 	}
-	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusActive, "host:9200"); err == nil {
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusActive, "host:9200", ""); err == nil {
 		t.Fatal("Active without container_id must fail")
 	}
-	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "stub://127.0.0.1/opensearch/x"); err == nil {
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "stub://127.0.0.1/opensearch/x", ""); err == nil {
 		t.Fatal("Active with stub:// must fail")
 	}
-	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "noctaxris-opensearch-lab-domain:9200"); err != nil {
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "ctr-os", store.OpenSearchDomainStatusActive, "noctaxris-opensearch-lab-domain:9200", ""); err != nil {
 		t.Fatal(err)
 	}
 	active, err := st.DescribeOpenSearchDomain(account, "lab-domain")
 	if err != nil || active.DomainStatus != store.OpenSearchDomainStatusActive || active.ContainerID != "ctr-os" {
 		t.Fatalf("active=%+v err=%v", active, err)
 	}
-	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusCreateFailed, ""); err != nil {
+	if active.FailureReason != "" {
+		t.Fatalf("Active must clear FailureReason, got %q", active.FailureReason)
+	}
+	hint := "vm.max_map_count too low"
+	if err := st.SetOpenSearchContainerID(account, "lab-domain", "", store.OpenSearchDomainStatusCreateFailed, "", hint); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := st.DescribeOpenSearchDomain(account, "lab-domain")
@@ -243,6 +247,9 @@ func TestOpenSearchDomainCRUD(t *testing.T) {
 	}
 	if !strings.HasPrefix(failed.StubEndpoint, "stub://127.0.0.1/opensearch/") {
 		t.Fatalf("CreateFailed endpoint=%q want stub://", failed.StubEndpoint)
+	}
+	if failed.FailureReason != hint {
+		t.Fatalf("FailureReason=%q want %q", failed.FailureReason, hint)
 	}
 	list, err := st.ListOpenSearchDomainNames(account)
 	if err != nil || len(list) != 1 {

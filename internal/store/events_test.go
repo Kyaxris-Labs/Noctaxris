@@ -470,6 +470,108 @@ func TestPutEventsDeliversToSNS(t *testing.T) {
 	}
 }
 
+func TestPutEventsSkipsLambdaWithoutResourcePolicy(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "eb-no-policy",
+		Runtime: store.LambdaRuntimePython312, RoleARN: "arn:aws:iam::" + account + ":role/lambda",
+		Handler: "app.handler", Zip: zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "lambda-deny-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "lambda-deny-rule", []store.EventTargetInput{{
+		ID:  "1",
+		ARN: fn.FunctionARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"ok":true}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches=%+v want none without function policy", matches)
+	}
+	if _, err := st.LatestAsyncInvocation(account, fn.FunctionName); err == nil {
+		t.Fatal("expected no async invoke without resource policy")
+	}
+}
+
+func TestPutEventsDeliversToLambdaWithResourcePolicy(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "eb-policy-fn",
+		Runtime: store.LambdaRuntimePython312, RoleARN: "arn:aws:iam::" + account + ":role/lambda",
+		Handler: "app.handler", Zip: zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutRule(account, "us-east-1", "default", "lambda-ok-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	ruleARN := store.EventRuleARN("us-east-1", account, "default", "lambda-ok-rule")
+	if _, err := st.AddFunctionPermission(account, fn.FunctionName, "eb-invoke", "lambda:InvokeFunction",
+		"events.amazonaws.com", account, ruleARN); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutTargets(account, "default", "lambda-ok-rule", []store.EventTargetInput{{
+		ID:  "1",
+		ARN: fn.FunctionARN,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.PutEvents(account, []store.PutEventsEntry{{
+		Source: "noctaxris.lab", DetailType: "demo", Detail: `{"via":"lambda-policy"}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := st.GetPutEventsMatches(result.Entries[0].EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches=%+v", matches)
+	}
+	job, err := st.LatestAsyncInvocation(account, fn.FunctionName)
+	if err != nil {
+		t.Fatalf("expected resource-policy async invoke: %v", err)
+	}
+	if !strings.Contains(job.EventJSON, "lambda-policy") && !strings.Contains(job.EventJSON, "noctaxris.lab") {
+		t.Fatalf("EventJSON=%q want eventbridge body", job.EventJSON)
+	}
+}
+
+func TestPutTargetsRequiresRoleArnForKinesis(t *testing.T) {
+	st := openEventsStore(t)
+	account := "000000000001"
+	if _, err := st.PutRule(account, "us-east-1", "default", "kinesis-rule", `{"source":["noctaxris.lab"]}`, "", store.RuleStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	err := st.PutTargets(account, "default", "kinesis-rule", []store.EventTargetInput{{
+		ID:  "1",
+		ARN: "arn:aws:kinesis:us-east-1:" + account + ":stream/lab",
+	}})
+	if !errors.Is(err, store.ErrEventTargetRoleArnRequired) {
+		t.Fatalf("got %v want ErrEventTargetRoleArnRequired", err)
+	}
+}
+
 func TestPutEventsRoleArnRequiresRoleIdentityAllow(t *testing.T) {
 	st := openEventsStore(t)
 	account := "000000000001"

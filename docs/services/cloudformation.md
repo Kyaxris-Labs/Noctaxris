@@ -11,7 +11,7 @@ Create, describe, list, update, and delete stacks from a JSON or YAML template s
 | Stacks | `CreateStack`, `DescribeStacks`, `DeleteStack`, `ListStacks`, `UpdateStack` (implicit ChangeSet) |
 | ChangeSets | `CreateChangeSet`, `DescribeChangeSet`, `ExecuteChangeSet` (Add/Remove; Modify rejected) |
 | Drift | `DetectStackDrift`, `DescribeStackDriftDetectionStatus`, `DescribeStackResourceDrifts` (`IN_SYNC` / `MODIFIED` / `NOT_CHECKED`; nested `NOT_CHECKED`) |
-| Resources | `AWS::S3::Bucket`, `AWS::S3::BucketPolicy`, `AWS::IAM::Role`, `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::SQS::Queue`, `AWS::SQS::QueuePolicy`, `AWS::DynamoDB::Table`, `AWS::Lambda::Function`, `AWS::Lambda::Permission`, `AWS::KMS::Key`, `AWS::SNS::Topic`, `AWS::Events::EventBus`, `AWS::Events::Rule`, `AWS::SSM::Parameter`, `AWS::SecretsManager::Secret`, `AWS::CloudFormation::Stack` |
+| Resources | `AWS::S3::Bucket`, `AWS::S3::BucketPolicy`, `AWS::IAM::Role`, `AWS::IAM::User`, `AWS::IAM::Group`, `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::SQS::Queue`, `AWS::SQS::QueuePolicy`, `AWS::DynamoDB::Table`, `AWS::Lambda::Function`, `AWS::Lambda::Permission`, `AWS::KMS::Key`, `AWS::KMS::Alias`, `AWS::SNS::Topic`, `AWS::SNS::TopicPolicy`, `AWS::SNS::Subscription`, `AWS::Logs::LogGroup`, `AWS::Events::EventBus`, `AWS::Events::Rule`, `AWS::SSM::Parameter`, `AWS::SecretsManager::Secret`, `AWS::CloudFormation::Stack` |
 | Template forms | JSON and YAML `TemplateBody` |
 | Intrinsics (lab) | `Ref`, `Fn::GetAtt`, `Fn::Sub`, `Fn::Join` (YAML short forms `!Ref`, `!GetAtt`, `!Sub`, `!Join`) |
 | Ordering | Ref/GetAtt/Sub plus explicit `DependsOn` |
@@ -24,9 +24,17 @@ Policy and permission notes:
 |------|----------------|
 | `AWS::IAM::ManagedPolicy` | Creates a customer-managed policy; optional `Roles` / `Users` / `Groups` attach. `Path` other than `/` is rejected. `Description` is accepted and ignored. |
 | `AWS::IAM::Policy` | Lab maps this to a customer-managed policy (not AWS inline embedding) so the same attach APIs apply; requires at least one of `Roles`, `Users`, or `Groups`. |
+| `AWS::IAM::User` / `AWS::IAM::Group` | Create user or group; optional inline `Policies`, `ManagedPolicyArns`, and (user) `Groups` membership. `Path` other than `/` is rejected. Login profiles, permissions boundaries, and tags beyond accept-and-ignore are unsupported. |
 | `AWS::S3::BucketPolicy` | Calls `PutBucketPolicy`; physical id `{bucket}#BucketPolicy`. |
+| `AWS::SQS::Queue` | Queue attribute props (`DelaySeconds`, FIFO flags, etc.) are passed to `CreateQueue`. |
+| `AWS::SQS::QueuePolicy` | Sets queue `Policy` attribute; physical id `{queueUrl}#QueuePolicy`. |
+| `AWS::SNS::TopicPolicy` | Sets topic `Policy` via `SetTopicAttributes` for each entry in `Topics`; physical id `{firstTopicArn}#TopicPolicy`. |
+| `AWS::SNS::Subscription` | `TopicArn` + `Protocol` + `Endpoint` only (`sqs` / `lambda` auto-confirm; HTTP uses lab allowlist). Filter/delivery/redrive policies are rejected. |
+| `AWS::Logs::LogGroup` | `CreateLogGroup`. `RetentionInDays`, KMS, and data-protection properties are rejected (not implemented in the Logs store). |
+| `AWS::KMS::Alias` | `AliasName` + `TargetKeyId` (key id or ARN); resolves via `ResolveKeyID`. |
 | `AWS::Lambda::Permission` | Calls `AddPermission` with `StatementId` (defaults to logical id). Wildcard `Principal` and properties such as `PrincipalOrgID` / `FunctionUrlAuthType` are rejected. Service principals (for example `s3.amazonaws.com`) with `SourceArn` / `SourceAccount` stay available for PassRole-style notification wiring. |
 | `AWS::S3::Bucket` `NotificationConfiguration` | Optional. Maps CFN `LambdaConfigurations` / `QueueConfigurations` / `TopicConfigurations` (`Event` + destination ARN + optional `Filter.S3Key.Rules`) and `EventBridgeConfiguration` onto `PutBucketNotificationConfiguration`. Destinations and resource policies must already exist (use `DependsOn`); circular CreateStack graphs fail closed like AWS. |
+| `AWS::Events::Rule` | Event pattern rules with optional `Targets`. `ScheduleExpression` is rejected (use the Scheduler service). |
 
 ### Authz notes
 
@@ -55,5 +63,8 @@ CreateStack round-trip suite: [tests/cloudformation/](../../tests/cloudformation
 - ChangeSet Modify / in-place property updates
 - Nested stack drift comparison beyond `NOT_CHECKED`
 - Broader resource type catalog beyond the lab set above
-- `AWS::IAM::ManagedPolicy` custom `Path` values other than `/`
+- `AWS::IAM::ManagedPolicy` / `AWS::IAM::User` / `AWS::IAM::Group` custom `Path` values other than `/`
 - `AWS::Lambda::Permission` function-URL and org-id properties (`FunctionUrlAuthType`, `PrincipalOrgID`, `InvokedViaFunctionUrl`, `EventSourceToken`)
+- `AWS::SNS::Subscription` filter / delivery / redrive policy attributes
+- `AWS::Logs::LogGroup` retention, KMS key, and resource policy properties
+- `AWS::Events::Rule` `ScheduleExpression` (use Scheduler)

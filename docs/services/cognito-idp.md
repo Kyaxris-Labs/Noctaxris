@@ -11,7 +11,7 @@ User Pool and app client CRUD, AdminCreateUser / SignUp lite, InitiateAuth `USER
 | Pool | `CreateUserPool`, `DescribeUserPool`, `ListUserPools`, `DeleteUserPool` |
 | Client | `CreateUserPoolClient`, `DescribeUserPoolClient`, `ListUserPoolClients`, `DeleteUserPoolClient` |
 | Users | `AdminCreateUser`, `SignUp`, `ConfirmSignUp` |
-| Auth | `InitiateAuth`, `AdminInitiateAuth` (`USER_PASSWORD_AUTH` / `ADMIN_USER_PASSWORD_AUTH`) |
+| Auth | `InitiateAuth` (unsigned public IdP API; AWS CLI shape without `Authorization`), `AdminInitiateAuth` (`USER_PASSWORD_AUTH` / `ADMIN_USER_PASSWORD_AUTH`; SigV4) |
 | JWKS | `GET /cognito-idp/{region}/{userPoolId}/.well-known/jwks.json` (no SigV4) |
 
 ### Issuer
@@ -24,7 +24,7 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 
 ### Authz notes
 
-Identity `EvaluateFull` on management `cognito-idp:*`. JWKS is public on loopback.
+Identity `EvaluateFull` on management `cognito-idp:*`. `InitiateAuth` does not require SigV4 (public IdP). JWKS is public on loopback.
 
 ## How to verify / CLI smoke
 

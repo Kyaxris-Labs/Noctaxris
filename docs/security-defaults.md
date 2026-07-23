@@ -62,6 +62,7 @@ Unauthenticated or alternate-auth paths (no SigV4 required):
 | HTTP API routes with authorizer `NONE` | Open invoke on `/http-api/...` (same open-data-plane gate; no CORS `*` by default) |
 | AppSync GraphQL | `API_KEY`, `AWS_IAM` (SigV4), or Cognito User Pools Bearer JWT |
 | S3 anonymous GetObject / HeadObject | Off by default. With `NOCTAXRIS_ALLOW_ANONYMOUS_S3=1`, unsigned path-style object GET/HEAD only when bucket policy Principal `"*"` / `{"AWS":"*"}` Allows `s3:GetObject` or the object canned ACL is `public-read` / `public-read-write`. Explicit Deny beats ACL. List/Put and other S3 APIs stay SigV4-required |
+| Cognito `InitiateAuth` | Public IdP API (unsigned AWS CLI / SDK shape). Pool/client CRUD and `Admin*` stay SigV4 |
 
 All other AWS API paths require a valid SigV4 signature (header or query) for a known access key.
 
@@ -77,16 +78,17 @@ Additional auth notes:
 - Lab Lambda configure APIs use identity Evaluate plus PassRole/trust.
 - Organizations SCP/RCP filters apply on member authorize paths, including OU-path inheritance.
 - SNS HTTP(S) subscription endpoints must be the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or an exact URL in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolves to a public host (private, loopback, link-local, and metadata targets are rejected even when listed). Delivery does not follow redirects.
-- Cognito management APIs require SigV4 and identity Allow.
+- Cognito management APIs (pool/client CRUD, `Admin*`) require SigV4 and identity Allow. `InitiateAuth` is the public IdP exception (unsigned).
 - API Gateway JWT routes reject missing, expired, not-yet-valid (`nbf`), or invalid Bearer tokens. IAM routes reject unsigned requests. HTTP API resource policies are not invented. `IdentitySource` must be `$request.header.Authorization`.
 - Gateway CredentialsArn requires PassRole plus matching service trust at create, and role-session `lambda:InvokeFunction` evaluation at invoke when set. Without CredentialsArn, HTTP API invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require a resource policy Allow for `appsync.amazonaws.com`. CodeDeploy serviceRoleArn requires PassRole plus matching service trust when set.
+- S3 bucket notifications and EventBridge target delivery re-check destination resource policies on emit (`s3.amazonaws.com` / `events.amazonaws.com` + `aws:SourceArn` / `aws:SourceAccount`). Empty notification config is off. EventBridge `PutTargets` without `RoleArn` is allowed only for SQS/Lambda/SNS when the destination policy Allows; Logs/Kinesis/SFN still require `RoleArn`.
 - Associated WAFv2 Web ACLs must exist at Associate time. Invoke-time association evaluation errors fail closed (403).
 - `iam:PassRole` evaluation populates `iam:PassedToService` from the target service principal.
 - Deferred depth returns `501 NotImplemented` or an explicit fail-closed error after successful authn. Never silent Allow.
 
 ## Residual escape notes
 
-- Privileged DinD (`noctaxris-engine`) remains the default packaged compute plane and a nested-escape class on Docker Desktop / shared-kernel hosts. Volume split keeps `master.key` off the engine; the compute volume is `:ro` on the engine (API still writes unpack paths). Engine compromise can still reach nested networks and bind-mounted code views. LAN expose of `:4566` with Invoke/RunTask principals is engine-trust equivalent. Restricted-engine overlay is experimental only.
+- Default Compose runs restricted DinD (`privileged: false` + caps/cgroup). Nested-engine compromise remains an escape class on Docker Desktop / shared-kernel hosts. Volume split keeps `master.key` off the engine; the compute volume is `:ro` on the engine (API still writes unpack paths). Engine compromise can still reach nested networks and bind-mounted code views. LAN expose of `:4566` with Invoke/RunTask principals is engine-trust equivalent. Full privileged DinD is opt-in only (`compose.engine-privileged.yaml`) for hosts that cannot start nested containers.
 - `host.docker.internal` ExtraHosts is an intentional path from the Lambda function network to the host-published API only when opted in. It is not public internet egress. ECS-path tasks do not get that entry unless `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`.
 - Go module `github.com/docker/docker` (client SDK) still surfaces several Docker Engine CVEs with Fixed in: N/A on that module path (fixes landed in Engine / `github.com/moby/moby/v2` only). CI allowlists those GO IDs in `scripts/govulncheck-allowlist.txt` so new app vulns still fail the job. Noctaxris never calls `CopyToContainer` / `CopyFromContainer` or `PUT /containers/{id}/archive`; Lambda and related code reach nested containers via read-only bind mounts. AuthZ-plugin bypass findings also do not apply to the packaged engine path (no AuthZ plugins). Residual is still the nested engine binary version and who can talk to it over TLS on the Compose network.
 

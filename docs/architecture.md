@@ -103,7 +103,7 @@ flowchart TD
   Helper -.-> DataAPI
 ```
 
-Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). Nested MQ and OpenSearch promote to `RUNNING` / `Active` only after a healthy nested container; without DinD or on start failure they fail closed (`CREATION_FAILED` / `CreateFailed` with `stub://`). Broker and search ports are never host-published.
+Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). Nested MQ and OpenSearch promote to `RUNNING` / `Active` only after a healthy nested container; without DinD or on start failure they fail closed (`CREATION_FAILED` / `CreateFailed` with `stub://`). OpenSearch CreateFailed may include a lab `FailureReason` when nested logs match mmap / memory-lock bootstrap failures (`vm.max_map_count`). Broker and search ports are never host-published.
 
 When DinD is unset, create paths keep control-plane rows and nested start is a no-op. Live engine start requires `noctaxris-engine`. Do not mount the operator host filesystem into nested data containers.
 

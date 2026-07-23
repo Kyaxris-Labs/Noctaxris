@@ -19,6 +19,10 @@ func (s *Store) deleteCFNPhysical(accountID string, res CFNStackResource) {
 		} else {
 			_ = s.DeleteRole(accountID, res.PhysicalID)
 		}
+	case "AWS::IAM::User":
+		_ = s.DeleteUser(accountID, res.PhysicalID)
+	case "AWS::IAM::Group":
+		_ = s.DeleteGroup(accountID, res.PhysicalID)
 	case "AWS::IAM::ManagedPolicy", "AWS::IAM::Policy":
 		_ = s.clearManagedPolicyAttachments(res.PhysicalID)
 		_ = s.DeleteManagedPolicy(res.PhysicalID)
@@ -43,12 +47,23 @@ func (s *Store) deleteCFNPhysical(accountID string, res CFNStackResource) {
 		}
 	case "AWS::KMS::Key":
 		_, _ = s.ScheduleKeyDeletion(res.PhysicalID, 7)
+	case "AWS::KMS::Alias":
+		_ = s.DeleteAlias(accountID, res.PhysicalID)
 	case "AWS::SNS::Topic":
 		name := res.PhysicalID
 		if t, err := s.GetTopicByARN(res.PhysicalID); err == nil {
 			name = t.TopicName
 		}
 		_ = s.DeleteTopic(accountID, name)
+	case "AWS::SNS::TopicPolicy":
+		topicARN := strings.TrimSuffix(res.PhysicalID, "#TopicPolicy")
+		if t, err := s.GetTopicByARN(topicARN); err == nil {
+			_ = s.SetTopicAttributes(accountID, t.TopicName, map[string]string{"Policy": ""})
+		}
+	case "AWS::SNS::Subscription":
+		_ = s.Unsubscribe(res.PhysicalID)
+	case "AWS::Logs::LogGroup":
+		_ = s.DeleteLogGroup(accountID, res.PhysicalID)
 	case "AWS::Events::EventBus":
 		_ = s.DeleteEventBus(accountID, res.PhysicalID)
 	case "AWS::Events::Rule":
@@ -117,6 +132,10 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			return "", nil, err
 		}
 		return arn, map[string]string{"Ref": name, "Arn": arn}, nil
+	case "AWS::IAM::User":
+		return s.provisionCFNIAMUser(accountID, logicalID, props)
+	case "AWS::IAM::Group":
+		return s.provisionCFNIAMGroup(accountID, logicalID, props)
 	case "AWS::IAM::ManagedPolicy":
 		return s.provisionCFNManagedPolicy(accountID, logicalID, props)
 	case "AWS::IAM::Policy":
@@ -126,7 +145,7 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		if name == "" {
 			name = strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
 		}
-		q, err := s.CreateQueue(accountID, region, "127.0.0.1:4566", name, nil)
+		q, err := s.CreateQueue(accountID, region, "127.0.0.1:4566", name, cfnSQSQueueAttributes(props))
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: SQS queue %s: %v", ErrCFNBadTemplate, logicalID, err)
 		}
@@ -211,6 +230,8 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			_ = s.SetKeyRotationEnabled(key.KeyID, true)
 		}
 		return key.KeyID, map[string]string{"Ref": key.KeyID, "Arn": key.ARN}, nil
+	case "AWS::KMS::Alias":
+		return s.provisionCFNKMSAlias(accountID, logicalID, props)
 	case "AWS::SNS::Topic":
 		name := cfnStringProp(props, "TopicName")
 		if name == "" {
@@ -228,6 +249,12 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			return "", nil, fmt.Errorf("%w: SNS topic %s: %v", ErrCFNBadTemplate, logicalID, err)
 		}
 		return topic.TopicARN, map[string]string{"Ref": topic.TopicARN, "TopicName": topic.TopicName}, nil
+	case "AWS::SNS::TopicPolicy":
+		return s.applyCFNTopicPolicy(accountID, props)
+	case "AWS::SNS::Subscription":
+		return s.provisionCFNSNSSubscription(accountID, logicalID, props)
+	case "AWS::Logs::LogGroup":
+		return s.provisionCFNLogGroup(accountID, region, logicalID, props)
 	case "AWS::Events::EventBus":
 		name := cfnStringProp(props, "Name")
 		if name == "" {

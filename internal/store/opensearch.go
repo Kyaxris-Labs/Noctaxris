@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS opensearch_domains (
   domain_status TEXT NOT NULL,
   stub_endpoint TEXT NOT NULL,
   container_id TEXT NOT NULL DEFAULT '',
+  failure_reason TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, domain_id)
 );
@@ -54,10 +55,11 @@ type OpenSearchDomain struct {
 	DomainStatus  string
 	StubEndpoint  string
 	ContainerID   string
+	FailureReason string
 	CreatedAt     int64
 }
 
-// EnsureOpenSearchSchema creates OpenSearch tables if missing and migrates container_id.
+// EnsureOpenSearchSchema creates OpenSearch tables if missing and migrates columns.
 func EnsureOpenSearchSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure opensearch schema: db is nil")
@@ -65,9 +67,12 @@ func EnsureOpenSearchSchema(db *sql.DB) error {
 	if _, err := db.Exec(openSearchSchema); err != nil {
 		return fmt.Errorf("ensure opensearch schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE opensearch_domains ADD COLUMN container_id TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure opensearch schema: migrate container_id: %w", err)
+	for _, stmt := range []string{
+		`ALTER TABLE opensearch_domains ADD COLUMN container_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE opensearch_domains ADD COLUMN failure_reason TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
+			return fmt.Errorf("ensure opensearch schema: migrate: %w", err)
 		}
 	}
 	return nil
@@ -137,7 +142,8 @@ func (s *Store) CreateOpenSearchDomain(accountID, region, name, engineVersion st
 // SetOpenSearchContainerID records a nested engine container after dataplane start.
 // endpoint may be empty to leave the existing endpoint unchanged.
 // Active requires a non-empty containerID and must not use stub://.
-func (s *Store) SetOpenSearchContainerID(accountID, domainName, containerID, status, endpoint string) error {
+// failureReason is stored on CreateFailed (operator hint); cleared on Active.
+func (s *Store) SetOpenSearchContainerID(accountID, domainName, containerID, status, endpoint, failureReason string) error {
 	domainName = strings.TrimSpace(domainName)
 	if status == "" {
 		status = OpenSearchDomainStatusActive
@@ -149,6 +155,7 @@ func (s *Store) SetOpenSearchContainerID(accountID, domainName, containerID, sta
 		if strings.HasPrefix(strings.TrimSpace(endpoint), "stub://") {
 			return fmt.Errorf("%w: Active must not use stub:// endpoint", ErrOpenSearchBadRequest)
 		}
+		failureReason = ""
 	}
 	if status == OpenSearchDomainStatusCreateFailed && strings.TrimSpace(endpoint) == "" {
 		// Fail-closed: restore loopback stub so callers never treat nested host as live.
@@ -165,13 +172,13 @@ func (s *Store) SetOpenSearchContainerID(accountID, domainName, containerID, sta
 	var err error
 	if strings.TrimSpace(endpoint) == "" {
 		res, err = s.db.Exec(
-			`UPDATE opensearch_domains SET container_id = ?, domain_status = ? WHERE account_id = ? AND domain_name = ?`,
-			containerID, status, accountID, domainName,
+			`UPDATE opensearch_domains SET container_id = ?, domain_status = ?, failure_reason = ? WHERE account_id = ? AND domain_name = ?`,
+			containerID, status, failureReason, accountID, domainName,
 		)
 	} else {
 		res, err = s.db.Exec(
-			`UPDATE opensearch_domains SET container_id = ?, domain_status = ?, stub_endpoint = ? WHERE account_id = ? AND domain_name = ?`,
-			containerID, status, endpoint, accountID, domainName,
+			`UPDATE opensearch_domains SET container_id = ?, domain_status = ?, stub_endpoint = ?, failure_reason = ? WHERE account_id = ? AND domain_name = ?`,
+			containerID, status, endpoint, failureReason, accountID, domainName,
 		)
 	}
 	if err != nil {
@@ -192,10 +199,10 @@ func (s *Store) DescribeOpenSearchDomain(accountID, name string) (OpenSearchDoma
 	}
 	var d OpenSearchDomain
 	err := s.db.QueryRow(
-		`SELECT domain_id, domain_name, domain_arn, engine_version, domain_status, stub_endpoint, container_id, created_at
+		`SELECT domain_id, domain_name, domain_arn, engine_version, domain_status, stub_endpoint, container_id, failure_reason, created_at
 		 FROM opensearch_domains WHERE account_id = ? AND domain_name = ?`,
 		accountID, name,
-	).Scan(&d.DomainID, &d.DomainName, &d.DomainARN, &d.EngineVersion, &d.DomainStatus, &d.StubEndpoint, &d.ContainerID, &d.CreatedAt)
+	).Scan(&d.DomainID, &d.DomainName, &d.DomainARN, &d.EngineVersion, &d.DomainStatus, &d.StubEndpoint, &d.ContainerID, &d.FailureReason, &d.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OpenSearchDomain{}, ErrOpenSearchDomainNotFound
 	}
@@ -208,7 +215,7 @@ func (s *Store) DescribeOpenSearchDomain(accountID, name string) (OpenSearchDoma
 // ListOpenSearchDomainNames lists domains for an account.
 func (s *Store) ListOpenSearchDomainNames(accountID string) ([]OpenSearchDomain, error) {
 	rows, err := s.db.Query(
-		`SELECT domain_id, domain_name, domain_arn, engine_version, domain_status, stub_endpoint, container_id, created_at
+		`SELECT domain_id, domain_name, domain_arn, engine_version, domain_status, stub_endpoint, container_id, failure_reason, created_at
 		 FROM opensearch_domains WHERE account_id = ? ORDER BY domain_name`,
 		accountID,
 	)
@@ -219,7 +226,7 @@ func (s *Store) ListOpenSearchDomainNames(accountID string) ([]OpenSearchDomain,
 	out := []OpenSearchDomain{}
 	for rows.Next() {
 		var d OpenSearchDomain
-		if err := rows.Scan(&d.DomainID, &d.DomainName, &d.DomainARN, &d.EngineVersion, &d.DomainStatus, &d.StubEndpoint, &d.ContainerID, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.DomainID, &d.DomainName, &d.DomainARN, &d.EngineVersion, &d.DomainStatus, &d.StubEndpoint, &d.ContainerID, &d.FailureReason, &d.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list opensearch domains: scan: %w", err)
 		}
 		out = append(out, d)

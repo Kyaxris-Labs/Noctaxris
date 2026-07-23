@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
@@ -62,12 +63,16 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 		t.Fatalf("mq after wait fail: %+v err=%v", mqFailed, err)
 	}
 
-	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindOpenSearch, "wait-fail-os", "ctr-os", "host-os", waitErr); err == nil {
+	mapCountErr := errors.New("compute: data-plane container exited: max virtual memory areas vm.max_map_count [65530] is too low")
+	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindOpenSearch, "wait-fail-os", "ctr-os", "host-os", mapCountErr); err == nil {
 		t.Fatal("expected wait error returned")
 	}
 	osFailed, err := st.DescribeOpenSearchDomain(account, "wait-fail-os")
 	if err != nil || osFailed.DomainStatus != store.OpenSearchDomainStatusCreateFailed {
 		t.Fatalf("opensearch after wait fail: %+v err=%v", osFailed, err)
+	}
+	if osFailed.FailureReason == "" || !strings.Contains(osFailed.FailureReason, "vm.max_map_count") {
+		t.Fatalf("opensearch CreateFailed missing mmap FailureReason: %+v", osFailed)
 	}
 
 	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindElastiCache, "wait-fail-cache", "ctr-ec2", "host-ec2", nil); err != nil {

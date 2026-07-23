@@ -143,7 +143,8 @@ func (s *Server) lambdaCreateEventSourceMapping(
 		return
 	}
 	if errors.Is(err, store.ErrNoSuchQueue) || errors.Is(err, store.ErrInvalidEventSourceARN) ||
-		errors.Is(err, store.ErrInvalidESMBatchSize) || errors.Is(err, store.ErrESMSourceAuthz) {
+		errors.Is(err, store.ErrInvalidESMBatchSize) || errors.Is(err, store.ErrESMSourceAuthz) ||
+		errors.Is(err, store.ErrInvalidESMFilterCriteria) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
 			err.Error(), readOnly, eventID, verified)
 		return
@@ -304,7 +305,7 @@ func (s *Server) lambdaUpdateEventSourceMapping(
 			"Event source mapping not found.", readOnly, eventID, verified)
 		return
 	}
-	if errors.Is(err, store.ErrInvalidESMBatchSize) {
+	if errors.Is(err, store.ErrInvalidESMBatchSize) || errors.Is(err, store.ErrInvalidESMFilterCriteria) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
 			err.Error(), readOnly, eventID, verified)
 		return

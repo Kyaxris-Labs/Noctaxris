@@ -602,3 +602,237 @@ func (s *Store) provisionCFNLambdaPermission(accountID, logicalID string, props 
 	phys := fnName + "|" + sid
 	return phys, map[string]string{"Ref": phys}, nil
 }
+
+func cfnSQSQueueAttributes(props map[string]any) map[string]string {
+	attrs := map[string]string{}
+	for _, key := range []string{
+		"DelaySeconds", "VisibilityTimeout", "MessageRetentionPeriod", "ReceiveMessageWaitTimeSeconds",
+	} {
+		if _, ok := props[key]; !ok {
+			continue
+		}
+		if s := cfnStringProp(props, key); s != "" {
+			attrs[key] = s
+			continue
+		}
+		attrs[key] = fmt.Sprintf("%d", cfnIntProp(props, key, 0))
+	}
+	if k := cfnStringProp(props, "KmsMasterKeyId"); k != "" {
+		attrs["KmsMasterKeyId"] = k
+	}
+	if _, ok := props["FifoQueue"]; ok {
+		attrs["FifoQueue"] = cfnPropTruthyString(props, "FifoQueue")
+	}
+	if _, ok := props["ContentBasedDeduplication"]; ok {
+		attrs["ContentBasedDeduplication"] = cfnPropTruthyString(props, "ContentBasedDeduplication")
+	}
+	if len(attrs) == 0 {
+		return nil
+	}
+	return attrs
+}
+
+func cfnPropTruthyString(props map[string]any, key string) string {
+	raw, ok := props[key]
+	if !ok || raw == nil {
+		return "false"
+	}
+	switch v := raw.(type) {
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case string:
+		if strings.EqualFold(strings.TrimSpace(v), "true") {
+			return "true"
+		}
+		return "false"
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if strings.EqualFold(s, "true") || s == "1" {
+			return "true"
+		}
+		return "false"
+	}
+}
+
+func (s *Store) applyCFNTopicPolicy(accountID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	topics, ok := props["Topics"].([]any)
+	if !ok || len(topics) == 0 {
+		return "", nil, fmt.Errorf("%w: TopicPolicy Topics required", ErrCFNBadTemplate)
+	}
+	docRaw, ok := props["PolicyDocument"]
+	if !ok {
+		return "", nil, fmt.Errorf("%w: TopicPolicy PolicyDocument required", ErrCFNBadTemplate)
+	}
+	docBytes, err := json.Marshal(docRaw)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: TopicPolicy PolicyDocument", ErrCFNBadTemplate)
+	}
+	policy := string(docBytes)
+	var firstARN string
+	for i, item := range topics {
+		topicRef := strings.TrimSpace(fmt.Sprint(item))
+		if topicRef == "" {
+			return "", nil, fmt.Errorf("%w: TopicPolicy Topics[%d] empty", ErrCFNBadTemplate, i)
+		}
+		topic, err := s.GetTopicByARN(topicRef)
+		if err != nil {
+			topic, err = s.GetTopic(accountID, topicRef)
+			if err != nil {
+				return "", nil, fmt.Errorf("%w: TopicPolicy topic %s: %v", ErrCFNBadTemplate, topicRef, err)
+			}
+		}
+		if err := s.SetTopicAttributes(accountID, topic.TopicName, map[string]string{"Policy": policy}); err != nil {
+			return "", nil, fmt.Errorf("%w: set topic policy: %v", ErrCFNBadTemplate, err)
+		}
+		if firstARN == "" {
+			firstARN = topic.TopicARN
+		}
+	}
+	phys := firstARN + "#TopicPolicy"
+	return phys, map[string]string{"Ref": phys, "TopicArn": firstARN}, nil
+}
+
+func (s *Store) provisionCFNSNSSubscription(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	topicARN := cfnStringProp(props, "TopicArn")
+	if topicARN == "" {
+		return "", nil, fmt.Errorf("%w: Subscription TopicArn required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	protocol := cfnStringProp(props, "Protocol")
+	if protocol == "" {
+		return "", nil, fmt.Errorf("%w: Subscription Protocol required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	endpoint := cfnStringProp(props, "Endpoint")
+	if endpoint == "" {
+		return "", nil, fmt.Errorf("%w: Subscription Endpoint required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	sub, err := s.Subscribe(accountID, topicARN, protocol, endpoint)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: SNS Subscription %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	return sub.SubscriptionARN, map[string]string{
+		"Ref": sub.SubscriptionARN, "Arn": sub.SubscriptionARN,
+	}, nil
+}
+
+func (s *Store) provisionCFNLogGroup(accountID, region, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	name := cfnStringProp(props, "LogGroupName")
+	if name == "" {
+		name = "/cfn/" + strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
+	}
+	g, err := s.CreateLogGroup(accountID, region, name)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: LogGroup %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	return g.LogGroupName, map[string]string{"Ref": g.LogGroupName, "Arn": g.Arn}, nil
+}
+
+func (s *Store) provisionCFNKMSAlias(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	aliasName := cfnStringProp(props, "AliasName")
+	if aliasName == "" {
+		return "", nil, fmt.Errorf("%w: Alias AliasName required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	target := cfnStringProp(props, "TargetKeyId")
+	if target == "" {
+		return "", nil, fmt.Errorf("%w: Alias TargetKeyId required for %s", ErrCFNBadTemplate, logicalID)
+	}
+	keyID, err := s.ResolveKeyID(accountID, target)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: Alias %s TargetKeyId: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if err := s.CreateAlias(accountID, aliasName, keyID); err != nil {
+		return "", nil, fmt.Errorf("%w: Alias %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	normalized := normalizeAliasName(aliasName)
+	return normalized, map[string]string{"Ref": normalized}, nil
+}
+
+func (s *Store) applyCFNPrincipalPolicies(accountID, principalARN, entityName string, props map[string]any, attachManaged func(accountID, name, policyARN string) error) error {
+	if raw, ok := props["Policies"].([]any); ok {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := cfnStringProp(m, "PolicyName")
+			if name == "" {
+				return fmt.Errorf("%w: Policies.PolicyName required", ErrCFNBadTemplate)
+			}
+			docRaw, ok := m["PolicyDocument"]
+			if !ok {
+				return fmt.Errorf("%w: Policies.PolicyDocument required", ErrCFNBadTemplate)
+			}
+			docBytes, err := json.Marshal(docRaw)
+			if err != nil {
+				return fmt.Errorf("%w: Policies.PolicyDocument", ErrCFNBadTemplate)
+			}
+			if err := s.PutInlinePolicy(principalARN, name, string(docBytes)); err != nil {
+				return fmt.Errorf("%w: put inline policy: %v", ErrCFNBadTemplate, err)
+			}
+		}
+	}
+	if raw, ok := props["ManagedPolicyArns"].([]any); ok {
+		for _, item := range raw {
+			arn := strings.TrimSpace(fmt.Sprint(item))
+			if arn == "" {
+				continue
+			}
+			if err := attachManaged(accountID, entityName, arn); err != nil {
+				return fmt.Errorf("%w: AttachPolicy: %v", ErrCFNBadTemplate, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) provisionCFNIAMUser(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	name := cfnStringProp(props, "UserName")
+	if name == "" {
+		name = logicalID + shortID()
+	}
+	path := cfnStringProp(props, "Path")
+	if path != "" && path != "/" {
+		return "", nil, fmt.Errorf("%w: IAM User Path other than / is not supported for %s", ErrCFNBadTemplate, logicalID)
+	}
+	_, arn, err := s.CreateUser(accountID, name)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: IAM User %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if err := s.applyCFNPrincipalPolicies(accountID, arn, name, props, s.AttachUserPolicy); err != nil {
+		_ = s.DeleteUser(accountID, name)
+		return "", nil, err
+	}
+	for _, groupRef := range cfnStringListProp(props, "Groups") {
+		gName := cfnIAMEntityName(groupRef)
+		if gName == "" {
+			continue
+		}
+		if err := s.AddUserToGroup(accountID, gName, name); err != nil {
+			_ = s.DeleteUser(accountID, name)
+			return "", nil, fmt.Errorf("%w: AddUserToGroup %s: %v", ErrCFNBadTemplate, gName, err)
+		}
+	}
+	return name, map[string]string{"Ref": name, "Arn": arn}, nil
+}
+
+func (s *Store) provisionCFNIAMGroup(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+	name := cfnStringProp(props, "GroupName")
+	if name == "" {
+		name = logicalID + shortID()
+	}
+	path := cfnStringProp(props, "Path")
+	if path != "" && path != "/" {
+		return "", nil, fmt.Errorf("%w: IAM Group Path other than / is not supported for %s", ErrCFNBadTemplate, logicalID)
+	}
+	_, arn, err := s.CreateGroup(accountID, name)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: IAM Group %s: %v", ErrCFNBadTemplate, logicalID, err)
+	}
+	if err := s.applyCFNPrincipalPolicies(accountID, arn, name, props, s.AttachGroupPolicy); err != nil {
+		_ = s.DeleteGroup(accountID, name)
+		return "", nil, err
+	}
+	return name, map[string]string{"Ref": name, "Arn": arn}, nil
+}

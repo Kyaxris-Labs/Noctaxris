@@ -160,8 +160,89 @@ func (s *Store) cfnLiveDriftStatus(accountID string, res CFNStackResource, expec
 			}
 		}
 		return "IN_SYNC"
-	case "AWS::SNS::Topic", "AWS::KMS::Key", "AWS::Events::EventBus", "AWS::Events::Rule",
-		"AWS::SecretsManager::Secret", "AWS::SQS::QueuePolicy":
+	case "AWS::IAM::User":
+		if _, err := s.GetUser(accountID, res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::IAM::Group":
+		if _, err := s.GetGroup(accountID, res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::KMS::Key":
+		if _, err := s.GetKey(res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::KMS::Alias":
+		if _, err := s.lookupAliasTarget(accountID, normalizeAliasName(res.PhysicalID)); err != nil {
+			return "DELETED"
+		}
+		want := cfnStringProp(expected.Properties, "AliasName")
+		if want != "" && normalizeAliasName(want) != normalizeAliasName(res.PhysicalID) {
+			return "MODIFIED"
+		}
+		return "IN_SYNC"
+	case "AWS::SNS::Topic":
+		if _, err := s.GetTopicByARN(res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::SNS::TopicPolicy":
+		topicARN := strings.TrimSuffix(res.PhysicalID, "#TopicPolicy")
+		t, err := s.GetTopicByARN(topicARN)
+		if err != nil {
+			return "DELETED"
+		}
+		attrs, err := s.GetTopicAttributes(accountID, t.TopicName)
+		if err != nil || strings.TrimSpace(attrs["Policy"]) == "" {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::SNS::Subscription":
+		if _, err := s.GetSubscription(res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::Logs::LogGroup":
+		if _, err := s.getLogGroup(accountID, res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		want := cfnStringProp(expected.Properties, "LogGroupName")
+		if want != "" && want != res.PhysicalID {
+			return "MODIFIED"
+		}
+		return "IN_SYNC"
+	case "AWS::Events::EventBus":
+		if _, err := s.GetEventBus(accountID, res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::Events::Rule":
+		bus, rule, ok := splitCFNEventRulePhysical(res.PhysicalID)
+		if !ok {
+			return "NOT_CHECKED"
+		}
+		if _, err := s.DescribeRule(accountID, bus, rule); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::SecretsManager::Secret":
+		if _, err := s.DescribeSecret(accountID, res.PhysicalID); err != nil {
+			return "DELETED"
+		}
+		return "IN_SYNC"
+	case "AWS::SQS::QueuePolicy":
+		queueURL := strings.TrimSuffix(res.PhysicalID, "#QueuePolicy")
+		q, err := s.GetQueueByURL(queueURL)
+		if err != nil {
+			return "DELETED"
+		}
+		attrs, err := s.GetQueueAttributes(accountID, q.QueueName)
+		if err != nil || strings.TrimSpace(attrs["Policy"]) == "" {
+			return "DELETED"
+		}
 		return "IN_SYNC"
 	default:
 		return "NOT_CHECKED"

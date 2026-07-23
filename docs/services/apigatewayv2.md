@@ -9,10 +9,11 @@ HTTP API (API Gateway v2) lite: CreateApi / CreateIntegration / CreateAuthorizer
 | Area | Actions |
 |------|---------|
 | API | `CreateApi` (ProtocolType HTTP), `GetApi`, `GetApis`, `DeleteApi` |
-| Integration | `CreateIntegration` (AWS_PROXY Lambda ARN only, optional `CredentialsArn` with PassRole) |
-| Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience; REQUEST Lambda authorizer) |
-| Route | `CreateRoute` (AuthorizationType NONE, JWT, AWS_IAM, or CUSTOM) |
+| Integration | `CreateIntegration` (AWS_PROXY Lambda ARN only, optional `CredentialsArn` with PassRole), `GetIntegrations` |
+| Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience; REQUEST Lambda authorizer), `GetAuthorizers` |
+| Route | `CreateRoute` (AuthorizationType NONE, JWT, AWS_IAM, or CUSTOM), `GetRoutes` |
 | Stage | `CreateStage` (`$default` common) |
+| REST vs Registry | HTTP API management REST under `/v2/apis...` is matched before lab ECR Docker Registry `/v2/` on the same listener |
 | Invoke | `GET/POST http://127.0.0.1:4566/http-api/{apiId}/{stage}/{path}` |
 
 ### Route auth

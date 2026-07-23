@@ -329,8 +329,12 @@ func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (Lamb
 	arn := strings.TrimSpace(in.EventSourceARN)
 	filterJSON := strings.TrimSpace(in.FilterCriteriaJSON)
 	if filterJSON != "" {
-		if _, err := parseESMFilterCriteriaJSON(filterJSON); err != nil {
-			return LambdaEventSourceMapping{}, err
+		fc, ferr := parseESMFilterCriteriaJSON(filterJSON)
+		if ferr != nil {
+			return LambdaEventSourceMapping{}, ferr
+		}
+		if len(fc.Filters) == 0 {
+			filterJSON = ""
 		}
 	}
 	respTypesJSON, err := normalizeFunctionResponseTypesJSON(in.FunctionResponseTypesJSON)
@@ -482,8 +486,12 @@ func (s *Store) UpdateEventSourceMapping(in UpdateEventSourceMappingInput) (Lamb
 	if in.FilterCriteriaJSON != nil {
 		filterJSON = strings.TrimSpace(*in.FilterCriteriaJSON)
 		if filterJSON != "" {
-			if _, err := parseESMFilterCriteriaJSON(filterJSON); err != nil {
-				return LambdaEventSourceMapping{}, err
+			fc, ferr := parseESMFilterCriteriaJSON(filterJSON)
+			if ferr != nil {
+				return LambdaEventSourceMapping{}, ferr
+			}
+			if len(fc.Filters) == 0 {
+				filterJSON = ""
 			}
 		}
 	}

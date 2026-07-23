@@ -79,7 +79,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Pool and app client CRUD, AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH (unsigned public IdP API; Admin* stay SigV4), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
       <td>Identity Pools, Hosted UI, full SRP, MFA depth, refresh revoke APIs.</td>
     </tr>
     <tr>
@@ -91,8 +91,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="15" align="center" valign="middle">Data</td>
       <td>S3</td>
-      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite).</td>
-      <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign.</td>
+      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite), Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked).</td>
+      <td>Lifecycle, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign, exact AWS notification retry timing.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
@@ -101,8 +101,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>DynamoDB Streams</td>
-      <td>Enable stream on table (NEW_IMAGE or KEYS_ONLY), ListStreams/DescribeStream, GetShardIterator/GetRecords. Change records on Put/Update/DeleteItem when enabled.</td>
-      <td>OLD_IMAGE views, parallel shard fan-out, Lambda ESM for streams.</td>
+      <td>Enable stream on table (NEW_IMAGE or KEYS_ONLY), ListStreams/DescribeStream, GetShardIterator/GetRecords. Change records on Put/Update/DeleteItem when enabled. Lambda ESM + FilterCriteria for streams: see Lambda row.</td>
+      <td>OLD_IMAGE views, parallel shard fan-out.</td>
     </tr>
     <tr>
       <td>SQS</td>
@@ -126,7 +126,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, simple detail keys) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, CloudWatch Logs, Kinesis, Step Functions (Logs/Kinesis/SFN require RoleArn; foreign SQS/Lambda/SNS RoleArn AND dest policy). PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS via RoleArn or destination resource policy (events.amazonaws.com + SourceArn); Logs/Kinesis/SFN require RoleArn at PutTargets; foreign SQS/Lambda/SNS RoleArn AND dest policy. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
       <td>Archive and replay, legacy scheduled rules, full pattern language, InputPath bracket/wildcard notation, resource-policy delivery for Logs/Kinesis/SFN.</td>
     </tr>
     <tr>
@@ -219,7 +219,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
-      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet lite (Add/Remove; Modify fail-closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3, IAM Role, SQS(+QueuePolicy), DynamoDB, Lambda, KMS Key, SNS, Events bus/rule, SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
+      <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet lite (Add/Remove; Modify fail-closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission), KMS Key/Alias, SNS(+TopicPolicy/Subscription), Logs LogGroup, Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
       <td>ChangeSet Modify, nested drift depth, full intrinsic matrix, broader catalog.</td>
     </tr>
     <tr>
@@ -270,8 +270,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller, lab FilterCriteria (JSON body nest), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Kinesis/MQ ESM sources, full content-filtering operators beyond lab FilterCriteria, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller, FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys and NewImage), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Kinesis/MQ ESM sources, FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -311,7 +311,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="1" align="center" valign="middle">API edge</td>
       <td>API Gateway HTTP API</td>
-      <td>CreateApi/CreateIntegration/CreateAuthorizer/CreateRoute/CreateStage. Lambda AWS_PROXY only. Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (simple <code>isAuthorized</code> / IAM policy; Deny short-circuits before integration). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
+      <td>CreateApi/GetApi/GetApis/DeleteApi, CreateIntegration, GetIntegrations, CreateAuthorizer, GetAuthorizers, CreateRoute, GetRoutes, CreateStage. REST <code>/v2/apis...</code> is routed before lab ECR Registry <code>/v2/</code>. Lambda AWS_PROXY only. Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (simple <code>isAuthorized</code> / IAM policy; Deny short-circuits before integration). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
       <td>REST API v1, WebSocket, HTTP_PROXY, REST TOKEN authorizers, authorizer result caching, HTTP API resource policies.</td>
     </tr>
     <tr>
@@ -322,8 +322,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>OpenSearch</td>
-      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. Nested DinD when engine up (Creating→Active, Internal :9200). Else CreateFailed + stub:// (never Active on stub). No host search ports.</td>
-      <td>Query-plane index/search, full query DSL proxy, fine-grained access control, guaranteed start on all Docker Desktop hosts (vm.max_map_count).</td>
+      <td>CreateDomain / DescribeDomain / ListDomainNames / DeleteDomain. Nested DinD when engine up (Creating→Active, Internal :9200). Else CreateFailed + stub:// (never Active on stub); lab FailureReason when mmap / memory-lock bootstrap is classified. No host search ports.</td>
+      <td>Query-plane index/search, full query DSL proxy, fine-grained access control, automatic host sysctl (operator must raise vm.max_map_count for Active).</td>
     </tr>
     <tr>
       <td>EMR</td>

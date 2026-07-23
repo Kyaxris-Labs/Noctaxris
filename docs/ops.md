@@ -114,7 +114,20 @@ docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --
 
 ## Nested OpenSearch host map count
 
-OpenSearch nested create is fail-closed when the DinD host lacks adequate `vm.max_map_count` (`CreateFailed` + `stub://`). Operators on Linux or Docker Desktop/WSL who need `Active` domains should raise the VM sysctl before CreateDomain. Details: [services/opensearch.md](services/opensearch.md).
+OpenSearch nested create is **fail-closed** when the DinD host lacks adequate `vm.max_map_count` (`CreateFailed` + `stub://`). Noctaxris never raises host sysctl from the API container. When nested logs or wait errors match mmap / memory-lock bootstrap failures, CreateDomain / DescribeDomain include a lab `FailureReason` with the fix hint.
+
+Raise the sysctl on the machine that runs DinD (Linux host or Docker Desktop/WSL VM) **before** CreateDomain if you need `Active`:
+
+```bash
+# Linux
+cat /proc/sys/vm/max_map_count
+sudo sysctl -w vm.max_map_count=262144
+
+# Docker Desktop (Windows WSL2 backend) — inside the Desktop VM
+wsl -d docker-desktop sysctl -w vm.max_map_count=262144
+```
+
+Persist on Linux via `/etc/sysctl.d/`; on Desktop/WSL see [services/opensearch.md](services/opensearch.md) (`.wslconfig` / Desktop VM steps). Control-plane-only labs that accept `CreateFailed` do not need the change.
 
 ## Related
 

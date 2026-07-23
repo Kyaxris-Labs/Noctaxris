@@ -163,6 +163,9 @@ func TestOpenSearchDomainHTTP(t *testing.T) {
 	if strings.Contains(body, `"Created":true`) || strings.Contains(body, `"Created": true`) {
 		t.Fatalf("CreateFailed stub must not set Created=true; body=%q", body)
 	}
+	if !strings.Contains(body, `"FailureReason"`) {
+		t.Fatalf("CreateFailed without DinD should surface FailureReason hint; body=%q", body)
+	}
 
 	list := mustJSONTarget(t, handler, "AmazonOpenSearchService.ListDomainNames", "es", map[string]any{}, now)
 	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "srv-domain") {

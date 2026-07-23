@@ -57,4 +57,4 @@ aws dynamodbstreams get-records --shard-iterator "$IT" --endpoint-url "$EP"
 
 - Global tables and parallel shard fan-out
 - OLD_IMAGE / NEW_AND_OLD_IMAGE view types
-- FilterCriteria / parallelization factor on Lambda ESM (basic DynamoDB Streams ESM ships in [lambda.md](lambda.md))
+- Parallelization factor and OLD_IMAGE-shaped filter depth on Lambda ESM (DynamoDB Streams ESM with FilterCriteria ships in [lambda.md](lambda.md))

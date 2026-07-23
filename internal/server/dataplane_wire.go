@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
+	ossvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/opensearch"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -28,7 +29,7 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 	if err != nil || cli == nil {
 		switch dk {
 		case compute.DataKindMQ, compute.DataKindOpenSearch:
-			_ = markNestedDataFailed(s, accountID, dk, name)
+			_ = markNestedDataFailed(s, accountID, dk, name, "compute client unavailable")
 		}
 		return nil
 	}
@@ -41,7 +42,7 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		Env:   env,
 	})
 	if err != nil {
-		_ = markNestedDataFailed(s, accountID, dk, name)
+		_ = markNestedDataFailed(s, accountID, dk, name, err.Error())
 		return err
 	}
 	waitErr := cli.WaitDataPlaneHealthy(ctx, inst.ContainerID)
@@ -50,6 +51,14 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		if i := strings.LastIndex(ep, ":"); i > 0 {
 			host = ep[:i]
 		}
+	}
+	if waitErr != nil && dk == compute.DataKindOpenSearch {
+		evidence := waitErr.Error()
+		if logs, logErr := cli.DataPlaneLogs(ctx, inst.ContainerID); logErr == nil && strings.TrimSpace(logs) != "" {
+			evidence = evidence + "\n" + logs
+		}
+		_ = markNestedDataFailed(s, accountID, dk, name, evidence)
+		return waitErr
 	}
 	return promoteNestedDataAfterWait(s, accountID, dk, name, inst.ContainerID, host, waitErr)
 }
@@ -60,7 +69,7 @@ func promoteNestedDataAfterWait(
 	s *Server, accountID string, dk compute.DataKind, name, containerID, host string, waitErr error,
 ) error {
 	if waitErr != nil {
-		_ = markNestedDataFailed(s, accountID, dk, name)
+		_ = markNestedDataFailed(s, accountID, dk, name, waitErr.Error())
 		return waitErr
 	}
 	switch dk {
@@ -73,13 +82,13 @@ func promoteNestedDataAfterWait(
 		return s.store.SetMQContainerID(accountID, name, containerID, store.MQBrokerStateRunning, ep)
 	case compute.DataKindOpenSearch:
 		ep := fmt.Sprintf("%s:%d", host, store.OpenSearchNestedPort)
-		return s.store.SetOpenSearchContainerID(accountID, name, containerID, store.OpenSearchDomainStatusActive, ep)
+		return s.store.SetOpenSearchContainerID(accountID, name, containerID, store.OpenSearchDomainStatusActive, ep, "")
 	default:
 		return nil
 	}
 }
 
-func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name string) error {
+func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name, evidence string) error {
 	switch dk {
 	case compute.DataKindElastiCache:
 		return s.store.SetElastiCacheContainerID(accountID, name, "", "failed", "")
@@ -89,7 +98,8 @@ func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name
 		stub := fmt.Sprintf("stub://127.0.0.1/mq/%s", strings.TrimSpace(name))
 		return s.store.SetMQContainerID(accountID, name, "", store.MQBrokerStateCreationFailed, stub)
 	case compute.DataKindOpenSearch:
-		return s.store.SetOpenSearchContainerID(accountID, name, "", store.OpenSearchDomainStatusCreateFailed, "")
+		reason := ossvc.ClassifyOpenSearchNestedFailure(evidence)
+		return s.store.SetOpenSearchContainerID(accountID, name, "", store.OpenSearchDomainStatusCreateFailed, "", reason)
 	default:
 		return nil
 	}

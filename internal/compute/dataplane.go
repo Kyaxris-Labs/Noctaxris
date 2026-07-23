@@ -1,14 +1,17 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 )
 
@@ -300,8 +303,10 @@ func (c *Client) InspectDataPlane(ctx context.Context, containerID string) (Data
 	}, nil
 }
 
-// WaitDataPlaneHealthy best-effort waits until the container is running.
+// WaitDataPlaneHealthy best-effort waits until the container stays running briefly.
 // It does not speak engine wire protocols (no pgx/redis). Timeout uses ctx.
+// Exited containers fail immediately (includes inspect Error when present).
+// The short stability window catches OpenSearch bootstrap exits (vm.max_map_count).
 func (c *Client) WaitDataPlaneHealthy(ctx context.Context, containerID string) error {
 	if c == nil || c.cli == nil {
 		return fmt.Errorf("compute: data-plane client unavailable")
@@ -310,15 +315,34 @@ func (c *Client) WaitDataPlaneHealthy(ctx context.Context, containerID string) e
 	if containerID == "" {
 		return fmt.Errorf("compute: container ID is required")
 	}
+	const stableFor = 2 * time.Second
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
+	var runningSince time.Time
 	for {
-		running, err := c.ContainerRunning(ctx, containerID)
+		insp, err := c.cli.ContainerInspect(ctx, containerID)
 		if err != nil {
-			return err
+			if errdefs.IsNotFound(err) {
+				return fmt.Errorf("compute: data-plane container not found")
+			}
+			return fmt.Errorf("compute: data-plane container inspect: %w", err)
 		}
-		if running {
-			return nil
+		if insp.State != nil && insp.State.Running {
+			if runningSince.IsZero() {
+				runningSince = time.Now()
+			}
+			if time.Since(runningSince) >= stableFor {
+				return nil
+			}
+		} else {
+			runningSince = time.Time{}
+			if insp.State != nil && (insp.State.Status == "exited" || insp.State.Status == "dead") {
+				msg := strings.TrimSpace(insp.State.Error)
+				if msg == "" {
+					msg = fmt.Sprintf("exit code %d", insp.State.ExitCode)
+				}
+				return fmt.Errorf("compute: data-plane container %s: %s", insp.State.Status, msg)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -326,4 +350,31 @@ func (c *Client) WaitDataPlaneHealthy(ctx context.Context, containerID string) e
 		case <-ticker.C:
 		}
 	}
+}
+
+// DataPlaneLogs returns combined stdout/stderr for a nested data container.
+// Used to classify OpenSearch bootstrap failures (vm.max_map_count, memory lock).
+func (c *Client) DataPlaneLogs(ctx context.Context, containerID string) (string, error) {
+	if c == nil || c.cli == nil {
+		return "", fmt.Errorf("compute: data-plane client unavailable")
+	}
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return "", fmt.Errorf("compute: container ID is required")
+	}
+	rc, err := c.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "200",
+	})
+	if err != nil {
+		return "", fmt.Errorf("compute: data-plane logs: %w", err)
+	}
+	defer rc.Close()
+	var stdout, stderr bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, rc); err != nil && err != io.EOF {
+		all, _ := io.ReadAll(rc)
+		return string(all), nil
+	}
+	return stdout.String() + stderr.String(), nil
 }

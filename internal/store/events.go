@@ -46,6 +46,9 @@ var (
 	ErrNoSuchEventRule             = errors.New("ResourceNotFoundException")
 	ErrNoSuchEventTarget           = errors.New("ResourceNotFoundException")
 	ErrNoSuchEventEntry            = errors.New("EventNotFound")
+	// ErrEventTargetRoleArnRequired is returned when PutTargets omits RoleArn for
+	// Logs, Kinesis, or Step Functions targets (lab has no resource-policy path yet).
+	ErrEventTargetRoleArnRequired = errors.New("ValidationException: RoleArn is required for this target type")
 )
 
 // EventBus is an EventBridge bus metadata row.
@@ -569,6 +572,10 @@ func (s *Store) PutTargets(accountID, busName, ruleName string, targets []EventT
 		if id == "" || arn == "" {
 			return fmt.Errorf("put targets: target id and arn are required")
 		}
+		roleARN := strings.TrimSpace(tgt.RoleARN)
+		if roleARN == "" && eventTargetRequiresRoleARN(arn) {
+			return ErrEventTargetRoleArnRequired
+		}
 		transformerJSON, err := marshalEventBridgeInputTransformer(tgt.InputTransformer)
 		if err != nil {
 			return fmt.Errorf("put targets: InputTransformer: %w", err)
@@ -587,7 +594,7 @@ func (s *Store) PutTargets(accountID, busName, ruleName string, targets []EventT
 			   input_path = excluded.input_path,
 			   input_transformer_json = excluded.input_transformer_json`,
 			accountID, busName, ruleName, id, arn,
-			strings.TrimSpace(tgt.RoleARN),
+			roleARN,
 			strings.TrimSpace(tgt.Input),
 			strings.TrimSpace(tgt.InputPath),
 			transformerJSON,
@@ -935,12 +942,11 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt Eve
 		return false
 	}
 	roleARN := strings.TrimSpace(tgt.RoleARN)
-	// CloudWatch Logs, Kinesis, and Step Functions targets require RoleArn in the lab
-	// (no resource-policy delivery path for these targets yet).
+	// Without RoleArn: SQS/Lambda/SNS deliver only when the destination resource policy
+	// Allows events.amazonaws.com (or account root) with SourceArn/SourceAccount keys.
+	// Logs/Kinesis/SFN have no resource-policy delivery path in the lab (RoleArn required).
 	if roleARN == "" {
-		if strings.HasPrefix(arn, "arn:aws:logs:") ||
-			strings.HasPrefix(arn, "arn:aws:kinesis:") ||
-			strings.Contains(arn, ":stateMachine:") {
+		if eventTargetRequiresRoleARN(arn) {
 			return false
 		}
 		return s.deliveryTargetResourcePolicyAllows(accountID, arn, action, authz.ServicePrincipalEvents, ruleARN)
@@ -948,6 +954,19 @@ func (s *Store) eventTargetDeliveryAuthorized(accountID, ruleARN string, tgt Eve
 	return s.deliveryAuthorizedRoleAndResource(
 		accountID, roleARN, action, arn, authz.ServicePrincipalEvents, ruleARN, "events-delivery", DefaultEventsRegion,
 	)
+}
+
+// eventTargetRequiresRoleARN reports target types that need RoleArn at PutTargets /
+// delivery (AWS identity-based for Kinesis/SFN; lab Logs until resource-policy path).
+func eventTargetRequiresRoleARN(targetARN string) bool {
+	switch {
+	case strings.HasPrefix(targetARN, "arn:aws:logs:"),
+		strings.HasPrefix(targetARN, "arn:aws:kinesis:"),
+		strings.Contains(targetARN, ":stateMachine:"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) identityPolicyDocsForRoleARN(roleARN string) ([]string, error) {

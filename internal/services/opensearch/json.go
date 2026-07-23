@@ -20,7 +20,7 @@ func domainStatus(d store.OpenSearchDomain) map[string]any {
 	}
 	created := status == store.OpenSearchDomainStatusActive
 	processing := status == "Processing" || status == store.OpenSearchDomainStatusCreating
-	return map[string]any{
+	out := map[string]any{
 		"DomainId":          d.DomainID,
 		"DomainName":        d.DomainName,
 		"ARN":               d.DomainARN,
@@ -33,6 +33,11 @@ func domainStatus(d store.OpenSearchDomain) map[string]any {
 		// Lab status string for honesty; not a field on AWS DomainStatus.
 		"DomainStatus": status,
 	}
+	// Lab operator hint when CreateFailed (mmap / memory lock / nested start).
+	if reason := strings.TrimSpace(d.FailureReason); reason != "" {
+		out["FailureReason"] = reason
+	}
+	return out
 }
 
 // CreateDomainJSON builds CreateDomain response.

@@ -16,6 +16,7 @@ func TestDescribeDomainJSONNeverActiveOnStub(t *testing.T) {
 		EngineVersion: "OpenSearch_2.11",
 		DomainStatus:  store.OpenSearchDomainStatusCreateFailed,
 		StubEndpoint:  "stub://127.0.0.1/opensearch/id-1",
+		FailureReason: HintMaxMapCount,
 	}
 	raw, err := DescribeDomainJSON(d)
 	if err != nil {
@@ -44,5 +45,8 @@ func TestDescribeDomainJSONNeverActiveOnStub(t *testing.T) {
 	}
 	if st["Processing"] != false {
 		t.Fatalf("Processing=%v want false for CreateFailed stub", st["Processing"])
+	}
+	if st["FailureReason"] != HintMaxMapCount {
+		t.Fatalf("FailureReason=%v want max_map_count hint", st["FailureReason"])
 	}
 }

@@ -10,15 +10,15 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [STS](sts.md) | Shipped | All 11 actions (lab MFA on GetSessionToken) |
 | [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance |
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, tags, deletion sweeper, key-material rotation |
-| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, cross-account dual eval |
+| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, bucket notifications (Lambda/SQS/EventBridge/SNS emit; empty=off), cross-account dual eval |
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, DescribeContinuousBackups stub, resource policies, cross-account dual eval, stream enablement |
-| [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY |
+| [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY; Lambda ESM + FilterCriteria in [lambda.md](lambda.md) |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
-| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM with lab FilterCriteria, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM with FilterCriteria (EventBridge operators), Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, RotateSecret, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
 | [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, topic policies, XA Subscribe + foreign SQS delivery |
-| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
+| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; content filters (prefix/suffix/exists/anything-but/numeric/equals-ignore-case); RoleArn or resource-policy delivery for SQS/Lambda/SNS (RoleArn required for Logs/Kinesis/SFN); InputPath + InputTransformer; bus-policy dual-eval |
 | [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS targets, in-process ticker, PassRole |
 | [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy |
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD; nested RabbitMQ when DinD up (`RUNNING`); ActiveMQ / no-DinD → `CREATION_FAILED` stub |
@@ -33,7 +33,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [SES](ses.md) | Shipped | Local catcher: verify, SendEmail/SendRawEmail, ListIdentities, SetIdentityNotificationTopic Bounce, GetSendStatistics |
 | [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, GetConfiguration, AppConfigData session |
 | [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Task to Lambda/SQS/SNS/EventBridge |
-| [CloudFormation](cloudformation.md) | Shipped | Stack CRUD for S3, IAM Role, SQS, DynamoDB, Lambda; JSON/YAML; lab intrinsics |
+| [CloudFormation](cloudformation.md) | Shipped | Stack CRUD; S3/IAM/SQS/DynamoDB/Lambda/KMS/SNS/Logs/Events/SSM/Secrets (+ BucketPolicy, ManagedPolicy, Permission, NotificationConfiguration, TopicPolicy, Subscription, Alias, User/Group); JSON/YAML; lab intrinsics |
 | [CodeBuild](codebuild.md) | Shipped | Project CRUD lite, StartBuild on nested DinD, BatchGetBuilds/ListBuilds |
 | [CodePipeline](codepipeline.md) | Shipped | Pipeline CRUD, StartPipelineExecution with nested CodeBuild StartBuild, GetPipelineState |
 | [Batch](batch.md) | Shipped | Compute environment / queue / definition lite, SubmitJob on nested DinD |
@@ -45,8 +45,8 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Cloud Map](servicediscovery.md) | Shipped | Private DNS (requires Vpc) / HTTP namespace, service/instance, Vpc-scoped DiscoverInstances |
 | [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
 | [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY, IAM, or Cognito User Pools auth |
-| [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, NONE/JWT/IAM authorizers, optional CredentialsArn PassRole |
-| [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD, USER_PASSWORD_AUTH, RS256 tokens, JWKS on loopback |
+| [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, GetIntegrations/GetRoutes/GetAuthorizers, REST `/v2/apis` before ECR Registry `/v2/`, NONE/JWT/IAM/CUSTOM authorizers, optional CredentialsArn PassRole |
+| [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD, USER_PASSWORD_AUTH (unsigned InitiateAuth), RS256 tokens, JWKS on loopback |
 | [CloudFront](cloudfront.md) | Shipped | Distribution CRUD **control-plane stub** (origins must exist; `InProgress`, no DomainName/PoP) |
 | [ELB v2](elbv2.md) | Shipped | ALB / target group / listener lite; Lambda lab listener on `/alb/...`; health healthy when listener + permission; IP unused; NLB rejected |
 | [S3 Vectors](s3vectors.md) | Shipped | Vector bucket/index CRUD, PutVectors/QueryVectors cosine or euclidean |
@@ -60,7 +60,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
 | [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete; `creating` until nested Mongo-compatible starts |
 | [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; GetObject/OutputLocation fail closed |
-| [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://` |
+| [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://` + lab `FailureReason` on mmap/lock |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |
 | [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument **canned** Blocks |

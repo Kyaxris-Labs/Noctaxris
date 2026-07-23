@@ -6,15 +6,19 @@
 
 - S3 bucket notifications: Put/Get configuration plus emit on PutObject / DeleteObject / CompleteMultipartUpload to Lambda (async), SQS, EventBridge (`aws.s3`), and SNS Publish (HTTP subscribers remain allowlist/catcher-only); destination authz re-checked on emit
 - EventBridge content-based pattern operators: nested `detail`, `prefix` / `suffix`, `exists`, `anything-but`, `numeric`, `equals-ignore-case` (`wildcard` / `$or` / IP still rejected at PutRule)
+- EventBridge delivery without RoleArn for SQS/Lambda/SNS: destination resource policy must Allow `events.amazonaws.com` (or account root) with `aws:SourceArn` / `aws:SourceAccount`; RoleArn session path unchanged; `PutTargets` requires RoleArn for Logs/Kinesis/SFN
 - CloudFormation: `AWS::IAM::ManagedPolicy`, `AWS::IAM::Policy`, `AWS::S3::BucketPolicy`, `AWS::Lambda::Permission`, and `AWS::S3::Bucket` `NotificationConfiguration`
+- CloudFormation catalog: `AWS::SNS::TopicPolicy`, `AWS::SNS::Subscription`, `AWS::Logs::LogGroup`, `AWS::KMS::Alias`, `AWS::IAM::User`, `AWS::IAM::Group`; SQS queue attribute props wired on create; `ScheduleExpression` on `AWS::Events::Rule` fail-closed
+- Lambda ESM `FilterCriteria`: Create/Update validate EventBridge-style patterns (max 5 Filters); SQS and DynamoDB Streams pollers apply filters before Invoke; SQS nested JSON `body` plus `messageId`; DynamoDB `eventName` / `Keys` / `NewImage`; operators `prefix` / `suffix` / `exists` / `anything-but` / `numeric` / `equals-ignore-case` (`$or` / `wildcard` / `cidr` rejected)
 
-### Stabilization (CLI fidelity + docs)
+### Stabilization (CLI fidelity + compute honesty)
 
 - Lambda `FunctionConfiguration.Layers` returns AWS Layer objects (`Arn`, `CodeSize`) instead of bare ARN strings
-- API Gateway HTTP API REST `/v2/apis...` no longer stolen by lab ECR Registry V2; `GetIntegrations` / `GetRoutes` / `GetAuthorizers` list APIs
+- API Gateway HTTP API REST `/v2/apis...` routed before lab ECR Registry `/v2/`; `GetIntegrations` / `GetRoutes` / `GetAuthorizers` list APIs
 - Lambda REST: `AddPermission` (`/policy`) and Function URL config (`/2021-10-31/.../url`)
 - Cognito `InitiateAuth` accepts unsigned AWS CLI requests (public IdP API)
-- Docs: restricted DinD is current default (not “planned”); OpenSearch nested honesty + `vm.max_map_count` / host-gateway overlays in ops
+- Restricted DinD is the Compose default (`privileged: false` + caps/cgroup); `compose.engine-privileged.yaml` remains host opt-in
+- OpenSearch nested create: lab `FailureReason` on CreateFailed for mmap / memory-lock bootstrap; ops docs for Linux / Desktop / WSL `vm.max_map_count` (fail-closed; no host sysctl from the API container)
 - Nested task HostConfig adds pids limit (1024); audit `events.jsonl` chmod enforced to `0644`
 
 ## 1.0.0
