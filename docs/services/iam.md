@@ -18,7 +18,7 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 | Groups | `CreateGroup`, `DeleteGroup`, `GetGroup`, `ListGroups`, `AddUserToGroup`, `RemoveUserFromGroup` |
 | Group policies | `AttachGroupPolicy`, `DetachGroupPolicy`, `ListAttachedGroupPolicies`, `PutGroupPolicy`, `GetGroupPolicy`, `DeleteGroupPolicy`, `ListGroupPolicies` |
 | Boundaries | `PutUserPermissionsBoundary`, `DeleteUserPermissionsBoundary`, `PutRolePermissionsBoundary`, `DeleteRolePermissionsBoundary`. `GetUser` / `GetRole` embed `PermissionsBoundary` and `CreateDate`. Lab-only: `GetUserPermissionsBoundary` / `GetRolePermissionsBoundary` |
-| Instance profiles | `CreateInstanceProfile`, `DeleteInstanceProfile`, `GetInstanceProfile`, `AddRoleToInstanceProfile`, `RemoveRoleFromInstanceProfile`, `ListInstanceProfiles`. Role members include `Arn` and `RoleId` |
+| Instance profiles | `CreateInstanceProfile`, `DeleteInstanceProfile`, `GetInstanceProfile`, `AddRoleToInstanceProfile`, `RemoveRoleFromInstanceProfile`, `ListInstanceProfiles`, `ListInstanceProfilesForRole`. Role members include `Arn` and `RoleId` |
 | OIDC IdP | `CreateOpenIDConnectProvider`, `DeleteOpenIDConnectProvider`, `ListOpenIDConnectProviders`, `GetOpenIDConnectProvider` |
 | SAML IdP | `CreateSAMLProvider`, `DeleteSAMLProvider`, `ListSAMLProviders`, `GetSAMLProvider` |
 | Virtual MFA | `CreateVirtualMFADevice`, `EnableMFADevice`, `ListMFADevices`, `DeactivateMFADevice` |

@@ -13,7 +13,7 @@ Lab-complete ECS core: task definitions (with required task and execution roles)
 | Services | `CreateService`, `UpdateService`, `DeleteService`, `DescribeServices`, `ListServices` with DesiredCount lab reconciler (start/stop nested tasks toward desired). No awsvpc ENI |
 | Clusters | `DescribeClusters`, `ListClusters` (default cluster `default` seeded per account) |
 | Roles | `RegisterTaskDefinition` and `RunTask` require `taskRoleArn` **and** `executionRoleArn`. Caller needs `iam:PassRole` on each role. Role trust must Allow `sts:AssumeRole` for `ecs-tasks.amazonaws.com` |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Tasks run on Internal network `noctaxris-ecs` without host-gateway ExtraHosts by default (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1` to opt in). Nested tasks drop all Linux capabilities (`CapDrop: ALL`). Default runtime. No host `docker.sock` on the API container. After the container exits, task status becomes `STOPPED` (background reaper plus sync on `DescribeTasks` / `ListTasks`). Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) uses the same platform matrix as Lambda (Linux/KVM probe, fail-closed on WSL2 or missing binary). Live Firecracker guest RunTask is not packaged (fail closed; no fake boot) |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Tasks run on Internal network `noctaxris-ecs` without host-gateway ExtraHosts by default (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1` to opt in). Nested tasks drop all Linux capabilities (`CapDrop: ALL`). No host `docker.sock` on the API container. After the container exits, task status becomes `STOPPED` (background reaper plus sync on `DescribeTasks` / `ListTasks`). Live RunTask requires a healthy engine |
 | Task role session | Temporary AWS_* credentials for the task role injected into the container (same mint pattern as Lambda Invoke) |
 | Lab registry images | Task definitions may reference `127.0.0.1:4566/ACCOUNT/REPO:tag`. RunTask pulls inside DinD using a registry token when the image uses the lab ECR host |
 
@@ -25,7 +25,7 @@ ECS control-plane APIs use identity `EvaluateFull` on cluster, task-definition, 
 
 `RegisterTaskDefinition` and `RunTask` call `CheckPassRole` for both role ARNs with service principal `ecs-tasks.amazonaws.com`.
 
-Without `NOCTAXRIS_DOCKER_HOST`, DinD `RunTask` returns compute unavailable. Opt-in microVM does not require `NOCTAXRIS_DOCKER_HOST` and fails closed when KVM or the Firecracker binary is missing.
+Without `NOCTAXRIS_DOCKER_HOST`, `RunTask` returns compute unavailable.
 
 ## How to verify / CLI smoke
 
@@ -83,4 +83,4 @@ Expect `register-task-definition` to fail without both role ARNs. Expect `run-ta
 - Load balancers, `awsvpc` networking, capacity providers, ECS Exec, Service Connect
 - Autoscaling, circuit breakers, placement constraints, EBS volumes, Firelens matrix
 - Cross-account or multi-cluster depth beyond same-account `default`
-- Rootless DinD and live Firecracker guest RunTask (opt-in selection and fail-closed stubs ship with `NOCTAXRIS_COMPUTE_RUNTIME=microvm`). See [lambda.md](lambda.md#opt-in-microvm) and [index.md](index.md#cross-cutting)
+- Rootless / deprivileged nested engine (privilege reduction planned; see [security-defaults.md](../security-defaults.md))

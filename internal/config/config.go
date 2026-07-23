@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
@@ -23,10 +22,8 @@ type Config struct {
 	DockerHost string
 	// DockerTLSCertPath is the directory with ca.pem, cert.pem, key.pem for engine TLS.
 	DockerTLSCertPath string
-	// ComputeRuntime is dind (default) or microvm (NOCTAXRIS_COMPUTE_RUNTIME).
+	// ComputeRuntime is dind (default). Only nested DinD is supported (NOCTAXRIS_COMPUTE_RUNTIME).
 	ComputeRuntime string
-	// FirecrackerBin is an optional Firecracker binary path (NOCTAXRIS_FIRECRACKER_BIN).
-	FirecrackerBin string
 	// LambdaEndpointURL is injected into nested functions as AWS_ENDPOINT_URL.
 	// Defaults empty; Compose sets http://host.docker.internal:4566.
 	LambdaEndpointURL string
@@ -50,7 +47,6 @@ func LoadFromEnv() (Config, error) {
 		DockerHost:          getenv("NOCTAXRIS_DOCKER_HOST", ""),
 		DockerTLSCertPath:   getenv("NOCTAXRIS_DOCKER_CERT_PATH", ""),
 		ComputeRuntime:      getenv("NOCTAXRIS_COMPUTE_RUNTIME", ""),
-		FirecrackerBin:      getenv("NOCTAXRIS_FIRECRACKER_BIN", ""),
 		LambdaEndpointURL:   getenv("NOCTAXRIS_LAMBDA_ENDPOINT_URL", ""),
 		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
 		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),
@@ -58,9 +54,9 @@ func LoadFromEnv() (Config, error) {
 		OIDCClientID:        getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
 	}
 
-	runtime, err := parseComputeRuntime(cfg.ComputeRuntime)
+	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("NOCTAXRIS_COMPUTE_RUNTIME: %w", err)
 	}
 	cfg.ComputeRuntime = runtime
 
@@ -100,16 +96,4 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func parseComputeRuntime(raw string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	switch v {
-	case "", "dind":
-		return "dind", nil
-	case "microvm":
-		return "microvm", nil
-	default:
-		return "", fmt.Errorf("NOCTAXRIS_COMPUTE_RUNTIME: unknown value %q (want dind or microvm)", raw)
-	}
 }

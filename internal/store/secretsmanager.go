@@ -261,7 +261,8 @@ func (s *Store) storeSecretValues(
 	hasString := secretString != ""
 	hasBinary := len(secretBinary) > 0
 	if !hasString && !hasBinary {
-		return "", nil, 0, nil, nil, 0, "", fmt.Errorf("secret string or binary required")
+		// Metadata-only secret (no current version payload), matching AWS CreateSecret.
+		return "", nil, 0, nil, nil, 0, "", nil
 	}
 
 	resolvedKeyID := ""

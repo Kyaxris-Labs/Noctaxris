@@ -54,6 +54,12 @@ func (s *Server) handleSecretsManager(
 		s.secretsGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSecretsDeleteResourcePolicy:
 		s.secretsDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsListTagsForResource:
+		s.secretsListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsTagResource:
+		s.secretsTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSecretsUntagResource:
+		s.secretsUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeSecretsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Secrets Manager action is not implemented.", readOnly, eventID, verified)
@@ -87,6 +93,12 @@ func secretsAction(action string) string {
 		return catalog.ActionSecretsGetResourcePolicy
 	case "DeleteResourcePolicy":
 		return catalog.ActionSecretsDeleteResourcePolicy
+	case "ListTagsForResource":
+		return catalog.ActionSecretsListTagsForResource
+	case "TagResource":
+		return catalog.ActionSecretsTagResource
+	case "UntagResource":
+		return catalog.ActionSecretsUntagResource
 	default:
 		return action
 	}
@@ -220,13 +232,11 @@ func (s *Server) secretsCreateSecret(
 			"SecretBinary is not valid base64.", readOnly, eventID, verified)
 		return
 	}
-	if secretString == "" && len(secretBinary) == 0 {
-		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"You must provide SecretString or SecretBinary.", readOnly, eventID, verified)
-		return
-	}
+	// AWS allows CreateSecret with neither SecretString nor SecretBinary (metadata-only;
+	// Terraform aws_secretsmanager_secret then PutSecretValue via aws_secretsmanager_secret_version).
 	keyID, _ := params["KmsKeyId"].(string)
 	description, _ := params["Description"].(string)
+	hasValue := secretString != "" || len(secretBinary) > 0
 
 	arn := store.SecretARN(s.secretsRegion(verified), verified.AccountID, name, "000000")
 	if !s.authorize(verified, catalog.ActionSecretsCreateSecret, arn) {
@@ -234,8 +244,10 @@ func (s *Server) secretsCreateSecret(
 			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
 		return
 	}
-	if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, verified.AccountID, keyID, catalog.ActionKMSEncrypt) {
-		return
+	if hasValue {
+		if !s.secretsAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, verified.AccountID, keyID, catalog.ActionKMSEncrypt) {
+			return
+		}
 	}
 
 	sec, err := s.store.CreateSecret(
@@ -656,8 +668,16 @@ func (s *Server) secretsGetResourcePolicy(
 		return
 	}
 	if errors.Is(err, store.ErrNoSuchResourcePolicy) {
-		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
-			"Secrets Manager can't find the specified secret value for ResourcePolicy.", readOnly, eventID, verified)
+		// Terraform aws_secretsmanager_secret treats policy ResourceNotFoundException as
+		// a hard miss ("couldn't find resource"). Return success with empty policy instead.
+		payload, buildErr := sm.GetResourcePolicyJSON(meta, "")
+		if buildErr != nil {
+			s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build response.", readOnly, eventID, verified)
+			return
+		}
+		s.writeSecretsOK(w, requestID, payload)
+		s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "GetResourcePolicy", readOnly)
 		return
 	}
 	if err != nil {
@@ -713,6 +733,121 @@ func (s *Server) secretsDeleteResourcePolicy(
 	}
 	s.writeSecretsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "DeleteResourcePolicy", readOnly)
+}
+
+func (s *Server) secretsListTagsForResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsListTagsForResource, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:ListTagsForResource.", readOnly, eventID, verified)
+		return
+	}
+	tags, err := s.store.ListResourceTags(secretAccountID, meta.ARN)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list tags.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.ListTagsForResourceJSON(tags)
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "ListTagsForResource", readOnly)
+}
+
+func (s *Server) secretsTagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
+	}
+	tags := parseKeyValueTags(params["Tags"])
+	if len(tags) == 0 {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Tags is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsTagResource, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:TagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.TagResources(secretAccountID, []string{meta.ARN}, tags); err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to tag secret.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.EmptyOKJSON()
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "TagResource", readOnly)
+}
+
+func (s *Server) secretsUntagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	secretID := secretsSecretID(params)
+	meta, secretAccountID, ok := s.secretMetaOrErr(w, r, body, requestID, eventID, verified, readOnly, secretID)
+	if !ok {
+		return
+	}
+	keys := stringSliceParam(params["TagKeys"])
+	if len(keys) == 0 {
+		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TagKeys is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsUntagResource, meta.ARN, meta.ResourcePolicy) {
+		s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:UntagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.UntagResources(secretAccountID, []string{meta.ARN}, keys); err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to untag secret.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := sm.EmptyOKJSON()
+	if err != nil {
+		s.writeSecretsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSecretsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "UntagResource", readOnly)
 }
 
 func (s *Server) writeSecretsOK(w http.ResponseWriter, requestID string, payload []byte) {

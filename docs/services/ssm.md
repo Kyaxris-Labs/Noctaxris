@@ -9,10 +9,11 @@ Lab-complete Parameter Store core: String and SecureString parameters, Put/Get/G
 | Area | Actions |
 |------|---------|
 | Parameters | `PutParameter`, `GetParameter`, `GetParameters`, `GetParametersByPath`, `DeleteParameter`, `DescribeParameters` |
+| Tags | `ListTagsForResource`, `AddTagsToResource`, `RemoveTagsFromResource` (Parameter resources) |
 | Types | `String` (plaintext at rest), `SecureString` (sealed under KMS) |
 | Hierarchy | `GetParametersByPath` with `Path`, optional `Recursive`, and `WithDecryption` |
 | KMS | Optional `KeyId` on Put. Defaults to lab `alias/aws/ssm` (per-account CMK seeded on first use) |
-| Describe filters | `ParameterFilters` with `Key=Name`, `Option=BeginsWith` (optional), and `Values` prefix |
+| Describe filters | `ParameterFilters` with `Key=Name`, `Option=Equals` (exact name) or `BeginsWith` (optional; prefix), and `Values` |
 
 Parameter metadata lives in SQLite. SecureString values are sealed under the resolved CMK. Names normalize with a leading `/` when omitted.
 
@@ -73,6 +74,10 @@ aws ssm get-parameters-by-path \
 
 aws ssm describe-parameters \
   --parameter-filters "Key=Name,Option=BeginsWith,Values=/noctaxris" \
+  --endpoint-url "$EP"
+
+aws ssm describe-parameters \
+  --parameter-filters "Key=Name,Option=Equals,Values=$PARAM" \
   --endpoint-url "$EP"
 
 aws ssm delete-parameter --name "$PARAM" --endpoint-url "$EP"

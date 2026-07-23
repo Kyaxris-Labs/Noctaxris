@@ -17,3 +17,7 @@ README.md
 docs/
 docker/compose_test.go
 **/*_test.go
+tests/
+**/node_modules/
+**/.pytest_cache/
+**/.terraform/

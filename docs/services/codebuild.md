@@ -53,4 +53,4 @@ aws codebuild list-builds --endpoint-url "$EP"
 - VPC config, fleets, privileged mode depth, cache, secondary sources
 - Batch build matrix and CodeCommit
 - CloudWatch Logs and S3 artifact publishing beyond lab status records
-- MicroVM isolation path for builds
+- Rootless / deprivileged nested engine for builds

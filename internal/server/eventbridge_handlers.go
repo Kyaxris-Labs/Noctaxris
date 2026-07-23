@@ -60,6 +60,12 @@ func (s *Server) handleEventBridge(
 		s.eventsPutPermission(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionEventsRemovePermission:
 		s.eventsRemovePermission(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEventsListTagsForResource:
+		s.eventsListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEventsTagResource:
+		s.eventsTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEventsUntagResource:
+		s.eventsUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeEventsError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This EventBridge action is not implemented.", readOnly, eventID, verified)
@@ -103,6 +109,12 @@ func eventsAction(action string) string {
 		return catalog.ActionEventsPutPermission
 	case "RemovePermission":
 		return catalog.ActionEventsRemovePermission
+	case "ListTagsForResource":
+		return catalog.ActionEventsListTagsForResource
+	case "TagResource":
+		return catalog.ActionEventsTagResource
+	case "UntagResource":
+		return catalog.ActionEventsUntagResource
 	default:
 		return action
 	}
@@ -912,6 +924,107 @@ func (s *Server) eventsRemovePermission(
 	payload, _ := eb.EmptyOKJSON()
 	s.writeEventsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "RemovePermission", readOnly)
+}
+
+func (s *Server) eventsListTagsForResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, _ := params["ResourceARN"].(string)
+	arn = strings.TrimSpace(arn)
+	if arn == "" {
+		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ResourceARN is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeEvents(verified, catalog.ActionEventsListTagsForResource, arn) {
+		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform events:ListTagsForResource.", readOnly, eventID, verified)
+		return
+	}
+	tags, err := s.store.ListResourceTags(verified.AccountID, arn)
+	if err != nil {
+		s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list tags.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := eb.ListTagsForResourceJSON(tags)
+	if err != nil {
+		s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeEventsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "ListTagsForResource", readOnly)
+}
+
+func (s *Server) eventsTagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, _ := params["ResourceARN"].(string)
+	arn = strings.TrimSpace(arn)
+	tags := parseKeyValueTags(params["Tags"])
+	if arn == "" || len(tags) == 0 {
+		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ResourceARN and Tags are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeEvents(verified, catalog.ActionEventsTagResource, arn) {
+		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform events:TagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.TagResources(verified.AccountID, []string{arn}, tags); err != nil {
+		s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to tag resource.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := eb.EmptyOKJSON()
+	s.writeEventsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "TagResource", readOnly)
+}
+
+func (s *Server) eventsUntagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, _ := params["ResourceARN"].(string)
+	arn = strings.TrimSpace(arn)
+	keys := stringSliceParam(params["TagKeys"])
+	if arn == "" || len(keys) == 0 {
+		s.writeEventsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ResourceARN and TagKeys are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeEvents(verified, catalog.ActionEventsUntagResource, arn) {
+		s.writeEventsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform events:UntagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.UntagResources(verified.AccountID, []string{arn}, keys); err != nil {
+		s.writeEventsError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to untag resource.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := eb.EmptyOKJSON()
+	s.writeEventsOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, eventsEventSource, "UntagResource", readOnly)
 }
 
 func (s *Server) writeEventsOK(w http.ResponseWriter, requestID string, payload []byte) {

@@ -238,3 +238,28 @@ func DescribeTimeToLiveJSON(t store.DynamoTable) ([]byte, error) {
 func UpdateTimeToLiveJSON(t store.DynamoTable) ([]byte, error) {
 	return DescribeTimeToLiveJSON(t)
 }
+
+// DescribeContinuousBackupsJSON builds a lab stub for DescribeContinuousBackups.
+// Continuous backups are always ENABLED (AWS-shaped); PITR defaults to DISABLED.
+func DescribeContinuousBackupsJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ContinuousBackupsDescription": map[string]any{
+			"ContinuousBackupsStatus": "ENABLED",
+			"PointInTimeRecoveryDescription": map[string]any{
+				"PointInTimeRecoveryStatus": "DISABLED",
+			},
+		},
+	})
+}
+
+// ListTagsOfResourceJSON builds a ListTagsOfResource success body (Key/Value tags).
+func ListTagsOfResourceJSON(tags []store.ResourceTag) ([]byte, error) {
+	entries := make([]map[string]string, 0, len(tags))
+	for _, t := range tags {
+		entries = append(entries, map[string]string{
+			"Key":   t.Key,
+			"Value": t.Value,
+		})
+	}
+	return json.Marshal(map[string]any{"Tags": entries})
+}

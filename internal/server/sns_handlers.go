@@ -29,6 +29,16 @@ func (s *Server) handleSNS(
 	readOnly bool,
 ) {
 	params := formParams(r, body)
+	// Query Action=ListTagsForResource/TagResource/UntagResource is normalized to
+	// kms:* by resolveAction; remap for SNS-signed requests.
+	switch action {
+	case catalog.ActionKMSListResourceTags, "ListTagsForResource":
+		action = catalog.ActionSNSListTagsForResource
+	case catalog.ActionKMSTagResource, "TagResource":
+		action = catalog.ActionSNSTagResource
+	case catalog.ActionKMSUntagResource, "UntagResource":
+		action = catalog.ActionSNSUntagResource
+	}
 	action = snsAction(action)
 	accountID := verified.AccountID
 	region := verified.Region
@@ -48,6 +58,26 @@ func (s *Server) handleSNS(
 		resource = "*"
 	case catalog.ActionSNSListSubscriptions, "ListSubscriptions":
 		resource = "*"
+	case catalog.ActionSNSListTagsForResource, catalog.ActionSNSTagResource, catalog.ActionSNSUntagResource:
+		arn := strings.TrimSpace(params.Get("ResourceArn"))
+		if arn == "" {
+			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+				"ResourceArn is required.", readOnly, eventID, verified)
+			return
+		}
+		topic, err = s.store.GetTopicByARN(arn)
+		if err != nil {
+			if errors.Is(err, store.ErrNoSuchTopic) {
+				s.writeSNSError(w, r, requestID, http.StatusNotFound, "NotFound",
+					"Topic does not exist.", readOnly, eventID, verified)
+				return
+			}
+			s.writeSNSError(w, r, requestID, http.StatusInternalServerError, "InternalError",
+				"Unable to resolve topic.", readOnly, eventID, verified)
+			return
+		}
+		resource = topic.TopicARN
+		topicPolicy = topic.Policy
 	case catalog.ActionSNSCreateTopic, "CreateTopic":
 		name := strings.TrimSpace(params.Get("Name"))
 		if name == "" {
@@ -184,6 +214,48 @@ func (s *Server) handleSNS(
 		payload, err = s.snsAddPermission(topic.AccountID, topic, params, requestID)
 	case catalog.ActionSNSRemovePermission, "RemovePermission":
 		payload, err = s.snsRemovePermission(topic.AccountID, topic, params, requestID)
+	case catalog.ActionSNSListTagsForResource:
+		tags, listErr := s.store.ListResourceTags(topic.AccountID, topic.TopicARN)
+		if listErr != nil {
+			s.writeSNSError(w, r, requestID, http.StatusInternalServerError, "InternalError",
+				"Unable to list tags.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = snssvc.ListTagsForResourceXML(tags, requestID)
+	case catalog.ActionSNSTagResource:
+		tags := snsTagsFromForm(params)
+		if len(tags) == 0 {
+			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+				"Tags is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, tagErr := s.store.TagResources(topic.AccountID, []string{topic.TopicARN}, tags); tagErr != nil {
+			s.writeSNSError(w, r, requestID, http.StatusInternalServerError, "InternalError",
+				"Unable to tag topic.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = snssvc.TagResourceXML(requestID)
+	case catalog.ActionSNSUntagResource:
+		keys := params["TagKeys.member"]
+		if len(keys) == 0 {
+			// Also accept TagKeys.member.N form used by some SDKs.
+			for k, vals := range params {
+				if strings.HasPrefix(k, "TagKeys.member.") {
+					keys = append(keys, vals...)
+				}
+			}
+		}
+		if len(keys) == 0 {
+			s.writeSNSError(w, r, requestID, http.StatusBadRequest, "InvalidParameter",
+				"TagKeys is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, untagErr := s.store.UntagResources(topic.AccountID, []string{topic.TopicARN}, keys); untagErr != nil {
+			s.writeSNSError(w, r, requestID, http.StatusInternalServerError, "InternalError",
+				"Unable to untag topic.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = snssvc.UntagResourceXML(requestID)
 	default:
 		s.writeSNSError(w, r, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This SNS action is not implemented.", readOnly, eventID, verified)
@@ -248,9 +320,43 @@ func snsAction(action string) string {
 		return catalog.ActionSNSAddPermission
 	case "RemovePermission":
 		return catalog.ActionSNSRemovePermission
+	case "ListTagsForResource":
+		return catalog.ActionSNSListTagsForResource
+	case "TagResource":
+		return catalog.ActionSNSTagResource
+	case "UntagResource":
+		return catalog.ActionSNSUntagResource
 	default:
 		return action
 	}
+}
+
+func snsTagsFromForm(vals url.Values) map[string]string {
+	out := map[string]string{}
+	// Tags.member.N.Key / Tags.member.N.Value
+	keyByIdx := map[string]string{}
+	valByIdx := map[string]string{}
+	for k, vs := range vals {
+		if len(vs) == 0 {
+			continue
+		}
+		if strings.HasPrefix(k, "Tags.member.") && strings.HasSuffix(k, ".Key") {
+			idx := strings.TrimSuffix(strings.TrimPrefix(k, "Tags.member."), ".Key")
+			keyByIdx[idx] = vs[0]
+			continue
+		}
+		if strings.HasPrefix(k, "Tags.member.") && strings.HasSuffix(k, ".Value") {
+			idx := strings.TrimSuffix(strings.TrimPrefix(k, "Tags.member."), ".Value")
+			valByIdx[idx] = vs[0]
+		}
+	}
+	for idx, key := range keyByIdx {
+		if key == "" {
+			continue
+		}
+		out[key] = valByIdx[idx]
+	}
+	return out
 }
 
 func snsEventName(action string) string {

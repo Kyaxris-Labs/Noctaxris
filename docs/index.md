@@ -2,7 +2,7 @@
 
 Public reference for **Noctaxris** (module `github.com/Kyaxris-Labs/Noctaxris`). Product name is PascalCase `Noctaxris`.
 
-Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. Lab cores are shipped: loopback by default, no host `docker.sock`, sealed secrets and CMK material, SigV4 (with documented auth-open exceptions), multi-account dual eval and OU SCP/RCP inheritance, identity (IAM/STS/Organizations), crypto and data plane with versioning/GSI/rotation depth, SSM and Secrets Manager, Lambda with lab ECR Image pull and opt-in microVM selection (DinD default), SNS, EventBridge (including Scheduler and Pipes), ECR, ECS, CloudTrail, CloudWatch Logs, Resource Groups Tagging API, Kinesis, Firehose, SES, AppConfig, Step Functions, CloudFormation, CodeBuild, CodePipeline, Batch, Glue, WAF v2, Config, Cognito User Pools, API Gateway HTTP API, AppSync, edge/governance stubs, nested RDS/ElastiCache/DocumentDB when DinD is up, RDS Data API (nested `psql` when DinD started Postgres, else stub), Athena (Glue + lab S3 SELECT subset), OpenSearch/EMR control-plane stubs, and Bedrock/Textract/Transcribe canned stubs. Remaining deferred depth (including live Firecracker guest boot and wire-protocol `pgx` Data API) is tracked on the per-service pages.
+Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. Lab cores are shipped: loopback by default, no host `docker.sock`, sealed secrets and CMK material, SigV4 (with documented auth-open exceptions), multi-account dual eval and OU SCP/RCP inheritance, identity (IAM/STS/Organizations), crypto and data plane with versioning/GSI/rotation depth, SSM and Secrets Manager, Lambda with lab ECR Image pull on nested DinD, SNS, EventBridge (including Scheduler and Pipes), ECR, ECS, CloudTrail, CloudWatch Logs, Resource Groups Tagging API, Kinesis, Firehose, SES, AppConfig, Step Functions, CloudFormation, CodeBuild, CodePipeline, Batch, Glue, WAF v2, Config, Cognito User Pools, API Gateway HTTP API, AppSync, edge/governance stubs, nested RDS/ElastiCache/DocumentDB when DinD is up, RDS Data API (nested `psql` when DinD started Postgres, else stub), Athena (Glue + lab S3 SELECT subset), OpenSearch/EMR control-plane stubs, and Bedrock/Textract/Transcribe canned stubs. Remaining deferred depth (including nested-engine privilege reduction and wire-protocol `pgx` Data API) is tracked on the per-service pages.
 
 ## Reference
 
@@ -13,6 +13,7 @@ Noctaxris is a Docker-first AWS-shaped emulator for cloud security labs. Lab cor
 | [configuration.md](configuration.md) | Env vars, data layout, Compose, backup, IdP bootstrap |
 | [ops.md](ops.md) | Single-replica rule, backup/restore, upgrades, CI matrix |
 | [security-defaults.md](security-defaults.md) | Host, crypto, and auth posture |
+| [../tests/README.md](../tests/README.md) | SDK (Go/Node/Python) / Terraform / CloudFormation integration suites |
 | [../CHANGELOG.md](../CHANGELOG.md) | Lab-core release notes |
 
 ## History

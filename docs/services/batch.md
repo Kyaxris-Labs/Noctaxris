@@ -62,4 +62,4 @@ aws batch submit-job --job-name job1 --job-queue lab-jq --job-definition lab-jd 
 - Array jobs, multi-node parallel jobs, fair-share scheduling
 - Fargate or EC2 capacity provider fidelity beyond nested DinD
 - Retry strategies, timeouts, and scheduling policy depth
-- MicroVM isolation path for jobs
+- Rootless / deprivileged nested engine for jobs

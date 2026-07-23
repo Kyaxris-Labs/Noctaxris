@@ -76,4 +76,4 @@ aws ecr describe-repositories --registry-id ACCOUNT_B --repository-names "$REPO"
 - Image scanning, replication, lifecycle policies, public galleries
 - OCI referrers and multi-arch index depth beyond single manifest
 - Chunked blob PATCH uploads (monolithic PUT only today)
-- Rootless DinD and microVM isolation (Firecracker-class)
+- Rootless / deprivileged nested engine

@@ -145,6 +145,48 @@ func (s *Store) RemoveRoleFromInstanceProfile(accountID, profileName, roleName s
 	return nil
 }
 
+// ListInstanceProfilesForRole returns instance profiles associated with roleName.
+// Missing roles return sql.ErrNoRows.
+func (s *Store) ListInstanceProfilesForRole(accountID, roleName string) ([]InstanceProfile, error) {
+	if _, _, err := s.GetRole(accountID, roleName); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT p.account_id, p.profile_name, p.profile_arn
+		 FROM iam_instance_profiles p
+		 INNER JOIN iam_instance_profile_roles r
+		   ON r.account_id = p.account_id AND r.profile_name = p.profile_name
+		 WHERE p.account_id = ? AND r.role_name = ?
+		 ORDER BY p.profile_name`,
+		accountID, roleName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list instance profiles for role %s/%s: %w", accountID, roleName, err)
+	}
+	defer rows.Close()
+
+	var out []InstanceProfile
+	for rows.Next() {
+		var p InstanceProfile
+		if err := rows.Scan(&p.AccountID, &p.ProfileName, &p.ProfileARN); err != nil {
+			return nil, fmt.Errorf("list instance profiles for role %s/%s: %w", accountID, roleName, err)
+		}
+		p.RoleName = roleName
+		if role, roleErr := s.GetRoleRecord(p.AccountID, roleName); roleErr == nil {
+			p.RoleARN = role.RoleARN
+			p.RoleID = role.RoleID
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list instance profiles for role %s/%s: %w", accountID, roleName, err)
+	}
+	if out == nil {
+		out = []InstanceProfile{}
+	}
+	return out, nil
+}
+
 // ListInstanceProfiles returns instance profiles for accountID.
 func (s *Store) ListInstanceProfiles(accountID string) ([]InstanceProfile, error) {
 	rows, err := s.db.Query(

@@ -70,6 +70,14 @@ func (s *Server) handleDynamoDB(
 		s.dynamoUpdateTimeToLive(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBDescribeTimeToLive:
 		s.dynamoDescribeTimeToLive(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBDescribeContinuousBackups:
+		s.dynamoDescribeContinuousBackups(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBListTagsOfResource:
+		s.dynamoListTagsOfResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBTagResource:
+		s.dynamoTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBUntagResource:
+		s.dynamoUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		_ = accountID
 		s.writeDynamoError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
@@ -118,6 +126,14 @@ func dynamoAction(action string) string {
 		return catalog.ActionDynamoDBUpdateTimeToLive
 	case "DescribeTimeToLive":
 		return catalog.ActionDynamoDBDescribeTimeToLive
+	case "DescribeContinuousBackups":
+		return catalog.ActionDynamoDBDescribeContinuousBackups
+	case "ListTagsOfResource":
+		return catalog.ActionDynamoDBListTagsOfResource
+	case "TagResource":
+		return catalog.ActionDynamoDBTagResource
+	case "UntagResource":
+		return catalog.ActionDynamoDBUntagResource
 	default:
 		return action
 	}
@@ -682,6 +698,169 @@ func (s *Server) dynamoDescribeTimeToLive(
 	}
 	s.writeDynamoOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "DescribeTimeToLive", readOnly)
+}
+
+func (s *Server) dynamoDescribeContinuousBackups(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	tableName, _ := params["TableName"].(string)
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+	if !ok {
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBDescribeContinuousBackups, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:DescribeContinuousBackups.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.DescribeContinuousBackupsJSON()
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "DescribeContinuousBackups", readOnly)
+}
+
+func (s *Server) dynamoTableFromResourceArn(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) (store.DynamoTable, bool) {
+	resourceArn, _ := params["ResourceArn"].(string)
+	if strings.TrimSpace(resourceArn) == "" {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ResourceArn is required.", readOnly, eventID, verified)
+		return store.DynamoTable{}, false
+	}
+	tableName := resourceArn
+	if strings.Contains(tableName, ":table/") {
+		tableName = tableName[strings.LastIndex(tableName, "/")+1:]
+	}
+	return s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, tableName)
+}
+
+func (s *Server) dynamoListTagsOfResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	table, ok := s.dynamoTableFromResourceArn(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBListTagsOfResource, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:ListTagsOfResource.", readOnly, eventID, verified)
+		return
+	}
+	tags, err := s.store.ListResourceTags(table.AccountID, table.TableARN)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list tags.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.ListTagsOfResourceJSON(tags)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "ListTagsOfResource", readOnly)
+}
+
+func (s *Server) dynamoTagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	table, ok := s.dynamoTableFromResourceArn(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	tags := parseKeyValueTags(params["Tags"])
+	if len(tags) == 0 {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Tags is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBTagResource, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:TagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.TagResources(table.AccountID, []string{table.TableARN}, tags); err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to tag resource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.EmptyOKJSON()
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "TagResource", readOnly)
+}
+
+func (s *Server) dynamoUntagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	table, ok := s.dynamoTableFromResourceArn(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	keys := stringSliceParam(params["TagKeys"])
+	if len(keys) == 0 {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"TagKeys is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBUntagResource, table.TableARN, table.ResourcePolicy) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodb:UntagResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.UntagResources(table.AccountID, []string{table.TableARN}, keys); err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to untag resource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ddb.EmptyOKJSON()
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "UntagResource", readOnly)
 }
 
 func (s *Server) dynamoPutItem(

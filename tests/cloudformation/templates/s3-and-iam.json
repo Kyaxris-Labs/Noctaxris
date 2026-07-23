@@ -1,0 +1,28 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Noctaxris CFN lab: S3 bucket and IAM role",
+  "Resources": {
+    "LabBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": "REPLACE_BUCKET_NAME"
+      }
+    },
+    "LabRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "REPLACE_ROLE_NAME",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "ec2.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

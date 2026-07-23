@@ -39,6 +39,28 @@ func TestCFNRejectsUnknownType(t *testing.T) {
 	}
 }
 
+func TestCFNStackS3AndIAMRoleRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	tpl := `{"Resources":{"LabBucket":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-lab-bucket-2"}},"LabRole":{"Type":"AWS::IAM::Role","Properties":{"RoleName":"CfnLabRole2","AssumeRolePolicyDocument":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}}}}}`
+	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack-2", tpl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Resources) != 2 {
+		t.Fatalf("resources=%d", len(created.Resources))
+	}
+	if _, err := st.GetBucketByName("cfn-lab-bucket-2"); err != nil {
+		t.Fatalf("bucket missing: %v", err)
+	}
+	if _, _, err := st.GetRole(account, "CfnLabRole2"); err != nil {
+		t.Fatalf("role missing: %v", err)
+	}
+	if err := st.DeleteCFNStack(account, "lab-stack-2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodePipelineRequiresCodeBuild(t *testing.T) {
 	st := openTestStore(t)
 	_, err := st.CreateCodePipeline("000000000001", "us-east-1", store.CodePipelineDeclaration{

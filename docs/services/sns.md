@@ -8,7 +8,7 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 
 | Area | Actions |
 |------|---------|
-| Topics | `CreateTopic`, `DeleteTopic`, `ListTopics`, `GetTopicAttributes`, `SetTopicAttributes` |
+| Topics | `CreateTopic`, `DeleteTopic`, `ListTopics`, `GetTopicAttributes`, `SetTopicAttributes`. `CreateTopic` seeds a default owner-root `Policy` (valid JSON; no `AWS:SourceOwner` condition). Tags: `ListTagsForResource`, `TagResource`, `UntagResource` |
 | FIFO | Topic names ending in `.fifo` (or `FifoTopic=true`). Publish requires `MessageGroupId`. Dedup via `MessageDeduplicationId` or `ContentBasedDeduplication` within a 5-minute window (same as SQS FIFO). SQS FIFO subscriptions receive group and dedup ids |
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
 | Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes` |

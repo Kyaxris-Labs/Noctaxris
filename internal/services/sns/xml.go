@@ -6,6 +6,61 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+type snsTagMemberXML struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
+}
+
+type listTagsForResourceResponse struct {
+	XMLName                 xml.Name `xml:"ListTagsForResourceResponse"`
+	XMLNS                   string   `xml:"xmlns,attr"`
+	ListTagsForResourceResult struct {
+		Tags struct {
+			Members []snsTagMemberXML `xml:"member"`
+		} `xml:"Tags"`
+	} `xml:"ListTagsForResourceResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// ListTagsForResourceXML builds a ListTagsForResource response.
+func ListTagsForResourceXML(tags []store.ResourceTag, requestID string) ([]byte, error) {
+	resp := listTagsForResourceResponse{XMLNS: snsXMLNS}
+	for _, t := range tags {
+		resp.ListTagsForResourceResult.Tags.Members = append(
+			resp.ListTagsForResourceResult.Tags.Members,
+			snsTagMemberXML{Key: t.Key, Value: t.Value},
+		)
+	}
+	resp.ResponseMetadata.RequestID = requestID
+	return marshalResponse(resp)
+}
+
+type tagResourceResponse struct {
+	XMLName          xml.Name `xml:"TagResourceResponse"`
+	XMLNS            string   `xml:"xmlns,attr"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// TagResourceXML builds a TagResource response.
+func TagResourceXML(requestID string) ([]byte, error) {
+	resp := tagResourceResponse{XMLNS: snsXMLNS}
+	resp.ResponseMetadata.RequestID = requestID
+	return marshalResponse(resp)
+}
+
+type untagResourceResponse struct {
+	XMLName          xml.Name `xml:"UntagResourceResponse"`
+	XMLNS            string   `xml:"xmlns,attr"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// UntagResourceXML builds an UntagResource response.
+func UntagResourceXML(requestID string) ([]byte, error) {
+	resp := untagResourceResponse{XMLNS: snsXMLNS}
+	resp.ResponseMetadata.RequestID = requestID
+	return marshalResponse(resp)
+}
+
 const snsXMLNS = "http://sns.amazonaws.com/doc/2010-03-31/"
 
 type responseMetadata struct {

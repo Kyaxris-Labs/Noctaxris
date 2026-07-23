@@ -64,6 +64,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | image | `docker build -f docker/Dockerfile .` |
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
 | smoke-nested | **Manual only:** Actions `workflow_dispatch` with input `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, optional Lambda Invoke). Skips cleanly if Docker is unavailable. **Not** on push/PR |
+| integration-suites | Optional: `workflow_dispatch` with `integration_suites=true`, or pull requests that touch `tests/**`. Compose up → `tests/run-all.sh` (Go/Node/Python SDK, Terraform S3+IAM, CloudFormation). **Not** a required PR gate |
 
 A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via Actions `workflow_dispatch` or the script below before relying on those paths.
 

@@ -16,6 +16,7 @@ Lab-complete EventBridge core: default and custom event buses, rules, targets, a
 | Targets | SQS, Lambda (async invoke), SNS, CloudWatch Logs (RoleArn), Kinesis (RoleArn), Step Functions state machine (RoleArn) |
 | Input | Constant `Input` overrides the envelope. Else lab `InputTransformer` (`InputPathsMap` + `InputTemplate` with `<var>` placeholders). Else lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys). InputTransformer cannot combine with Input/InputPath |
 | Bus policy | `PutPermission` / `RemovePermission` maintain bus `Policy`. `PutEvents` uses identity **or** bus policy (same account) and identity **and** bus policy (cross-account ARN). `EventBusName` may be a bus ARN |
+| Tags | `ListTagsForResource`, `TagResource`, `UntagResource` |
 
 Bus, rule, and target metadata live in SQLite.
 

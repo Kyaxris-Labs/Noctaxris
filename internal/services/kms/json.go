@@ -117,6 +117,21 @@ func EmptyOKJSON() ([]byte, error) {
 	return []byte(`{}`), nil
 }
 
+// ListResourceTagsJSON builds a ListResourceTags success body.
+func ListResourceTagsJSON(tags []store.ResourceTag) ([]byte, error) {
+	entries := make([]map[string]string, 0, len(tags))
+	for _, t := range tags {
+		entries = append(entries, map[string]string{
+			"TagKey":   t.Key,
+			"TagValue": t.Value,
+		})
+	}
+	return json.Marshal(map[string]any{
+		"Tags":      entries,
+		"Truncated": false,
+	})
+}
+
 func GetKeyPolicyJSON(policy string) ([]byte, error) {
 	return json.Marshal(map[string]string{"Policy": policy})
 }

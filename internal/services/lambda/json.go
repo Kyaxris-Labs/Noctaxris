@@ -125,8 +125,10 @@ func PublishVersionJSON(v store.LambdaFunctionVersion) ([]byte, error) {
 }
 
 // ListVersionsByFunctionJSON builds a ListVersionsByFunction success body.
-func ListVersionsByFunctionJSON(versions []store.LambdaFunctionVersion) ([]byte, error) {
-	out := make([]map[string]any, 0, len(versions))
+// AWS always includes $LATEST first, then published numeric versions.
+func ListVersionsByFunctionJSON(latest store.LambdaFunction, versions []store.LambdaFunctionVersion) ([]byte, error) {
+	out := make([]map[string]any, 0, len(versions)+1)
+	out = append(out, functionConfiguration(latest))
 	for _, v := range versions {
 		cfg := functionConfiguration(v.LambdaFunction)
 		cfg["Version"] = fmt.Sprintf("%d", v.Version)
@@ -183,6 +185,14 @@ func ListAliasesJSON(aliases []store.LambdaAlias) ([]byte, error) {
 // EmptyOKJSON returns an empty JSON object for DeleteFunction.
 func EmptyOKJSON() ([]byte, error) {
 	return []byte("{}"), nil
+}
+
+// ListTagsJSON builds a ListTags response (string-to-string Tags map).
+func ListTagsJSON(tags map[string]string) ([]byte, error) {
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	return json.Marshal(map[string]any{"Tags": tags})
 }
 
 // AddPermissionJSON builds an AddPermission success body.

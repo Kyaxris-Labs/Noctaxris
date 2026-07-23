@@ -40,6 +40,13 @@ func TestCreateTopic(t *testing.T) {
 	if topic.TopicName != "alerts" || topic.AccountID != account {
 		t.Fatalf("topic=%+v", topic)
 	}
+	if strings.TrimSpace(topic.Policy) == "" {
+		t.Fatal("expected default topic Policy on create")
+	}
+	var policyDoc map[string]any
+	if err := json.Unmarshal([]byte(topic.Policy), &policyDoc); err != nil {
+		t.Fatalf("default Policy JSON: %v", err)
+	}
 
 	if _, err := st.CreateTopic(account, "us-east-1", "alerts", nil); !errors.Is(err, store.ErrTopicAlreadyExists) {
 		t.Fatalf("want ErrTopicAlreadyExists, got %v", err)
@@ -167,6 +174,31 @@ func TestSetTopicAttributesMergesPolicy(t *testing.T) {
 	}
 }
 
+func TestGetTopicAttributesReturnsDefaultPolicy(t *testing.T) {
+	st := openSNSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTopic(account, "us-east-1", "with-default", map[string]string{
+		"DisplayName": "DefaultPolicy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := st.GetTopicAttributes(account, "with-default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := attrs["Policy"]
+	if strings.TrimSpace(policy) == "" {
+		t.Fatal("Policy missing; Terraform cannot parse empty/omitted Policy")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		t.Fatalf("Policy JSON: %v raw=%q", err, policy)
+	}
+	if attrs["DisplayName"] != "DefaultPolicy" {
+		t.Fatalf("attrs=%+v", attrs)
+	}
+}
+
 func TestGetPublishedMessageMissing(t *testing.T) {
 	st := openSNSStore(t)
 
@@ -206,15 +238,25 @@ func TestAddTopicPermissionSeedsPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	statements, ok := doc["Statement"].([]any)
-	if !ok || len(statements) != 1 {
-		t.Fatalf("statements=%v", doc["Statement"])
+	if !ok || len(statements) < 2 {
+		t.Fatalf("statements=%v want default + AddPermission", doc["Statement"])
 	}
-	stmt, ok := statements[0].(map[string]any)
-	if !ok {
-		t.Fatalf("statement=%v", statements[0])
+	var found map[string]any
+	for _, raw := range statements {
+		stmt, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if stmt["Sid"] == "pub-label" {
+			found = stmt
+			break
+		}
 	}
-	if stmt["Sid"] != "pub-label" || stmt["Action"] != action || stmt["Resource"] != topic.TopicARN {
-		t.Fatalf("statement=%+v", stmt)
+	if found == nil {
+		t.Fatalf("missing pub-label statement in %v", statements)
+	}
+	if found["Action"] != action || found["Resource"] != topic.TopicARN {
+		t.Fatalf("statement=%+v", found)
 	}
 }
 

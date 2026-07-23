@@ -207,6 +207,40 @@ func (s *Server) handleSQS(
 			return
 		}
 		payload, err = sqssvc.EmptyOKJSON()
+	case catalog.ActionSQSListQueueTags, "ListQueueTags":
+		tags, listErr := s.store.ListResourceTags(accountID, queue.QueueARN)
+		if listErr != nil {
+			s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to list queue tags.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = sqssvc.ListQueueTagsJSON(resourceTagsToMap(tags))
+	case catalog.ActionSQSTagQueue, "TagQueue":
+		tags := parseStringMapTags(params["Tags"])
+		if len(tags) == 0 {
+			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "MissingParameter",
+				"Tags is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, tagErr := s.store.TagResources(accountID, []string{queue.QueueARN}, tags); tagErr != nil {
+			s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to tag queue.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = sqssvc.EmptyOKJSON()
+	case catalog.ActionSQSUntagQueue, "UntagQueue":
+		keys := stringSliceParam(params["TagKeys"])
+		if len(keys) == 0 {
+			s.writeSQSError(w, r, requestID, http.StatusBadRequest, "MissingParameter",
+				"TagKeys is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, untagErr := s.store.UntagResources(accountID, []string{queue.QueueARN}, keys); untagErr != nil {
+			s.writeSQSError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to untag queue.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = sqssvc.EmptyOKJSON()
 	default:
 		s.writeSQSError(w, r, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This SQS action is not implemented.", readOnly, eventID, verified)

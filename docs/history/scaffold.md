@@ -22,7 +22,7 @@ Historical ship snapshot: the runnable scaffold. It proves packaging, persistenc
 - IAM policy evaluation
 - Any STS/IAM/S3/KMS/DynamoDB/SQS/Lambda API beyond the stub response
 - Multi-account / Organizations
-- Nested containers or microVMs for compute
+- Nested containers for compute
 
 ## How to verify
 

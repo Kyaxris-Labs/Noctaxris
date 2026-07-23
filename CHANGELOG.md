@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Compute path honesty
+
+- Removed opt-in microVM / Firecracker selection path. Nested DinD via Compose `noctaxris-engine` is the only packaged compute plane
+- `NOCTAXRIS_COMPUTE_RUNTIME` accepts only `dind` (or unset); `NOCTAXRIS_FIRECRACKER_BIN` removed
+- Docs and README describe DinD-only compute; privilege reduction for the nested engine is planned
+
+### Integration suites
+
+- Real Compose-backed suites under `tests/`: Go / Node.js / Python AWS SDK round-trips, Terraform apply/destroy (S3 + IAM + DynamoDB + KMS), CloudFormation JSON/YAML stack CRUD for lab resource types
+- Optional CI job `integration-suites` (`workflow_dispatch` or `tests/**` path filter); not a required PR gate
+- Run guide: [tests/README.md](tests/README.md)
+- CloudFormation CreateStack: provision S3/IAM resources before the SQLite write transaction (avoids `SQLITE_BUSY` under the open tx)
+- IAM `ListInstanceProfilesForRole` (empty list when none; needed for Terraform `aws_iam_role` destroy)
+- DynamoDB `DescribeContinuousBackups` lab stub; KMS `ListResourceTags` / `TagResource` / `UntagResource` (Terraform provider v5 post-create)
+- CloudFormation YAML `TemplateBody`, lab intrinsics (`Ref` / `Fn::GetAtt` / `Fn::Sub` / `Fn::Join`), types SQS / DynamoDB / Lambda (`ZipFile`)
+
 ### CTF fidelity
 
 - IAM managed policy versions: `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (five-version cap; default document syncs into Evaluate)
@@ -13,7 +29,6 @@
 ### Platform depth
 
 - RDS Data API: ExecuteStatement runs real SQL via nested `psql` (DinD exec) when a Postgres container was started; stub marker when DinD is unset (still no `pgx`)
-- Opt-in microVM: clearer fail-closed errors (WSL2 / missing binary / guest boot not packaged); no fake live guest boot
 - Nested DinD smoke: `docker/smoke-nested.sh` (manual only: Actions `workflow_dispatch` with `nested_smoke=true`, or run the script locally). Not on push/PR; a green PR proves `smoke-core` only. See [docs/ops.md](docs/ops.md).
 
 ### Security hardening (H1)
@@ -40,7 +55,7 @@
 - Lambda `Environment` rejects reserved keys; Invoke overlays minted execution-role credentials and lab endpoints last
 - Batch `jobRoleArn` / CodeBuild `serviceRole` mint in-container AWS_* sessions; lab registry rewrite + auth pull on those paths
 - Zip Invoke uses per-invoke scratch for event + merged layers; Timeout 1–900s and MemorySize 128–10240 MB clamps; nested CapDrop ALL
-- ECS / CodeBuild / Batch host-gateway ExtraHosts default off (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1` to opt in); docs honesty for privileged DinD and unpackaged Firecracker guest
+- ECS / CodeBuild / Batch host-gateway ExtraHosts default off (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1` to opt in); docs honesty for privileged DinD
 - Unpacked Lambda/layer trees and invoke scratch use `0755`/`0644` so nested DinD can read API-owned (UID `65532`) bind mounts
 
 ## Nested data planes and ML stubs
@@ -62,7 +77,7 @@ Nested data planes (RDS Postgres, ElastiCache, DocumentDB) via DinD without host
 - Textract stub: DetectDocumentText / AnalyzeDocument canned Blocks
 - Transcribe stub: Start/Get/List transcription jobs with canned transcript under the data root
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Wire-protocol `pgx` Data API executor, MemoryDB, Neptune, real ML model runtimes, and live Firecracker guest boot remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Wire-protocol `pgx` Data API executor, MemoryDB, Neptune, and real ML model runtimes remain deferred.
 
 ## Cognito, HTTP API, and edge stubs
 
@@ -84,7 +99,7 @@ Cognito User Pools and API Gateway HTTP API (JWT + IAM authorizers) on the exist
 - Budgets lite (CRUD, notification stubs stored only)
 - CodeDeploy lite (sync Succeeded, optional ECS DesiredCount hook, PassRole)
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). REST API v1, Cognito Identity Pools / Hosted UI, real CloudFront PoPs, and live Firecracker guest boot remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). REST API v1, Cognito Identity Pools / Hosted UI, and real CloudFront PoPs remain deferred.
 
 ## Scheduler, Streams, Pipes, and edge lite
 
@@ -109,16 +124,15 @@ EventBridge Scheduler lite, Lambda SQS ESM and Function URLs, SNS FIFO/HTTP dept
 - AppSync lite: GraphQL API CRUD, schema, Lambda data source, API_KEY or IAM auth (Cognito User Pools auth landed later)
 - CloudWatch Logs delete and DescribeLogStreams polish
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, IoT Core, MSK, and live Firecracker guest boot remain deferred.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Nested MQ broker, IoT Core, and MSK remain deferred.
 
-## MicroVM selection and CI/CD lite
+## Data-plane depth and CI/CD lite
 
-Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and CI/CD plus catalog lab services. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md). Live Firecracker guest boot needs a Linux+KVM host with kernel/rootfs assets (stubs and platform matrix ship on all hosts).
+Data-plane depth on KMS/S3/DynamoDB/SQS/Secrets/SSM, and CI/CD plus catalog lab services. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md). Nested compute stayed on DinD via Compose `noctaxris-engine`.
 
 ### Included
 
-- Compute runtime selection: `NOCTAXRIS_COMPUTE_RUNTIME=dind|microvm` (default DinD). Opt-in microVM probes KVM and Firecracker binary, fails closed on WSL2 or missing assets, never falls through to host Docker
-- Lambda zip/Image Invoke and ECS RunTask route to the microVM runner when opted in (fail-closed stubs until live guest boot on Linux+KVM)
+- Nested DinD compute path for Lambda Invoke and ECS RunTask (never falls through to host Docker)
 - KMS on-read sweeper after DeletionDate and key-material rotation (enable rotates sealed material, lab auto-rotate by period)
 - DynamoDB up to two lab GSIs per table via CreateTable / UpdateTable
 - S3 versioning lite: Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite
@@ -134,7 +148,7 @@ Opt-in microVM selection (DinD remains default), data-plane depth on KMS/S3/Dyna
 - WAF v2 lite: WebACL / rule group shape, AssociateWebACL, labeled Evaluate helper
 - Config lite: recorder / delivery channel, StartConfigurationRecorder, DescribeComplianceByConfigRule stub over tagged resources
 
-Deferred depth: [docs/services/index.md](docs/services/index.md). Live Firecracker guest boot needs Linux+KVM plus kernel/rootfs assets. Athena shipped in a later release.
+Deferred depth: [docs/services/index.md](docs/services/index.md). Athena shipped in a later release.
 
 ## Multi-account honesty and audit services
 
@@ -158,7 +172,7 @@ Deferred depth: [docs/services/index.md](docs/services/index.md).
 
 ## Identity depth and messaging / container labs
 
-Cleared in-scope deferred depth for the lab core (except microVMs), then shipped lab-complete SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md).
+Cleared in-scope deferred depth for the lab core, then shipped lab-complete SSM Parameter Store, Secrets Manager, SNS, EventBridge, ECR, and ECS. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md).
 
 ### Included
 

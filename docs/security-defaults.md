@@ -14,8 +14,8 @@ These defaults are intentional product posture for a local emulator that people 
 - Nested data engines (RDS Postgres, ElastiCache Valkey/Redis, DocumentDB Mongo-compatible) run as labeled containers on the same DinD path. Compose does **not** publish Postgres, Redis/Valkey, Mongo, or OpenSearch ports on the host.
 - Lab SQL uses the **RDS Data API** HTTP facade on `:4566`. When DinD has started nested Postgres, ExecuteStatement runs real SQL via `psql` inside that container (no host DB ports). Without a nested container the recorded-statement stub applies (explicit stub marker). There is no `pgx` wire driver in the API process. Nested-network endpoint strings on Describe* responses are for DinD-side smoke only, not WAN-reachable listeners.
 - When DinD is unset, Create* still records control-plane state and nested start is a no-op (status may stay `creating`). Paths never fall through to host Docker or invent host-published DB ports.
-- Default Lambda and ECS runtime is DinD. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` probes Linux with usable KVM and a Firecracker binary; WSL2 and missing binary fail closed. Live guest boot is not packaged. Opt-in never mounts host Docker or silently weakens the path.
-- `noctaxris-engine` runs privileged DinD so function containers can start. Privilege stays inside that nested engine. The API container remains distroless `nonroot` without a host socket.
+- Lambda and ECS compute is nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Invoke/RunTask require a healthy engine. The path never mounts host Docker.
+- `noctaxris-engine` runs privileged DinD so function containers can start. Privilege stays inside that nested engine. The API container remains distroless `nonroot` without a host socket. Privilege reduction for the nested engine is planned.
 - Image runs as distroless `nonroot`. Data dir is seeded owned by UID `65532` so the volume is writable.
 - Compose sets `read_only: true` with `/tmp` as tmpfs on the API service.
 
@@ -84,9 +84,8 @@ Additional auth notes:
 
 ## Residual escape notes
 
-- Privileged DinD (`noctaxris-engine`) remains the default packaged compute plane and a nested-escape class on Docker Desktop / shared-kernel hosts. Volume split keeps `master.key` off the engine; engine compromise can still reach task/code mounts and nested networks. LAN expose of `:4566` with Invoke/RunTask principals is engine-trust equivalent.
+- Privileged DinD (`noctaxris-engine`) remains the default packaged compute plane and a nested-escape class on Docker Desktop / shared-kernel hosts. Volume split keeps `master.key` off the engine; engine compromise can still reach task/code mounts and nested networks. LAN expose of `:4566` with Invoke/RunTask principals is engine-trust equivalent. Privilege reduction for the nested engine is planned.
 - `host.docker.internal` ExtraHosts is an intentional path from the Lambda function network to the host-published API only. It is not public internet egress; disable with `NOCTAXRIS_INJECT_HOST_GATEWAY=0` when unused. ECS-path tasks do not get that entry unless `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`.
-- Opt-in Firecracker selection (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) probes Linux+KVM and a Firecracker binary, then fails closed: live guest boot (kernel/rootfs runner) is not packaged. There is no simulated guest and no fallthrough to host Docker.
 
 ## Optional TLS
 

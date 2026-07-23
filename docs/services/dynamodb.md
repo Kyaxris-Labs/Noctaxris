@@ -9,6 +9,8 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Area | Actions |
 |------|---------|
 | Tables | `CreateTable`, `DescribeTable`, `DeleteTable`, `ListTables`, `UpdateTable` |
+| Continuous backups | `DescribeContinuousBackups` (lab stub: continuous `ENABLED`, PITR `DISABLED`) |
+| Tags | `ListTagsOfResource`, `TagResource`, `UntagResource` (table ARN via `ResourceArn`; `Tags` as `{Key,Value}`) |
 | GSI | Up to two lab global secondary indexes per table (`CreateTable` or `UpdateTable` `Create` GSI updates) |
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
 | Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`; optional `FilterExpression` with the same lab subset as `ConditionExpression`, fail-closed on unsupported operators) |
@@ -84,5 +86,5 @@ aws dynamodb get-item --table-name "$TABLE_ARN" --key '{"pk":{"S":"1"}}' \
 
 ## Not yet / deferred
 
-- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Transactions, PartiQL, Contributor Insights, export/import, global tables, continuous backups, PITR, on-demand vs provisioned billing depth, tags, full pagination parity)
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, Transactions, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity)
 - Streams depth beyond the lab core in [dynamodbstreams.md](dynamodbstreams.md) (OLD_IMAGE views; DynamoDB Streams Lambda ESM ships in [lambda.md](lambda.md))

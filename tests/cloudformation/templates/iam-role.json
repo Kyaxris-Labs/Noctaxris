@@ -1,0 +1,22 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Noctaxris CFN lab: IAM role",
+  "Resources": {
+    "LabRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "REPLACE_ROLE_NAME",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "lambda.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

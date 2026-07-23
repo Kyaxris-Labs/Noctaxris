@@ -9,8 +9,9 @@ Lab-complete Secrets Manager core: create, read, update, delete, describe, and l
 | Area | Actions |
 |------|---------|
 | Secrets | `CreateSecret`, `GetSecretValue`, `PutSecretValue`, `DeleteSecret`, `RestoreSecret`, `RotateSecret`, `DescribeSecret`, `ListSecrets` |
+| Tags | `ListTagsForResource`, `TagResource`, `UntagResource` |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
-| Payload | `SecretString` and/or `SecretBinary` (base64 on wire) |
+| Payload | `SecretString` and/or `SecretBinary` (base64 on wire). `CreateSecret` may omit both (metadata-only; use `PutSecretValue` for the first version, matching Terraform `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version`) |
 | KMS | Optional `KmsKeyId` on create. Defaults to lab `alias/aws/secretsmanager` (per-account CMK seeded on first use) |
 | Delete / recovery | `DeleteSecret` schedules deletion with `RecoveryWindowInDays` (7–30, default 30). `ForceDeleteWithoutRecovery` deletes immediately. `RestoreSecret` clears a scheduled deletion. On-read sweeper hard-deletes after `DeletionDate` |
 | Rotate | Lab `RotateSecret` replaces the secret string with a new random value (no Lambda rotation function) |

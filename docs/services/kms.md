@@ -15,6 +15,7 @@ Lab-complete customer-managed keys: sealed CMK material, key policies with expli
 | Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` (optional `EncryptionContext` bound as GCM AAD; decrypt/re-encrypt must supply the same map) |
 | Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
 | Aliases | `CreateAlias`, `ListAliases`, `DeleteAlias`, `UpdateAlias` |
+| Tags | `ListResourceTags`, `TagResource`, `UntagResource`; `CreateKey` accepts `Tags` |
 | Lab convenience aliases | Per-account `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs` (lab CMK approximations, not AWS-owned keys) |
 
 CreateKey seeds a default key policy that allows the account root (and the IAM user creator when applicable). CMK material is sealed at rest under the data volume. Lab convenience aliases are created on first use per account.
@@ -64,7 +65,7 @@ aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
 
 ## Not yet / deferred
 
-- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, tags, full pagination parity, `RotateKeyOnDemand` API shape)
+- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, full pagination parity, `RotateKeyOnDemand` API shape)
 - Grant `Constraints` / distinct `GrantToken` / `GrantTokens` on crypto APIs
 - Cross-account grant flows beyond key policy dual eval
 - True AWS-owned managed key types beyond the lab convenience aliases above

@@ -1,0 +1,12 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Noctaxris CFN lab: S3 bucket",
+  "Resources": {
+    "LabBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": "REPLACE_BUCKET_NAME"
+      }
+    }
+  }
+}

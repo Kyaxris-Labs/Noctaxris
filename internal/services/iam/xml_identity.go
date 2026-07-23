@@ -454,6 +454,28 @@ func ListInstanceProfilesXML(profiles []store.InstanceProfile, requestID string)
 	return marshalResponse(resp)
 }
 
+type listInstanceProfilesForRoleResponse struct {
+	XMLName                           xml.Name `xml:"ListInstanceProfilesForRoleResponse"`
+	XMLNS                             string   `xml:"xmlns,attr"`
+	ListInstanceProfilesForRoleResult struct {
+		InstanceProfiles []instanceProfileXML `xml:"InstanceProfiles>member"`
+		IsTruncated      bool                 `xml:"IsTruncated"`
+	} `xml:"ListInstanceProfilesForRoleResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// ListInstanceProfilesForRoleXML builds ListInstanceProfilesForRole response XML.
+func ListInstanceProfilesForRoleXML(profiles []store.InstanceProfile, requestID string) ([]byte, error) {
+	resp := listInstanceProfilesForRoleResponse{XMLNS: iamXMLNS}
+	for _, p := range profiles {
+		resp.ListInstanceProfilesForRoleResult.InstanceProfiles = append(
+			resp.ListInstanceProfilesForRoleResult.InstanceProfiles, instanceProfileToXML(p),
+		)
+	}
+	resp.ResponseMetadata.RequestId = requestID
+	return marshalResponse(resp)
+}
+
 // --- IdP ---
 
 type createOpenIDConnectProviderResponse struct {

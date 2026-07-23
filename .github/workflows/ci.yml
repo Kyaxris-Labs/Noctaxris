@@ -10,6 +10,10 @@ on:
         description: Run nested DinD smoke (engine healthy, RDS describe, Data API nested-psql, Lambda Invoke)
         type: boolean
         default: false
+      integration_suites:
+        description: Run SDK / Terraform / CloudFormation integration suites against Compose
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -169,3 +173,90 @@ jobs:
         env:
           READY_TIMEOUT_SEC: "240"
         run: bash docker/smoke-nested.sh
+
+  integration-suites:
+    runs-on: ubuntu-latest
+    # Optional: workflow_dispatch with integration_suites=true, or PRs that touch tests/**.
+    # Not a required status check; smoke-core remains the PR Compose gate.
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.integration_suites) ||
+      github.event_name == 'pull_request'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            tests:
+              - 'tests/**'
+              - '.github/workflows/ci.yml'
+      - name: Decide whether to run
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ steps.filter.outputs.tests }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=false" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        if: steps.decide.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        if: steps.decide.outputs.run == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/sdk/nodejs/package-lock.json
+      - uses: actions/setup-python@v5
+        if: steps.decide.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+      - name: Install Terraform
+        if: steps.decide.outputs.run == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Install AWS CLI v2
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+      - name: Prepare Compose env
+        if: steps.decide.outputs.run == 'true'
+        run: cp docker/.env.example docker/.env
+      - name: Compose up
+        if: steps.decide.outputs.run == 'true'
+        run: docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
+      - name: Wait for readiness
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4566/_noctaxris/ready | grep -q ready; then
+              echo "ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API never became ready" >&2
+          docker compose -f docker/compose.yaml --env-file docker/.env logs --no-color || true
+          exit 1
+      - name: Integration suites
+        if: steps.decide.outputs.run == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: AKIAROOTEXAMPLE01
+          AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: "true"
+          NOCTAXRIS_ENDPOINT: http://127.0.0.1:4566
+        run: bash tests/run-all.sh
+      - name: Compose down
+        if: always() && steps.decide.outputs.run == 'true'
+        run: docker compose -f docker/compose.yaml --env-file docker/.env down -v

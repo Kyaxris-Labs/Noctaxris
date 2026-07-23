@@ -29,8 +29,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_SNS_HTTP_ALLOWLIST` | empty | Comma-separated exact HTTP(S) URLs allowed for SNS subscriptions beyond the lab catcher on `127.0.0.1:4566/_noctaxris/sns-http-catcher`. Listed URLs still reject private, loopback, link-local, and metadata hosts; delivery does not follow redirects. |
 | `NOCTAXRIS_INJECT_HOST_GATEWAY` | enabled | Set to `0` to omit `host.docker.internal:host-gateway` ExtraHosts on nested Lambda function containers. |
 | `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY` | disabled | Set to `1` to inject `host.docker.internal:host-gateway` ExtraHosts on nested ECS / CodeBuild / Batch containers (Internal `noctaxris-ecs`). Default off. |
-| `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Lambda and ECS compute runtime: `dind` (default) or `microvm` (opt-in). Unknown values fail process start. Nested data engines use the DinD path. |
-| `NOCTAXRIS_FIRECRACKER_BIN` | empty | Optional path to the Firecracker binary when `NOCTAXRIS_COMPUTE_RUNTIME=microvm`. If empty, `firecracker` must be on `PATH`. |
+| `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Nested compute path. Only `dind` (or unset) is accepted. Unknown values fail process start. Nested data engines use the same DinD path. |
 | `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
 
 Federation is fail-closed. If these are unset and no IdP rows exist in the store, SAML/OIDC STS APIs deny with AccessDenied / InvalidIdentityToken rather than accepting unsigned tokens.

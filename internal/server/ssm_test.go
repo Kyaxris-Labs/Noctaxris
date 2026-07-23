@@ -247,6 +247,31 @@ func TestSSMGetParametersAndDescribe(t *testing.T) {
 	if len(descParams) != 2 {
 		t.Fatalf("Describe Parameters len=%d want 2 body=%q", len(descParams), descRec.Body.String())
 	}
+
+	equalsRec := mustSSMJSON(t, handler, "DescribeParameters", map[string]any{
+		"ParameterFilters": []map[string]any{
+			{
+				"Key":    "Name",
+				"Option": "Equals",
+				"Values": []string{"/app/a"},
+			},
+		},
+	}, now)
+	if equalsRec.Code != http.StatusOK {
+		t.Fatalf("DescribeParameters Equals status=%d body=%q", equalsRec.Code, equalsRec.Body.String())
+	}
+	var equalsOut map[string]any
+	if err := json.Unmarshal(equalsRec.Body.Bytes(), &equalsOut); err != nil {
+		t.Fatal(err)
+	}
+	equalsParams, _ := equalsOut["Parameters"].([]any)
+	if len(equalsParams) != 1 {
+		t.Fatalf("Equals Parameters len=%d want 1 body=%q", len(equalsParams), equalsRec.Body.String())
+	}
+	one, _ := equalsParams[0].(map[string]any)
+	if one["Name"] != "/app/a" {
+		t.Fatalf("Equals Name=%v want /app/a", one["Name"])
+	}
 }
 
 func TestSSMAccessDeniedWithoutIdentityPolicy(t *testing.T) {

@@ -7,6 +7,34 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func TestListInstanceProfilesForRole(t *testing.T) {
+	st := openTestStore(t)
+	accountID := "000000000001"
+	if _, err := st.CreateRole(accountID, "RoleA", `{"Version":"2012-10-17","Statement":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := st.ListInstanceProfilesForRole(accountID, "RoleA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("want empty, got %#v", listed)
+	}
+	if _, err := st.CreateInstanceProfile(accountID, "MyProfile"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddRoleToInstanceProfile(accountID, "MyProfile", "RoleA"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = st.ListInstanceProfilesForRole(accountID, "RoleA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ProfileName != "MyProfile" {
+		t.Fatalf("listed=%#v", listed)
+	}
+}
+
 func TestInstanceProfileOneRole(t *testing.T) {
 	st := openTestStore(t)
 	const accountID = "000000000001"

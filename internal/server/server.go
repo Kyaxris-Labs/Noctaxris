@@ -46,7 +46,7 @@ type Server struct {
 	compute     *compute.Client
 	computeErr  error
 
-	// Lazy Lambda invoker (DinD default or opt-in microVM).
+	// Lazy Lambda invoker (nested DinD via cfg.DockerHost).
 	invokerOnce sync.Once
 	invoker     compute.FunctionInvoker
 	invokerErr  error
@@ -530,6 +530,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMAddRoleToInstanceProfile, "AddRoleToInstanceProfile",
 		catalog.ActionIAMRemoveRoleFromInstanceProfile, "RemoveRoleFromInstanceProfile",
 		catalog.ActionIAMListInstanceProfiles, "ListInstanceProfiles",
+		catalog.ActionIAMListInstanceProfilesForRole, "ListInstanceProfilesForRole",
 		catalog.ActionIAMCreateOpenIDConnectProvider, "CreateOpenIDConnectProvider",
 		catalog.ActionIAMDeleteOpenIDConnectProvider, "DeleteOpenIDConnectProvider",
 		catalog.ActionIAMListOpenIDConnectProviders, "ListOpenIDConnectProviders",
@@ -567,6 +568,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKMSEnableKeyRotation, "EnableKeyRotation",
 		catalog.ActionKMSDisableKeyRotation, "DisableKeyRotation",
 		catalog.ActionKMSGetKeyRotationStatus, "GetKeyRotationStatus",
+		catalog.ActionKMSListResourceTags, "ListResourceTags",
+		catalog.ActionKMSTagResource, "TagResource",
+		catalog.ActionKMSUntagResource, "UntagResource",
 		"ReEncrypt":
 		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionDynamoDBCreateTable, "CreateTable",
@@ -586,7 +590,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionDynamoDBGetResourcePolicy, "GetResourcePolicy",
 		catalog.ActionDynamoDBDeleteResourcePolicy, "DeleteResourcePolicy",
 		catalog.ActionDynamoDBUpdateTimeToLive, "UpdateTimeToLive",
-		catalog.ActionDynamoDBDescribeTimeToLive, "DescribeTimeToLive":
+		catalog.ActionDynamoDBDescribeTimeToLive, "DescribeTimeToLive",
+		catalog.ActionDynamoDBDescribeContinuousBackups, "DescribeContinuousBackups",
+		catalog.ActionDynamoDBListTagsOfResource, "ListTagsOfResource",
+		catalog.ActionDynamoDBTagResource,
+		catalog.ActionDynamoDBUntagResource:
 		s.handleDynamoDB(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSQSCreateQueue, "CreateQueue",
 		catalog.ActionSQSGetQueueUrl, "GetQueueUrl",
@@ -600,14 +608,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSQSDeleteMessage, "DeleteMessage",
 		catalog.ActionSQSSendMessageBatch, "SendMessageBatch",
 		catalog.ActionSQSDeleteMessageBatch, "DeleteMessageBatch",
-		catalog.ActionSQSChangeMessageVisibility, "ChangeMessageVisibility":
+		catalog.ActionSQSChangeMessageVisibility, "ChangeMessageVisibility",
+		catalog.ActionSQSListQueueTags, "ListQueueTags",
+		catalog.ActionSQSTagQueue, "TagQueue",
+		catalog.ActionSQSUntagQueue, "UntagQueue":
 		s.handleSQS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSSMPutParameter, "PutParameter",
 		catalog.ActionSSMGetParameter, "GetParameter",
 		catalog.ActionSSMGetParameters, "GetParameters",
 		catalog.ActionSSMGetParametersByPath, "GetParametersByPath",
 		catalog.ActionSSMDeleteParameter, "DeleteParameter",
-		catalog.ActionSSMDescribeParameters, "DescribeParameters":
+		catalog.ActionSSMDescribeParameters, "DescribeParameters",
+		catalog.ActionSSMListTagsForResource,
+		catalog.ActionSSMAddTagsToResource, "AddTagsToResource",
+		catalog.ActionSSMRemoveTagsFromResource, "RemoveTagsFromResource":
 		s.handleSSM(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSecretsCreateSecret, "CreateSecret",
 		catalog.ActionSecretsGetSecretValue, "GetSecretValue",
@@ -619,7 +633,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSecretsListSecrets, "ListSecrets",
 		catalog.ActionSecretsPutResourcePolicy,
 		catalog.ActionSecretsGetResourcePolicy,
-		catalog.ActionSecretsDeleteResourcePolicy:
+		catalog.ActionSecretsDeleteResourcePolicy,
+		catalog.ActionSecretsListTagsForResource,
+		catalog.ActionSecretsTagResource,
+		catalog.ActionSecretsUntagResource:
 		s.handleSecretsManager(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionECRCreateRepository, "CreateRepository",
 		catalog.ActionECRDescribeRepositories, "DescribeRepositories",
@@ -648,7 +665,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionEventsRemoveTargets, "RemoveTargets",
 		catalog.ActionEventsListTargetsByRule, "ListTargetsByRule",
 		catalog.ActionEventsPutPermission, "PutPermission",
-		catalog.ActionEventsRemovePermission:
+		catalog.ActionEventsRemovePermission,
+		catalog.ActionEventsListTagsForResource,
+		catalog.ActionEventsTagResource,
+		catalog.ActionEventsUntagResource:
 		s.handleEventBridge(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLambdaCreateFunction, "CreateFunction",
 		catalog.ActionLambdaGetFunction, "GetFunction",
@@ -679,7 +699,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionLambdaCreateFunctionUrlConfig, "CreateFunctionUrlConfig",
 		catalog.ActionLambdaGetFunctionUrlConfig, "GetFunctionUrlConfig",
 		catalog.ActionLambdaDeleteFunctionUrlConfig, "DeleteFunctionUrlConfig",
-		catalog.ActionLambdaListFunctionUrlConfigs, "ListFunctionUrlConfigs":
+		catalog.ActionLambdaListFunctionUrlConfigs, "ListFunctionUrlConfigs",
+		catalog.ActionLambdaListTags, "ListTags",
+		catalog.ActionLambdaGetFunctionCodeSigningConfig, "GetFunctionCodeSigningConfig":
 		s.handleLambda(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionECSRegisterTaskDefinition, "RegisterTaskDefinition",
 		catalog.ActionECSDescribeTaskDefinition, "DescribeTaskDefinition",
@@ -1017,11 +1039,14 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 }
 
 func isLambdaRESTPath(path string) bool {
-	return strings.HasPrefix(path, "/2015-03-31/") || strings.HasPrefix(path, "/2018-10-31/")
+	return strings.HasPrefix(path, "/2015-03-31/") ||
+		strings.HasPrefix(path, "/2017-03-31/") ||
+		strings.HasPrefix(path, "/2018-10-31/") ||
+		strings.HasPrefix(path, "/2020-06-30/")
 }
 
 func isLambdaRESTAPIVersion(v string) bool {
-	return v == "2015-03-31" || v == "2018-10-31"
+	return v == "2015-03-31" || v == "2017-03-31" || v == "2018-10-31" || v == "2020-06-30"
 }
 
 // resolveLambdaREST maps AWS Lambda REST paths to catalog actions and injects
@@ -1037,9 +1062,23 @@ func resolveLambdaREST(r *http.Request, body []byte) (action string, outBody []b
 		return resolveLambdaFunctionsREST(r.Method, parts, body)
 	case "layers":
 		return resolveLambdaLayersREST(r.Method, parts, body)
+	case "tags":
+		return resolveLambdaTagsREST(r.Method, parts, body)
 	default:
 		return "", body
 	}
+}
+
+func resolveLambdaTagsREST(method string, parts []string, body []byte) (string, []byte) {
+	// GET /2017-03-31/tags/{Resource}
+	if method != http.MethodGet || len(parts) != 3 {
+		return "", body
+	}
+	resource, err := url.PathUnescape(parts[2])
+	if err != nil {
+		resource = parts[2]
+	}
+	return catalog.ActionLambdaListTags, injectJSONStringField(body, "Resource", resource)
 }
 
 func resolveLambdaFunctionsREST(method string, parts []string, body []byte) (string, []byte) {
@@ -1061,6 +1100,12 @@ func resolveLambdaFunctionsREST(method string, parts []string, body []byte) (str
 		}
 		if len(parts) == 3 {
 			return catalog.ActionLambdaGetFunction, injectFunctionNameJSON(body, name)
+		}
+		if len(parts) == 4 && parts[3] == "versions" {
+			return catalog.ActionLambdaListVersionsByFunction, injectFunctionNameJSON(body, name)
+		}
+		if len(parts) == 4 && parts[3] == "code-signing-config" {
+			return catalog.ActionLambdaGetFunctionCodeSigningConfig, injectFunctionNameJSON(body, name)
 		}
 	case http.MethodDelete:
 		if len(parts) == 3 {
@@ -1274,7 +1319,7 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.EqualFold(prefix, "TrentService"), strings.EqualFold(prefix, "AWSKMS"):
 			return normalizeAction(short)
 		case strings.EqualFold(prefix, "AmazonSSM"):
-			return normalizeAction(short)
+			return ssmAction(short)
 		case strings.EqualFold(prefix, "AWSEvents"):
 			return eventsAction(short)
 		case strings.EqualFold(prefix, "secretsmanager"):
@@ -1323,6 +1368,8 @@ func resolveAction(r *http.Request, body []byte) string {
 			return wafAction(short)
 		case strings.Contains(strings.ToLower(prefix), "dynamodbstreams"):
 			return dynamodbstreamsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "dynamodb"):
+			return dynamoAction(short)
 		case strings.Contains(strings.ToLower(prefix), "pipes"):
 			return pipesAction(short)
 		case strings.HasPrefix(strings.ToLower(prefix), "mq."),
@@ -1572,6 +1619,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMRemoveRoleFromInstanceProfile
 	case "ListInstanceProfiles":
 		return catalog.ActionIAMListInstanceProfiles
+	case "ListInstanceProfilesForRole":
+		return catalog.ActionIAMListInstanceProfilesForRole
 	case "CreateOpenIDConnectProvider":
 		return catalog.ActionIAMCreateOpenIDConnectProvider
 	case "DeleteOpenIDConnectProvider":
@@ -1644,6 +1693,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionKMSDisableKeyRotation
 	case "GetKeyRotationStatus":
 		return catalog.ActionKMSGetKeyRotationStatus
+	case "ListResourceTags":
+		return catalog.ActionKMSListResourceTags
+	case "TagResource":
+		return catalog.ActionKMSTagResource
+	case "UntagResource":
+		return catalog.ActionKMSUntagResource
 	case "CreateTable":
 		return catalog.ActionDynamoDBCreateTable
 	case "DescribeTable":
@@ -1676,6 +1731,14 @@ func normalizeAction(action string) string {
 		return catalog.ActionDynamoDBGetResourcePolicy
 	case "DeleteResourcePolicy":
 		return catalog.ActionDynamoDBDeleteResourcePolicy
+	case "UpdateTimeToLive":
+		return catalog.ActionDynamoDBUpdateTimeToLive
+	case "DescribeTimeToLive":
+		return catalog.ActionDynamoDBDescribeTimeToLive
+	case "DescribeContinuousBackups":
+		return catalog.ActionDynamoDBDescribeContinuousBackups
+	case "ListTagsOfResource":
+		return catalog.ActionDynamoDBListTagsOfResource
 	case "CreateQueue":
 		return catalog.ActionSQSCreateQueue
 	case "GetQueueUrl":
@@ -1702,6 +1765,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionSQSDeleteMessageBatch
 	case "ChangeMessageVisibility":
 		return catalog.ActionSQSChangeMessageVisibility
+	case "ListQueueTags":
+		return catalog.ActionSQSListQueueTags
+	case "TagQueue":
+		return catalog.ActionSQSTagQueue
+	case "UntagQueue":
+		return catalog.ActionSQSUntagQueue
 	case "CreateTopic":
 		return catalog.ActionSNSCreateTopic
 	case "DeleteTopic":
@@ -1736,6 +1805,10 @@ func normalizeAction(action string) string {
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "AddTagsToResource":
+		return catalog.ActionSSMAddTagsToResource
+	case "RemoveTagsFromResource":
+		return catalog.ActionSSMRemoveTagsFromResource
 	case "CreateSecret":
 		return catalog.ActionSecretsCreateSecret
 	case "GetSecretValue":
@@ -1802,6 +1875,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionLambdaPublishVersion
 	case "ListVersionsByFunction":
 		return catalog.ActionLambdaListVersionsByFunction
+	case "ListTags":
+		return catalog.ActionLambdaListTags
 	case "GetAlias":
 		return catalog.ActionLambdaGetAlias
 	case "RegisterTaskDefinition":

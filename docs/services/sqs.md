@@ -9,6 +9,7 @@ Lab-complete standard and FIFO queues: send/receive/delete (including batch and 
 | Area | Actions |
 |------|---------|
 | Queues | `CreateQueue`, `GetQueueUrl`, `GetQueueAttributes`, `SetQueueAttributes`, `DeleteQueue`, `ListQueues`, `PurgeQueue` |
+| Tags | `ListQueueTags`, `TagQueue`, `UntagQueue` |
 | FIFO | `FifoQueue` attribute, `.fifo` name suffix, `MessageGroupId`, content-based or explicit deduplication |
 | Messages | `SendMessage`, `ReceiveMessage` (honors `WaitTimeSeconds` 0–20), `DeleteMessage` |
 | Batch / visibility | `SendMessageBatch`, `DeleteMessageBatch`, `ChangeMessageVisibility` |

@@ -24,14 +24,11 @@ flowchart TB
     DataNet["RDS / ElastiCache / DocDB<br/>nested-network endpoints only"]
   end
 
-  MicroVM["Opt-in microVM<br/>NOCTAXRIS_COMPUTE_RUNTIME=microvm<br/>Linux + KVM + Firecracker<br/>fail-closed otherwise"]
-
   Client --> HostPort --> API
   API -->|"TCP TLS NOCTAXRIS_DOCKER_HOST"| Engine
   Engine --> FnNet
   Engine --> EcsNet
   Engine --> DataNet
-  API -.->|"runtime selection"| MicroVM
 ```
 
 ## Tree
@@ -86,7 +83,7 @@ Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip conten
 
 Compose sets `NOCTAXRIS_DOCKER_HOST=tcp://noctaxris-engine:2376` and `NOCTAXRIS_DOCKER_CERT_PATH=/certs/client` for TLS to the nested engine. The API process never mounts host `/var/run/docker.sock`. Runtime allowlists the Compose engine URL (extend with `NOCTAXRIS_DOCKER_HOST_ALLOWLIST`) and requires client TLS PEMs whenever Docker host is set. `noctaxris-engine` is privileged DinD so nested containers can start. The engine API is not published to the host. Function containers attach to DinD network `noctaxris-fn` with IP masquerade disabled (WAN deny; host-gateway reachability for the published lab API). Empty `NOCTAXRIS_DOCKER_HOST` disables compute so unit tests can run without DinD. Image pulls are limited to the lab registry and pinned lab bases (`NOCTAXRIS_IMAGE_PULL_ALLOWLIST` for extras).
 
-Default Lambda and ECS compute runtime is DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Opt-in `microvm` probes for Linux with usable `/dev/kvm` and a Firecracker binary. WSL2 stays DinD-only. Missing KVM or binary fails closed without falling through to host Docker. A successful probe does not boot a guest: zip/Image Invoke and ECS RunTask on the microVM path fail closed until kernel/rootfs assets and a real runner ship. CodeBuild and Batch stay on the DinD path.
+Lambda, ECS, CodeBuild, Batch, and nested data engines all use nested DinD (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Unknown runtime values fail process start. Live zip/Image Invoke and ECS RunTask require a healthy `noctaxris-engine`. The API never falls through to host Docker.
 
 ## Nested data planes
 

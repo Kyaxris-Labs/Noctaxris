@@ -41,6 +41,12 @@ func (s *Server) handleSSM(
 		s.ssmDeleteParameter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMDescribeParameters:
 		s.ssmDescribeParameters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMListTagsForResource:
+		s.ssmListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMAddTagsToResource:
+		s.ssmAddTagsToResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMRemoveTagsFromResource:
+		s.ssmRemoveTagsFromResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeSSMError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This SSM action is not implemented.", readOnly, eventID, verified)
@@ -64,6 +70,12 @@ func ssmAction(action string) string {
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "ListTagsForResource":
+		return catalog.ActionSSMListTagsForResource
+	case "AddTagsToResource":
+		return catalog.ActionSSMAddTagsToResource
+	case "RemoveTagsFromResource":
+		return catalog.ActionSSMRemoveTagsFromResource
 	default:
 		return action
 	}
@@ -417,12 +429,26 @@ func (s *Server) ssmDescribeParameters(
 		return
 	}
 
-	prefix := ssmNamePrefixFromFilters(params["ParameterFilters"])
-	paramsList, err := s.store.DescribeParameters(verified.AccountID, prefix)
+	nameFilter := ssmNameFilterFromFilters(params["ParameterFilters"])
+	listPrefix := nameFilter.prefix
+	if nameFilter.exact != "" {
+		listPrefix = nameFilter.exact
+	}
+	paramsList, err := s.store.DescribeParameters(verified.AccountID, listPrefix)
 	if err != nil {
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to describe parameters.", readOnly, eventID, verified)
 		return
+	}
+	if nameFilter.exact != "" {
+		exact := ssmNormalizeName(nameFilter.exact)
+		filtered := make([]store.Parameter, 0, 1)
+		for _, p := range paramsList {
+			if p.Name == exact {
+				filtered = append(filtered, p)
+			}
+		}
+		paramsList = filtered
 	}
 
 	payload, err := ssmsvc.DescribeParametersJSON(paramsList)
@@ -435,10 +461,163 @@ func (s *Server) ssmDescribeParameters(
 	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "DescribeParameters", readOnly)
 }
 
-func ssmNamePrefixFromFilters(v any) string {
+func (s *Server) ssmResolveParameterARN(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) (arn string, ok bool) {
+	resourceType, _ := params["ResourceType"].(string)
+	resourceID, _ := params["ResourceId"].(string)
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "InvalidResourceId",
+			"ResourceId is required.", readOnly, eventID, verified)
+		return "", false
+	}
+	if resourceType != "" && !strings.EqualFold(resourceType, "Parameter") {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "InvalidResourceType",
+			"Only Parameter resource type is supported.", readOnly, eventID, verified)
+		return "", false
+	}
+	name := ssmNormalizeName(resourceID)
+	if _, err := s.store.GetParameter(verified.AccountID, name, false); errors.Is(err, store.ErrParameterNotFound) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "InvalidResourceId",
+			"Parameter not found.", readOnly, eventID, verified)
+		return "", false
+	} else if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load parameter.", readOnly, eventID, verified)
+		return "", false
+	}
+	return s.ssmParameterARN(verified, name), true
+}
+
+func (s *Server) ssmListTagsForResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, ok := s.ssmResolveParameterARN(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	if !s.authorizeSSM(verified, catalog.ActionSSMListTagsForResource, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:ListTagsForResource.", readOnly, eventID, verified)
+		return
+	}
+	tags, err := s.store.ListResourceTags(verified.AccountID, arn)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list tags.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ssmsvc.ListTagsForResourceJSON(tags)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "ListTagsForResource", readOnly)
+}
+
+func (s *Server) ssmAddTagsToResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, ok := s.ssmResolveParameterARN(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	tags := parseKeyValueTags(params["Tags"])
+	if len(tags) == 0 {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "InvalidResourceId",
+			"Tags is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeSSM(verified, catalog.ActionSSMAddTagsToResource, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:AddTagsToResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.TagResources(verified.AccountID, []string{arn}, tags); err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to tag parameter.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ssmsvc.EmptyOKJSON()
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "AddTagsToResource", readOnly)
+}
+
+func (s *Server) ssmRemoveTagsFromResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	arn, ok := s.ssmResolveParameterARN(w, r, body, requestID, eventID, verified, readOnly, params)
+	if !ok {
+		return
+	}
+	keys := stringSliceParam(params["TagKeys"])
+	if len(keys) == 0 {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "InvalidResourceId",
+			"TagKeys is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeSSM(verified, catalog.ActionSSMRemoveTagsFromResource, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:RemoveTagsFromResource.", readOnly, eventID, verified)
+		return
+	}
+	if _, err := s.store.UntagResources(verified.AccountID, []string{arn}, keys); err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to untag parameter.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ssmsvc.EmptyOKJSON()
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "RemoveTagsFromResource", readOnly)
+}
+
+type ssmNameFilter struct {
+	exact  string
+	prefix string
+}
+
+func ssmNameFilterFromFilters(v any) ssmNameFilter {
 	filters, ok := v.([]any)
 	if !ok {
-		return ""
+		return ssmNameFilter{}
 	}
 	for _, raw := range filters {
 		m, ok := raw.(map[string]any)
@@ -449,16 +628,19 @@ func ssmNamePrefixFromFilters(v any) string {
 		if !strings.EqualFold(key, "Name") {
 			continue
 		}
-		opt, _ := m["Option"].(string)
-		if opt != "" && !strings.EqualFold(opt, "BeginsWith") {
+		vals := stringSliceParam(m["Values"])
+		if len(vals) == 0 {
 			continue
 		}
-		vals := stringSliceParam(m["Values"])
-		if len(vals) > 0 {
-			return vals[0]
+		opt, _ := m["Option"].(string)
+		switch {
+		case strings.EqualFold(opt, "Equals"):
+			return ssmNameFilter{exact: vals[0]}
+		case opt == "" || strings.EqualFold(opt, "BeginsWith"):
+			return ssmNameFilter{prefix: vals[0]}
 		}
 	}
-	return ""
+	return ssmNameFilter{}
 }
 
 func ssmBoolParam(v any, def bool) bool {

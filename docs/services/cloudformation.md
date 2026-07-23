@@ -2,16 +2,18 @@
 
 **Status:** shipped (lab core)
 
-Create, describe, list, and delete stacks from a JSON template subset. Identity authz. Optional PassRole for `RoleARN` with `cloudformation.amazonaws.com` trust.
+Create, describe, list, and delete stacks from a JSON or YAML template subset. Identity authz. Optional PassRole for `RoleARN` with `cloudformation.amazonaws.com` trust.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Stacks | `CreateStack`, `DescribeStacks`, `DeleteStack`, `ListStacks` |
-| Resources | `AWS::S3::Bucket`, `AWS::IAM::Role` |
+| Resources | `AWS::S3::Bucket`, `AWS::IAM::Role`, `AWS::SQS::Queue`, `AWS::DynamoDB::Table`, `AWS::Lambda::Function` |
+| Template forms | JSON and YAML `TemplateBody` |
+| Intrinsics (lab) | `Ref`, `Fn::GetAtt`, `Fn::Sub`, `Fn::Join` (YAML short forms `!Ref`, `!GetAtt`, `!Sub`, `!Join`) |
 
-Unknown resource types fail closed with a clear validation error. Templates must be JSON (YAML not accepted).
+Unknown resource types fail closed with a clear validation error. Lambda lab resources require `Code.ZipFile` (inline source zipped at create). Resource create order follows Ref/GetAtt/Sub dependencies.
 
 ### Authz notes
 
@@ -32,8 +34,10 @@ aws cloudformation list-stacks --endpoint-url "$EP"
 aws cloudformation delete-stack --stack-name lab --endpoint-url "$EP"
 ```
 
+CreateStack round-trip suite: [tests/cloudformation/](../../tests/cloudformation/) (see [tests/README.md](../../tests/README.md)).
+
 ## Not yet / deferred
 
-- YAML templates and intrinsic function matrix
 - ChangeSets, drift detection, nested stacks
-- Broader resource type catalog
+- Full intrinsic matrix (`Fn::If`, `Fn::Select`, mappings, conditions, transforms)
+- Broader resource type catalog beyond the lab set above

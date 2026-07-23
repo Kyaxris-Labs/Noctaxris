@@ -74,6 +74,48 @@ func TestSecretsCreateGetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSecretsCreateSecretWithoutValue(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustSecretsJSON(t, handler, "CreateSecret", map[string]any{
+		"Name": "metadata-only",
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateSecret status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+	var createOut map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &createOut); err != nil {
+		t.Fatal(err)
+	}
+	if createOut["ARN"] == nil || createOut["Name"] != "metadata-only" {
+		t.Fatalf("create body=%q", createRec.Body.String())
+	}
+
+	putRec := mustSecretsJSON(t, handler, "PutSecretValue", map[string]any{
+		"SecretId":     "metadata-only",
+		"SecretString": "later",
+	}, now)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PutSecretValue status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+
+	getRec := mustSecretsJSON(t, handler, "GetSecretValue", map[string]any{
+		"SecretId": "metadata-only",
+	}, now)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetSecretValue status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+	var getOut map[string]any
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getOut); err != nil {
+		t.Fatal(err)
+	}
+	if getOut["SecretString"] != "later" {
+		t.Fatalf("SecretString=%v want later body=%q", getOut["SecretString"], getRec.Body.String())
+	}
+}
+
 func TestSecretsCreateAlreadyExists(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

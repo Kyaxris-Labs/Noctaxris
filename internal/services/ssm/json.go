@@ -76,6 +76,15 @@ func EmptyOKJSON() ([]byte, error) {
 	return []byte(`{}`), nil
 }
 
+// ListTagsForResourceJSON builds a ListTagsForResource response (TagList Key/Value).
+func ListTagsForResourceJSON(tags []store.ResourceTag) ([]byte, error) {
+	entries := make([]map[string]string, 0, len(tags))
+	for _, t := range tags {
+		entries = append(entries, map[string]string{"Key": t.Key, "Value": t.Value})
+	}
+	return json.Marshal(map[string]any{"TagList": entries})
+}
+
 func parameterJSON(p store.Parameter, includeValue bool) (map[string]any, error) {
 	ts, err := lastModifiedUnix(p.LastModified)
 	if err != nil {

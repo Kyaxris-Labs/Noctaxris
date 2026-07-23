@@ -506,7 +506,7 @@ func (s *Server) ecsRunTask(
 		return
 	}
 
-	if s.cfg.ComputeRuntime != compute.RuntimeMicroVM && strings.TrimSpace(s.cfg.DockerHost) == "" {
+	if strings.TrimSpace(s.cfg.DockerHost) == "" {
 		s.writeECSError(w, r, body, requestID, http.StatusServiceUnavailable, "ServiceException",
 			"compute unavailable", readOnly, eventID, verified)
 		return
@@ -573,17 +573,6 @@ func (s *Server) executeECSTask(
 	imageURI = strings.TrimSpace(imageURI)
 	if imageURI == "" {
 		return errors.New("container image is required")
-	}
-
-	if s.cfg.ComputeRuntime == compute.RuntimeMicroVM {
-		runner, err := compute.NewMicroVMRunner(compute.MicroVMProbeOpts{
-			FirecrackerPath: s.cfg.FirecrackerBin,
-		})
-		if err != nil {
-			return err
-		}
-		_, err = runner.RunECSTask(ctx, compute.ECSRunOpts{ImageURI: imageURI})
-		return err
 	}
 
 	cli, err := s.computeClient()

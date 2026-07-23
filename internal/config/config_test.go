@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
@@ -74,19 +75,14 @@ func TestLoadFromEnvDockerHostRequiresCertPath(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvComputeRuntimeMicroVM(t *testing.T) {
+func TestLoadFromEnvComputeRuntimeRejectsMicroVM(t *testing.T) {
 	t.Setenv("NOCTAXRIS_COMPUTE_RUNTIME", "microvm")
-	t.Setenv("NOCTAXRIS_FIRECRACKER_BIN", "/opt/firecracker/firecracker")
-
-	cfg, err := config.LoadFromEnv()
-	if err != nil {
-		t.Fatal(err)
+	_, err := config.LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected microvm rejection")
 	}
-	if cfg.ComputeRuntime != "microvm" {
-		t.Fatalf("ComputeRuntime = %q, want microvm", cfg.ComputeRuntime)
-	}
-	if cfg.FirecrackerBin != "/opt/firecracker/firecracker" {
-		t.Fatalf("FirecrackerBin = %q", cfg.FirecrackerBin)
+	if !strings.Contains(err.Error(), "NOCTAXRIS_COMPUTE_RUNTIME") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

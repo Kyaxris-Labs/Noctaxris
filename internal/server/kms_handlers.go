@@ -166,6 +166,13 @@ func (s *Server) handleKMS(
 				"Unable to create key.", readOnly, eventID, verified)
 			return
 		}
+		if tags := parseKMSTags(params["Tags"]); len(tags) > 0 {
+			if _, tagErr := s.store.TagResources(accountID, []string{k.ARN}, tags); tagErr != nil {
+				s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to tag key.", readOnly, eventID, verified)
+				return
+			}
+		}
 		payload, err = kmssvc.CreateKeyJSON(k)
 	case catalog.ActionKMSDescribeKey, "DescribeKey":
 		payload, err = kmssvc.DescribeKeyJSON(key)
@@ -470,6 +477,40 @@ func (s *Server) handleKMS(
 			return
 		}
 		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSListResourceTags, "ListResourceTags":
+		tags, listErr := s.store.ListResourceTags(accountID, key.ARN)
+		if listErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to list tags.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.ListResourceTagsJSON(tags)
+	case catalog.ActionKMSTagResource, "TagResource":
+		tags := parseKMSTags(params["Tags"])
+		if len(tags) == 0 {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Tags is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, tagErr := s.store.TagResources(accountID, []string{key.ARN}, tags); tagErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to tag key.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSUntagResource, "UntagResource":
+		keys := parseKMSTagKeys(params["TagKeys"])
+		if len(keys) == 0 {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"TagKeys is required.", readOnly, eventID, verified)
+			return
+		}
+		if _, untagErr := s.store.UntagResources(accountID, []string{key.ARN}, keys); untagErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to untag key.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.EmptyOKJSON()
 	default:
 		s.writeKMSError(w, r, body, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This KMS action is not implemented.", readOnly, eventID, verified)
@@ -680,6 +721,45 @@ func stringSliceParam(v any) []string {
 	}
 }
 
+// parseStringMapTags parses SQS/Lambda Tags maps ({"k":"v"}).
+func parseStringMapTags(v any) map[string]string {
+	return stringMapParam(v)
+}
+
+// parseKeyValueTags parses Events/SSM/Secrets Tags arrays ([{Key,Value},...]).
+func parseKeyValueTags(v any) map[string]string {
+	raw, ok := v.([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		k, _ := m["Key"].(string)
+		val, _ := m["Value"].(string)
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		out[k] = val
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func resourceTagsToMap(tags []store.ResourceTag) map[string]string {
+	out := make(map[string]string, len(tags))
+	for _, t := range tags {
+		out[t.Key] = t.Value
+	}
+	return out
+}
+
 func intFromJSONNumber(v any) int {
 	switch t := v.(type) {
 	case float64:
@@ -747,4 +827,46 @@ func (s *Server) writeKMSError(
 		accountID = verified.AccountID
 	}
 	s.auditAPIError(r, requestID, eventID, code, message, readOnly, accessKeyID, accountID, verified != nil)
+}
+
+func parseKMSTags(v any) map[string]string {
+	raw, ok := v.([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		k, _ := m["TagKey"].(string)
+		val, _ := m["TagValue"].(string)
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		out[k] = val
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func parseKMSTagKeys(v any) []string {
+	raw, ok := v.([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		switch t := item.(type) {
+		case string:
+			if k := strings.TrimSpace(t); k != "" {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }

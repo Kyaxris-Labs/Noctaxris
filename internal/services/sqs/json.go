@@ -42,6 +42,14 @@ func EmptyOKJSON() ([]byte, error) {
 	return []byte(`{}`), nil
 }
 
+// ListQueueTagsJSON builds a ListQueueTags response (string-to-string Tags map).
+func ListQueueTagsJSON(tags map[string]string) ([]byte, error) {
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	return json.Marshal(map[string]any{"Tags": tags})
+}
+
 // SendMessageJSON builds a SendMessage response. md5Attrs may be empty.
 func SendMessageJSON(messageID, md5Body, md5Attrs string, sequenceNumber int64) ([]byte, error) {
 	out := map[string]any{

@@ -6,15 +6,15 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 
 | Service | Status | Doc |
 |---------|--------|-----|
-| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, IdPs, MFA |
+| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, instance profiles including ListInstanceProfilesForRole, IdPs, MFA |
 | [STS](sts.md) | Shipped | All 11 actions (lab MFA on GetSessionToken) |
 | [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance |
-| [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, deletion sweeper, key-material rotation |
+| [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, tags, deletion sweeper, key-material rotation |
 | [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, cross-account dual eval |
-| [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, resource policies, cross-account dual eval, stream enablement |
+| [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, TTL, DescribeContinuousBackups stub, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE or KEYS_ONLY |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
-| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM with lab FilterCriteria, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD default, opt-in microVM |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS and DynamoDB Streams ESM with lab FilterCriteria, Function URLs, sync+async Invoke, lab ECR Image pull, TLS DinD |
 | [SSM Parameter Store](ssm.md) | Shipped | String and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, RotateSecret, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
 | [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, topic policies, XA Subscribe + foreign SQS delivery |
@@ -24,7 +24,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD **control-plane stub** (ActiveMQ/RabbitMQ); loopback `stub://` endpoint; not a live broker |
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox under data root; Describe reports `OFFLINE` (no listener) |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2, DinD sync |
-| [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD default, opt-in microVM |
+| [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |
 | [CloudWatch Logs](logs.md) | Shipped | Log groups/streams CRUD lite, Put/GetLogEvents, subscription filters to Lambda/SQS |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
@@ -33,7 +33,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 | [SES](ses.md) | Shipped | Local catcher: verify, SendEmail/SendRawEmail, ListIdentities, SetIdentityNotificationTopic Bounce, GetSendStatistics |
 | [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, GetConfiguration, AppConfigData session |
 | [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Task to Lambda/SQS/SNS/EventBridge |
-| [CloudFormation](cloudformation.md) | Shipped | Stack CRUD lite for S3 bucket and IAM role resources |
+| [CloudFormation](cloudformation.md) | Shipped | Stack CRUD for S3, IAM Role, SQS, DynamoDB, Lambda; JSON/YAML; lab intrinsics |
 | [CodeBuild](codebuild.md) | Shipped | Project CRUD lite, StartBuild on nested DinD, BatchGetBuilds/ListBuilds |
 | [CodePipeline](codepipeline.md) | Shipped | Pipeline CRUD, StartPipelineExecution with nested CodeBuild StartBuild, GetPipelineState |
 | [Batch](batch.md) | Shipped | Compute environment / queue / definition lite, SubmitJob on nested DinD |
@@ -68,11 +68,19 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, and what
 
 ## Shared verification
 
-Unit and integration tests:
+Unit tests (in-process; no Compose):
 
 ```bash
 go test ./... -count=1
 ```
+
+Compose-backed SDK / Terraform / CloudFormation suites (API must be ready on `127.0.0.1:4566`):
+
+```bash
+bash tests/run-all.sh
+```
+
+See [tests/README.md](../../tests/README.md).
 
 Condition-key catalogs and ADR-0005 §7 evaluation:
 
@@ -102,8 +110,6 @@ EP=http://127.0.0.1:4566
 
 Prefer WSL or Linux for AWS CLI smoke against `http://127.0.0.1:4566`. On Windows, run the same commands inside WSL when Docker Desktop publishes that port on the Windows host.
 
-Opt-in microVM (`NOCTAXRIS_COMPUTE_RUNTIME=microvm`) needs a Linux host with usable `/dev/kvm` and a Firecracker binary for selection. On WSL2 or without KVM/binary the path fails closed. Even when the probe succeeds, live guest zip/Image Invoke and ECS RunTask are not packaged (fail closed; no fake boot). Leave the runtime unset (or `dind`) for normal labs.
-
 **CI vs nested smoke:** Push/PR CI runs `smoke-core` (ready + STS/S3/KMS/DynamoDB). Nested DinD is **manual only**: Actions `workflow_dispatch` with `nested_smoke=true`, or [docker/smoke-nested.sh](../../docker/smoke-nested.sh). A green PR does not prove Lambda Invoke, nested RDS/Data API, or other DinD paths. Full matrix: [ops.md](../ops.md).
 
 Per-service CLI smoke lives on each shipped service page above.
@@ -116,7 +122,7 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Condition keys:** Catalogs for lab-core services (IAM, STS, Organizations, KMS, S3, DynamoDB, SQS, Lambda, SSM, Secrets Manager, SNS, EventBridge, ECR, ECS) plus a global seed ship via `internal/catalog/conditionkeys` (servicereference snapshots and ADR-0005 §7 eval rules). Request context now populates `aws:SourceIp`, `aws:PrincipalArn`, `aws:PrincipalAccount`, `aws:RequestedRegion`, MFA keys, and `aws:ResourceTag/*` (plus matching service ResourceTag keys) when tags exist via the Tagging API. Broader operator matrix and every global key population remain open (partial today: StringEquals/Like/NotEquals, Null, IfExists variants).
 
-**Compute runtime:** Nested DinD is the default for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB). Opt-in microVM selection for Lambda and ECS RunTask is documented on [lambda.md](lambda.md) and [ecs.md](ecs.md). WSL2 is DinD-only. Live Firecracker guest boot remains deferred. Athena runs in-process (no nested query engine).
+**Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB). Live Invoke/RunTask need a healthy engine. Privilege reduction for the nested engine is planned. Athena runs in-process (no nested query engine).
 
 **Nested data ports:** Compose publishes only `127.0.0.1:4566`. Postgres, Redis/Valkey, Mongo, and OpenSearch ports are not published on the host. Prefer RDS Data API on `:4566` for SQL labs.
 

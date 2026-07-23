@@ -340,6 +340,21 @@ func (s *Server) handleIAMIdentity(
 		}
 		payload, err = iam.ListInstanceProfilesXML(profiles, requestID)
 
+	case catalog.ActionIAMListInstanceProfilesForRole, "ListInstanceProfilesForRole":
+		handled = true
+		profiles, listErr := s.store.ListInstanceProfilesForRole(accountID, params["RoleName"])
+		if listErr != nil {
+			if errors.Is(listErr, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"The role cannot be found.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+				return nil, true, errHandled
+			}
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to list instance profiles for role.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
+			return nil, true, errHandled
+		}
+		payload, err = iam.ListInstanceProfilesForRoleXML(profiles, requestID)
+
 	case catalog.ActionIAMCreateOpenIDConnectProvider, "CreateOpenIDConnectProvider":
 		handled = true
 		oidcURL := params["Url"]

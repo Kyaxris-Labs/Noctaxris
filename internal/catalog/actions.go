@@ -157,6 +157,7 @@ const (
 	ActionIAMAddRoleToInstanceProfile      = "iam:AddRoleToInstanceProfile"
 	ActionIAMRemoveRoleFromInstanceProfile = "iam:RemoveRoleFromInstanceProfile"
 	ActionIAMListInstanceProfiles          = "iam:ListInstanceProfiles"
+	ActionIAMListInstanceProfilesForRole   = "iam:ListInstanceProfilesForRole"
 )
 
 // Identity providers
@@ -207,6 +208,9 @@ const (
 	ActionKMSGetKeyRotationStatus            = "kms:GetKeyRotationStatus"
 	ActionKMSReEncryptFrom                   = "kms:ReEncryptFrom"
 	ActionKMSReEncryptTo                     = "kms:ReEncryptTo"
+	ActionKMSListResourceTags                = "kms:ListResourceTags"
+	ActionKMSTagResource                     = "kms:TagResource"
+	ActionKMSUntagResource                   = "kms:UntagResource"
 )
 
 // S3 lab actions.
@@ -253,8 +257,12 @@ const (
 	ActionDynamoDBPutResourcePolicy    = "dynamodb:PutResourcePolicy"
 	ActionDynamoDBGetResourcePolicy    = "dynamodb:GetResourcePolicy"
 	ActionDynamoDBDeleteResourcePolicy = "dynamodb:DeleteResourcePolicy"
-	ActionDynamoDBUpdateTimeToLive     = "dynamodb:UpdateTimeToLive"
-	ActionDynamoDBDescribeTimeToLive   = "dynamodb:DescribeTimeToLive"
+	ActionDynamoDBUpdateTimeToLive         = "dynamodb:UpdateTimeToLive"
+	ActionDynamoDBDescribeTimeToLive       = "dynamodb:DescribeTimeToLive"
+	ActionDynamoDBDescribeContinuousBackups = "dynamodb:DescribeContinuousBackups"
+	ActionDynamoDBListTagsOfResource        = "dynamodb:ListTagsOfResource"
+	ActionDynamoDBTagResource               = "dynamodb:TagResource"
+	ActionDynamoDBUntagResource             = "dynamodb:UntagResource"
 )
 
 // DynamoDB Streams lab actions.
@@ -335,6 +343,9 @@ const (
 	ActionSQSSendMessageBatch        = "sqs:SendMessageBatch"
 	ActionSQSDeleteMessageBatch      = "sqs:DeleteMessageBatch"
 	ActionSQSChangeMessageVisibility = "sqs:ChangeMessageVisibility"
+	ActionSQSListQueueTags           = "sqs:ListQueueTags"
+	ActionSQSTagQueue                = "sqs:TagQueue"
+	ActionSQSUntagQueue              = "sqs:UntagQueue"
 )
 
 // SSM lab actions.
@@ -343,8 +354,11 @@ const (
 	ActionSSMGetParameter        = "ssm:GetParameter"
 	ActionSSMGetParameters       = "ssm:GetParameters"
 	ActionSSMGetParametersByPath = "ssm:GetParametersByPath"
-	ActionSSMDeleteParameter     = "ssm:DeleteParameter"
-	ActionSSMDescribeParameters  = "ssm:DescribeParameters"
+	ActionSSMDeleteParameter         = "ssm:DeleteParameter"
+	ActionSSMDescribeParameters      = "ssm:DescribeParameters"
+	ActionSSMListTagsForResource     = "ssm:ListTagsForResource"
+	ActionSSMAddTagsToResource       = "ssm:AddTagsToResource"
+	ActionSSMRemoveTagsFromResource  = "ssm:RemoveTagsFromResource"
 )
 
 // SNS lab actions.
@@ -363,6 +377,9 @@ const (
 	ActionSNSGetSubscriptionAttributes = "sns:GetSubscriptionAttributes"
 	ActionSNSAddPermission             = "sns:AddPermission"
 	ActionSNSRemovePermission          = "sns:RemovePermission"
+	ActionSNSListTagsForResource       = "sns:ListTagsForResource"
+	ActionSNSTagResource               = "sns:TagResource"
+	ActionSNSUntagResource             = "sns:UntagResource"
 )
 
 // EventBridge lab actions.
@@ -381,8 +398,11 @@ const (
 	ActionEventsPutTargets        = "events:PutTargets"
 	ActionEventsRemoveTargets     = "events:RemoveTargets"
 	ActionEventsListTargetsByRule = "events:ListTargetsByRule"
-	ActionEventsPutPermission     = "events:PutPermission"
-	ActionEventsRemovePermission  = "events:RemovePermission"
+	ActionEventsPutPermission        = "events:PutPermission"
+	ActionEventsRemovePermission     = "events:RemovePermission"
+	ActionEventsListTagsForResource  = "events:ListTagsForResource"
+	ActionEventsTagResource          = "events:TagResource"
+	ActionEventsUntagResource        = "events:UntagResource"
 )
 
 // ECR lab actions.
@@ -436,6 +456,9 @@ const (
 	ActionSecretsPutResourcePolicy    = "secretsmanager:PutResourcePolicy"
 	ActionSecretsGetResourcePolicy    = "secretsmanager:GetResourcePolicy"
 	ActionSecretsDeleteResourcePolicy = "secretsmanager:DeleteResourcePolicy"
+	ActionSecretsListTagsForResource  = "secretsmanager:ListTagsForResource"
+	ActionSecretsTagResource          = "secretsmanager:TagResource"
+	ActionSecretsUntagResource        = "secretsmanager:UntagResource"
 )
 
 // CloudTrail lab actions.
@@ -824,6 +847,8 @@ const (
 	ActionLambdaDeleteFunctionUrlConfig     = "lambda:DeleteFunctionUrlConfig"
 	ActionLambdaListFunctionUrlConfigs      = "lambda:ListFunctionUrlConfigs"
 	ActionLambdaInvokeFunctionUrl           = "lambda:InvokeFunctionUrl"
+	ActionLambdaListTags                    = "lambda:ListTags"
+	ActionLambdaGetFunctionCodeSigningConfig = "lambda:GetFunctionCodeSigningConfig"
 )
 
 // KnownAction reports whether action is recognized in the current catalog.
@@ -912,6 +937,7 @@ func KnownAction(action string) bool {
 		ActionIAMAddRoleToInstanceProfile,
 		ActionIAMRemoveRoleFromInstanceProfile,
 		ActionIAMListInstanceProfiles,
+		ActionIAMListInstanceProfilesForRole,
 		ActionIAMCreateOpenIDConnectProvider,
 		ActionIAMDeleteOpenIDConnectProvider,
 		ActionIAMListOpenIDConnectProviders,
@@ -950,6 +976,9 @@ func KnownAction(action string) bool {
 		ActionKMSGetKeyRotationStatus,
 		ActionKMSReEncryptFrom,
 		ActionKMSReEncryptTo,
+		ActionKMSListResourceTags,
+		ActionKMSTagResource,
+		ActionKMSUntagResource,
 		ActionS3CreateBucket,
 		ActionS3DeleteBucket,
 		ActionS3ListAllMyBuckets,
@@ -990,6 +1019,10 @@ func KnownAction(action string) bool {
 		ActionDynamoDBDeleteResourcePolicy,
 		ActionDynamoDBUpdateTimeToLive,
 		ActionDynamoDBDescribeTimeToLive,
+		ActionDynamoDBDescribeContinuousBackups,
+		ActionDynamoDBListTagsOfResource,
+		ActionDynamoDBTagResource,
+		ActionDynamoDBUntagResource,
 		ActionDynamoDBStreamsListStreams,
 		ActionDynamoDBStreamsDescribeStream,
 		ActionDynamoDBStreamsGetShardIterator,
@@ -1034,6 +1067,9 @@ func KnownAction(action string) bool {
 		ActionSQSSendMessageBatch,
 		ActionSQSDeleteMessageBatch,
 		ActionSQSChangeMessageVisibility,
+		ActionSQSListQueueTags,
+		ActionSQSTagQueue,
+		ActionSQSUntagQueue,
 		ActionLambdaCreateFunction,
 		ActionLambdaGetFunction,
 		ActionLambdaDeleteFunction,
@@ -1065,12 +1101,17 @@ func KnownAction(action string) bool {
 		ActionLambdaDeleteFunctionUrlConfig,
 		ActionLambdaListFunctionUrlConfigs,
 		ActionLambdaInvokeFunctionUrl,
+		ActionLambdaListTags,
+		ActionLambdaGetFunctionCodeSigningConfig,
 		ActionSSMPutParameter,
 		ActionSSMGetParameter,
 		ActionSSMGetParameters,
 		ActionSSMGetParametersByPath,
 		ActionSSMDeleteParameter,
 		ActionSSMDescribeParameters,
+		ActionSSMListTagsForResource,
+		ActionSSMAddTagsToResource,
+		ActionSSMRemoveTagsFromResource,
 		ActionSecretsCreateSecret,
 		ActionSecretsGetSecretValue,
 		ActionSecretsPutSecretValue,
@@ -1082,6 +1123,9 @@ func KnownAction(action string) bool {
 		ActionSecretsPutResourcePolicy,
 		ActionSecretsGetResourcePolicy,
 		ActionSecretsDeleteResourcePolicy,
+		ActionSecretsListTagsForResource,
+		ActionSecretsTagResource,
+		ActionSecretsUntagResource,
 		ActionSNSCreateTopic,
 		ActionSNSDeleteTopic,
 		ActionSNSListTopics,
@@ -1096,6 +1140,9 @@ func KnownAction(action string) bool {
 		ActionSNSGetSubscriptionAttributes,
 		ActionSNSAddPermission,
 		ActionSNSRemovePermission,
+		ActionSNSListTagsForResource,
+		ActionSNSTagResource,
+		ActionSNSUntagResource,
 		ActionEventsPutEvents,
 		ActionEventsCreateEventBus,
 		ActionEventsDeleteEventBus,
@@ -1112,6 +1159,9 @@ func KnownAction(action string) bool {
 		ActionEventsListTargetsByRule,
 		ActionEventsPutPermission,
 		ActionEventsRemovePermission,
+		ActionEventsListTagsForResource,
+		ActionEventsTagResource,
+		ActionEventsUntagResource,
 		ActionECRCreateRepository,
 		ActionECRDescribeRepositories,
 		ActionECRDeleteRepository,

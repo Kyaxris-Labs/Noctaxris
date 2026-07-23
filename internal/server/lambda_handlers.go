@@ -103,6 +103,10 @@ func (s *Server) handleLambda(
 		s.lambdaDeleteFunctionUrlConfig(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionLambdaListFunctionUrlConfigs:
 		s.lambdaListFunctionUrlConfigs(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaListTags:
+		s.lambdaListTags(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLambdaGetFunctionCodeSigningConfig:
+		s.lambdaGetFunctionCodeSigningConfig(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLambdaError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Lambda action is not implemented.", readOnly, eventID, verified)
@@ -174,6 +178,10 @@ func lambdaAction(action string) string {
 		return catalog.ActionLambdaDeleteFunctionUrlConfig
 	case "ListFunctionUrlConfigs":
 		return catalog.ActionLambdaListFunctionUrlConfigs
+	case "ListTags":
+		return catalog.ActionLambdaListTags
+	case "GetFunctionCodeSigningConfig":
+		return catalog.ActionLambdaGetFunctionCodeSigningConfig
 	default:
 		return action
 	}
@@ -898,6 +906,49 @@ func (s *Server) lambdaPublishVersion(
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "PublishVersion", readOnly)
 }
 
+func (s *Server) lambdaGetFunctionCodeSigningConfig(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name := functionNameParam(params)
+	if name == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"FunctionName is required.", readOnly, eventID, verified)
+		return
+	}
+	base, err := s.store.GetFunction(verified.AccountID, name)
+	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Function not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to load function.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeLambda(verified, catalog.ActionLambdaGetFunctionCodeSigningConfig, base.FunctionARN, base.ResourcePolicy) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lambda:GetFunctionCodeSigningConfig.", readOnly, eventID, verified)
+		return
+	}
+	// Lab has no code signing. Return success without CodeSigningConfigArn so Terraform
+	// provider v5 refresh does not treat CodeSigningConfigNotFoundException as hard fail.
+	payload, err := json.Marshal(map[string]any{"FunctionName": base.FunctionName})
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLambdaOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "GetFunctionCodeSigningConfig", readOnly)
+}
+
 func (s *Server) lambdaListVersionsByFunction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -935,7 +986,7 @@ func (s *Server) lambdaListVersionsByFunction(
 			"Unable to list versions.", readOnly, eventID, verified)
 		return
 	}
-	payload, err := lambdasvc.ListVersionsByFunctionJSON(versions)
+	payload, err := lambdasvc.ListVersionsByFunctionJSON(base, versions)
 	if err != nil {
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
 			"Unable to build response.", readOnly, eventID, verified)
@@ -943,6 +994,64 @@ func (s *Server) lambdaListVersionsByFunction(
 	}
 	s.writeLambdaOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "ListVersionsByFunction", readOnly)
+}
+
+func (s *Server) lambdaListTags(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	resource, _ := params["Resource"].(string)
+	resource = strings.TrimSpace(resource)
+	if resource == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			"Resource is required.", readOnly, eventID, verified)
+		return
+	}
+	name, _ := store.ParseFunctionQualifier(resource)
+	if name == "" {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			"Invalid Resource ARN.", readOnly, eventID, verified)
+		return
+	}
+	accountID := verified.AccountID
+	if acct := resourceAccountIDFromARN(resource); acct != "" {
+		accountID = acct
+	}
+	base, err := s.store.GetFunction(accountID, name)
+	if errors.Is(err, store.ErrNoSuchFunction) || errors.Is(err, store.ErrInvalidFunctionName) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Function not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to load function.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeLambda(verified, catalog.ActionLambdaListTags, base.FunctionARN, base.ResourcePolicy) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lambda:ListTags.", readOnly, eventID, verified)
+		return
+	}
+	tags, err := s.store.ListResourceTags(accountID, base.FunctionARN)
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to list tags.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := lambdasvc.ListTagsJSON(resourceTagsToMap(tags))
+	if err != nil {
+		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeLambdaOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "ListTags", readOnly)
 }
 
 func lambdaAliasVersionParam(params map[string]any) (int, error) {
@@ -1752,14 +1861,11 @@ func (s *Server) executeLambdaInvoke(
 	fn store.LambdaFunction,
 	executedVersion, eventJSON string,
 ) ([]byte, error) {
-	if s.cfg.ComputeRuntime != compute.RuntimeMicroVM && strings.TrimSpace(s.cfg.DockerHost) == "" {
+	if strings.TrimSpace(s.cfg.DockerHost) == "" {
 		return nil, errors.New("compute unavailable")
 	}
 	cli, err := s.lambdaInvoker()
 	if err != nil {
-		if s.cfg.ComputeRuntime == compute.RuntimeMicroVM {
-			return nil, err
-		}
 		return nil, errors.New("compute unavailable")
 	}
 
@@ -1902,7 +2008,6 @@ func (s *Server) lambdaInvoker() (compute.FunctionInvoker, error) {
 			Runtime:           s.cfg.ComputeRuntime,
 			DockerHost:        s.cfg.DockerHost,
 			DockerTLSCertPath: s.cfg.DockerTLSCertPath,
-			FirecrackerBin:    s.cfg.FirecrackerBin,
 		})
 	})
 	return s.invoker, s.invokerErr

@@ -3,6 +3,7 @@ package secretsmanager
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -137,12 +138,16 @@ func PutResourcePolicyJSON(sec store.Secret) ([]byte, error) {
 }
 
 // GetResourcePolicyJSON builds a GetResourcePolicy response.
+// Omits ResourcePolicy when empty so Terraform does not try to parse "".
 func GetResourcePolicyJSON(sec store.Secret, policy string) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"ARN":            sec.ARN,
-		"Name":           sec.Name,
-		"ResourcePolicy": policy,
-	})
+	out := map[string]any{
+		"ARN":  sec.ARN,
+		"Name": sec.Name,
+	}
+	if strings.TrimSpace(policy) != "" {
+		out["ResourcePolicy"] = policy
+	}
+	return json.Marshal(out)
 }
 
 // DeleteResourcePolicyJSON builds a DeleteResourcePolicy response.
@@ -151,6 +156,20 @@ func DeleteResourcePolicyJSON(sec store.Secret) ([]byte, error) {
 		"ARN":  sec.ARN,
 		"Name": sec.Name,
 	})
+}
+
+// EmptyOKJSON is the empty success body used by TagResource/UntagResource.
+func EmptyOKJSON() ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+// ListTagsForResourceJSON builds a ListTagsForResource response (Key/Value tags).
+func ListTagsForResourceJSON(tags []store.ResourceTag) ([]byte, error) {
+	entries := make([]map[string]string, 0, len(tags))
+	for _, t := range tags {
+		entries = append(entries, map[string]string{"Key": t.Key, "Value": t.Value})
+	}
+	return json.Marshal(map[string]any{"Tags": entries})
 }
 
 func listSecretJSON(sec store.Secret) (map[string]any, error) {

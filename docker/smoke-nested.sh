@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Nested DinD operator/CI smoke for Noctaxris.
 # Requires Docker Compose, curl, and AWS CLI v2.
-# Does not claim live Firecracker guest boot.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

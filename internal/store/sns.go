@@ -232,17 +232,22 @@ func (s *Store) CreateTopic(accountID, region, topicName string, attributes map[
 	if fifo && attributes["FifoTopic"] == "" {
 		attributes["FifoTopic"] = "true"
 	}
+	arn := TopicARN(region, accountID, topicName)
+	policy := strings.TrimSpace(attributes["Policy"])
+	delete(attributes, "Policy")
+	if policy == "" {
+		policy = defaultSNSTopicPolicy(accountID, arn)
+	}
 	attrsJSON, err := marshalAttributes(attributes)
 	if err != nil {
 		return Topic{}, err
 	}
-	arn := TopicARN(region, accountID, topicName)
 	created := nowRFC3339()
 	_, err = s.db.Exec(
 		`INSERT INTO sns_topics
 		 (account_id, topic_name, topic_arn, policy_json, attributes_json, creation_date)
-		 VALUES (?, ?, ?, '', ?, ?)`,
-		accountID, topicName, arn, attrsJSON, created,
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		accountID, topicName, arn, policy, attrsJSON, created,
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -258,9 +263,47 @@ func (s *Store) CreateTopic(accountID, region, topicName string, attributes map[
 		AccountID:    accountID,
 		TopicName:    topicName,
 		TopicARN:     arn,
+		Policy:       policy,
 		Attributes:   attrsCopy,
 		CreationDate: created,
 	}, nil
+}
+
+// defaultSNSTopicPolicy returns an owner Allow policy for a new topic.
+// Uses account root Principal (no AWS:SourceOwner). That SNS key is not in the
+// lab condition catalog yet; an unknown Condition key fail-closes EvaluateResourceAccess.
+func defaultSNSTopicPolicy(accountID, topicARN string) string {
+	rootARN := "arn:aws:iam::" + accountID + ":root"
+	doc := map[string]any{
+		"Version": "2008-10-17",
+		"Id":      "__default_policy_ID",
+		"Statement": []any{
+			map[string]any{
+				"Sid":    "__default_statement_ID",
+				"Effect": "Allow",
+				"Principal": map[string]any{
+					"AWS": rootARN,
+				},
+				"Action": []any{
+					"SNS:GetTopicAttributes",
+					"SNS:SetTopicAttributes",
+					"SNS:AddPermission",
+					"SNS:RemovePermission",
+					"SNS:DeleteTopic",
+					"SNS:Subscribe",
+					"SNS:ListSubscriptionsByTopic",
+					"SNS:Publish",
+					"SNS:Receive",
+				},
+				"Resource": topicARN,
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return `{"Version":"2008-10-17","Statement":[]}`
+	}
+	return string(raw)
 }
 
 // GetTopic returns a topic by name or ErrNoSuchTopic.
@@ -343,11 +386,19 @@ func (s *Store) DeleteTopic(accountID, topicName string) error {
 func (s *Store) topicAttributesMap(topic Topic) map[string]string {
 	attrs := map[string]string{}
 	for k, v := range topic.Attributes {
+		if k == "Policy" {
+			continue
+		}
 		attrs[k] = v
 	}
 	attrs["TopicArn"] = topic.TopicARN
-	if strings.TrimSpace(topic.Policy) != "" {
-		attrs["Policy"] = topic.Policy
+	// Prefer policy_json; fall back to Attributes.Policy. Omit empty (TF cannot parse "").
+	policy := strings.TrimSpace(topic.Policy)
+	if policy == "" && topic.Attributes != nil {
+		policy = strings.TrimSpace(topic.Attributes["Policy"])
+	}
+	if policy != "" {
+		attrs["Policy"] = policy
 	}
 	return attrs
 }

@@ -19,7 +19,7 @@ Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kya
 |---|---|
 | Lab fidelity | Identity evaluation with boundaries, SCP/RCP filters, PassRole, and condition keys |
 | Secure defaults | Loopback publish only. No host `docker.sock`. Sealed secrets and CMK material at rest |
-| Nested compute | DinD via Compose `noctaxris-engine` is the default. Opt-in microVM on Linux with KVM. WSL2 stays DinD-only |
+| Nested compute | Nested Docker (DinD) via Compose `noctaxris-engine` over TLS. Live Invoke needs a healthy engine. Privilege reduction for the engine is planned |
 | CLI-shaped | Latest AWS CLI v2 via `--endpoint-url` |
 
 ## Quick start
@@ -63,7 +63,7 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
-      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles, OIDC and SAML IdP CRUD, virtual MFA.</td>
+      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA.</td>
       <td>Service-linked roles, full pagination and tagging parity.</td>
     </tr>
     <tr>
@@ -218,8 +218,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
-      <td>CreateStack/DescribeStacks/DeleteStack/ListStacks. JSON templates with AWS::S3::Bucket and AWS::IAM::Role. Unknown types fail closed. Optional PassRole for cloudformation.amazonaws.com.</td>
-      <td>YAML templates, intrinsic matrix, ChangeSets, nested stacks, broader resource catalog.</td>
+      <td>CreateStack/DescribeStacks/DeleteStack/ListStacks. JSON or YAML templates with AWS::S3::Bucket, AWS::IAM::Role, AWS::SQS::Queue, AWS::DynamoDB::Table, AWS::Lambda::Function. Lab intrinsics Ref/Fn::GetAtt/Fn::Sub/Fn::Join. Unknown types fail closed. Optional PassRole for cloudformation.amazonaws.com.</td>
+      <td>ChangeSets, nested stacks, drift, full intrinsic matrix, broader resource catalog.</td>
     </tr>
     <tr>
       <td>Cloud Control</td>
@@ -269,8 +269,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller and lab FilterCriteria, Function URLs lite (NONE with simple CORS or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (Linux/KVM probe, fail-closed, live guest boot deferred), platform egress deny.</td>
-      <td>Kinesis/MQ ESM sources, full content-filtering operators beyond lab FilterCriteria, ReportBatchItemFailures, provisioned concurrency, weighted aliases, Function URL CORS config object depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless engine, live Firecracker guest zip/Image Invoke on Linux+KVM, full SAR depth.</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS and DynamoDB Streams event source mappings with in-process poller and lab FilterCriteria, Function URLs lite (NONE with simple CORS or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign principals, same-account or / cross-account and), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Kinesis/MQ ESM sources, full content-filtering operators beyond lab FilterCriteria, ReportBatchItemFailures, provisioned concurrency, weighted aliases, Function URL CORS config object depth, service-principal cross-account grants, EventBridge failure destinations, non-lab private registries, rootless / deprivileged nested engine, full SAR depth.</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -279,8 +279,8 @@ Use the same root keys you put in `docker/.env`. Full per-service CLI smoke live
     </tr>
     <tr>
       <td>ECS</td>
-      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection, opt-in microVM selection via <code>NOCTAXRIS_COMPUTE_RUNTIME=microvm</code> (same Linux/KVM fail-closed matrix as Lambda, live guest boot deferred).</td>
-      <td>Load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, live Firecracker guest RunTask on Linux+KVM, full SAR depth.</td>
+      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, rootless / deprivileged nested engine, full SAR depth.</td>
     </tr>
     <tr>
       <td>CodeBuild</td>
@@ -376,7 +376,7 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 |---------|--------|
 | Listen | `127.0.0.1:4566` only |
 | Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch, and nested data engines) |
-| Compute runtime | Default `dind`. Opt-in `NOCTAXRIS_COMPUTE_RUNTIME=microvm` on Linux with KVM and a Firecracker binary. WSL2 is DinD-only. Missing KVM or binary fails closed. Nested data engines stay on DinD |
+| Compute runtime | Nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Lambda/ECS compute needs healthy `noctaxris-engine`. Nested data engines use the same path |
 | Data ports | Compose publishes only `127.0.0.1:4566`. No host publish of Postgres, Redis/Valkey, Mongo, or OpenSearch |
 | API replicas | **One process per data root.** Multi-replica against the same SQLite volume is unsupported and can corrupt state |
 | Credentials | Root keys via env injection |
@@ -385,6 +385,8 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
 Backup, restore, upgrade, graceful shutdown, and CI matrix (PR `smoke-core` vs manual nested smoke): [docs/ops.md](docs/ops.md).
+
+SDK, Terraform, and CloudFormation integration suites (Compose required): [tests/README.md](tests/README.md).
 
 ## Architecture
 
@@ -396,7 +398,6 @@ flowchart LR
   Port --> API["noctaxris API"]
   API -->|"TLS"| Engine["noctaxris-engine DinD"]
   Engine --> Nested["Lambda / ECS / nested data"]
-  API -.->|"opt-in fail-closed"| MicroVM["microVM"]
 ```
 
 ## Docs
