@@ -60,6 +60,7 @@ Noctaxris/
 HTTP request
   ├─ GET /_noctaxris/health → 200 ok (liveness)
   ├─ GET /_noctaxris/ready → 200 ready / 503 (SQLite ping; engine TLS dial when DockerHost set)
+  ├─ GET /_noctaxris/version → 200 product semver (plain text)
   ├─ GET /cognito-idp/{region}/{pool}/.well-known/jwks.json → JWKS (no SigV4)
   ├─ /http-api/{apiId}/{stage}/{path} → Gateway invoke (NONE / JWT / IAM)
   ├─ /lambda-url/{account}/{function} → Function URL invoke

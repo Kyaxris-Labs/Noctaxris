@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+## 1.0.0
+
+First public semver release. Docker Hub image: `kyaxris/noctaxris` (`1.0.0`, `latest`; nightlies via `nightly` / `nightly-YYYYMMDD`). Cut steps: [docs/release.md](docs/release.md).
+
 ### CI / supply chain
 
 - `govulncheck` CI uses `go run ./scripts/govulncheck-ci` with an explicit allowlist for five Docker Engine CVEs reported against `github.com/docker/docker` with Fixed in: N/A (no client-module bump available). All other findings still fail the job. Residual risk and non-use of archive/`docker cp` APIs: [docs/security-defaults.md](docs/security-defaults.md)
+- Nightly and tag-based Docker Hub publish workflows (canonical repo only; `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets)
+- Product version surface: `VERSION` file, image OCI labels, ldflags, `GET /_noctaxris/version`
 
 ### Storage and KMS custody
 
@@ -70,7 +76,7 @@
 - `NOCTAXRIS_RDS_DATA_PGX=0` forces nested-psql; nested DSN rejects loopback/IP/host-published endpoints
 - Nested DinD smoke: `docker/smoke-nested.sh` (weekly schedule + Actions `workflow_dispatch` with `nested_smoke=true`, or run the script locally). Not on push/PR; a green PR proves `smoke-core` only. See [docs/ops.md](docs/ops.md).
 
-### Security hardening (H1)
+### Security defaults and edge gates
 
 - JWT / AppSync issuers: lab Cognito JWKS only by default; remote JWKS behind `NOCTAXRIS_ALLOW_REMOTE_JWKS` + public host allowlist (no redirects / no RFC1918)
 - `NOCTAXRIS_DOCKER_HOST` allowlist (default `tcp://noctaxris-engine:2376`); reject `unix://`, `npipe://`, `docker.sock`; TLS client PEMs required when host is set
@@ -80,16 +86,13 @@
 - Non-loopback listen without TLS fails closed unless `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1`; Function URL / HTTP API `NONE` gated on non-loopback via `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE`
 - AppSync API keys hashed at rest (HMAC with master key); Gateway JWT enforces `nbf`; CredentialsArn evaluated at invoke; `iam:PassedToService` on PassRole
 - Internal network reuse inspect; optional `NOCTAXRIS_INJECT_HOST_GATEWAY=0`; nested data start fail → `failed`; CodeBuild/Batch non-zero exit → Failed
-
-### Security + edge (round 2)
-
 - Compose default: leave `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE` unset; keep `ALLOW_NONLOOPBACK_LISTEN` with loud docs for the container bind
 - WAF Associate requires an existing Web ACL; invoke association evaluate errors fail closed (403)
 - HTTP API (no CredentialsArn) and AppSync Lambda invoke require resource policy Allow for `apigateway.amazonaws.com` / `appsync.amazonaws.com`
 - SNS HTTP allowlist applies private/metadata host rejects and does not follow redirects
 - Remote JWKS dial pins to IPs re-checked at connect time; Function URL / AppSync IAM require matching SigV4 service names
 
-### Compute (round 2)
+### Nested compute session and clamps
 
 - Lambda `Environment` rejects reserved keys; Invoke overlays minted execution-role credentials and lab endpoints last
 - Batch `jobRoleArn` / CodeBuild `serviceRole` mint in-container AWS_* sessions; lab registry rewrite + auth pull on those paths

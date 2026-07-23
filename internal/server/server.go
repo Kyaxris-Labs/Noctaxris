@@ -21,6 +21,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/version"
 	"github.com/google/uuid"
 )
 
@@ -28,6 +29,7 @@ const (
 	eventVersion    = "1.11"
 	healthPath      = "/_noctaxris/health"
 	readyPath       = "/_noctaxris/ready"
+	versionPath     = "/_noctaxris/version"
 	requestIDHeader = "x-amz-request-id"
 	maxBodyBytes    = 1 << 20  // 1 MiB
 	maxS3BodyBytes  = 16 << 20 // 16 MiB lab PutObject
@@ -161,6 +163,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && r.URL.Path == readyPath {
 		s.handleReady(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Path == versionPath {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(version.Version + "\n"))
 		return
 	}
 

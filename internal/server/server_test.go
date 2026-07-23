@@ -104,6 +104,26 @@ func TestHealthOK(t *testing.T) {
 	}
 }
 
+func TestVersionOK(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/_noctaxris/version", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want %d", rec.Code, http.StatusOK)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body == "" {
+		t.Fatal("empty version body")
+	}
+	if !strings.Contains(body, ".") {
+		t.Fatalf("body=%q want semver-like string", body)
+	}
+}
+
 func TestReadyOKWithoutDockerHost(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
@@ -598,7 +618,7 @@ func TestS3PutGetObject(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/lab-bucket", nil, "s3", now, nil)
-	payload := []byte("hello-phase5")
+	payload := []byte("hello-lab-object")
 	putRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/lab-bucket/docs/hi.txt", payload, "s3", now, map[string]string{
 		"Content-Type": "text/plain",
 	})

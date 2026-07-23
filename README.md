@@ -6,12 +6,13 @@
 docker compose -f docker/compose.yaml --env-file docker/.env up --build
 curl http://127.0.0.1:4566/_noctaxris/health
 curl http://127.0.0.1:4566/_noctaxris/ready
-# ok
+curl http://127.0.0.1:4566/_noctaxris/version
+# ok / ready / 1.0.0
 ```
 
 SigV4 endpoint on `127.0.0.1:4566`. Point the AWS CLI at it and exercise the lab services in the table below the way you would against real AWS.
 
-Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs/Noctaxris). Images ship under [Kyaxris-Labs](https://github.com/Kyaxris-Labs).
+Repo and Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs/Noctaxris). Docker Hub image: [`kyaxris/noctaxris`](https://hub.docker.com/r/kyaxris/noctaxris) (`latest` / semver releases; `nightly` from CI).
 
 ## Why this exists
 
@@ -385,6 +386,8 @@ Per-service APIs, authz notes, and CLI smoke: [docs/services/](docs/services/ind
 | Function egress | Platform deny on `noctaxris-fn` (unlike AWS Lambda default internet) |
 
 Backup, restore, upgrade, graceful shutdown, and CI matrix (PR `smoke-core` vs manual nested smoke): [docs/ops.md](docs/ops.md).
+
+Cut a release (`v1.0.0`, Hub `latest` / semver): [docs/release.md](docs/release.md).
 
 SDK, Terraform, and CloudFormation integration suites (Compose required): [tests/README.md](tests/README.md).
 

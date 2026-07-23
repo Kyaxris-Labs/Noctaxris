@@ -31,12 +31,25 @@ Compose project prefixes may rename volumes (for example `docker_noctaxris-data`
 
 4. Without `master.key`, sealed secrets and CMK material cannot be decrypted even if `state.db` and object trees are restored.
 
+## Published images
+
+Docker Hub image: **`kyaxris/noctaxris`** (canonical GitHub repo `Kyaxris-Labs/Noctaxris` only).
+
+| Tags | Source |
+|------|--------|
+| `1.x.y`, `1.x`, `1`, `latest`, `sha-<short>` | Tag push `v*` → [`.github/workflows/release.yml`](../.github/workflows/release.yml) |
+| `nightly`, `nightly-YYYYMMDD`, `sha-<short>` | Nightly cron / dispatch → [`.github/workflows/docker-nightly.yml`](../.github/workflows/docker-nightly.yml) |
+
+Repository secrets (never commit): `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`. Release cut steps: [release.md](release.md).
+
+Product version: file `VERSION`, OCI label `org.opencontainers.image.version`, binary ldflags, and open probe `GET /_noctaxris/version`.
+
 ## Image upgrades
 
 1. Stop Compose.
 2. Take a backup (above).
-3. Pull or rebuild the API image (`docker compose ... up --build`).
-4. Start Compose and confirm `/_noctaxris/ready` returns `ready`.
+3. Pull a Hub tag (`docker pull kyaxris/noctaxris:1.0.0`) or rebuild (`docker compose ... up --build`).
+4. Start Compose and confirm `/_noctaxris/ready` returns `ready` (optional: `/_noctaxris/version`).
 
 Schema changes are additive (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN` with duplicate-column ignore). A `schema_version` marker row exists (currently `1`) for operators and tests; migrations are still independent `Ensure*` helpers and do **not** consult that integer as a migration ledger. Do not treat the value as proof that a particular ALTER has applied. There is no down-migration. Prefer stop → backup → start over live multi-writer upgrades.
 
@@ -65,6 +78,8 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
 | smoke-nested | Weekly schedule on `main` plus Actions `workflow_dispatch` with `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, Lambda zip/Image Invoke, short ECS RunTask). Skips cleanly if Docker is unavailable. **Not** on push/PR |
 | integration-suites | Optional: `workflow_dispatch` with `integration_suites=true`, or pull requests that touch `tests/**`. Compose up → `tests/run-all.sh` (Go/Node/Python SDK, Terraform lab-core, CloudFormation). Dispatch inputs `advanced_suites` (`NOCTAXRIS_ADVANCED=1`) and `nested_sdk` (`NOCTAXRIS_NESTED=1`) opt into longer paths. **Not** a required PR gate |
+| docker-nightly (separate workflow) | UTC cron + `workflow_dispatch`: build `docker/Dockerfile`, push `kyaxris/noctaxris:nightly` (+ dated / sha tags). Canonical repo + Hub secrets required |
+| release (separate workflow) | Push tag `v*`: push semver + `latest` (+ sha). Same secrets. See [release.md](release.md) |
 
 A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Run nested smoke via the weekly schedule, Actions `workflow_dispatch`, or the script below before relying on those paths. Any Compose change that touches `noctaxris-engine` privilege, devices, seccomp, or compute mounts must pass `docker/smoke-nested.sh` before merge; green `smoke-core` is not enough.
 

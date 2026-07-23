@@ -55,6 +55,7 @@ Unauthenticated or alternate-auth paths (no SigV4 required):
 |------------|------|
 | `GET /_noctaxris/health` | Open (liveness) |
 | `GET /_noctaxris/ready` | Open (readiness; SQLite ping, optional engine TLS dial) |
+| `GET /_noctaxris/version` | Open (product semver, plain text) |
 | `GET /cognito-idp/{region}/{pool}/.well-known/jwks.json` | Public JWKS on the loopback listener |
 | `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` | Federation token crypto (not SigV4) |
 | Lambda Function URL with AuthType `NONE` | Open invoke on `/lambda-url/...` when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1`. CORS defaults to `Access-Control-Allow-Origin: *` unless `Cors.AllowOrigins` / `NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS` is set |
