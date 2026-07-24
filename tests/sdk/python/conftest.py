@@ -121,3 +121,13 @@ def ssm_client():
 @pytest.fixture
 def secretsmanager_client():
     return boto3.client("secretsmanager", **_creds())
+
+
+@pytest.fixture
+def apigatewayv2_client():
+    return boto3.client("apigatewayv2", **_creds())
+
+
+@pytest.fixture
+def cognito_idp_client():
+    return boto3.client("cognito-idp", **_creds())

@@ -11,10 +11,19 @@ import (
 var (
 	rateExprRe = regexp.MustCompile(`(?i)^rate\(\s*(\d+)\s+(minute|minutes|hour|hours|day|days)\s*\)$`)
 	// Lab cron subset: cron(minutes hours day-of-month month day-of-week year)
-	// Supports digits, *, ?, lists, ranges, and steps. L and # remain unsupported.
+	// Supports digits, *, ?, lists, ranges, steps, L, #, and month/DOW names.
 	cronExprRe = regexp.MustCompile(`(?i)^cron\(\s*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*\)$`)
 	atExprRe   = regexp.MustCompile(`(?i)^at\(\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\)$`)
 )
+
+var cronDOWNames = map[string]int{
+	"SUN": 1, "MON": 2, "TUE": 3, "WED": 4, "THU": 5, "FRI": 6, "SAT": 7,
+}
+
+var cronMonthNames = map[string]int{
+	"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+	"JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
 
 // NextScheduleRun computes the next fire time after `from` for a lab schedule expression.
 // Supported: rate(n minutes|hours|days), cron(6-field AWS subset), at(yyyy-mm-ddThh:mm:ss).
@@ -66,13 +75,13 @@ func nextCronRun(from time.Time, minute, hour, dom, month, dow, year string) (ti
 	if err := validateCronField(hour, 0, 23, false); err != nil {
 		return time.Time{}, fmt.Errorf("cron hours: %w", err)
 	}
-	if err := validateCronField(dom, 1, 31, true); err != nil {
+	if err := validateCronDOMField(dom); err != nil {
 		return time.Time{}, fmt.Errorf("cron day-of-month: %w", err)
 	}
-	if err := validateCronField(month, 1, 12, false); err != nil {
+	if err := validateCronNamedField(month, 1, 12, false, cronMonthNames); err != nil {
 		return time.Time{}, fmt.Errorf("cron month: %w", err)
 	}
-	if err := validateCronField(dow, 1, 7, true); err != nil {
+	if err := validateCronDOWField(dow); err != nil {
 		return time.Time{}, fmt.Errorf("cron day-of-week: %w", err)
 	}
 	if err := validateCronField(year, 1970, 2199, false); err != nil {
@@ -85,7 +94,7 @@ func nextCronRun(from time.Time, minute, hour, dom, month, dow, year string) (ti
 	for !t.After(limit) {
 		if cronFieldMatches(minute, t.Minute(), 0, 59, false) &&
 			cronFieldMatches(hour, t.Hour(), 0, 23, false) &&
-			cronFieldMatches(month, int(t.Month()), 1, 12, false) &&
+			cronNamedFieldMatches(month, int(t.Month()), 1, 12, false, cronMonthNames) &&
 			cronFieldMatches(year, t.Year(), 1970, 2199, false) &&
 			cronDayMatches(dom, dow, t) {
 			return t, nil
@@ -96,26 +105,117 @@ func nextCronRun(from time.Time, minute, hour, dom, month, dow, year string) (ti
 }
 
 func validateCronField(field string, min, max int, allowQ bool) error {
+	if allowQ && min == 1 && max == 31 {
+		return validateCronDOMField(field)
+	}
+	if allowQ && min == 1 && max == 7 {
+		return validateCronDOWField(field)
+	}
+	if min == 1 && max == 12 {
+		return validateCronNamedField(field, min, max, allowQ, cronMonthNames)
+	}
+	return validateCronNamedField(field, min, max, allowQ, nil)
+}
+
+func validateCronNamedField(field string, min, max int, allowQ bool, names map[string]int) error {
 	field = strings.TrimSpace(field)
 	if field == "" {
 		return fmt.Errorf("unsupported token %q", field)
 	}
 	for _, part := range strings.Split(field, ",") {
-		if err := validateCronSegment(strings.TrimSpace(part), min, max, allowQ); err != nil {
+		if err := validateCronSegment(strings.TrimSpace(part), min, max, allowQ, names); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateCronSegment(seg string, min, max int, allowQ bool) error {
+func validateCronDOMField(field string) error {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return fmt.Errorf("unsupported token %q", field)
+	}
+	for _, part := range strings.Split(field, ",") {
+		seg := strings.TrimSpace(part)
+		if strings.EqualFold(seg, "L") {
+			continue
+		}
+		if err := validateCronSegment(seg, 1, 31, true, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCronDOWField(field string) error {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return fmt.Errorf("unsupported token %q", field)
+	}
+	parts := strings.Split(field, ",")
+	hashCount := 0
+	for _, part := range parts {
+		seg := strings.TrimSpace(part)
+		if strings.Contains(seg, "#") {
+			hashCount++
+			if err := validateCronHashSegment(seg); err != nil {
+				return err
+			}
+			continue
+		}
+		if isCronLastWeekdaySegment(seg) {
+			continue
+		}
+		if err := validateCronSegment(seg, 1, 7, true, cronDOWNames); err != nil {
+			return err
+		}
+	}
+	if hashCount > 1 {
+		return fmt.Errorf("unsupported token %q: only one # expression allowed", field)
+	}
+	if hashCount > 0 && len(parts) > 1 {
+		return fmt.Errorf("unsupported token %q: # cannot be combined in a list", field)
+	}
+	return nil
+}
+
+func validateCronHashSegment(seg string) error {
+	dowPart, nth, ok := splitCronHash(seg)
+	if !ok {
+		return fmt.Errorf("unsupported token %q", seg)
+	}
+	if nth < 1 || nth > 5 {
+		return fmt.Errorf("unsupported token %q", seg)
+	}
+	n, err := parseCronNamedInt(dowPart, 1, 7, cronDOWNames)
+	if err != nil {
+		return fmt.Errorf("unsupported token %q", seg)
+	}
+	_ = n
+	return nil
+}
+
+func isCronLastWeekdaySegment(seg string) bool {
+	seg = strings.ToUpper(strings.TrimSpace(seg))
+	if seg == "L" {
+		return true // last day of week (Saturday=7) — rarely used alone
+	}
+	if strings.HasSuffix(seg, "L") && !strings.Contains(seg, "#") {
+		base := strings.TrimSuffix(seg, "L")
+		_, err := parseCronNamedInt(base, 1, 7, cronDOWNames)
+		return err == nil
+	}
+	return false
+}
+
+func validateCronSegment(seg string, min, max int, allowQ bool, names map[string]int) error {
 	if seg == "*" {
 		return nil
 	}
 	if allowQ && seg == "?" {
 		return nil
 	}
-	if seg == "" || strings.ContainsAny(seg, "L#") {
+	if seg == "" {
 		return fmt.Errorf("unsupported token %q", seg)
 	}
 	rangePart, step, hasStep, err := splitCronStep(seg)
@@ -128,7 +228,7 @@ func validateCronSegment(seg string, min, max int, allowQ bool) error {
 	if rangePart == "*" {
 		return nil
 	}
-	start, end, err := parseCronRange(rangePart, min, max)
+	start, end, err := parseCronRangeNamed(rangePart, min, max, names)
 	if err != nil {
 		return err
 	}
@@ -143,26 +243,33 @@ func validateCronSegment(seg string, min, max int, allowQ bool) error {
 }
 
 func cronFieldMatches(field string, value, min, max int, allowQ bool) bool {
+	if min == 1 && max == 12 {
+		return cronNamedFieldMatches(field, value, min, max, allowQ, cronMonthNames)
+	}
+	return cronNamedFieldMatches(field, value, min, max, allowQ, nil)
+}
+
+func cronNamedFieldMatches(field string, value, min, max int, allowQ bool, names map[string]int) bool {
 	field = strings.TrimSpace(field)
 	if field == "" {
 		return false
 	}
 	for _, part := range strings.Split(field, ",") {
-		if cronSegmentMatches(strings.TrimSpace(part), value, min, max, allowQ) {
+		if cronSegmentMatchesNamed(strings.TrimSpace(part), value, min, max, allowQ, names) {
 			return true
 		}
 	}
 	return false
 }
 
-func cronSegmentMatches(seg string, value, min, max int, allowQ bool) bool {
+func cronSegmentMatchesNamed(seg string, value, min, max int, allowQ bool, names map[string]int) bool {
 	if seg == "*" {
 		return true
 	}
 	if allowQ && seg == "?" {
 		return true
 	}
-	if seg == "" || strings.ContainsAny(seg, "L#") {
+	if seg == "" {
 		return false
 	}
 	rangePart, step, hasStep, err := splitCronStep(seg)
@@ -181,12 +288,11 @@ func cronSegmentMatches(seg string, value, min, max int, allowQ bool) bool {
 		}
 		return (value-start)%step == 0
 	}
-	start, end, err := parseCronRange(rangePart, min, max)
+	start, end, err := parseCronRangeNamed(rangePart, min, max, names)
 	if err != nil {
 		return false
 	}
 	if hasStep && !strings.ContainsRune(rangePart, '-') {
-		// start/step: continue through field max (AWS Secrets/Scheduler shape).
 		end = max
 	}
 	if value < start || value > end {
@@ -220,23 +326,24 @@ func splitCronStep(seg string) (rangePart string, step int, hasStep bool, err er
 }
 
 func parseCronRange(rangePart string, min, max int) (start, end int, err error) {
+	return parseCronRangeNamed(rangePart, min, max, nil)
+}
+
+func parseCronRangeNamed(rangePart string, min, max int, names map[string]int) (start, end int, err error) {
 	dash := strings.IndexByte(rangePart, '-')
 	if dash < 0 {
-		n, convErr := strconv.Atoi(rangePart)
+		n, convErr := parseCronNamedInt(rangePart, min, max, names)
 		if convErr != nil {
-			return 0, 0, fmt.Errorf("unsupported token %q", rangePart)
-		}
-		if n < min || n > max {
-			return 0, 0, fmt.Errorf("out of range %d", n)
+			return 0, 0, convErr
 		}
 		return n, n, nil
 	}
 	startStr, endStr := rangePart[:dash], rangePart[dash+1:]
-	start, err = strconv.Atoi(startStr)
+	start, err = parseCronNamedInt(startStr, min, max, names)
 	if err != nil {
 		return 0, 0, fmt.Errorf("unsupported token %q", rangePart)
 	}
-	end, err = strconv.Atoi(endStr)
+	end, err = parseCronNamedInt(endStr, min, max, names)
 	if err != nil {
 		return 0, 0, fmt.Errorf("unsupported token %q", rangePart)
 	}
@@ -246,16 +353,139 @@ func parseCronRange(rangePart string, min, max int) (start, end int, err error) 
 	return start, end, nil
 }
 
+func parseCronNamedInt(tok string, min, max int, names map[string]int) (int, error) {
+	tok = strings.TrimSpace(tok)
+	if names != nil {
+		if n, ok := names[strings.ToUpper(tok)]; ok {
+			if n < min || n > max {
+				return 0, fmt.Errorf("out of range %d", n)
+			}
+			return n, nil
+		}
+	}
+	n, err := strconv.Atoi(tok)
+	if err != nil {
+		return 0, fmt.Errorf("unsupported token %q", tok)
+	}
+	if n < min || n > max {
+		return 0, fmt.Errorf("out of range %d", n)
+	}
+	return n, nil
+}
+
+func splitCronHash(seg string) (dowPart string, nth int, ok bool) {
+	hash := strings.IndexByte(seg, '#')
+	if hash < 0 {
+		return "", 0, false
+	}
+	dowPart = seg[:hash]
+	nthStr := seg[hash+1:]
+	if dowPart == "" || nthStr == "" {
+		return "", 0, false
+	}
+	nth, err := strconv.Atoi(nthStr)
+	if err != nil {
+		return "", 0, false
+	}
+	return dowPart, nth, true
+}
+
+func lastDayOfMonth(t time.Time) int {
+	return time.Date(t.Year(), t.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func awsDow(t time.Time) int {
+	// AWS cron: Sunday=1 ... Saturday=7. Go Weekday: Sunday=0.
+	return int(t.Weekday()) + 1
+}
+
+func cronDOMMatches(dom string, t time.Time) bool {
+	dom = strings.TrimSpace(dom)
+	if dom == "" {
+		return false
+	}
+	for _, part := range strings.Split(dom, ",") {
+		seg := strings.TrimSpace(part)
+		if strings.EqualFold(seg, "L") {
+			if t.Day() == lastDayOfMonth(t) {
+				return true
+			}
+			continue
+		}
+		if cronSegmentMatchesNamed(seg, t.Day(), 1, 31, true, nil) {
+			return true
+		}
+	}
+	return false
+}
+
+func cronDOWMatches(dow string, t time.Time) bool {
+	dow = strings.TrimSpace(dow)
+	if dow == "" {
+		return false
+	}
+	if strings.Contains(dow, "#") {
+		dowPart, nth, ok := splitCronHash(dow)
+		if !ok {
+			return false
+		}
+		want, err := parseCronNamedInt(dowPart, 1, 7, cronDOWNames)
+		if err != nil {
+			return false
+		}
+		return isNthWeekdayOfMonth(t, want, nth)
+	}
+	for _, part := range strings.Split(dow, ",") {
+		seg := strings.TrimSpace(part)
+		upper := strings.ToUpper(seg)
+		if upper == "L" {
+			if awsDow(t) == 7 {
+				return true
+			}
+			continue
+		}
+		if strings.HasSuffix(upper, "L") {
+			base := strings.TrimSuffix(upper, "L")
+			want, err := parseCronNamedInt(base, 1, 7, cronDOWNames)
+			if err != nil {
+				continue
+			}
+			if isLastWeekdayOfMonth(t, want) {
+				return true
+			}
+			continue
+		}
+		if cronSegmentMatchesNamed(seg, awsDow(t), 1, 7, true, cronDOWNames) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNthWeekdayOfMonth(t time.Time, awsWeekday, nth int) bool {
+	if awsDow(t) != awsWeekday {
+		return false
+	}
+	occurrence := (t.Day()-1)/7 + 1
+	return occurrence == nth
+}
+
+func isLastWeekdayOfMonth(t time.Time, awsWeekday int) bool {
+	if awsDow(t) != awsWeekday {
+		return false
+	}
+	next := t.AddDate(0, 0, 7)
+	return next.Month() != t.Month()
+}
+
 func cronDayMatches(dom, dow string, t time.Time) bool {
 	dom = strings.TrimSpace(dom)
 	dow = strings.TrimSpace(dow)
 	domStarOrQ := dom == "*" || dom == "?"
 	dowStarOrQ := dow == "*" || dow == "?"
 
-	domOK := cronFieldMatches(dom, t.Day(), 1, 31, true)
-	// AWS cron: Sunday=1 ... Saturday=7. Go Weekday: Sunday=0.
-	awsDow := int(t.Weekday()) + 1
-	dowOK := cronFieldMatches(dow, awsDow, 1, 7, true)
+	domOK := cronDOMMatches(dom, t)
+	dowOK := cronDOWMatches(dow, t)
 
 	switch {
 	case dom == "?" && dow != "?":

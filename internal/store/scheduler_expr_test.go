@@ -49,11 +49,11 @@ func TestValidateCronFieldListRangeStep(t *testing.T) {
 	if err := validateCronField("1-10/2", 0, 23, false); err != nil {
 		t.Fatalf("range/step: %v", err)
 	}
-	if err := validateCronField("L", 1, 31, true); err == nil {
-		t.Fatal("want reject L until deferred")
+	if err := validateCronField("L", 1, 31, true); err != nil {
+		t.Fatalf("DOM L: %v", err)
 	}
-	if err := validateCronField("1#2", 1, 7, true); err == nil {
-		t.Fatal("want reject # until deferred")
+	if err := validateCronField("1#2", 1, 7, true); err != nil {
+		t.Fatalf("DOW #: %v", err)
 	}
 	if err := validateCronField("24", 0, 23, false); err == nil {
 		t.Fatal("want reject out of range")

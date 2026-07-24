@@ -160,6 +160,12 @@ func EnsureCognitoSchema(db *sql.DB) error {
 	if err := EnsureCognitoTriggerSchema(db); err != nil {
 		return err
 	}
+	if err := EnsureCognitoCustomMessageSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureCognitoCustomAuthSchema(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -335,6 +341,8 @@ func (s *Store) DeleteCognitoUserPool(accountID, poolID string) error {
 	_, _ = tx.Exec(`DELETE FROM cognito_refresh_tokens WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_mfa_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_srp_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_custom_auth_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_custom_messages WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	return tx.Commit()
 }
 
@@ -553,8 +561,8 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	if err := s.storeUserSRPVerifier(acct, poolID, username, password); err != nil {
 		return CognitoUser{}, "", err
 	}
-	// CustomMessage_SignUp: lab has no SES; Invoke for fail-closed parity, ignore message body.
-	if _, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
+	// CustomMessage_SignUp: lab has no SES; Invoke, render/store body fields for tests.
+	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
 		TriggerSource: "CustomMessage_SignUp",
 		UserPoolID:    poolID,
 		Username:      username,
@@ -562,7 +570,11 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 		UserSub:       sub,
 		UserStatus:    "UNCONFIRMED",
 		CodeParameter: "{####}",
-	}); err != nil {
+	})
+	if err != nil {
+		return CognitoUser{}, "", err
+	}
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_SignUp", "{####}", cmPayload); err != nil {
 		return CognitoUser{}, "", err
 	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now}, poolID, nil

@@ -3,12 +3,14 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-apigatewayv2": "^3.758.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.758.0",
     "@aws-sdk/client-dynamodb": "^3.758.0",
     "@aws-sdk/client-eventbridge": "^3.758.0",
     "@aws-sdk/client-iam": "^3.758.0",

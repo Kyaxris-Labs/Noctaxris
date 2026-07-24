@@ -560,6 +560,11 @@ func (s *Server) cognitoSignUp(
 		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
 		return
 	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrCognitoBadRequest) || errors.Is(err, store.ErrCognitoInvalidPass) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			err.Error(), readOnly, eventID, verified)
@@ -657,13 +662,15 @@ func (s *Server) cognitoInitiateAuth(
 		outcome, err = s.store.InitiateCognitoAuth(clientID, username, password)
 	case flowNorm == "USER_SRP_AUTH":
 		outcome, err = s.store.InitiateCognitoSRPAuth(clientID, username, srpA)
+	case flowNorm == "CUSTOM_AUTH":
+		outcome, err = s.store.InitiateCognitoCustomAuth(clientID, username)
 	case cognitoIsRefreshFlow(flow):
 		result, refreshErr := s.store.RefreshCognitoTokens("", clientID, refreshToken)
 		err = refreshErr
 		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only USER_PASSWORD_AUTH, USER_SRP_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
+			"Only USER_PASSWORD_AUTH, USER_SRP_AUTH, CUSTOM_AUTH, REFRESH_TOKEN_AUTH, or REFRESH_TOKEN is supported.", readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoUnauthorized) {
@@ -687,6 +694,11 @@ func (s *Server) cognitoInitiateAuth(
 	}
 	if errors.Is(err, store.ErrCognitoTriggerFailed) {
 		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {
@@ -906,9 +918,11 @@ func (s *Server) cognitoRespondToAuthChallenge(
 		outcome = store.CognitoAuthOutcome{CognitoAuthResult: result}
 	case "PASSWORD_VERIFIER":
 		outcome, err = s.store.RespondToCognitoPASSWORDVerifierChallenge(clientID, session, responses)
+	case "CUSTOM_CHALLENGE":
+		outcome, err = s.store.RespondToCognitoCUSTOMChallenge(clientID, session, responses)
 	default:
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
-			"Only PASSWORD_VERIFIER or SOFTWARE_TOKEN_MFA challenge is supported.", readOnly, eventID, verified)
+			"Only PASSWORD_VERIFIER, SOFTWARE_TOKEN_MFA, or CUSTOM_CHALLENGE is supported.", readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoCodeMismatch) {
@@ -923,6 +937,11 @@ func (s *Server) cognitoRespondToAuthChallenge(
 	}
 	if errors.Is(err, store.ErrCognitoTriggerFailed) {
 		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoBadRequest) {

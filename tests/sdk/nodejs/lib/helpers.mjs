@@ -1,3 +1,5 @@
+import { ApiGatewayV2Client } from "@aws-sdk/client-apigatewayv2";
+import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
 import { IAMClient } from "@aws-sdk/client-iam";
@@ -109,4 +111,12 @@ export function newSSM() {
 
 export function newSecrets() {
   return new SecretsManagerClient(baseConfig());
+}
+
+export function newAPIGWv2() {
+  return new ApiGatewayV2Client(baseConfig());
+}
+
+export function newCognito() {
+  return new CognitoIdentityProviderClient(baseConfig());
 }

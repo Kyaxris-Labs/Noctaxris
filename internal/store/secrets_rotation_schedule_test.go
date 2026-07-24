@@ -402,3 +402,44 @@ func TestRotateImmediatelyTrueAdvancesScheduleAfterRotate(t *testing.T) {
 		t.Fatal("immediate path should have rotated")
 	}
 }
+
+func TestSetRotationRulesCronLastDayAndWeekdayNames(t *testing.T) {
+	st := openSecretsScheduleStore(t)
+	account := "000000000001"
+	now := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+
+	created, err := st.CreateSecret(account, "us-east-1", "cron-l", "v", nil, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := store.SecretRotationRules{ScheduleExpression: "cron(0 17 L * ? *)"}
+	if err := st.SetSecretRotationRules(account, created.Name, rules, now, false); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.DescribeSecret(account, created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 7, 31, 17, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if sec.NextRotationDate != want {
+		t.Fatalf("NextRotationDate=%q want %q", sec.NextRotationDate, want)
+	}
+
+	created2, err := st.CreateSecret(account, "us-east-1", "cron-dow", "v", nil, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFri := time.Date(2026, 7, 24, 9, 0, 0, 0, time.UTC) // Friday after 08:00
+	rules2 := store.SecretRotationRules{ScheduleExpression: "cron(0 8 ? * MON-FRI *)"}
+	if err := st.SetSecretRotationRules(account, created2.Name, rules2, fromFri, false); err != nil {
+		t.Fatal(err)
+	}
+	sec2, err := st.DescribeSecret(account, created2.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMon := time.Date(2026, 7, 27, 8, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if sec2.NextRotationDate != wantMon {
+		t.Fatalf("MON-FRI NextRotationDate=%q want %q", sec2.NextRotationDate, wantMon)
+	}
+}

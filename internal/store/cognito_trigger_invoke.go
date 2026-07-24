@@ -15,13 +15,16 @@ var ErrCognitoTriggerFailed = errors.New("UnexpectedLambdaException")
 type CognitoTriggerName string
 
 const (
-	CognitoTriggerPreSignUp          CognitoTriggerName = "PreSignUp"
-	CognitoTriggerPostConfirmation   CognitoTriggerName = "PostConfirmation"
-	CognitoTriggerPreAuthentication  CognitoTriggerName = "PreAuthentication"
-	CognitoTriggerPostAuthentication CognitoTriggerName = "PostAuthentication"
-	CognitoTriggerPreTokenGeneration CognitoTriggerName = "PreTokenGeneration"
-	CognitoTriggerCustomMessage      CognitoTriggerName = "CustomMessage"
-	CognitoTriggerUserMigration      CognitoTriggerName = "UserMigration"
+	CognitoTriggerPreSignUp                   CognitoTriggerName = "PreSignUp"
+	CognitoTriggerPostConfirmation            CognitoTriggerName = "PostConfirmation"
+	CognitoTriggerPreAuthentication           CognitoTriggerName = "PreAuthentication"
+	CognitoTriggerPostAuthentication          CognitoTriggerName = "PostAuthentication"
+	CognitoTriggerPreTokenGeneration          CognitoTriggerName = "PreTokenGeneration"
+	CognitoTriggerCustomMessage               CognitoTriggerName = "CustomMessage"
+	CognitoTriggerUserMigration               CognitoTriggerName = "UserMigration"
+	CognitoTriggerDefineAuthChallenge         CognitoTriggerName = "DefineAuthChallenge"
+	CognitoTriggerCreateAuthChallenge         CognitoTriggerName = "CreateAuthChallenge"
+	CognitoTriggerVerifyAuthChallengeResponse CognitoTriggerName = "VerifyAuthChallengeResponse"
 )
 
 // CognitoTriggerInvoker synchronously Invokes a Cognito Lambda trigger by ARN.
@@ -65,6 +68,12 @@ func (c CognitoLambdaConfig) ARNFor(name CognitoTriggerName) string {
 		return strings.TrimSpace(c.CustomMessage)
 	case CognitoTriggerUserMigration:
 		return strings.TrimSpace(c.UserMigration)
+	case CognitoTriggerDefineAuthChallenge:
+		return strings.TrimSpace(c.DefineAuthChallenge)
+	case CognitoTriggerCreateAuthChallenge:
+		return strings.TrimSpace(c.CreateAuthChallenge)
+	case CognitoTriggerVerifyAuthChallengeResponse:
+		return strings.TrimSpace(c.VerifyAuthChallengeResponse)
 	default:
 		return ""
 	}
@@ -83,6 +92,12 @@ type CognitoTriggerEventInput struct {
 	CodeParameter string
 	// Password is set for UserMigration_Authentication request.password.
 	Password string
+	// Custom-auth challenge fields.
+	UserNotFound               bool
+	ChallengeName              string
+	ChallengeSession           []CognitoChallengeResult
+	PrivateChallengeParameters map[string]string
+	ChallengeAnswer            string
 }
 
 // BuildCognitoTriggerEventJSON builds the Lambda event payload for a Cognito trigger.
@@ -130,6 +145,45 @@ func BuildCognitoTriggerEventJSON(in CognitoTriggerEventInput) (string, error) {
 		req["password"] = in.Password
 		resp = map[string]any{
 			"userAttributes": map[string]string{},
+		}
+	}
+	if strings.HasPrefix(triggerSource, "DefineAuthChallenge_") {
+		session := in.ChallengeSession
+		if session == nil {
+			session = []CognitoChallengeResult{}
+		}
+		req["session"] = session
+		req["userNotFound"] = in.UserNotFound
+		resp = map[string]any{
+			"challengeName":      nil,
+			"issueTokens":        false,
+			"failAuthentication": false,
+		}
+	}
+	if strings.HasPrefix(triggerSource, "CreateAuthChallenge_") {
+		session := in.ChallengeSession
+		if session == nil {
+			session = []CognitoChallengeResult{}
+		}
+		req["session"] = session
+		req["challengeName"] = strings.TrimSpace(in.ChallengeName)
+		req["userNotFound"] = in.UserNotFound
+		resp = map[string]any{
+			"publicChallengeParameters":  map[string]string{},
+			"privateChallengeParameters": map[string]string{},
+			"challengeMetadata":          nil,
+		}
+	}
+	if strings.HasPrefix(triggerSource, "VerifyAuthChallengeResponse_") {
+		priv := in.PrivateChallengeParameters
+		if priv == nil {
+			priv = map[string]string{}
+		}
+		req["privateChallengeParameters"] = priv
+		req["challengeAnswer"] = in.ChallengeAnswer
+		req["userNotFound"] = in.UserNotFound
+		resp = map[string]any{
+			"answerCorrect": false,
 		}
 	}
 	event := map[string]any{
