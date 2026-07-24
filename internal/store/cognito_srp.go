@@ -359,7 +359,7 @@ func (s *Store) beginCognitoSRP(accountID, poolID, clientID, username, srpAHex s
 	if status != "CONFIRMED" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	if _, err := s.FireCognitoTriggerIfConfigured(
 		accountID, poolID, clientID, username, sub, status,
 		CognitoTriggerPreAuthentication, "PreAuthentication_Authentication",
 	); err != nil {

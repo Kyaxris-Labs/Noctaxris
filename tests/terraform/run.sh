@@ -70,7 +70,7 @@ required = {
     "lab-fullstack": [
         "bucket_name", "kms_key_arn", "table_name", "lambda_role_arn",
         "queue_url", "topic_arn", "function_name", "event_bus_name",
-        "rule_name", "ssm_parameter_name", "secret_arn",
+        "rule_name", "ssm_parameter_name", "ssm_stringlist_parameter_name", "secret_arn",
     ],
 }.get(stack, [])
 missing = [k for k in required if not outs.get(k, {}).get("value")]

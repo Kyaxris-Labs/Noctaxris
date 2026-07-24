@@ -104,8 +104,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD (UpdateUserPool), AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH / USER_SRP_AUTH (PASSWORD_VERIFIER) plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code>), lab <code>RoleArn</code> + <code>LambdaConfig</code> with PassRole for cognito-idp.amazonaws.com and sync Invoke of PreSignUp / PostConfirmation / PreAuthentication / PostAuthentication / PreTokenGeneration, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
-      <td>Out of lab scope: Identity Pools, Hosted UI, SMS/email MFA, Adaptive auth / UI customization. Open: PreTokenGeneration claim overrides; UserMigration / custom-auth / CustomMessage Invoke.</td>
+      <td>Pool and app client CRUD (UpdateUserPool), AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH / USER_SRP_AUTH (PASSWORD_VERIFIER) plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code>), lab <code>RoleArn</code> + <code>LambdaConfig</code> with PassRole for cognito-idp.amazonaws.com and sync Invoke of PreSignUp / PostConfirmation / PreAuthentication / PostAuthentication / PreTokenGeneration (V1 ID-token <code>claimsOverrideDetails</code>) / CustomMessage_SignUp / UserMigration_Authentication (password auth), RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Out of lab scope: Identity Pools, Hosted UI, SMS/email MFA, Adaptive auth / UI customization. Open: custom-auth challenge orchestration; UserMigration on USER_SRP_AUTH; CustomMessage SMS/email rendering (no SES).</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
@@ -141,8 +141,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Secrets Manager</td>
-      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, multi-version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS, UpdateSecretVersionStage), RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then four-step createSecret/setSecret/testSecret/finishSecret Invokes), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression + optional Duration) with RotateImmediately=false deferral and in-process due ticker.</td>
-      <td>Open: Secrets cron wildcards beyond lab digit/<code>*</code>/<code>?</code>; random rotate time inside Duration window. Out of lab scope: tags, replication, ListSecrets filtering, random-password APIs, true AWS-owned alias, service-linked grant that skips caller KMS.</td>
+      <td>Create/Get/Put/Delete/Restore/Rotate/Describe/List, resource policies (same-account or, cross-account and), KMS via alias/aws/secretsmanager, recovery window on delete (7-30 days) with on-read sweeper, multi-version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS, UpdateSecretVersionStage), RotateSecret (random replacement by default; optional RotationLambdaARN with PassRole for secretsmanager.amazonaws.com then four-step createSecret/setSecret/testSecret/finishSecret Invokes), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression with lists/ranges/steps + optional Duration in-window jitter) with RotateImmediately=false deferral and in-process due ticker.</td>
+      <td>Open: Secrets cron <code>L</code>/<code>#</code> and day-of-week names (<code>MON-FRI</code>). Out of lab scope: tags, replication, ListSecrets filtering, random-password APIs, true AWS-owned alias, service-linked grant that skips caller KMS.</td>
     </tr>
     <tr>
       <td>SNS</td>
@@ -305,7 +305,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>ECS</td>
-      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network, task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network (host-gateway ExtraHosts off by default; opt in with <code>NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1</code> or <code>docker/compose.lab-ecs-host-gateway.yaml</code>), task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
       <td>Out of lab scope: load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, autoscaling/circuit breakers/placement/EBS/Firelens, multi-cluster, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
     </tr>
     <tr>

@@ -11,3 +11,19 @@ def test_ssm_string_parameter_round_trip(ssm_client, unique_prefix):
             ssm_client.delete_parameter(Name=name)
         except Exception:
             pass
+
+
+def test_ssm_string_list_parameter_round_trip(ssm_client, unique_prefix):
+    name = f"/lab/{unique_prefix}/list"
+    value = "a,b,c"
+    ssm_client.put_parameter(Name=name, Type="StringList", Value=value)
+    try:
+        got = ssm_client.get_parameter(Name=name)
+        assert got["Parameter"]["Value"] == value
+        assert got["Parameter"]["Type"] == "StringList"
+        ssm_client.delete_parameter(Name=name)
+    finally:
+        try:
+            ssm_client.delete_parameter(Name=name)
+        except Exception:
+            pass

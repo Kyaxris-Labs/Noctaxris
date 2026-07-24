@@ -42,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Unit tests
@@ -53,8 +53,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Compose static checks
@@ -64,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install govulncheck
@@ -81,8 +81,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Scoped race tests (kernel + store)
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build API image
         run: docker build -f docker/Dockerfile .
 
@@ -101,7 +101,7 @@ jobs:
     if: github.event_name != 'schedule'
     needs: [unit, compose-static, image]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install AWS CLI v2
         run: |
           curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
@@ -178,7 +178,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.nested_smoke)
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Require Docker
         id: docker
         run: |
@@ -212,8 +212,8 @@ jobs:
       github.event_name == 'pull_request'
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name == 'pull_request'
         with:
@@ -233,23 +233,23 @@ jobs:
             exit 0
           fi
           echo "run=false" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.decide.outputs.run == 'true'
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.decide.outputs.run == 'true'
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: tests/sdk/nodejs/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.decide.outputs.run == 'true'
         with:
           python-version: "3.12"
       - name: Install Terraform
         if: steps.decide.outputs.run == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
       - name: Install AWS CLI v2

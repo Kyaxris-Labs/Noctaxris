@@ -127,6 +127,19 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 	if strings.Contains(noctaxris, `NOCTAXRIS_INJECT_HOST_GATEWAY: "1"`) {
 		t.Fatal("default Compose must not hardcode NOCTAXRIS_INJECT_HOST_GATEWAY=1")
 	}
+	ecsHG, err := os.ReadFile("compose.lab-ecs-host-gateway.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ecsHG), `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "1"`) {
+		t.Fatal("compose.lab-ecs-host-gateway.yaml must opt in NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1")
+	}
+	if strings.Contains(noctaxris, `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "1"`) {
+		t.Fatal("default Compose must not hardcode NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1")
+	}
+	if !strings.Contains(noctaxris, `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "${NOCTAXRIS_INJECT_ECS_HOST_GATEWAY:-0}"`) {
+		t.Fatal("default Compose must pass ECS host-gateway env defaulting to 0")
+	}
 }
 
 func TestComposeSetsDockerHost(t *testing.T) {

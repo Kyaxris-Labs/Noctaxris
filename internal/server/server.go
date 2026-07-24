@@ -424,7 +424,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if verified.Service == "cloudcontrol" || strings.HasPrefix(action, "cloudcontrol:") {
+	// AWS SDK Go v2 signs Cloud Control as cloudcontrolapi with X-Amz-Target CloudApiService.*.
+	if verified.Service == "cloudcontrol" || verified.Service == "cloudcontrolapi" ||
+		strings.HasPrefix(action, "cloudcontrol:") {
 		s.handleCloudControl(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
@@ -1523,7 +1525,8 @@ func resolveAction(r *http.Request, body []byte) string {
 			return apiGatewayV2Action(short)
 		case strings.Contains(strings.ToLower(prefix), "cognito"):
 			return cognitoAction(short)
-		case strings.Contains(strings.ToLower(prefix), "cloudcontrol"):
+		case strings.Contains(strings.ToLower(prefix), "cloudcontrol"),
+			strings.EqualFold(prefix, "CloudApiService"):
 			return cloudControlAction(short)
 		case strings.Contains(strings.ToLower(prefix), "bcm"),
 			strings.Contains(strings.ToLower(prefix), "dataexports"):

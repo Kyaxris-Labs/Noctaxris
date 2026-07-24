@@ -34,3 +34,30 @@ test("SSM String parameter round-trip", async (t) => {
 
   await ssm.send(new DeleteParameterCommand({ Name: name }));
 });
+
+test("SSM StringList parameter round-trip", async (t) => {
+  if (!(await requireReady(t))) return;
+  const ssm = newSSM();
+  const prefix = uniquePrefix();
+  const name = `/lab/${prefix}/list`;
+  const value = "a,b,c";
+
+  await ssm.send(
+    new PutParameterCommand({
+      Name: name,
+      Type: "StringList",
+      Value: value,
+    }),
+  );
+  t.after(async () => {
+    try {
+      await ssm.send(new DeleteParameterCommand({ Name: name }));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const got = await ssm.send(new GetParameterCommand({ Name: name }));
+  assert.equal(got.Parameter?.Value, value);
+  assert.equal(got.Parameter?.Type, "StringList");
+});

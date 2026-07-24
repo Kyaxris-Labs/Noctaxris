@@ -184,7 +184,7 @@ func TestAPIGatewayCredentialsArnPassRoleSourceArn(t *testing.T) {
 	}
 	var apiResp map[string]any
 	_ = json.Unmarshal(apiRec.Body.Bytes(), &apiResp)
-	apiID, _ := apiResp["ApiId"].(string)
+	apiID, _ := apiResp["apiId"].(string)
 	if apiID == "" {
 		t.Fatalf("missing ApiId: %s", apiRec.Body.String())
 	}

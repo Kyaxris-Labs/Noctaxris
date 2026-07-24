@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Cognito PreToken claim overrides and low-cost trigger Invokes
+
+- PreTokenGeneration V1 `claimsOverrideDetails` (`claimsToAddOrOverride` / `claimsToSuppress`) applied to ID tokens; reserved claims ignored
+- Sync Invoke for `CustomMessage_SignUp` (body fields ignored; no SES) and `UserMigration_Authentication` on password auth when the user is missing
+- Trigger invoker returns Lambda payload bytes for claim/migration parsing; fail closed on Invoke or parse errors
+
+### Secrets cron lists/ranges/steps and Duration jitter
+
+- Cron fields accept lists, ranges, and steps (`1,13`, `1-5`, `*/6`, `2/10`, `1-10/2`); `L` / `#` still deferred
+- Optional RotationRules `Duration` picks a random offset in `[0, Duration)` for `NextRotationDate` (empty Duration keeps window start)
+
+### ECS host-gateway Compose overlay
+
+- Opt-in `docker/compose.lab-ecs-host-gateway.yaml` sets `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`; default Compose passes the env defaulting to `0`
+
+### Integration suite deepen
+
+- Go SDK: Cognito PreSignUp fail-closed, S3→SQS notifications, DynamoDB TransactWrite + OLD_IMAGE streams, EventBridge RoleArn-less SQS, Secrets RotationRules defer, HTTP API CORS preflight/UpdateApi, ECR Registry V2 chunked PATCH (live HTTP)
+- Node/Python SSM StringList; Terraform lab-fullstack StringList; CloudFormation ChangeSet Modify SSM Value + Cloud Control UpdateResource IAM User
+- API Gateway HTTP management responses use restJson1 camelCase + `application/json` (AWS SDK Go v2 CreateApi/CreateIntegration deserialize)
+
 ## 1.1.0
 
 Minor release after 1.0.0: lab-core depth, inter-service wiring, CLI fidelity, and secure-default honesty. Docker Hub: `kyaxris/noctaxris` (`1.1.0`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

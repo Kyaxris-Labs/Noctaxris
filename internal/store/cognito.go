@@ -527,7 +527,7 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	if accountID != "" && acct != accountID {
 		return CognitoUser{}, "", ErrCognitoNotFound
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	if _, err := s.FireCognitoTriggerIfConfigured(
 		acct, poolID, clientID, username, "", "UNCONFIRMED",
 		CognitoTriggerPreSignUp, "PreSignUp_SignUp",
 	); err != nil {
@@ -551,6 +551,18 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 		return CognitoUser{}, "", fmt.Errorf("sign up: %w", err)
 	}
 	if err := s.storeUserSRPVerifier(acct, poolID, username, password); err != nil {
+		return CognitoUser{}, "", err
+	}
+	// CustomMessage_SignUp: lab has no SES; Invoke for fail-closed parity, ignore message body.
+	if _, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
+		TriggerSource: "CustomMessage_SignUp",
+		UserPoolID:    poolID,
+		Username:      username,
+		ClientID:      clientID,
+		UserSub:       sub,
+		UserStatus:    "UNCONFIRMED",
+		CodeParameter: "{####}",
+	}); err != nil {
 		return CognitoUser{}, "", err
 	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now}, poolID, nil
@@ -583,7 +595,7 @@ func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode st
 	if err != nil {
 		return fmt.Errorf("confirm signup update: %w", err)
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	if _, err := s.FireCognitoTriggerIfConfigured(
 		acct, poolID, clientID, username, sub, "CONFIRMED",
 		CognitoTriggerPostConfirmation, "PostConfirmation_ConfirmSignUp",
 	); err != nil {
@@ -648,14 +660,25 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	sub, hash, status, err := s.getUser(accountID, poolID, username)
 	if err != nil {
 		if errors.Is(err, ErrCognitoUserNotFound) {
-			return CognitoAuthOutcome{}, ErrCognitoUnauthorized
+			migrated, mErr := s.tryUserMigrationAuthentication(accountID, poolID, clientID, username, password)
+			if mErr != nil {
+				return CognitoAuthOutcome{}, mErr
+			}
+			if !migrated {
+				return CognitoAuthOutcome{}, ErrCognitoUnauthorized
+			}
+			sub, hash, status, err = s.getUser(accountID, poolID, username)
+			if err != nil {
+				return CognitoAuthOutcome{}, err
+			}
+		} else {
+			return CognitoAuthOutcome{}, err
 		}
-		return CognitoAuthOutcome{}, err
 	}
 	if status != "CONFIRMED" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	if _, err := s.FireCognitoTriggerIfConfigured(
 		accountID, poolID, clientID, username, sub, status,
 		CognitoTriggerPreAuthentication, "PreAuthentication_Authentication",
 	); err != nil {
@@ -678,6 +701,43 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	return CognitoAuthOutcome{CognitoAuthResult: result}, nil
 }
 
+// tryUserMigrationAuthentication Invokes UserMigration when configured for a missing user.
+// Returns migrated=true when the Lambda response includes userAttributes and the user was created.
+func (s *Store) tryUserMigrationAuthentication(accountID, poolID, clientID, username, password string) (migrated bool, err error) {
+	pool, err := s.DescribeCognitoUserPool(accountID, poolID)
+	if err != nil {
+		return false, err
+	}
+	if pool.LambdaConfig.ARNFor(CognitoTriggerUserMigration) == "" {
+		return false, nil
+	}
+	payload, err := s.FireCognitoTriggerEvent(accountID, poolID, CognitoTriggerUserMigration, CognitoTriggerEventInput{
+		TriggerSource: "UserMigration_Authentication",
+		UserPoolID:    poolID,
+		Username:      username,
+		ClientID:      clientID,
+		Password:      password,
+	})
+	if err != nil {
+		return false, err
+	}
+	attrs, ok, err := ParseCognitoUserMigrationAttributes(payload)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrCognitoTriggerFailed, err)
+	}
+	if !ok {
+		return false, ErrCognitoUserNotFound
+	}
+	_ = attrs // lab stores password only; attributes acknowledge successful migration response
+	if _, err := s.AdminCreateCognitoUser(accountID, poolID, username, password); err != nil {
+		if errors.Is(err, ErrCognitoUserExists) {
+			return true, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // issueTokensAfterAuth runs PreTokenGeneration (and optional PostAuthentication) around token minting.
 func (s *Store) issueTokensAfterAuth(
 	accountID, poolID, clientID, username, sub, status string,
@@ -686,18 +746,23 @@ func (s *Store) issueTokensAfterAuth(
 	if status == "" {
 		status = "CONFIRMED"
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	payload, err := s.FireCognitoTriggerIfConfigured(
 		accountID, poolID, clientID, username, sub, status,
 		CognitoTriggerPreTokenGeneration, "TokenGeneration_Authentication",
-	); err != nil {
+	)
+	if err != nil {
 		return CognitoAuthResult{}, err
 	}
-	result, err := s.issueTokens(accountID, poolID, clientID, username, sub)
+	override, err := ParseCognitoPreTokenClaimsOverride(payload)
+	if err != nil {
+		return CognitoAuthResult{}, fmt.Errorf("%w: %v", ErrCognitoTriggerFailed, err)
+	}
+	result, err := s.issueTokens(accountID, poolID, clientID, username, sub, override)
 	if err != nil {
 		return CognitoAuthResult{}, err
 	}
 	if firePostAuth {
-		if err := s.FireCognitoTriggerIfConfigured(
+		if _, err := s.FireCognitoTriggerIfConfigured(
 			accountID, poolID, clientID, username, sub, status,
 			CognitoTriggerPostAuthentication, "PostAuthentication_Authentication",
 		); err != nil {
@@ -712,7 +777,7 @@ func hashRefreshToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (CognitoAuthResult, error) {
+func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string, override CognitoClaimsOverride) (CognitoAuthResult, error) {
 	key, kid, region, err := s.loadPoolPrivateKey(accountID, poolID)
 	if err != nil {
 		return CognitoAuthResult{}, err
@@ -722,7 +787,7 @@ func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (
 	exp := now.Add(time.Duration(cognitoTokenTTLSeconds) * time.Second).Unix()
 	iat := now.Unix()
 
-	idClaims, _ := json.Marshal(map[string]any{
+	idClaimMap := map[string]any{
 		"sub":              sub,
 		"iss":              iss,
 		"aud":              clientID,
@@ -732,7 +797,9 @@ func (s *Store) issueTokens(accountID, poolID, clientID, username, sub string) (
 		"exp":              exp,
 		"cognito:username": username,
 		"email_verified":   false,
-	})
+	}
+	ApplyCognitoClaimsOverrideToIDClaims(idClaimMap, override)
+	idClaims, _ := json.Marshal(idClaimMap)
 	accessClaims, _ := json.Marshal(map[string]any{
 		"sub":       sub,
 		"iss":       iss,
@@ -814,13 +881,18 @@ func (s *Store) RefreshCognitoTokens(accountID, clientID, refreshToken string) (
 	if _, err := s.db.Exec(`DELETE FROM cognito_refresh_tokens WHERE token_hash = ?`, tokenHash); err != nil {
 		return CognitoAuthResult{}, fmt.Errorf("rotate refresh token: %w", err)
 	}
-	if err := s.FireCognitoTriggerIfConfigured(
+	payload, err := s.FireCognitoTriggerIfConfigured(
 		acct, poolID, clientID, username, sub, status,
 		CognitoTriggerPreTokenGeneration, "TokenGeneration_RefreshTokens",
-	); err != nil {
+	)
+	if err != nil {
 		return CognitoAuthResult{}, err
 	}
-	return s.issueTokens(acct, poolID, clientID, username, sub)
+	override, err := ParseCognitoPreTokenClaimsOverride(payload)
+	if err != nil {
+		return CognitoAuthResult{}, fmt.Errorf("%w: %v", ErrCognitoTriggerFailed, err)
+	}
+	return s.issueTokens(acct, poolID, clientID, username, sub, override)
 }
 
 // RevokeCognitoToken deletes the refresh token hash so subsequent refresh fails.

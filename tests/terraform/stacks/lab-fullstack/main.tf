@@ -170,6 +170,12 @@ resource "aws_ssm_parameter" "config" {
   value = "lab-fullstack"
 }
 
+resource "aws_ssm_parameter" "stringlist" {
+  name  = "/lab/${var.name_prefix}/stringlist"
+  type  = "StringList"
+  value = "one,two,three"
+}
+
 resource "aws_ssm_parameter" "secure_config" {
   name   = "/lab/${var.name_prefix}/secure-config"
   type   = "SecureString"

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	apiGatewayJSONContentType = "application/x-amz-json-1.1"
+	apiGatewayJSONContentType = "application/json"
 	apiGatewayEventSource     = "apigateway.amazonaws.com"
 )
 
@@ -419,9 +419,21 @@ func (s *Server) apigwCreateIntegration(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
 	intType, _ := params["IntegrationType"].(string)
+	if intType == "" {
+		intType, _ = params["integrationType"].(string)
+	}
 	uri, _ := params["IntegrationUri"].(string)
+	if uri == "" {
+		uri, _ = params["integrationUri"].(string)
+	}
 	payloadFmt, _ := params["PayloadFormatVersion"].(string)
+	if payloadFmt == "" {
+		payloadFmt, _ = params["payloadFormatVersion"].(string)
+	}
 	credentialsArn, _ := params["CredentialsArn"].(string)
 	if credentialsArn == "" {
 		credentialsArn, _ = params["credentialsArn"].(string)
@@ -556,10 +568,25 @@ func (s *Server) apigwCreateRoute(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
 	routeKey, _ := params["RouteKey"].(string)
+	if routeKey == "" {
+		routeKey, _ = params["routeKey"].(string)
+	}
 	target, _ := params["Target"].(string)
+	if target == "" {
+		target, _ = params["target"].(string)
+	}
 	authType, _ := params["AuthorizationType"].(string)
+	if authType == "" {
+		authType, _ = params["authorizationType"].(string)
+	}
 	authorizerID, _ := params["AuthorizerId"].(string)
+	if authorizerID == "" {
+		authorizerID, _ = params["authorizerId"].(string)
+	}
 	if !s.authorize(verified, catalog.ActionAPIGatewayV2CreateRoute, "*") {
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform apigatewayv2:CreateRoute.", readOnly, eventID, verified)
@@ -601,9 +628,17 @@ func (s *Server) apigwCreateStage(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	apiID, _ := params["ApiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["apiId"].(string)
+	}
 	stageName, _ := params["StageName"].(string)
+	if stageName == "" {
+		stageName, _ = params["stageName"].(string)
+	}
 	autoDeploy := true
 	if v, ok := params["AutoDeploy"].(bool); ok {
+		autoDeploy = v
+	} else if v, ok := params["autoDeploy"].(bool); ok {
 		autoDeploy = v
 	}
 	if !s.authorize(verified, catalog.ActionAPIGatewayV2CreateStage, "*") {

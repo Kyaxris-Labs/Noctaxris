@@ -102,13 +102,16 @@ Default `docker/compose.yaml` stays loopback-published and host-gateway off. Use
 |---------|------|
 | `docker/compose.engine-privileged.yaml` | Nested `docker info` / Invoke / nested data engines fail on restricted DinD (Desktop/WSL edge cases). Privileged DinD is a host workaround, not the secure default |
 | `docker/compose.lab-host-gateway.yaml` | In-function SDK labs that call the published API via `host.docker.internal` (sets `NOCTAXRIS_INJECT_HOST_GATEWAY=1`). Keep code/default Compose off |
+| `docker/compose.lab-ecs-host-gateway.yaml` | Nested ECS / CodeBuild / Batch containers need `host.docker.internal` to call the published API (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`). Default Compose stays off |
 | `docker/compose.lab-open.yaml` | Open data-plane labs that need `AuthType NONE` / HTTP API `NONE` on the Compose non-loopback bind |
 
-Desktop + nested DinD often cannot reach a loopback-only publish from function containers. For that layout only, with the host-gateway overlay, set session `NOCTAXRIS_PUBLISH_ADDR=0.0.0.0` (prefer TLS if the host is reachable beyond your lab machine). Restore `127.0.0.1` publish for all other work.
+Desktop + nested DinD often cannot reach a loopback-only publish from function or ECS-path containers. For that layout only, with a host-gateway overlay, set session `NOCTAXRIS_PUBLISH_ADDR=0.0.0.0` (prefer TLS if the host is reachable beyond your lab machine). Restore `127.0.0.1` publish for all other work.
 
 ```bash
 docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
-# Desktop DinD if connection refused from functions:
+# Nested ECS / CodeBuild / Batch task→API labs:
+# docker compose -f docker/compose.yaml -f docker/compose.lab-ecs-host-gateway.yaml --env-file docker/.env up --build
+# Desktop DinD if connection refused from nested containers:
 # NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
 ```
 

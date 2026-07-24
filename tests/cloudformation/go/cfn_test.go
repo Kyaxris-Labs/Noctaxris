@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
 func endpoint() string {
@@ -78,11 +79,13 @@ func templatesDir(t *testing.T) string {
 }
 
 type templateVars struct {
-	Bucket   string
-	Role     string
-	Queue    string
-	Table    string
-	Function string
+	Bucket     string
+	Role       string
+	Queue      string
+	Table      string
+	Function   string
+	ParamName  string
+	ParamValue string
 }
 
 func renderTemplate(t *testing.T, name string, vars templateVars) string {
@@ -97,6 +100,8 @@ func renderTemplate(t *testing.T, name string, vars templateVars) string {
 	body = strings.ReplaceAll(body, "REPLACE_QUEUE_NAME", vars.Queue)
 	body = strings.ReplaceAll(body, "REPLACE_TABLE_NAME", vars.Table)
 	body = strings.ReplaceAll(body, "REPLACE_FUNCTION_NAME", vars.Function)
+	body = strings.ReplaceAll(body, "REPLACE_PARAM_NAME", vars.ParamName)
+	body = strings.ReplaceAll(body, "REPLACE_PARAM_VALUE", vars.ParamValue)
 	return body
 }
 
@@ -285,5 +290,136 @@ func TestCloudFormationRejectsUnsupportedType(t *testing.T) {
 			_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
 		})
 		t.Fatal("expected CreateStack with unsupported type to fail")
+	}
+}
+
+func TestCloudFormationChangeSetModifySSM(t *testing.T) {
+	requireReady(t)
+	cfg := loadCFG(t)
+	cfn := newCFN(t, cfg)
+	ssmc := ssm.NewFromConfig(cfg, func(o *ssm.Options) {
+		o.BaseEndpoint = aws.String(endpoint())
+	})
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	short := suffix
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	paramName := "/lab/cfn-mod-" + short
+	stackName := "cfn-mod-ssm-" + short
+	csName := "bump-value-" + short
+
+	v1 := renderTemplate(t, "ssm-string-param.yaml", templateVars{
+		ParamName: paramName, ParamValue: "v1",
+	})
+	_, err := cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
+		StackName:    aws.String(stackName),
+		TemplateBody: aws.String(v1),
+	})
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
+	})
+
+	got, err := ssmc.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(paramName)})
+	if err != nil {
+		t.Fatalf("GetParameter after create: %v", err)
+	}
+	if aws.ToString(got.Parameter.Value) != "v1" {
+		t.Fatalf("after create value=%q", aws.ToString(got.Parameter.Value))
+	}
+
+	v2 := renderTemplate(t, "ssm-string-param.yaml", templateVars{
+		ParamName: paramName, ParamValue: "v2",
+	})
+	_, err = cfn.CreateChangeSet(ctx, &cloudformation.CreateChangeSetInput{
+		StackName:     aws.String(stackName),
+		ChangeSetName: aws.String(csName),
+		ChangeSetType: types.ChangeSetTypeUpdate,
+		TemplateBody:  aws.String(v2),
+	})
+	if err != nil {
+		t.Fatalf("CreateChangeSet: %v", err)
+	}
+
+	desc, err := cfn.DescribeChangeSet(ctx, &cloudformation.DescribeChangeSetInput{
+		StackName:     aws.String(stackName),
+		ChangeSetName: aws.String(csName),
+	})
+	if err != nil {
+		t.Fatalf("DescribeChangeSet: %v", err)
+	}
+	if len(desc.Changes) == 0 {
+		t.Fatal("DescribeChangeSet returned no Changes for Value modify")
+	}
+
+	_, err = cfn.ExecuteChangeSet(ctx, &cloudformation.ExecuteChangeSetInput{
+		StackName:     aws.String(stackName),
+		ChangeSetName: aws.String(csName),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteChangeSet: %v", err)
+	}
+
+	got, err = ssmc.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(paramName)})
+	if err != nil {
+		t.Fatalf("GetParameter after execute: %v", err)
+	}
+	if aws.ToString(got.Parameter.Value) != "v2" {
+		t.Fatalf("after execute value=%q want v2", aws.ToString(got.Parameter.Value))
+	}
+}
+
+func TestCloudFormationChangeSetModifySSMRenameFailsClosed(t *testing.T) {
+	requireReady(t)
+	cfg := loadCFG(t)
+	cfn := newCFN(t, cfg)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	short := suffix
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	paramName := "/lab/cfn-ren-" + short
+	stackName := "cfn-ren-ssm-" + short
+	csName := "rename-" + short
+
+	base := renderTemplate(t, "ssm-string-param.yaml", templateVars{
+		ParamName: paramName, ParamValue: "keep",
+	})
+	_, err := cfn.CreateStack(ctx, &cloudformation.CreateStackInput{
+		StackName:    aws.String(stackName),
+		TemplateBody: aws.String(base),
+	})
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = cfn.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(stackName)})
+	})
+
+	renamed := renderTemplate(t, "ssm-string-param.yaml", templateVars{
+		ParamName: paramName + "-renamed", ParamValue: "keep",
+	})
+	_, err = cfn.CreateChangeSet(ctx, &cloudformation.CreateChangeSetInput{
+		StackName:     aws.String(stackName),
+		ChangeSetName: aws.String(csName),
+		ChangeSetType: types.ChangeSetTypeUpdate,
+		TemplateBody:  aws.String(renamed),
+	})
+	if err != nil {
+		t.Fatalf("CreateChangeSet: %v", err)
+	}
+	_, err = cfn.ExecuteChangeSet(ctx, &cloudformation.ExecuteChangeSetInput{
+		StackName:     aws.String(stackName),
+		ChangeSetName: aws.String(csName),
+	})
+	if err == nil {
+		t.Fatal("expected ExecuteChangeSet to fail closed on immutable Name rename")
 	}
 }

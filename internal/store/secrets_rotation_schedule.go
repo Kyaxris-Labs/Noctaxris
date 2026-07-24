@@ -3,9 +3,11 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +24,9 @@ var (
 	rateHoursRE        = regexp.MustCompile(`(?i)^rate\((\d+)\s+hours?\)$`)
 	rotationDurationRE = regexp.MustCompile(`(?i)^(\d+)h$`)
 	secretsCronExprRE  = regexp.MustCompile(`(?i)^cron\(\s*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*\)$`)
+
+	rotationJitterMu   sync.Mutex
+	rotationJitterRand *rand.Rand
 )
 
 // EnsureSecretsRotationScheduleSchema adds RotationRules schedule columns.
@@ -160,6 +165,42 @@ func nextRotationTime(rules SecretRotationRules, from time.Time) (time.Time, err
 	return time.Time{}, fmt.Errorf("ValidationException: lab ScheduleExpression supports rate(N days|hours) or cron(0 H D M Dow *)")
 }
 
+// applyRotationWindowJitter adds a random offset in [0, Duration) to the window start.
+// Empty Duration leaves next unchanged (backward compatible).
+func applyRotationWindowJitter(next time.Time, duration string, rnd *rand.Rand) (time.Time, error) {
+	hours, err := parseRotationDurationHours(duration)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if hours == 0 {
+		return next, nil
+	}
+	if rnd == nil {
+		rnd = rotationJitterRNG()
+	}
+	window := int64(hours) * int64(time.Hour)
+	offset := time.Duration(rnd.Int63n(window))
+	return next.Add(offset), nil
+}
+
+func rotationJitterRNG() *rand.Rand {
+	rotationJitterMu.Lock()
+	defer rotationJitterMu.Unlock()
+	if rotationJitterRand != nil {
+		return rotationJitterRand
+	}
+	return rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
+// SetRotationJitterRand injects a deterministic RNG for Duration in-window jitter tests.
+// Pass nil to restore process-default random offsets.
+func (s *Store) SetRotationJitterRand(rnd *rand.Rand) {
+	_ = s
+	rotationJitterMu.Lock()
+	defer rotationJitterMu.Unlock()
+	rotationJitterRand = rnd
+}
+
 // SetSecretRotationRules persists RotationRules and enables automatic rotation.
 // When rotateImmediately is false, next_rotation_date is now+interval (no rotate).
 // When true, next_rotation_date is left for MarkSecretRotated after the caller rotates.
@@ -185,6 +226,10 @@ func (s *Store) SetSecretRotationRules(
 		now = now.UTC()
 	}
 	nextTime, err := nextRotationTime(rules, now)
+	if err != nil {
+		return err
+	}
+	nextTime, err = applyRotationWindowJitter(nextTime, rules.Duration, nil)
 	if err != nil {
 		return err
 	}
@@ -259,6 +304,10 @@ func (s *Store) MarkSecretRotated(accountID, nameOrARN string, now time.Time) er
 		rules.AutomaticallyAfterDays = 0
 	}
 	nextTime, err := nextRotationTime(rules, now)
+	if err != nil {
+		return err
+	}
+	nextTime, err = applyRotationWindowJitter(nextTime, rules.Duration, nil)
 	if err != nil {
 		return err
 	}

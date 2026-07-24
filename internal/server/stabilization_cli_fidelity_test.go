@@ -30,7 +30,7 @@ func TestAPIGatewayV2RESTNotStolenByRegistry(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	apiID, _ := out["ApiId"].(string)
+	apiID, _ := out["apiId"].(string)
 	if apiID == "" {
 		t.Fatalf("missing ApiId: %s", rec.Body.String())
 	}
@@ -71,7 +71,7 @@ func TestAPIGatewayV2GetIntegrationsRoutesAuthorizers(t *testing.T) {
 	}
 	var apiResp map[string]any
 	_ = json.Unmarshal(apiRec.Body.Bytes(), &apiResp)
-	apiID, _ := apiResp["ApiId"].(string)
+	apiID, _ := apiResp["apiId"].(string)
 
 	intRec := mustJSONTarget(t, handler, "ApiGatewayV2.CreateIntegration", "apigateway", map[string]any{
 		"ApiId": apiID, "IntegrationType": "AWS_PROXY", "IntegrationUri": lambdaARN,
@@ -81,7 +81,7 @@ func TestAPIGatewayV2GetIntegrationsRoutesAuthorizers(t *testing.T) {
 	}
 	var intResp map[string]any
 	_ = json.Unmarshal(intRec.Body.Bytes(), &intResp)
-	integrationID, _ := intResp["IntegrationId"].(string)
+	integrationID, _ := intResp["integrationId"].(string)
 
 	routeRec := mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /listed", "Target": "integrations/" + integrationID,
@@ -99,8 +99,8 @@ func TestAPIGatewayV2GetIntegrationsRoutesAuthorizers(t *testing.T) {
 	}
 	var intList map[string]any
 	_ = json.Unmarshal(listInt.Body.Bytes(), &intList)
-	if items, _ := intList["Items"].([]any); len(items) != 1 {
-		t.Fatalf("GetIntegrations Items=%v", intList["Items"])
+	if items, _ := intList["items"].([]any); len(items) != 1 {
+		t.Fatalf("GetIntegrations Items=%v", intList["items"])
 	}
 
 	listRoutes := mustJSONTarget(t, handler, "ApiGatewayV2.GetRoutes", "apigateway", map[string]any{

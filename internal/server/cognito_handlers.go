@@ -675,6 +675,11 @@ func (s *Server) cognitoInitiateAuth(
 			msg, readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User does not exist.", readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrCognitoNotFound) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
 			"Client not found.", readOnly, eventID, verified)
@@ -735,6 +740,11 @@ func (s *Server) cognitoAdminInitiateAuth(
 		}
 		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
 			msg, readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User does not exist.", readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCognitoNotFound) {

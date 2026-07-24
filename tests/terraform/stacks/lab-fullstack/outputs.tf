@@ -46,6 +46,10 @@ output "ssm_parameter_name" {
   value = aws_ssm_parameter.config.name
 }
 
+output "ssm_stringlist_parameter_name" {
+  value = aws_ssm_parameter.stringlist.name
+}
+
 output "ssm_secure_parameter_name" {
   value = aws_ssm_parameter.secure_config.name
 }

@@ -1,12 +1,19 @@
 package store_test
 
 import (
+	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
+
+// fixedInt63Source returns a constant Int63 for deterministic rand.Rand tests.
+type fixedInt63Source struct{ v int64 }
+
+func (s fixedInt63Source) Int63() int64 { return s.v }
+func (s fixedInt63Source) Seed(int64)   {}
 
 func openSecretsScheduleStore(t *testing.T) *store.Store {
 	t.Helper()
@@ -126,6 +133,9 @@ func TestSetRotationRulesRejectsBothDaysAndSchedule(t *testing.T) {
 
 func TestSetRotationRulesRateHoursFakeClock(t *testing.T) {
 	st := openSecretsScheduleStore(t)
+	// Duration is stored; pin zero jitter so this case asserts window-start scheduling.
+	st.SetRotationJitterRand(rand.New(fixedInt63Source{v: 0}))
+	t.Cleanup(func() { st.SetRotationJitterRand(nil) })
 	account := "000000000001"
 	created, err := st.CreateSecret(account, "us-east-1", "sched-hours", "v1", nil, "", "", "")
 	if err != nil {
@@ -185,6 +195,8 @@ func TestSetRotationRulesRateHoursFakeClock(t *testing.T) {
 
 func TestSetRotationRulesCronFakeClock(t *testing.T) {
 	st := openSecretsScheduleStore(t)
+	st.SetRotationJitterRand(rand.New(fixedInt63Source{v: 0}))
+	t.Cleanup(func() { st.SetRotationJitterRand(nil) })
 	account := "000000000001"
 	created, err := st.CreateSecret(account, "us-east-1", "sched-cron", "v1", nil, "", "", "")
 	if err != nil {
@@ -251,6 +263,108 @@ func TestSetRotationRulesRejectsInvalidDurationAndCron(t *testing.T) {
 		if err == nil {
 			t.Fatalf("case %d: expected validation error for %+v", i, rules)
 		}
+	}
+}
+
+func TestSecretsCronWithHourList(t *testing.T) {
+	st := openSecretsScheduleStore(t)
+	account := "000000000001"
+	created, err := st.CreateSecret(account, "us-east-1", "sched-cron-list", "v1", nil, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rules := store.SecretRotationRules{
+		ScheduleExpression: "cron(0 1,13 * * ? *)",
+	}
+	if err := st.SetSecretRotationRules(account, created.Name, rules, now, false); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.DescribeSecret(account, created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNext := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if sec.NextRotationDate != wantNext {
+		t.Fatalf("NextRotationDate=%q want %q", sec.NextRotationDate, wantNext)
+	}
+}
+
+func TestSecretsCronWithHourStep(t *testing.T) {
+	st := openSecretsScheduleStore(t)
+	account := "000000000001"
+	created, err := st.CreateSecret(account, "us-east-1", "sched-cron-step", "v1", nil, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rules := store.SecretRotationRules{
+		ScheduleExpression: "cron(0 2/10 * * ? *)",
+	}
+	if err := st.SetSecretRotationRules(account, created.Name, rules, now, false); err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.DescribeSecret(account, created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNext := time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	if sec.NextRotationDate != wantNext {
+		t.Fatalf("NextRotationDate=%q want %q", sec.NextRotationDate, wantNext)
+	}
+}
+
+func TestRotationDurationJitterDeterministic(t *testing.T) {
+	st := openSecretsScheduleStore(t)
+	// 30m of nanoseconds: Int63n(1h) returns this when Int63 is this value (< 1h).
+	st.SetRotationJitterRand(rand.New(fixedInt63Source{v: int64(30 * time.Minute)}))
+	t.Cleanup(func() { st.SetRotationJitterRand(nil) })
+
+	account := "000000000001"
+	created, err := st.CreateSecret(account, "us-east-1", "sched-jitter", "v1", nil, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	rules := store.SecretRotationRules{
+		ScheduleExpression: "rate(4 hours)",
+		Duration:           "1h",
+	}
+	if err := st.SetSecretRotationRules(account, created.Name, rules, now, false); err != nil {
+		t.Fatal(err)
+	}
+	windowStart := now.Add(4 * time.Hour)
+	wantNext := windowStart.Add(30 * time.Minute)
+	sec, err := st.DescribeSecret(account, created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sec.NextRotationDate != wantNext.Format(time.RFC3339) {
+		t.Fatalf("NextRotationDate=%q want %q", sec.NextRotationDate, wantNext.Format(time.RFC3339))
+	}
+
+	n, err := st.ProcessDueSecretRotations(windowStart, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("not due at window start: n=%d", n)
+	}
+	n, err = st.ProcessDueSecretRotations(wantNext, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("due at jittered time: n=%d", n)
+	}
+	meta, err := st.DescribeSecret(account, created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Next window start + same fixed 30m jitter.
+	wantNext2 := wantNext.Add(4 * time.Hour).Add(30 * time.Minute).Format(time.RFC3339)
+	if meta.NextRotationDate != wantNext2 {
+		t.Fatalf("NextRotationDate after rotate=%q want %q", meta.NextRotationDate, wantNext2)
 	}
 }
 

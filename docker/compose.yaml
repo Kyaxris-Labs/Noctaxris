@@ -36,8 +36,9 @@ services:
       # Lambda ExtraHosts host.docker.internal. Code default is off; set 1 for
       # in-function SDK labs (fn-sidecar-secret). Docs previously said default on.
       NOCTAXRIS_INJECT_HOST_GATEWAY: "${NOCTAXRIS_INJECT_HOST_GATEWAY:-0}"
-      # ECS/CodeBuild/Batch ExtraHosts (default off). Set to 1 to opt in.
-      # NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "1"
+      # ECS/CodeBuild/Batch ExtraHosts. Code default is off; set 1 or use
+      # compose.lab-ecs-host-gateway.yaml for nested task→API labs.
+      NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "${NOCTAXRIS_INJECT_ECS_HOST_GATEWAY:-0}"
     volumes:
       # API-only sealed state (master.key, state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris

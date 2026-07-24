@@ -58,7 +58,7 @@ func TestAPIGatewayLambdaAuthorizerDenyShortCircuit(t *testing.T) {
 	}
 	var authzResp map[string]any
 	_ = json.Unmarshal(authzRec.Body.Bytes(), &authzResp)
-	authorizerID, _ := authzResp["AuthorizerId"].(string)
+	authorizerID, _ := authzResp["authorizerId"].(string)
 
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /secure", "Target": "integrations/" + integrationID,
@@ -126,7 +126,7 @@ func TestAPIGatewayLambdaAuthorizerAllowReachesIntegration(t *testing.T) {
 	}
 	var authzResp map[string]any
 	_ = json.Unmarshal(authzRec.Body.Bytes(), &authzResp)
-	authorizerID, _ := authzResp["AuthorizerId"].(string)
+	authorizerID, _ := authzResp["authorizerId"].(string)
 
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /secure", "Target": "integrations/" + integrationID,
@@ -197,7 +197,7 @@ func TestAPIGatewayLambdaAuthorizerRequiresResourcePolicy(t *testing.T) {
 	}
 	var authzResp map[string]any
 	_ = json.Unmarshal(authzRec.Body.Bytes(), &authzResp)
-	authorizerID, _ := authzResp["AuthorizerId"].(string)
+	authorizerID, _ := authzResp["authorizerId"].(string)
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /secure", "Target": "integrations/" + integrationID,
 		"AuthorizationType": "CUSTOM", "AuthorizerId": authorizerID,
@@ -225,7 +225,7 @@ func TestAPIGatewayCreateAuthorizerRejectsTOKEN(t *testing.T) {
 	}, now)
 	var apiResp map[string]any
 	_ = json.Unmarshal(apiRec.Body.Bytes(), &apiResp)
-	apiID, _ := apiResp["ApiId"].(string)
+	apiID, _ := apiResp["apiId"].(string)
 	bad := mustJSONTarget(t, handler, "ApiGatewayV2.CreateAuthorizer", "apigateway", map[string]any{
 		"ApiId": apiID, "Name": "tok", "AuthorizerType": "TOKEN",
 		"AuthorizerUri": "arn:aws:lambda:us-east-1:" + testAccountID + ":function:x",
@@ -280,7 +280,7 @@ func TestParseHTTPAPIAuthorizerResponseShapes(t *testing.T) {
 	}, now)
 	var authzResp map[string]any
 	_ = json.Unmarshal(authzRec.Body.Bytes(), &authzResp)
-	authorizerID, _ := authzResp["AuthorizerId"].(string)
+	authorizerID, _ := authzResp["authorizerId"].(string)
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /secure", "Target": "integrations/" + integrationID,
 		"AuthorizationType": "CUSTOM", "AuthorizerId": authorizerID,

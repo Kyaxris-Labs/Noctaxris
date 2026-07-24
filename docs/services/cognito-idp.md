@@ -13,7 +13,7 @@ User Pool and app client CRUD, AdminCreateUser / SignUp lite, InitiateAuth `USER
 | Users | `AdminCreateUser`, `SignUp`, `ConfirmSignUp` |
 | Auth | `InitiateAuth` (unsigned public IdP API; AWS CLI shape without `Authorization`): `USER_PASSWORD_AUTH`, `USER_SRP_AUTH` (`SRP_A` → `PASSWORD_VERIFIER`), `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN`; `AdminInitiateAuth` (password and refresh flows; SigV4); `RevokeToken` (unsigned public IdP; `ClientId` + refresh `Token`) |
 | MFA (TOTP) | `AssociateSoftwareToken`, `VerifySoftwareToken`, `RespondToAuthChallenge` (`SOFTWARE_TOKEN_MFA`, `PASSWORD_VERIFIER`) — unsigned public IdP. After Verify, password or SRP auth returns `ChallengeName=SOFTWARE_TOKEN_MFA` + `Session` (no tokens) until a valid TOTP is submitted |
-| Triggers | `LambdaConfig` lab subset store ARNs (`PreSignUp`, `PostConfirmation`, `PreAuthentication`, `PostAuthentication`, `PreTokenGeneration`, plus configure-only `UserMigration` / custom-auth / `CustomMessage`) and lab top-level `RoleArn` on Create/Update/Describe; PassRole for `cognito-idp.amazonaws.com` when `RoleArn` is set (`aws:SourceArn` = pool ARN). Sync Invoke on lifecycle events below |
+| Triggers | `LambdaConfig` lab subset store ARNs (`PreSignUp`, `PostConfirmation`, `PreAuthentication`, `PostAuthentication`, `PreTokenGeneration`, `CustomMessage`, `UserMigration`, plus configure-only custom-auth challenge ARNs) and lab top-level `RoleArn` on Create/Update/Describe; PassRole for `cognito-idp.amazonaws.com` when `RoleArn` is set (`aws:SourceArn` = pool ARN). Sync Invoke on lifecycle events below |
 | JWKS | `GET /cognito-idp/{region}/{userPoolId}/.well-known/jwks.json` (no SigV4) |
 
 ### Issuer
@@ -38,12 +38,15 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 - `UpdateUserPool` replace semantics: omit `LambdaConfig` / `RoleArn` to clear those lab fields.
 - When a trigger ARN is configured, the lab Invokes it synchronously (RequestResponse) on the matching lifecycle event:
   - `PreSignUp` → `SignUp` (before the user row is created)
+  - `CustomMessage` → `SignUp` after the user row is created (`CustomMessage_SignUp`; lab stub `codeParameter` `{####}`; SMS/email body fields in the response are ignored — no SES)
   - `PostConfirmation` → `ConfirmSignUp` (after the user is marked `CONFIRMED`)
   - `PreAuthentication` → password / SRP auth start
+  - `UserMigration` → `USER_PASSWORD_AUTH` when the username is missing (`UserMigration_Authentication`); if the Lambda response includes non-empty `response.userAttributes`, the lab creates a `CONFIRMED` user with the auth password and continues; otherwise `UserNotFoundException`. Fail closed on Invoke error
   - `PreTokenGeneration` → before access/id tokens are minted (including refresh; trigger source `TokenGeneration_RefreshTokens` on refresh)
   - `PostAuthentication` → after a successful password / SRP / MFA auth that returns tokens (not on refresh)
-- Fail closed: missing function or Invoke error returns `UnexpectedLambdaException` and the Cognito API fails. Claim customization from `PreTokenGeneration` responses is not applied (invoke-only).
-- Configure-only (stored, not invoked): `UserMigration`, custom-auth challenge ARNs, `CustomMessage`.
+- Fail closed: missing function, Invoke error, or unparseable PreToken/UserMigration payload returns `UnexpectedLambdaException` (or `UserNotFoundException` when migration returns no attributes) and the Cognito API fails.
+- PreTokenGeneration V1 claim overrides: apply `response.claimsOverrideDetails.claimsToAddOrOverride` and `claimsToSuppress` to the **ID** token only. Reserved claims (`iss`, `aud`, `client_id`, `exp`, `iat`, `auth_time`, `token_use`, `sub`) are ignored for add/suppress. V2/V3 `claimsAndScopeOverrideDetails`, access-token custom claims, and `groupOverrideDetails` are not applied.
+- Configure-only (stored, not invoked): custom-auth challenge ARNs (`DefineAuthChallenge`, `CreateAuthChallenge`, `VerifyAuthChallengeResponse`).
 
 ### MFA lab rules
 
@@ -91,8 +94,10 @@ Document skip when Docker is unavailable (unit tests still cover issue/verify/re
 
 ## Not yet / deferred
 
-- Applying `PreTokenGeneration` response claim/scope overrides to minted JWTs
-- Invoking configure-only slots: `UserMigration`, custom-auth challenge ARNs, `CustomMessage`
+- PreTokenGeneration V2/V3 `claimsAndScopeOverrideDetails` (access-token claims/scopes) and `groupOverrideDetails`
+- UserMigration on `USER_SRP_AUTH` (password not available at Initiate; password auth path only)
+- CustomMessage response SMS/email rendering (no SES); other CustomMessage trigger sources beyond SignUp
+- Custom-auth challenge orchestration (`Define` / `Create` / `Verify` Invoke)
 - `SECRET_HASH` for app clients with a client secret
 - `NEW_PASSWORD_REQUIRED` and device SRP challenges
 

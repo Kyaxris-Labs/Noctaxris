@@ -45,8 +45,8 @@ func TestHTTPAPICORSPreflightAndUpdateApi(t *testing.T) {
 	}
 	var apiResp map[string]any
 	_ = json.Unmarshal(apiRec.Body.Bytes(), &apiResp)
-	apiID, _ := apiResp["ApiId"].(string)
-	if _, ok := apiResp["CorsConfiguration"].(map[string]any); !ok {
+	apiID, _ := apiResp["apiId"].(string)
+	if _, ok := apiResp["corsConfiguration"].(map[string]any); !ok {
 		t.Fatalf("CreateApi missing CorsConfiguration: %v", apiResp)
 	}
 
@@ -58,7 +58,7 @@ func TestHTTPAPICORSPreflightAndUpdateApi(t *testing.T) {
 	}
 	var intResp map[string]any
 	_ = json.Unmarshal(intRec.Body.Bytes(), &intResp)
-	integrationID, _ := intResp["IntegrationId"].(string)
+	integrationID, _ := intResp["integrationId"].(string)
 
 	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
 		"ApiId": apiID, "RouteKey": "GET /hello", "Target": "integrations/" + integrationID,

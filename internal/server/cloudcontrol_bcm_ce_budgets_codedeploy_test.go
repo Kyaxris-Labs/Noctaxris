@@ -21,6 +21,22 @@ func TestCloudControlCreateListDelete(t *testing.T) {
 		t.Fatalf("CreateResource status=%d body=%q", create.Code, create.Body.String())
 	}
 
+	// Live AWS SDK Go v2 uses CloudApiService.* + SigV4 service cloudcontrolapi.
+	sdkCreate := mustJSONTarget(t, handler, "CloudApiService.CreateResource", "cloudcontrolapi", map[string]any{
+		"TypeName":     "AWS::S3::Bucket",
+		"DesiredState": `{"BucketName":"srv-cc-sdk-bucket"}`,
+	}, now)
+	if sdkCreate.Code != http.StatusOK || !strings.Contains(sdkCreate.Body.String(), "SUCCESS") {
+		t.Fatalf("CloudApiService CreateResource status=%d body=%q", sdkCreate.Code, sdkCreate.Body.String())
+	}
+	sdkDel := mustJSONTarget(t, handler, "CloudApiService.DeleteResource", "cloudcontrolapi", map[string]any{
+		"TypeName":   "AWS::S3::Bucket",
+		"Identifier": "srv-cc-sdk-bucket",
+	}, now)
+	if sdkDel.Code != http.StatusOK {
+		t.Fatalf("CloudApiService DeleteResource status=%d body=%q", sdkDel.Code, sdkDel.Body.String())
+	}
+
 	unknown := mustJSONTarget(t, handler, "CloudControlApi.CreateResource", "cloudcontrol", map[string]any{
 		"TypeName":     "AWS::EC2::Instance",
 		"DesiredState": `{"InstanceType":"t3.micro"}`,

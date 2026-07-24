@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -172,7 +173,17 @@ func TestCognitoPreTokenGenerationTriggerInvoke(t *testing.T) {
 		var evt map[string]any
 		_ = json.Unmarshal([]byte(eventJSON), &evt)
 		sources = append(sources, evt["triggerSource"].(string))
-		return []byte(`{}`), nil
+		resp, _ := evt["response"].(map[string]any)
+		if resp == nil {
+			resp = map[string]any{}
+			evt["response"] = resp
+		}
+		resp["claimsOverrideDetails"] = map[string]any{
+			"claimsToAddOrOverride": map[string]any{"http_claim": "1"},
+			"claimsToSuppress":      []any{"email_verified"},
+		}
+		b, _ := json.Marshal(evt)
+		return b, nil
 	})
 
 	mustCreateIAMRole(t, handler, "cognito-trig-role3", lambdaTrustOK, now)
@@ -235,5 +246,171 @@ func TestCognitoPreTokenGenerationTriggerInvoke(t *testing.T) {
 	}
 	if len(sources) != 1 || sources[0] != "TokenGeneration_Authentication" {
 		t.Fatalf("sources=%v", sources)
+	}
+	var authOut map[string]any
+	_ = json.Unmarshal(auth.Body.Bytes(), &authOut)
+	ar, _ := authOut["AuthenticationResult"].(map[string]any)
+	idToken, _ := ar["IdToken"].(string)
+	parts := strings.Split(idToken, ".")
+	if len(parts) < 2 {
+		t.Fatalf("bad id token")
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payloadJSON, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims["http_claim"] != "1" {
+		t.Fatalf("claims=%v", claims)
+	}
+	if _, ok := claims["email_verified"]; ok {
+		t.Fatalf("email_verified should be suppressed")
+	}
+}
+
+func TestCognitoCustomMessageTriggerInvoke(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	var invokedName, invokedEvent string
+	srv.SetLambdaInvokeHookForTest(func(_ context.Context, _, name string, _ store.LambdaFunction, _, eventJSON string) ([]byte, error) {
+		invokedName = name
+		invokedEvent = eventJSON
+		return []byte(eventJSON), nil
+	})
+
+	mustCreateIAMRole(t, handler, "cognito-trig-role-cm", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cognito-trig-role-cm"
+	createFn := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "custom-msg-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	var fnOut map[string]any
+	_ = json.Unmarshal(createFn.Body.Bytes(), &fnOut)
+	fnARN, _ := fnOut["FunctionArn"].(string)
+
+	mustCreateIAMRole(t, handler, "cognito-pool-role-cm",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"cognito-idp.amazonaws.com"},"Action":"sts:AssumeRole"}]}`, now)
+	poolRole := "arn:aws:iam::" + testAccountID + ":role/cognito-pool-role-cm"
+
+	createPool := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPool", "cognito-idp", map[string]any{
+		"PoolName": "custom-msg-http",
+		"RoleArn":  poolRole,
+		"LambdaConfig": map[string]any{
+			"CustomMessage": fnARN,
+		},
+	}, now)
+	var poolResp map[string]any
+	_ = json.Unmarshal(createPool.Body.Bytes(), &poolResp)
+	up, _ := poolResp["UserPool"].(map[string]any)
+	poolID, _ := up["Id"].(string)
+
+	createClient := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPoolClient", "cognito-idp", map[string]any{
+		"UserPoolId": poolID,
+		"ClientName": "app",
+	}, now)
+	var clientResp map[string]any
+	_ = json.Unmarshal(createClient.Body.Bytes(), &clientResp)
+	upc, _ := clientResp["UserPoolClient"].(map[string]any)
+	clientID, _ := upc["ClientId"].(string)
+
+	signUp := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.SignUp", "cognito-idp", map[string]any{
+		"ClientId": clientID,
+		"Username": "cm-user",
+		"Password": "Secret9!",
+	}, now)
+	if signUp.Code != http.StatusOK {
+		t.Fatalf("SignUp status=%d body=%q", signUp.Code, signUp.Body.String())
+	}
+	if invokedName != "custom-msg-fn" {
+		t.Fatalf("invoked=%q", invokedName)
+	}
+	if !strings.Contains(invokedEvent, "CustomMessage_SignUp") {
+		t.Fatalf("event=%s", invokedEvent)
+	}
+}
+
+func TestCognitoUserMigrationTriggerInvoke(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	srv.SetLambdaInvokeHookForTest(func(_ context.Context, _, name string, _ store.LambdaFunction, _, eventJSON string) ([]byte, error) {
+		if name != "migrate-fn" {
+			return nil, errors.New("wrong function")
+		}
+		var evt map[string]any
+		_ = json.Unmarshal([]byte(eventJSON), &evt)
+		evt["response"] = map[string]any{
+			"userAttributes": map[string]any{
+				"email": "mig@example.com",
+			},
+			"finalUserStatus": "CONFIRMED",
+		}
+		b, _ := json.Marshal(evt)
+		return b, nil
+	})
+
+	mustCreateIAMRole(t, handler, "cognito-trig-role-mig", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cognito-trig-role-mig"
+	createFn := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "migrate-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	var fnOut map[string]any
+	_ = json.Unmarshal(createFn.Body.Bytes(), &fnOut)
+	fnARN, _ := fnOut["FunctionArn"].(string)
+
+	mustCreateIAMRole(t, handler, "cognito-pool-role-mig",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"cognito-idp.amazonaws.com"},"Action":"sts:AssumeRole"}]}`, now)
+	poolRole := "arn:aws:iam::" + testAccountID + ":role/cognito-pool-role-mig"
+
+	createPool := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPool", "cognito-idp", map[string]any{
+		"PoolName": "migrate-http",
+		"RoleArn":  poolRole,
+		"LambdaConfig": map[string]any{
+			"UserMigration": fnARN,
+		},
+	}, now)
+	var poolResp map[string]any
+	_ = json.Unmarshal(createPool.Body.Bytes(), &poolResp)
+	up, _ := poolResp["UserPool"].(map[string]any)
+	poolID, _ := up["Id"].(string)
+
+	createClient := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.CreateUserPoolClient", "cognito-idp", map[string]any{
+		"UserPoolId": poolID,
+		"ClientName": "app",
+	}, now)
+	var clientResp map[string]any
+	_ = json.Unmarshal(createClient.Body.Bytes(), &clientResp)
+	upc, _ := clientResp["UserPoolClient"].(map[string]any)
+	clientID, _ := upc["ClientId"].(string)
+
+	auth := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.InitiateAuth", "cognito-idp", map[string]any{
+		"ClientId": clientID,
+		"AuthFlow": "USER_PASSWORD_AUTH",
+		"AuthParameters": map[string]any{
+			"USERNAME": "migrated-http",
+			"PASSWORD": "Migrated9!",
+		},
+	}, now)
+	if auth.Code != http.StatusOK {
+		t.Fatalf("InitiateAuth status=%d body=%q", auth.Code, auth.Body.String())
+	}
+	var authOut map[string]any
+	_ = json.Unmarshal(auth.Body.Bytes(), &authOut)
+	ar, _ := authOut["AuthenticationResult"].(map[string]any)
+	if ar == nil || ar["AccessToken"] == nil {
+		t.Fatalf("body=%s", auth.Body.String())
 	}
 }

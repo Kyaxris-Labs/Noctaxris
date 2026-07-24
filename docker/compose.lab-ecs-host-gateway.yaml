@@ -1,0 +1,12 @@
+# Opt-in overlay for nested ECS / CodeBuild / Batch task→API labs.
+# Code and default compose.yaml leave NOCTAXRIS_INJECT_ECS_HOST_GATEWAY off.
+#
+# Usage (from repo root):
+#   docker compose -f docker/compose.yaml -f docker/compose.lab-ecs-host-gateway.yaml --env-file docker/.env up --build
+#
+# On Docker Desktop + nested DinD, pair with NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 only for
+# that lab session (prefer TLS if reachable beyond the lab machine).
+services:
+  noctaxris:
+    environment:
+      NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "1"
