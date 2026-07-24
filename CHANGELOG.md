@@ -2,20 +2,34 @@
 
 ## Unreleased
 
+### Secrets cron L / # / day-of-week names
+
+- Cron fields accept DOM `L`, DOW `N#M` / `SUN#1`, DOW `NL` / `FRIL`, and month/DOW names (`JUL`, `MON-FRI`); shared by Secrets RotationRules and Scheduler expressions
+
+### Cognito CUSTOM_AUTH and CustomMessage body rendering
+
+- `InitiateAuth` `CUSTOM_AUTH` sync-Invokes Define/Create/Verify challenge Lambdas; `RespondToAuthChallenge` `CUSTOM_CHALLENGE` with `ANSWER`
+- `CustomMessage_SignUp` validates/renders/stores `smsMessage` / `emailMessage` / `emailSubject` (stub code `123456`; no SES)
+
 ### Cognito PreToken claim overrides and low-cost trigger Invokes
 
 - PreTokenGeneration V1 `claimsOverrideDetails` (`claimsToAddOrOverride` / `claimsToSuppress`) applied to ID tokens; reserved claims ignored
-- Sync Invoke for `CustomMessage_SignUp` (body fields ignored; no SES) and `UserMigration_Authentication` on password auth when the user is missing
+- Sync Invoke for `CustomMessage_SignUp` and `UserMigration_Authentication` on password auth when the user is missing
 - Trigger invoker returns Lambda payload bytes for claim/migration parsing; fail closed on Invoke or parse errors
 
 ### Secrets cron lists/ranges/steps and Duration jitter
 
-- Cron fields accept lists, ranges, and steps (`1,13`, `1-5`, `*/6`, `2/10`, `1-10/2`); `L` / `#` still deferred
+- Cron fields accept lists, ranges, and steps (`1,13`, `1-5`, `*/6`, `2/10`, `1-10/2`)
 - Optional RotationRules `Duration` picks a random offset in `[0, Duration)` for `NextRotationDate` (empty Duration keeps window start)
 
 ### ECS host-gateway Compose overlay
 
 - Opt-in `docker/compose.lab-ecs-host-gateway.yaml` sets `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`; default Compose passes the env defaulting to `0`
+
+### Node/Python SDK parity (Track D)
+
+- Node.js (`tests/sdk/nodejs`) and Python (`tests/sdk/python`) match Go lab coverage for APIGW HTTP CORS, S3→SQS notifications, Cognito `USER_SRP_AUTH` + LambdaConfig fail-closed, and EventBridge RoleArn-less SQS delivery
+- Node engines `>=24`; clients include `apigatewayv2` and `cognito-idp`
 
 ### Integration suite deepen
 

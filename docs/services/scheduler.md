@@ -9,7 +9,7 @@ Distinct Scheduler API (not EventBridge Rules `ScheduleExpression`). Create and 
 | Area | Actions |
 |------|---------|
 | Schedules | `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule`, `ListSchedules` |
-| Expressions | `rate(n minutes\|hours\|days)`, AWS-shaped `cron(minutes hours day-of-month month day-of-week year)` subset (digits, `*`, `?`), optional one-time `at(yyyy-mm-ddThh:mm:ss)` |
+| Expressions | `rate(n minutes\|hours\|days)`, AWS-shaped `cron(minutes hours day-of-month month day-of-week year)` subset (digits, `*`, `?`, lists/ranges/steps, `L`, `#`, month `JAN-DEC` / DOW `SUN-SAT` names), optional one-time `at(yyyy-mm-ddThh:mm:ss)` |
 | Targets | SQS `SendMessage`, Lambda async Invoke enqueue, SNS `Publish`, Step Functions `StartExecution` (RoleArn) |
 | Authz | Identity `EvaluateFull` on `scheduler:*`. PassRole when `Target.RoleArn` is set (`scheduler.amazonaws.com` trust). Delivery without RoleArn requires a target resource policy Allow for `scheduler.amazonaws.com`. Foreign SQS/Lambda/SNS targets with RoleArn require role session Allow **and** destination resource policy. Target I/O uses the account embedded in the target ARN |
 | Ticker | In-process worker advances `next_run` and delivers due ENABLED schedules (at-least-once lab best-effort) |
