@@ -9,7 +9,7 @@ Behavior graph lite over CloudTrail JSONL and GuardDuty findings for forensic co
 | Area | Actions |
 |------|---------|
 | Graph | `CreateGraph`, `ListGraphs`, `AcceptInvitation` (noop lite) |
-| Search | Lab `SearchGraph` joins CT events and GuardDuty findings by resource ARN or source IP |
+| Search | Lab `SearchGraph` (Noctaxris lab extension; not a full AWS Detective API) joins CT events and GuardDuty findings by resource ARN or source IP |
 
 ### Authz notes
 

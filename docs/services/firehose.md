@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Delivery stream CRUD and PutRecord / PutRecordBatch. Destinations: S3 bucket (writes objects), Lambda ARN (persists the record and enqueues async Lambda Invoke), and OpenSearch domain (indexes documents to a nested Active domain). Identity authz. PassRole when RoleARN is present with `firehose.amazonaws.com` trust. Put delivery evaluates a RoleARN session (Scheduler-shaped) or requires a destination resource policy Allow for `firehose.amazonaws.com` (S3/Lambda). OpenSearch has no resource-policy surface yet, so Put requires RoleARN with `es:ESHttpPut` (fail closed).
+Delivery stream CRUD and PutRecord / PutRecordBatch. Destinations: S3 bucket (writes objects), Lambda ARN (persists the record and enqueues async Lambda Invoke), OpenSearch domain (indexes documents to a nested Active domain), and lab VPC Flow Logs (`VpcFlowLogsDestinationConfiguration`) that formats PutRecord payloads as AWS VPC Flow Logs custom format v2 lines into S3. Identity authz. PassRole when RoleARN is present with `firehose.amazonaws.com` trust. Put delivery evaluates a RoleARN session (Scheduler-shaped) or requires a destination resource policy Allow for `firehose.amazonaws.com` (S3/Lambda). OpenSearch has no resource-policy surface yet, so Put requires RoleARN with `es:ESHttpPut` (fail closed).
 
 ## Implemented
 
@@ -16,6 +16,7 @@ Delivery stream CRUD and PutRecord / PutRecordBatch. Destinations: S3 bucket (wr
 | S3 | `S3DestinationConfiguration` or `ExtendedS3DestinationConfiguration` (BucketARN, optional Prefix) | Writes object under prefix |
 | Lambda | `LambdaDestinationConfiguration` (`LambdaArn` or `FunctionArn`) | Stores record and enqueues async Invoke |
 | OpenSearch | `AmazonopensearchserviceDestinationConfiguration` or lab `OpenSearchDestinationConfiguration` (DomainARN/DomainName, IndexName, RoleARN) | POST `/{index}/_doc` on nested allowlisted host only |
+| VPC Flow (lab) | `VpcFlowLogsDestinationConfiguration` (BucketARN, optional Prefix, RoleARN) | Formats record data as a v2 flow line and `PutObject` to S3 under a lab flow-log key |
 
 Create OpenSearch destination only when the domain exists, is `Active`, and has a non-`stub://` nested endpoint (`noctaxris-opensearch-*` / `noctaxris-data-opensearch-*` on port 9200).
 

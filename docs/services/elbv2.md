@@ -13,6 +13,7 @@ Application load balancer, target group, listener, and path/host listener rule C
 | Listener | `CreateListener`, `DescribeListeners`, `DeleteListener` (forward to target group) |
 | Rules | `CreateRule`, `DescribeRules`, `DeleteRule` (path-pattern and/or host-header forward; priority ascending) |
 | Targets | `RegisterTargets`, `DescribeTargetHealth` (`healthy` when a listener or rule forwards and Lambda permission Allows; `unused` without; IP stays `unused`) |
+| Access logs | `ModifyLoadBalancerAttributes` / `DescribeLoadBalancerAttributes` for `access_logs.s3.enabled` / `access_logs.s3.bucket` / `access_logs.s3.prefix`; lab listener appends ALB access-log lite lines to an in-account S3 bucket when enabled |
 | Lab listener | `GET`/`POST` `/alb/{accountId}/{loadBalancerName}/{port}[/{path...}]` invokes the first registered Lambda on the matched target group (ALB event shape) |
 
 ### Listener rules lite

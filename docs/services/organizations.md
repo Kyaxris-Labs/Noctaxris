@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Organizations MVP for multi-account labs: create accounts, list accounts, OUs, move accounts into OUs, enable policy types, and SCP/RCP create/attach/detach/describe. Shared authorize uses identity, boundary, SCP, and RCP. SCP and RCP collection walks the OU path from the account parent to the organization root.
+Organizations MVP for multi-account labs: create accounts, list accounts, OUs, move accounts into OUs, enable policy types, SCP/RCP create/attach/detach/describe, and list helpers for policies, parents, and accounts-for-parent. Shared authorize uses identity, boundary, SCP, and RCP. SCP and RCP collection walks the OU path from the account parent to the organization root. Organization trail flag (`IsOrganizationTrail`) is on CloudTrail CreateTrail for the management account (see [cloudtrail.md](cloudtrail.md)).
 
 ## Implemented
 

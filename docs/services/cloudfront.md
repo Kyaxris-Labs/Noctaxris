@@ -10,6 +10,7 @@ Distribution CRUD lite plus a loopback fake-edge fetch path. Origins must resolv
 |------|-----------------|
 | Distribution | `CreateDistribution`, `GetDistribution`, `ListDistributions`, `DeleteDistribution` |
 | Origins | `OriginType` `s3` or `apigateway` (DomainName must exist in-account; fail closed) |
+| Logging | Optional `Logging` on create (`Bucket` / `Prefix` / `Enabled`); edge GET appends tab-separated access-log lite lines to an in-account S3 bucket |
 | Fake-edge | SigV4 `GET /cloudfront/{distributionId}/{objectKey...}` on `:4566` (first origin only) |
 | Edge fetch | S3 → in-store `GetObject`; apigateway → internal `/http-api/...` invoke (never dials arbitrary hosts) |
 

@@ -14,6 +14,7 @@ Lab log groups and streams with Put/GetLogEvents, FilterLogEvents, DescribeLogGr
 | Subscriptions | `PutSubscriptionFilter` / `DeleteSubscriptionFilter` / `DescribeSubscriptionFilters` to Lambda or SQS. Same lab `filterPattern` subset as `FilterLogEvents` (unsupported patterns rejected at put). Fan-out on PutLogEvents (best-effort). Delivery uses the destination ARN owner account. Destination resource policy must Allow `logs.amazonaws.com` (with log-group `aws:SourceArn`). Lambda destinations use the AWS `awslogs.data` gzip+base64 envelope; SQS destinations are lab-only raw `DATA_MESSAGE` JSON. Lambda ignores `roleArn` (resource-policy path). For SQS, optional `roleArn` requires PassRole + `logs.amazonaws.com` trust and AND with destination policy at deliver |
 | Metric filters | `PutMetricFilter` / `DeleteMetricFilter` / `DescribeMetricFilters`. Same lab `filterPattern` subset. `DescribeLogGroups` reports honest `metricFilterCount`. Matching PutLogEvents emit SQLite datapoints readable via store `GetMetricData` (no full CloudWatch Metrics API) |
 | Resource policy | Account-scoped `PutResourcePolicy` / `GetResourcePolicy` / `DeleteResourcePolicy` / `DescribeResourcePolicies` (AWS Logs shape; soft cap 10). EventBridge RoleArn-less Logs targets require Allow for `events.amazonaws.com` on `logs:PutLogEvents` / `logs:CreateLogStream` (empty policy skips delivery) |
+| Lambda invoke logs | Sync and ESM Invokes auto-create `/aws/lambda/{functionName}` and ship START / stdout (when available) / END / REPORT (see [lambda.md](lambda.md)) |
 
 ### Lab filter pattern subset
 
@@ -93,7 +94,7 @@ aws logs delete-log-group --log-group-name "$GROUP" --endpoint-url "$EP"
 ## Out of lab scope
 
 - Insights queries (`StartQuery` / `GetQueryResults` / query language), export tasks (out of lab scope; no fake Insights engine)
-- Full CloudWatch Logs filter syntax beyond the lab subset (JSON object filters, space-delimited field patterns, `%regex%`, AWS optional `?term` OR semantics) (out of lab scope; lab filterPattern subset is shipped)
+- Full CloudWatch Logs filter syntax beyond the lab subset (compact/unquoted JSON, space-delimited field patterns, `%regex%`, AWS optional `?term` OR semantics, JSON ops beyond equality) (out of lab scope; lab filterPattern subset including `{ $.path = "value" }` is shipped)
 - Full CloudWatch Metrics / Alarms surface (out of lab scope; datapoints are store-lite only)
 - Kinesis / Firehose / OpenSearch subscription destinations (out of lab scope)
 - Full pagination token parity (`FilterLogEvents` uses a lab offset token) (out of lab scope)

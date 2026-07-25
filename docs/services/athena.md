@@ -99,7 +99,7 @@ Skip live Compose smoke when Docker is unavailable. Store and server unit tests 
 
 ## Not yet / deferred
 
-- Broader SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, inequalities, `LIKE`, `IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
+- Broader SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, inequalities, `IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
 - WorkGroup configuration matrix and result reuse
 - Nested Trino / Presto / Spark engines
 - Managed query results encryption options

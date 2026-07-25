@@ -73,10 +73,9 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine` (`dock
 | Area | Services |
 |------|----------|
 | Identity | IAM, STS, Organizations, Cognito User Pools |
-| Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab), CloudWatch Logs, Resource Groups Tagging API |
 | Crypto | KMS |
 | Data | S3, DynamoDB, DynamoDB Streams, SQS, SSM, Secrets Manager, SNS, EventBridge, Scheduler, Pipes, S3 Vectors, RDS, RDS Data API, ElastiCache, DocumentDB |
-| Audit and tags | CloudTrail, CloudWatch Logs, Resource Groups Tagging API |
+| Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab), CloudWatch Logs, Resource Groups Tagging API |
 | Streams and delivery | Kinesis, Firehose, Amazon MQ, Transfer Family, SES, AppConfig, Step Functions |
 | IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2, Control Tower (stub) |
 | Compute | Lambda, ECR, ECS, CodeBuild, CodePipeline, CodeDeploy, Batch, AppSync |
@@ -164,7 +163,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets (optional DeadLetterConfig), PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. Failed deliveries can send to DLQ with lab delivery history. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets (optional DeadLetterConfig), PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. Failed deliveries can send to DeadLetterConfig SQS; outcomes are recorded in lab store delivery history (no public list API). PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
       <td>Out of lab scope: partner buses, archive/replay, API Destinations, legacy scheduled rules, remaining pattern ops (wildcard/$or/cidr), InputPath bracket/wildcard notation, exact retry timing.</td>
     </tr>
     <tr>
@@ -283,7 +282,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td rowspan="11" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
       <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet Add/Remove plus allowlisted in-place Modify (unknown Modify types or immutable props fail closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission with FunctionUrlAuthType), KMS Key/Alias, SNS(+TopicPolicy/Subscription FilterPolicy), Logs LogGroup(+RetentionInDays), Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
-      <td>Out of lab scope: Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog, custom IAM Path ≠ <code>/</code>, Events Rule ScheduleExpression, Lambda Permission PrincipalOrgID/EventSourceToken, SNS RedrivePolicy DLQ delivery.</td>
+      <td>Out of lab scope: Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog, custom IAM Path ≠ <code>/</code>, Events Rule ScheduleExpression, Lambda Permission PrincipalOrgID/EventSourceToken. SNS Subscription RedrivePolicy attributes persist; DLQ fan-out follows SNS lab RedrivePolicy (exact AWS retry timing still out of scope).</td>
     </tr>
     <tr>
       <td>Cloud Control</td>
@@ -386,7 +385,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
       <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
-      <td>Full SQL (outer joins, LIKE/IN, multi-aggregate GROUP BY), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
+      <td>Full SQL (outer joins, IN, multi-aggregate GROUP BY, inequalities beyond lab LIKE/json_extract), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>

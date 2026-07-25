@@ -105,6 +105,8 @@ Default `docker/compose.yaml` stays loopback-published and host-gateway off. Use
 | `docker/compose.lab-ecs-host-gateway.yaml` | Nested ECS / CodeBuild / Batch containers need `host.docker.internal` to call the published API (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`). Default Compose stays off |
 | `docker/compose.lab-open.yaml` | Open data-plane labs that need `AuthType NONE` / HTTP API `NONE` on the Compose non-loopback bind |
 
+Forensic inject and lab-clock helpers (`NOCTAXRIS_CLOUDTRAIL_INJECT`, `NOCTAXRIS_GUARDDUTY_INJECT`, `NOCTAXRIS_MACIE_INJECT`, `NOCTAXRIS_VPCFLOW_INJECT`, `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT`, `NOCTAXRIS_LAB_FORENSICS`, plus `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF` / `NOCTAXRIS_CLOUDTRAIL_GZIP`) stay off unless set on the API process. See [configuration.md](configuration.md).
+
 Desktop + nested DinD often cannot reach a loopback-only publish from function or ECS-path containers. For that layout only, with a host-gateway overlay, set session `NOCTAXRIS_PUBLISH_ADDR=0.0.0.0` (prefer TLS if the host is reachable beyond your lab machine). Restore `127.0.0.1` publish for all other work.
 
 ```bash

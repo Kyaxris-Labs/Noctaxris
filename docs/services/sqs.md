@@ -13,7 +13,7 @@ Lab-complete standard and FIFO queues: send/receive/delete (including batch and 
 | FIFO | `FifoQueue` attribute, `.fifo` name suffix, `MessageGroupId`, content-based or explicit deduplication |
 | Messages | `SendMessage`, `ReceiveMessage` (honors `WaitTimeSeconds` 0–20), `DeleteMessage` |
 | Batch / visibility | `SendMessageBatch`, `DeleteMessageBatch`, `ChangeMessageVisibility` |
-| Redrive | `RedrivePolicy` moves messages to a dead-letter queue after `maxReceiveCount`. DLQ `RedriveAllowPolicy` (`allowAll`, `denyAll`, `byQueue` + `sourceQueueArns`) is enforced on redrive |
+| Redrive | `RedrivePolicy` moves messages to a dead-letter queue after `maxReceiveCount`. DLQ `RedriveAllowPolicy` (`allowAll`, `denyAll`, `byQueue` + `sourceQueueArns`) is enforced on redrive. Redriven messages carry lab message attribute `NoctaxrisDlqSourceArn` (provenance of the source queue ARN) |
 | Delay | Queue `DelaySeconds` and per-message `DelaySeconds` (up to 900) set `visible_after` before receive |
 | Policy | Queue policy via attributes |
 | Encryption | SSE-SQS and SSE-KMS when queue attributes request encryption |

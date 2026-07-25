@@ -35,6 +35,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY` | disabled | Set to `1` to inject `host.docker.internal:host-gateway` ExtraHosts on nested ECS / CodeBuild / Batch containers (Internal `noctaxris-ecs`). Prefer `docker/compose.lab-ecs-host-gateway.yaml` over changing the code default. Default off. |
 | `NOCTAXRIS_COMPUTE_RUNTIME` | `dind` | Nested compute path. Only `dind` (or unset) is accepted. Unknown values fail process start. Nested data engines use the same DinD path. |
 | `NOCTAXRIS_RDS_DATA_PGX` | prefer on | Set to `0` / `false` / `off` to force RDS Data API nested-psql (skip `pgx` dial). Default prefers `pgx` against the nested data-plane DSN only, then falls back to nested-psql. |
+| `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
 | `NOCTAXRIS_CLOUDTRAIL_INJECT` | disabled | Set to `1` to enable lab-only `cloudtrail:InjectEvents` and `cloudtrail:InjectInsightsEvents` (`NoctaxrisCloudTrail.*`) for seeding forensic JSONL events. Default off returns AccessDenied. |
 | `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF` | disabled | Set to `1` to use the first `X-Forwarded-For` hop for CloudTrail-shaped audit `sourceIPAddress` only. Default uses TCP `RemoteAddr`. Authz `aws:SourceIp` always stays the peer address. |
 | `NOCTAXRIS_CLOUDTRAIL_GZIP` | disabled | Set to `1` to gzip-compress CloudTrail trail delivery objects under the AWSLogs hive (`.json.gz`). Athena reads decompress by suffix/magic. |
@@ -43,6 +44,18 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_VPCFLOW_INJECT` | disabled | Set to `1` to enable lab-only `ec2:InjectFlowLogs` (`NoctaxrisEC2.InjectFlowLogs`). Default off returns AccessDenied. |
 | `NOCTAXRIS_LAB_FORENSICS` | disabled | Set to `1` to enable lab FreezeClock/UnfreezeClock/SetClock/BulkSeed (`NoctaxrisLab.*`). Default off returns AccessDenied. |
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
+
+### Lab forensics helpers (`NOCTAXRIS_LAB_FORENSICS`)
+
+When `NOCTAXRIS_LAB_FORENSICS=1`, SigV4 service `noctaxris-lab` accepts:
+
+| Action | Behavior |
+|--------|----------|
+| `FreezeClock` / `UnfreezeClock` | Pin or clear the lab wall clock used for audit timestamps and similar lab time (SigV4 skew checks still use real time) |
+| `SetClock` | Set the lab clock to an ISO-8601 / RFC3339 instant |
+| `BulkSeed` | Seed a named forensic scenario (`ScenarioId` required: `suspicious-login`, `s3-data-exfil`, `crypto-mining`) into CloudTrail JSONL and optional GuardDuty findings (canned shapes; not live traffic) |
+
+Default off returns AccessDenied. These are Noctaxris lab extensions, not AWS public APIs.
 
 Federation is fail-closed. If these are unset and no IdP rows exist in the store, SAML/OIDC STS APIs deny with AccessDenied / InvalidIdentityToken rather than accepting unsigned tokens.
 

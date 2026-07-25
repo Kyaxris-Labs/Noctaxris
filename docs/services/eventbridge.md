@@ -10,10 +10,10 @@ Lab-complete EventBridge core: default and custom event buses, rules, targets, a
 |------|---------|
 | Buses | Default bus per account (`default`), `CreateEventBus`, `DeleteEventBus`, `ListEventBuses`, `DescribeEventBus` |
 | Rules | `PutRule`, `DescribeRule`, `ListRules`, `DeleteRule`, `EnableRule`, `DisableRule` |
-| Targets | `PutTargets`, `RemoveTargets`, `ListTargetsByRule` |
+| Targets | `PutTargets`, `RemoveTargets`, `ListTargetsByRule` (optional `DeadLetterConfig.Arn` SQS on each target) |
 | Events | `PutEvents` matches enabled rules and fans out to targets |
 | Pattern | Content-based match on `source`, `detail-type`, and nested `detail`: exact/OR lists, `prefix`, `suffix`, `exists`, `anything-but` (value, list, or prefix/suffix), `numeric`, `equals-ignore-case`. Unsupported operators rejected at `PutRule` |
-| Targets | SQS, Lambda (async invoke), SNS, CloudWatch Logs, Kinesis, Step Functions via RoleArn **or** destination resource policy (`events.amazonaws.com` / account root + SourceArn). Empty policy skips delivery (fail-closed) |
+| Targets | SQS, Lambda (async invoke), SNS, CloudWatch Logs, Kinesis, Step Functions via RoleArn **or** destination resource policy (`events.amazonaws.com` / account root + SourceArn). Empty policy skips delivery (fail-closed). Failed deliveries may SendMessage to the target DeadLetterConfig SQS; outcomes are recorded in lab store delivery history (no public list API) |
 | Input | Constant `Input` overrides the envelope. Else lab `InputTransformer` (`InputPathsMap` + `InputTemplate` with `<var>` placeholders). Else lab `InputPath` JSONPath subset (`$.a.b`, hyphenated keys). InputTransformer cannot combine with Input/InputPath |
 | Bus policy | `PutPermission` / `RemovePermission` maintain bus `Policy`. `PutEvents` uses identity **or** bus policy (same account) and identity **and** bus policy (cross-account ARN). `EventBusName` may be a bus ARN |
 | Tags | `ListTagsForResource`, `TagResource`, `UntagResource` |

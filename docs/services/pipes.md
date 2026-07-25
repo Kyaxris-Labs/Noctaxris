@@ -12,6 +12,7 @@ Pipe CRUD with SQS, DynamoDB Streams, or EventBridge bus sources and Lambda or S
 | Sources | SQS queue ARN, DynamoDB Streams ARN, EventBridge bus ARN (cursor over `event_entries`) |
 | Targets | SQS queue ARN, Lambda function ARN |
 | Enrichment | Optional Lambda ARN; sync invoke result becomes the payload forwarded to the target (empty result keeps the original body) |
+| DLQ | Optional `DeadLetterArn` (SQS) on create for enrichment or target delivery failures |
 | Delivery | Continuous ticker + `PollPipeOnce` receive/get, deliver, delete SQS messages on success. Source + enrichment RoleArn (or SQS source policy); target RoleArn session or target resource policy Allow for `pipes.amazonaws.com` |
 
 ### Authz notes

@@ -9,7 +9,8 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 | Area | Actions |
 |------|---------|
 | Users | `CreateUser`, `GetUser`, `ListUsers`, `DeleteUser` |
-| Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey` |
+| Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey`, `GetAccessKeyLastUsed` (AKIA* last-used service/region/time; updated on successful SigV4 calls) |
+| Credential report | `GenerateCredentialReport` (lab CSV, state COMPLETE), `GetCredentialReport` (fail closed until Generate) |
 | Managed policies | `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy`, `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (max five versions; default document feeds Evaluate) |
 | Attachments | `AttachUserPolicy`, `DetachUserPolicy`, `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedUserPolicies`, `ListAttachedRolePolicies` |
 | Inline user | `PutUserPolicy`, `GetUserPolicy`, `DeleteUserPolicy`, `ListUserPolicies` |
@@ -41,6 +42,10 @@ aws iam create-access-key --user-name labuser --endpoint-url "$EP"
 
 TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:root"},"Action":"sts:AssumeRole"}]}'
 aws iam create-role --role-name LabRole --assume-role-policy-document "$TRUST" --endpoint-url "$EP"
+
+aws iam get-access-key-last-used --access-key-id "$ACCESS_KEY_ID" --endpoint-url "$EP"
+aws iam generate-credential-report --endpoint-url "$EP"
+aws iam get-credential-report --endpoint-url "$EP"
 ```
 
 Groups inherit attached and inline policies. Permissions boundaries intersect with identity policies in `EvaluateFull`.
