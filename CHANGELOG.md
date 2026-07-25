@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.1
+
+Patch after 1.1.0: residual lab-core depth, Node/Python SDK parity, and remaining Unreleased items. Docker Hub: `kyaxris/noctaxris` (`1.1.1`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 ### Secrets cron L / # / day-of-week names
 
 - Cron fields accept DOM `L`, DOW `N#M` / `SUN#1`, DOW `NL` / `FRIL`, and month/DOW names (`JUL`, `MON-FRI`); shared by Secrets RotationRules and Scheduler expressions
