@@ -9,6 +9,9 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
+// EnvCognitoInsecureCodes restores Cognito lab stub confirmation codes when set to 1/true.
+const EnvCognitoInsecureCodes = "NOCTAXRIS_COGNITO_INSECURE_CODES"
+
 type Config struct {
 	ListenAddr          string
 	DataRoot            string
@@ -68,6 +71,10 @@ type Config struct {
 	// LabForensics enables NoctaxrisLab clock and bulk-seed APIs
 	// (NOCTAXRIS_LAB_FORENSICS=1). Default false (AccessDenied when off).
 	LabForensics bool
+	// CognitoInsecureCodes restores fixed confirmation code 123456 and
+	// any-non-empty ConfirmSignUp (NOCTAXRIS_COGNITO_INSECURE_CODES=1).
+	// Default false: high-entropy single-use codes with expiry.
+	CognitoInsecureCodes bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -101,6 +108,7 @@ func LoadFromEnv() (Config, error) {
 		VPCFlowInject:         envTruthy("NOCTAXRIS_VPCFLOW_INJECT"),
 		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
+		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
 	}
 
 	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)

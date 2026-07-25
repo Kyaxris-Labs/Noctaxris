@@ -2,7 +2,6 @@ package compute
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"strings"
 
@@ -14,12 +13,16 @@ const EnvImagePullAllowlist = "NOCTAXRIS_IMAGE_PULL_ALLOWLIST"
 
 // AllowImagePull fails closed unless imageRef is the lab registry or a pinned lab base image.
 // Attacker-controlled registry hosts are rejected.
-func AllowImagePull(imageRef string) error {
+//
+// listenAddr pins host.docker.internal refs to DinDPullHost(listenAddr) only.
+// When listenAddr is empty, DinD host.docker.internal refs are denied (no silent :4566 pin).
+// Lab registry host refs (store.LabRegistryHost) still validate without listenAddr.
+func AllowImagePull(imageRef, listenAddr string) error {
 	ref := strings.TrimSpace(imageRef)
 	if ref == "" {
 		return fmt.Errorf("compute: image reference is empty")
 	}
-	if isLabRegistryRef(ref) {
+	if isLabRegistryRef(ref, listenAddr) {
 		return nil
 	}
 	if isPinnedLabImage(ref) {
@@ -39,22 +42,54 @@ func AllowImagePull(imageRef string) error {
 	return fmt.Errorf("compute: image pull host not allowlisted: %q (lab registry or pinned bases only)", ref)
 }
 
-func isLabRegistryRef(ref string) bool {
-	if strings.HasPrefix(ref, store.LabRegistryHost+"/") {
-		return true
+func isLabRegistryRef(ref, listenAddr string) bool {
+	labPrefix := store.LabRegistryHost + "/"
+	if strings.HasPrefix(ref, labPrefix) {
+		return isLabECRPath(strings.TrimPrefix(ref, labPrefix))
 	}
-	// DinD rewrite: host.docker.internal:PORT/ACCOUNT/REPO:tag
-	const dindHost = "host.docker.internal:"
-	if !strings.HasPrefix(ref, dindHost) {
+	// Refuse DinD host checks without an explicit listen pin (no silent :4566 fallback).
+	if strings.TrimSpace(listenAddr) == "" {
 		return false
 	}
-	rest := strings.TrimPrefix(ref, dindHost)
-	portAndPath := strings.SplitN(rest, "/", 2)
-	if len(portAndPath) != 2 || portAndPath[0] == "" || portAndPath[1] == "" {
+	dindPrefix := DinDPullHost(listenAddr) + "/"
+	if !strings.HasPrefix(ref, dindPrefix) {
 		return false
 	}
-	if _, err := net.LookupPort("tcp", portAndPath[0]); err != nil {
+	return isLabECRPath(strings.TrimPrefix(ref, dindPrefix))
+}
+
+// isLabECRPath reports whether path is ACCOUNT/REPO with optional :tag or @digest.
+func isLabECRPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.Contains(path, "..") {
 		return false
+	}
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	if !isLabAccountID(parts[0]) {
+		return false
+	}
+	repo := parts[1]
+	name := repo
+	if i := strings.IndexAny(repo, "@:"); i >= 0 {
+		name = repo[:i]
+	}
+	if name == "" || strings.Contains(name, "/") {
+		return false
+	}
+	return true
+}
+
+func isLabAccountID(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
 	}
 	return true
 }

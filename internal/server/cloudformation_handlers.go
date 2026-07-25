@@ -156,10 +156,27 @@ func (s *Server) cfnCreateStack(
 			return
 		}
 	}
-	st, err := s.store.CreateCFNStack(verified.AccountID, s.cfnRegion(verified), name, template, roleARN)
+	caps := cfnCapabilitiesFromParams(params)
+	authz, err := s.newCFNAuthorizer(verified, roleARN)
+	if err != nil {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	st, err := s.store.CreateCFNStackAuthorized(verified.AccountID, s.cfnRegion(verified), name, template, roleARN, caps, authz)
 	if errors.Is(err, store.ErrCFNStackExists) {
 		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "AlreadyExistsException",
 			"Stack already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNInsufficientCapabilities) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "InsufficientCapabilitiesException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCFNBadTemplate) {
@@ -283,9 +300,24 @@ func (s *Server) cfnUpdateStack(
 			"User is not authorized to perform cloudformation:UpdateStack.", readOnly, eventID, verified)
 		return
 	}
-	st, err := s.store.UpdateCFNStack(verified.AccountID, s.cfnRegion(verified), name, template)
+	caps := cfnCapabilitiesFromParams(params)
+	authz, aerr := s.newCFNAuthorizer(verified, "")
+	if aerr != nil {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			aerr.Error(), readOnly, eventID, verified)
+		return
+	}
+	st, err := s.store.UpdateCFNStackAuthorized(verified.AccountID, s.cfnRegion(verified), name, template, caps, authz)
 	if errors.Is(err, store.ErrCFNStackNotFound) {
 		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ValidationError", "Stack does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNInsufficientCapabilities) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "InsufficientCapabilitiesException", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied", err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCFNBadTemplate) {
@@ -368,9 +400,24 @@ func (s *Server) cfnExecuteChangeSet(
 			"User is not authorized to perform cloudformation:ExecuteChangeSet.", readOnly, eventID, verified)
 		return
 	}
-	_, err := s.store.ExecuteCFNChangeSet(verified.AccountID, s.cfnRegion(verified), params.Get("ChangeSetName"), params.Get("StackName"))
+	caps := cfnCapabilitiesFromParams(params)
+	authz, aerr := s.newCFNAuthorizer(verified, "")
+	if aerr != nil {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			aerr.Error(), readOnly, eventID, verified)
+		return
+	}
+	_, err := s.store.ExecuteCFNChangeSetAuthorized(verified.AccountID, s.cfnRegion(verified), params.Get("ChangeSetName"), params.Get("StackName"), caps, authz)
 	if errors.Is(err, store.ErrCFNChangeSetNotFound) {
 		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ChangeSetNotFound", "Change set does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNInsufficientCapabilities) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "InsufficientCapabilitiesException", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied", err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrCFNBadTemplate) {

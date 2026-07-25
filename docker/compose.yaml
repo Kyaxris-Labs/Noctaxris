@@ -4,8 +4,9 @@ services:
     user: "0:0"
     volumes:
       - noctaxris-compute:/lambda
+      - noctaxris-secrets:/secrets
     # Named volumes are root-owned on first create; API runs as UID 65532 (distroless nonroot).
-    command: ["sh", "-c", "chown -R 65532:65532 /lambda && chmod 775 /lambda"]
+    command: ["sh", "-c", "chown -R 65532:65532 /lambda /secrets && chmod 775 /lambda && chmod 700 /secrets"]
   noctaxris:
     build:
       context: ..
@@ -24,6 +25,8 @@ services:
       # non-loopback bind. Opt in for CTF labs only:
       # NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"
       NOCTAXRIS_DATA_ROOT: "/var/lib/noctaxris"
+      # Sibling secrets volume (outside data root; required under read_only rootfs).
+      NOCTAXRIS_MASTER_KEY_FILE: "/var/lib/noctaxris-secrets/master.key"
       NOCTAXRIS_ROOT_ACCESS_KEY_ID: "${NOCTAXRIS_ROOT_ACCESS_KEY_ID}"
       NOCTAXRIS_ROOT_SECRET_ACCESS_KEY: "${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY}"
       NOCTAXRIS_ACCOUNT_ID: "000000000001"
@@ -40,8 +43,10 @@ services:
       # compose.lab-ecs-host-gateway.yaml for nested task→API labs.
       NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "${NOCTAXRIS_INJECT_ECS_HOST_GATEWAY:-0}"
     volumes:
-      # API-only sealed state (master.key, state.db, s3/, …). Not mounted on DinD.
+      # API sealed state (state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris
+      # Master key outside data root (API-only; never mount on DinD).
+      - noctaxris-secrets:/var/lib/noctaxris-secrets
       # Lambda zip/code shared with nested engine (API RW for unpack; engine mounts :ro).
       - noctaxris-compute:/var/lib/noctaxris/lambda
       - noctaxris-engine-certs:/certs:ro
@@ -123,5 +128,6 @@ services:
       start_period: 15s
 volumes:
   noctaxris-data:
+  noctaxris-secrets:
   noctaxris-compute:
   noctaxris-engine-certs:

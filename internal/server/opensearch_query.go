@@ -18,9 +18,7 @@ import (
 )
 
 const (
-	openSearchLabHostPrefix     = "noctaxris-opensearch-"
-	openSearchLabHostPrefixAlt  = "noctaxris-data-opensearch-"
-	openSearchLabTimeout        = 10 * time.Second
+	openSearchLabTimeout = 10 * time.Second
 )
 
 // openSearchLabTransport is overridden in unit tests (mock RoundTripper).
@@ -80,35 +78,9 @@ func safeOpenSearchPathSegment(s string) bool {
 }
 
 // validateNestedOpenSearchHost allows only DinD nested OpenSearch hostnames.
-// Loopback, wildcards, and raw IPs are rejected so the query facade never dials an
-// operator-published or open network endpoint.
+// Delegates to store.ValidateNestedOpenSearchHost (rejects dotted suffixes after prefix).
 func validateNestedOpenSearchHost(host string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return fmt.Errorf("nested opensearch endpoint is empty")
-	}
-	lower := strings.ToLower(host)
-	switch lower {
-	case "localhost", "127.0.0.1", "::1", "0.0.0.0", "*", "host.docker.internal":
-		return fmt.Errorf("refusing non-nested opensearch host %q", host)
-	}
-	if strings.Contains(host, "/") || strings.Contains(host, "\\") {
-		return fmt.Errorf("invalid nested opensearch host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return fmt.Errorf("refusing IP opensearch host %q (nested container DNS name required)", host)
-	}
-	if !strings.HasPrefix(lower, openSearchLabHostPrefix) && !strings.HasPrefix(lower, openSearchLabHostPrefixAlt) {
-		return fmt.Errorf("nested opensearch host %q is not a data-plane endpoint", host)
-	}
-	suffix := strings.TrimPrefix(lower, openSearchLabHostPrefix)
-	if strings.HasPrefix(lower, openSearchLabHostPrefixAlt) {
-		suffix = strings.TrimPrefix(lower, openSearchLabHostPrefixAlt)
-	}
-	if suffix == "" {
-		return fmt.Errorf("nested opensearch host %q is missing a domain suffix", host)
-	}
-	return nil
+	return store.ValidateNestedOpenSearchHost(host)
 }
 
 // validateOpenSearchLabSearchBody allowlists query.match, query.match_all, and size only.
@@ -155,32 +127,35 @@ func validateOpenSearchLabSearchBody(body []byte) error {
 }
 
 func openSearchLabHTTPClient() *http.Client {
-	tr := openSearchLabTransport
-	return &http.Client{
-		Timeout:   openSearchLabTimeout,
-		Transport: tr,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("stopped after %d redirects", len(via))
+	checkRedirect := func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		host := req.URL.Hostname()
+		if err := validateNestedOpenSearchHost(host); err != nil {
+			return fmt.Errorf("refusing redirect off nested network: %w", err)
+		}
+		port := req.URL.Port()
+		if port == "" {
+			port = "80"
+			if req.URL.Scheme == "https" {
+				port = "443"
 			}
-			host := req.URL.Hostname()
-			if err := validateNestedOpenSearchHost(host); err != nil {
-				return fmt.Errorf("refusing redirect off nested network: %w", err)
-			}
-			port := req.URL.Port()
-			if port == "" {
-				port = "80"
-				if req.URL.Scheme == "https" {
-					port = "443"
-				}
-			}
-			p, err := strconv.Atoi(port)
-			if err != nil || p != store.OpenSearchNestedPort {
-				return fmt.Errorf("refusing redirect to non-nested opensearch port %q", port)
-			}
-			return nil
-		},
+		}
+		p, err := strconv.Atoi(port)
+		if err != nil || p != store.OpenSearchNestedPort {
+			return fmt.Errorf("refusing redirect to non-nested opensearch port %q", port)
+		}
+		return nil
 	}
+	if openSearchLabTransport != nil {
+		return &http.Client{
+			Timeout:       openSearchLabTimeout,
+			Transport:     openSearchLabTransport,
+			CheckRedirect: checkRedirect,
+		}
+	}
+	return store.NestedOpenSearchHTTPClient(openSearchLabTimeout, checkRedirect)
 }
 
 // handleOpenSearchLabQuery proxies allowlisted index/search calls to the nested OpenSearch engine.

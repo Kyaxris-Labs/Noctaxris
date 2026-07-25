@@ -8,11 +8,14 @@
 
 ```bash
 docker pull kyaxris/noctaxris:latest
+# Container bind is 0.0.0.0; generate unique roots (shipped example pair is refused).
+ROOT_AKID="AKIA$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')"
+ROOT_SECRET="$(openssl rand -hex 32)"
 docker run -d --name noctaxris -p 127.0.0.1:4566:4566 \
   -e NOCTAXRIS_LISTEN=0.0.0.0:4566 \
   -e NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1 \
-  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID=AKIAROOTEXAMPLE01 \
-  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' \
+  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID="$ROOT_AKID" \
+  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY="$ROOT_SECRET" \
   kyaxris/noctaxris:latest
 curl http://127.0.0.1:4566/_noctaxris/health
 # ok
@@ -45,18 +48,22 @@ Pull the Hub image, run it on loopback `:4566`, then hit STS and S3 with the sam
 ```bash
 docker pull kyaxris/noctaxris:latest
 
+# Container bind is 0.0.0.0; generate unique roots (shipped example pair is refused).
+ROOT_AKID="AKIA$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')"
+ROOT_SECRET="$(openssl rand -hex 32)"
+
 docker run -d --name noctaxris -p 127.0.0.1:4566:4566 \
   -e NOCTAXRIS_LISTEN=0.0.0.0:4566 \
   -e NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1 \
-  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID=AKIAROOTEXAMPLE01 \
-  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' \
+  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID="$ROOT_AKID" \
+  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY="$ROOT_SECRET" \
   kyaxris/noctaxris:latest
 
 curl http://127.0.0.1:4566/_noctaxris/health
 curl http://127.0.0.1:4566/_noctaxris/ready
 
-export AWS_ACCESS_KEY_ID=AKIAROOTEXAMPLE01
-export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+export AWS_ACCESS_KEY_ID="$ROOT_AKID"
+export AWS_SECRET_ACCESS_KEY="$ROOT_SECRET"
 export AWS_DEFAULT_REGION=us-east-1
 EP=http://127.0.0.1:4566
 
@@ -66,7 +73,7 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine` (`docker compose -f docker/compose.yaml --env-file docker/.env up --build`). Per-service CLI smoke: [docs/services/](docs/services/index.md).
+Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Per-service CLI smoke: [docs/services/](docs/services/index.md).
 
 ## Services
 

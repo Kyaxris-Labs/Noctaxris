@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,6 +104,53 @@ func TestRunHealthcheckFailsWhenAPIDown(t *testing.T) {
 	err := run([]string{"healthcheck"})
 	if err == nil {
 		t.Fatal("expected healthcheck failure when nothing listens")
+	}
+}
+
+func TestRunRefusesExampleRootsOnNonLoopback(t *testing.T) {
+	t.Setenv("NOCTAXRIS_ROOT_ACCESS_KEY_ID", "AKIAROOTEXAMPLE01")
+	t.Setenv("NOCTAXRIS_ROOT_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	t.Setenv("NOCTAXRIS_ACCOUNT_ID", "000000000001")
+	t.Setenv("NOCTAXRIS_DATA_ROOT", t.TempDir())
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", "")
+	t.Setenv("NOCTAXRIS_COMPUTE_RUNTIME", "")
+	t.Setenv("NOCTAXRIS_LISTEN", "0.0.0.0:4566")
+	t.Setenv("NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN", "1")
+
+	err := run(nil)
+	if err == nil {
+		t.Fatal("expected error for example roots on non-loopback listen")
+	}
+	if !strings.Contains(err.Error(), "example root") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunAllowsExampleRootsOnLoopbackPastGate(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	t.Setenv("NOCTAXRIS_ROOT_ACCESS_KEY_ID", "AKIAROOTEXAMPLE01")
+	t.Setenv("NOCTAXRIS_ROOT_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	t.Setenv("NOCTAXRIS_ACCOUNT_ID", "000000000001")
+	t.Setenv("NOCTAXRIS_DATA_ROOT", t.TempDir())
+	t.Setenv("NOCTAXRIS_DOCKER_HOST", "")
+	t.Setenv("NOCTAXRIS_DOCKER_CERT_PATH", "")
+	t.Setenv("NOCTAXRIS_COMPUTE_RUNTIME", "")
+	t.Setenv("NOCTAXRIS_LISTEN", addr)
+	t.Setenv("NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN", "")
+
+	err = run(nil)
+	if err == nil {
+		t.Fatal("expected listen bind failure after passing example-root gate")
+	}
+	if strings.Contains(err.Error(), "example root") {
+		t.Fatalf("loopback must allow example roots past refuse gate, got: %v", err)
 	}
 }
 

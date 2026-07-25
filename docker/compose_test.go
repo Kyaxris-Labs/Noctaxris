@@ -24,6 +24,7 @@ func TestSmokeNestedScriptPresent(t *testing.T) {
 		"lambda invoke",
 		"package-type",
 		"run-task",
+		"AKIAROOTEXAMPLE01",
 	} {
 		if !strings.Contains(strings.ToLower(content), strings.ToLower(needle)) {
 			t.Fatalf("smoke-nested.sh missing %q", needle)
@@ -205,7 +206,13 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 	engine := serviceBlock(content, "noctaxris-engine")
 	initSvc := serviceBlock(content, "noctaxris-compute-init")
 	if !strings.Contains(noctaxris, "noctaxris-data:/var/lib/noctaxris") {
-		t.Fatal("noctaxris must mount noctaxris-data for API state (master.key / state.db)")
+		t.Fatal("noctaxris must mount noctaxris-data for API state (state.db / sealed material)")
+	}
+	if !strings.Contains(noctaxris, "noctaxris-secrets:/var/lib/noctaxris-secrets") {
+		t.Fatal("noctaxris must mount noctaxris-secrets for master.key outside the data root")
+	}
+	if !strings.Contains(noctaxris, `NOCTAXRIS_MASTER_KEY_FILE: "/var/lib/noctaxris-secrets/master.key"`) {
+		t.Fatal("noctaxris must set NOCTAXRIS_MASTER_KEY_FILE on the secrets volume")
 	}
 	if !strings.Contains(noctaxris, "noctaxris-compute:/var/lib/noctaxris/lambda") {
 		t.Fatal("noctaxris must mount noctaxris-compute for Lambda code shared with DinD")
@@ -217,13 +224,22 @@ func TestComposeSplitsDataFromEngineComputeVolume(t *testing.T) {
 		t.Fatal("noctaxris-engine noctaxris-compute mount must not be read-write")
 	}
 	if strings.Contains(engine, "noctaxris-data:") {
-		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose master.key to the nested engine)")
+		t.Fatal("noctaxris-engine must not mount noctaxris-data (would expose sealed state to the nested engine)")
+	}
+	if strings.Contains(engine, "noctaxris-secrets:") {
+		t.Fatal("noctaxris-engine must not mount noctaxris-secrets (would expose master.key to the nested engine)")
 	}
 	if !strings.Contains(content, "noctaxris-compute:") {
 		t.Fatal("compose must declare noctaxris-compute volume")
 	}
-	if !strings.Contains(initSvc, "chown -R 65532:65532 /lambda") {
-		t.Fatal("noctaxris-compute-init must chown compute volume to API UID 65532")
+	if !strings.Contains(content, "noctaxris-secrets:") {
+		t.Fatal("compose must declare noctaxris-secrets volume")
+	}
+	if !strings.Contains(initSvc, "chown -R 65532:65532 /lambda /secrets") {
+		t.Fatal("noctaxris-compute-init must chown compute and secrets volumes to API UID 65532")
+	}
+	if !strings.Contains(initSvc, "chmod 700 /secrets") {
+		t.Fatal("noctaxris-compute-init must chmod secrets volume to 0700")
 	}
 	if !strings.Contains(noctaxris, "noctaxris-compute-init:") ||
 		!strings.Contains(noctaxris, "service_completed_successfully") {

@@ -18,7 +18,7 @@ func TestCFNChangeSetAddExecuteAndUpdateStack(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "cs-stack", base, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "cs-stack", base, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	updated := `{
@@ -90,7 +90,7 @@ func TestCFNChangeSetModifySSMParameter(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ssm-stack", base, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ssm-stack", base, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	changed := `{
@@ -140,7 +140,7 @@ func TestCFNChangeSetModifyUnsupportedFailsClosed(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ddb-stack", base, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-ddb-stack", base, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	changed := `{
@@ -186,7 +186,7 @@ func TestCFNChangeSetModifyBucketRenameFailsClosed(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-stack", base, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "mod-stack", base, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	changed := `{
@@ -348,7 +348,7 @@ func TestCFNFullstackTypesAndDependsOn(t *testing.T) {
     }
   }
 }`
-	created, err := st.CreateCFNStack(account, "us-east-1", "full-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "full-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestCFNNestedTemplateURLDriftAndAllowlist(t *testing.T) {
       "Properties": { "TemplateURL": "https://example.com/evil.json" }
     }
   }
-}`, "")
+}`, "", "CAPABILITY_NAMED_IAM")
 	if err == nil || !strings.Contains(err.Error(), "allowlisted") {
 		t.Fatalf("expected allowlist reject, err=%v", err)
 	}
@@ -398,7 +398,7 @@ func TestCFNNestedTemplateURLDriftAndAllowlist(t *testing.T) {
     }
   }
 }`
-	created, err := st.CreateCFNStack(account, "us-east-1", "nested-parent", parent, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "nested-parent", parent, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestCFNUnknownPropertyRejected(t *testing.T) {
       }
     }
   }
-}`, "")
+}`, "", "CAPABILITY_NAMED_IAM")
 	if err == nil || !strings.Contains(err.Error(), "unsupported property") {
 		t.Fatalf("expected property reject, err=%v", err)
 	}

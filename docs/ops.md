@@ -6,7 +6,17 @@ Durable single-host lab ops for Noctaxris. This is not a multi-tenant HA guide.
 
 Run **one** Noctaxris API process against a given data root (Compose named volume or host path). Do not scale replicas against the same `state.db`. Multi-instance access is unsupported and can corrupt SQLite state. WAL is off by default; `busy_timeout=5000` applies on every connection. In-process workers (Scheduler, ESM pollers, Pipes ticker) assume a single API process.
 
-Compose already mounts API state (`noctaxris-data`) separately from Lambda code shared with DinD (`noctaxris-compute`). `noctaxris-compute-init` chowns the compute volume to UID `65532` before the API starts. The nested engine mounts compute `:ro` and never mounts `master.key` or `state.db`. Default engine is restricted DinD (`privileged: false` with explicit caps). If nested smoke fails on your host: `docker compose -f docker/compose.yaml -f docker/compose.engine-privileged.yaml --env-file docker/.env up --build`.
+Compose mounts API sealed state (`noctaxris-data`), the master key (`noctaxris-secrets` at `/var/lib/noctaxris-secrets`), and Lambda code shared with DinD (`noctaxris-compute`) as separate volumes. `noctaxris-compute-init` chowns compute and secrets to UID `65532` before the API starts. Default Compose sets `NOCTAXRIS_MASTER_KEY_FILE=/var/lib/noctaxris-secrets/master.key` so create works under `read_only: true`. The nested engine mounts compute `:ro` and never mounts `noctaxris-data` or `noctaxris-secrets`. Default engine is restricted DinD (`privileged: false` with explicit `SYS_ADMIN` / host cgroup; accepted shared-kernel residual). If nested smoke fails on your host: `docker compose -f docker/compose.yaml -f docker/compose.engine-privileged.yaml --env-file docker/.env up --build` and keep host publish loopback (`NOCTAXRIS_PUBLISH_ADDR` unset or `127.0.0.1`).
+
+## Listen and example roots
+
+Process listen is loopback only for `localhost`, `127.0.0.0/8`, and `::1`. Port-only (`:4566`), `0.0.0.0`, and `::` are non-loopback and require TLS or `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1` (Compose sets the opt-in for the in-container `0.0.0.0` bind; host publish stays `127.0.0.1:4566`).
+
+The shipped `docker/.env.example` root pair (`AKIAROOTEXAMPLE01` / example secret) is allowed on loopback listen only. Startup refuses that pair when listen is non-loopback, including default Compose. Copy `.env.example` to `.env` and replace both root values with unique lab credentials before `compose up`.
+
+## Master key
+
+Default `NOCTAXRIS_MASTER_KEY_FILE` is outside `NOCTAXRIS_DATA_ROOT` (sibling `…/noctaxris-secrets/master.key` when the data root is `…/noctaxris`). Compose pins that path on the `noctaxris-secrets` volume. Startup refuses a master key under the data root unless `NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT=1`. Labs that still keep `master.key` on `noctaxris-data` must set that opt-in and point `NOCTAXRIS_MASTER_KEY_FILE` at the colocated path (or copy the key onto `noctaxris-secrets` and use the default Compose wiring). On load, the process requires mode `0600` and refuses a world-readable key after a best-effort `chmod`.
 
 ## Backup and restore
 
@@ -16,11 +26,13 @@ Compose already mounts API state (`noctaxris-data`) separately from Lambda code 
 docker compose -f docker/compose.yaml --env-file docker/.env down
 ```
 
-2. Archive both volumes (or the host data root). Minimum set: `master.key`, `state.db`, `s3/`, `lambda/`, `cloudtrail/`. Also include `transfer/`, `transcribe/`, `bcm-exports/`, and `ecr/` when those labs were used.
+2. Archive data, secrets, and compute volumes (or the host data root plus master key path). Minimum set: `master.key` (Compose: `noctaxris-secrets`), `state.db`, `s3/`, `lambda/`, `cloudtrail/`. Also include `transfer/`, `transcribe/`, `bcm-exports/`, and `ecr/` when those labs were used.
 
 ```bash
 docker run --rm -v noctaxris-data:/data -v "$PWD:/backup" busybox \
   tar czf /backup/noctaxris-data.tgz -C /data .
+docker run --rm -v noctaxris-secrets:/data -v "$PWD:/backup" busybox \
+  tar czf /backup/noctaxris-secrets.tgz -C /data .
 docker run --rm -v noctaxris-compute:/data -v "$PWD:/backup" busybox \
   tar czf /backup/noctaxris-compute.tgz -C /data .
 ```
@@ -83,10 +95,9 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 A green PR proves unit tests, image build, and `smoke-core` only. It does **not** prove nested DinD (Lambda Invoke, ECS, CodeBuild/Batch, nested RDS/ElastiCache/DocumentDB, Data API nested-psql). Nested smoke on every PR and default-suite Lambda Invoke are out of lab scope as required gates (keep opt-in flags). Run nested smoke via the weekly schedule, Actions `workflow_dispatch`, or the script below before relying on those paths. Any Compose change that touches `noctaxris-engine` privilege, devices, seccomp, or compute mounts must pass `docker/smoke-nested.sh` before merge; green `smoke-core` is not enough.
 
-Operator shortcut (same script as the manual CI job):
+Operator shortcut (same script as the manual CI job). The script creates `docker/.env` from the example when missing and rewrites the shipped example root pair to unique lab roots (Compose `0.0.0.0` refuse):
 
 ```bash
-cp docker/.env.example docker/.env   # if needed
 bash docker/smoke-nested.sh
 # Privileged engine opt-in (broken hosts only):
 # COMPOSE_EXTRA_FILES="-f docker/compose.engine-privileged.yaml" bash docker/smoke-nested.sh
@@ -100,7 +111,7 @@ Default `docker/compose.yaml` stays loopback-published and host-gateway off. Use
 
 | Overlay | When |
 |---------|------|
-| `docker/compose.engine-privileged.yaml` | Nested `docker info` / Invoke / nested data engines fail on restricted DinD (Desktop/WSL edge cases). Privileged DinD is a host workaround, not the secure default |
+| `docker/compose.engine-privileged.yaml` | Nested `docker info` / Invoke / nested data engines fail on restricted DinD (Desktop/WSL edge cases). Privileged DinD is a host workaround, not the secure default. Keep `NOCTAXRIS_PUBLISH_ADDR=127.0.0.1` (default). No API startup gate pairs engine privilege with host publish; do not widen publish while this overlay is active |
 | `docker/compose.lab-host-gateway.yaml` | In-function SDK labs that call the published API via `host.docker.internal` (sets `NOCTAXRIS_INJECT_HOST_GATEWAY=1`). Keep code/default Compose off |
 | `docker/compose.lab-ecs-host-gateway.yaml` | Nested ECS / CodeBuild / Batch containers need `host.docker.internal` to call the published API (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`). Default Compose stays off |
 | `docker/compose.lab-open.yaml` | Open data-plane labs that need `AuthType NONE` / HTTP API `NONE` on the Compose non-loopback bind |

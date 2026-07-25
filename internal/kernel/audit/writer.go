@@ -26,12 +26,12 @@ func NewWriter(dir string) (*Writer, error) {
 	}
 
 	path := filepath.Join(dir, "events.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open events file: %w", err)
 	}
 	// Enforce mode on existing files (OpenFile mode applies only at create).
-	if err := f.Chmod(0o644); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("audit: chmod events file: %w", err)
 	}

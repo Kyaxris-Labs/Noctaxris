@@ -80,7 +80,18 @@ func (s *Server) ccCreateResource(
 			"User is not authorized to perform cloudcontrol:CreateResource.", readOnly, eventID, verified)
 		return
 	}
-	res, token, err := s.store.CloudControlCreateResource(verified.AccountID, typeName, desired)
+	authz, aerr := s.newCFNAuthorizer(verified, "")
+	if aerr != nil {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			aerr.Error(), readOnly, eventID, verified)
+		return
+	}
+	res, token, err := s.store.CloudControlCreateResourceAuthorized(verified.AccountID, typeName, desired, authz)
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
 		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedActionException",
 			err.Error(), readOnly, eventID, verified)
@@ -229,7 +240,18 @@ func (s *Server) ccUpdateResource(
 			"User is not authorized to perform cloudcontrol:UpdateResource.", readOnly, eventID, verified)
 		return
 	}
-	res, token, err := s.store.CloudControlUpdateResource(verified.AccountID, typeName, identifier, patch)
+	authz, aerr := s.newCFNAuthorizer(verified, "")
+	if aerr != nil {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			aerr.Error(), readOnly, eventID, verified)
+		return
+	}
+	res, token, err := s.store.CloudControlUpdateResourceAuthorized(verified.AccountID, typeName, identifier, patch, authz)
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
 		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedTypeException", err.Error(), readOnly, eventID, verified)
 		return

@@ -145,7 +145,12 @@ func (s *Store) DescribeCFNChangeSet(accountID, changeSetNameOrID, stackName str
 	return cs, nil
 }
 
-func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackName string) (CFNStack, error) {
+func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackName string, capabilities ...string) (CFNStack, error) {
+	return s.ExecuteCFNChangeSetAuthorized(accountID, region, changeSetNameOrID, stackName, capabilities, nil)
+}
+
+func (s *Store) ExecuteCFNChangeSetAuthorized(accountID, region, changeSetNameOrID, stackName string, capabilities []string, authz CFNAuthorizer) (CFNStack, error) {
+	auth := cfnProvisionAuth{Authorizer: authz, Capabilities: capabilities}
 	cs, err := s.DescribeCFNChangeSet(accountID, changeSetNameOrID, stackName)
 	if err != nil {
 		return CFNStack{}, err
@@ -160,6 +165,9 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 	st := stacks[0]
 	tpl, err := parseCFNTemplate(cs.TemplateBody)
 	if err != nil {
+		return CFNStack{}, err
+	}
+	if err := s.requireCFNIAMCapabilities(tpl, auth.Capabilities); err != nil {
 		return CFNStack{}, err
 	}
 	oldTpl, _ := parseCFNTemplate(st.TemplateBody)
@@ -215,7 +223,7 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 		if physicalID == "" {
 			return CFNStack{}, fmt.Errorf("%w: Modify missing physical id for %s", ErrCFNBadTemplate, logicalID)
 		}
-		if err := s.applyCFNModify(accountID, region, st.StackName, st.StackID, logicalID, res.Type, physicalID, oldProps, props); err != nil {
+		if err := s.applyCFNModify(accountID, region, st.StackName, st.StackID, logicalID, res.Type, physicalID, oldProps, props, auth); err != nil {
 			return CFNStack{}, err
 		}
 		eval.setResource(logicalID, physicalID, map[string]string{"Ref": physicalID, "Arn": physicalID})
@@ -229,7 +237,7 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 		if resolveErr != nil {
 			return CFNStack{}, resolveErr
 		}
-		physicalID, attrs, provErr := s.provisionCFNResource(accountID, region, st.StackName, st.StackID, logicalID, res.Type, props)
+		physicalID, attrs, provErr := s.provisionCFNResource(accountID, region, st.StackName, st.StackID, logicalID, res.Type, props, auth)
 		if provErr != nil {
 			return CFNStack{}, provErr
 		}
@@ -259,11 +267,15 @@ func (s *Store) ExecuteCFNChangeSet(accountID, region, changeSetNameOrID, stackN
 }
 
 // UpdateCFNStack applies an implicit change set (create + execute).
-func (s *Store) UpdateCFNStack(accountID, region, stackName, templateBody string) (CFNStack, error) {
+func (s *Store) UpdateCFNStack(accountID, region, stackName, templateBody string, capabilities ...string) (CFNStack, error) {
+	return s.UpdateCFNStackAuthorized(accountID, region, stackName, templateBody, capabilities, nil)
+}
+
+func (s *Store) UpdateCFNStackAuthorized(accountID, region, stackName, templateBody string, capabilities []string, authz CFNAuthorizer) (CFNStack, error) {
 	name := "implicit-" + shortID()
 	cs, err := s.CreateCFNChangeSet(accountID, region, stackName, name, templateBody)
 	if err != nil {
 		return CFNStack{}, err
 	}
-	return s.ExecuteCFNChangeSet(accountID, region, cs.ChangeSetID, stackName)
+	return s.ExecuteCFNChangeSetAuthorized(accountID, region, cs.ChangeSetID, stackName, capabilities, authz)
 }

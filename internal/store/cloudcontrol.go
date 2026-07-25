@@ -89,7 +89,26 @@ func (s *Store) recordCloudControlRequest(accountID, token, typeName, identifier
 }
 
 // CloudControlCreateResource creates an allowlisted resource and records it.
+
+func cloudControlMapProvisionErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrCFNAccessDenied) {
+		return err
+	}
+	if errors.Is(err, ErrBucketAlreadyExists) || strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("%w: %v", ErrCloudControlAlreadyExists, err)
+	}
+	return fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+}
+
 func (s *Store) CloudControlCreateResource(accountID, typeName, desiredState string) (CloudControlResource, string, error) {
+	return s.CloudControlCreateResourceAuthorized(accountID, typeName, desiredState, nil)
+}
+
+func (s *Store) CloudControlCreateResourceAuthorized(accountID, typeName, desiredState string, authz CFNAuthorizer) (CloudControlResource, string, error) {
+	auth := cfnProvisionAuth{Authorizer: authz}
 	typeName = strings.TrimSpace(typeName)
 	desiredState = strings.TrimSpace(desiredState)
 	if typeName == "" || desiredState == "" {
@@ -105,12 +124,13 @@ func (s *Store) CloudControlCreateResource(accountID, typeName, desiredState str
 	if err := validateCFNProperties("CloudControl", typeName, props); err != nil {
 		return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 	}
-	physicalID, attrs, err := s.provisionCFNResource(accountID, DefaultCFNRegion, "cloudcontrol", "", "CloudControl", typeName, props)
+	if cfnIsIAMResourceType(typeName) {
+		// Cloud Control has no Capabilities parameter; require underlying IAM actions via authorizer.
+		auth.Capabilities = []string{cfnCapNamedIAM, cfnCapIAM}
+	}
+	physicalID, attrs, err := s.provisionCFNResource(accountID, DefaultCFNRegion, "cloudcontrol", "", "CloudControl", typeName, props, auth)
 	if err != nil {
-		if errors.Is(err, ErrBucketAlreadyExists) || strings.Contains(err.Error(), "already exists") {
-			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlAlreadyExists, err)
-		}
-		return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 	}
 	identifier := physicalID
 	switch typeName {
@@ -312,6 +332,14 @@ func (s *Store) cloudControlPersistUpdate(accountID, typeName, identifier string
 // CloudControlUpdateResource updates a mutable property subset for allowlisted types.
 // PatchDocument is a lab JSON object of property keys (not RFC6902), matching CreateResource DesiredState shape.
 func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patchDocument string) (CloudControlResource, string, error) {
+	return s.CloudControlUpdateResourceAuthorized(accountID, typeName, identifier, patchDocument, nil)
+}
+
+func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identifier, patchDocument string, authz CFNAuthorizer) (CloudControlResource, string, error) {
+	auth := cfnProvisionAuth{Authorizer: authz}
+	if cfnIsIAMResourceType(typeName) {
+		auth.Capabilities = []string{cfnCapNamedIAM, cfnCapIAM}
+	}
 	typeName = strings.TrimSpace(typeName)
 	identifier = strings.TrimSpace(identifier)
 	patchDocument = strings.TrimSpace(patchDocument)
@@ -385,6 +413,9 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if state == "" {
 			state = "ENABLED"
 		}
+		if err := s.cfnAuthorizeAction(auth, "events:PutRule", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		r, err := s.PutRule(accountID, DefaultCFNRegion, bus, rule, pattern, cfnStringProp(patch, "Description"), state)
 		if err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
@@ -400,8 +431,8 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if err != nil {
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
-		if err := s.modifyCFNIAMRole(accountID, role.RoleARN, map[string]any{"RoleName": role.RoleName}, patch); err != nil {
-			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		if err := s.modifyCFNIAMRole(accountID, role.RoleARN, map[string]any{"RoleName": role.RoleName}, patch, auth); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
 		props, _ := json.Marshal(map[string]any{"RoleName": role.RoleName, "Arn": role.RoleARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, role.RoleName, props)
@@ -468,32 +499,13 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if err := cloudControlRejectUnknownPatchKeys(patch, "Timeout", "MemorySize", "Environment", "Handler", "Runtime"); err != nil {
 			return CloudControlResource{}, "", err
 		}
-		fn, err := s.GetFunction(accountID, identifier)
-		if err != nil {
+		if _, err := s.GetFunction(accountID, identifier); err != nil {
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
-		meta := UpdateFunctionConfigurationMeta{
-			RoleARN: fn.RoleARN, Timeout: fn.Timeout, Memory: fn.Memory, Handler: fn.Handler, Env: fn.Env, Runtime: fn.Runtime,
+		if err := s.modifyCFNLambdaFunction(accountID, DefaultCFNRegion, identifier, map[string]any{}, patch, auth); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
-		if _, ok := patch["Timeout"]; ok {
-			meta.Timeout = cfnIntProp(patch, "Timeout", fn.Timeout)
-		}
-		if _, ok := patch["MemorySize"]; ok {
-			meta.Memory = cfnIntProp(patch, "MemorySize", fn.Memory)
-		}
-		if h := cfnStringProp(patch, "Handler"); h != "" {
-			meta.Handler = h
-		}
-		if r := cfnStringProp(patch, "Runtime"); r != "" {
-			meta.Runtime = r
-		}
-		if env, ok := cfnLambdaEnvVars(patch); ok {
-			if env == nil {
-				return CloudControlResource{}, "", fmt.Errorf("%w: Environment must be an object", ErrCloudControlBadRequest)
-			}
-			meta.Env = env
-		}
-		updated, err := s.UpdateFunctionConfiguration(accountID, identifier, meta)
+		updated, err := s.GetFunction(accountID, identifier)
 		if err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
@@ -588,12 +600,16 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if err != nil {
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
-		if err := s.replaceCFNPrincipalPolicies(accountID, u.ARN, u.UserName, patch, s.AttachUserPolicy, s.DetachUserPolicy); err != nil {
-			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		if err := s.replaceCFNPrincipalPolicies(
+			accountID, u.ARN, u.UserName, patch, auth,
+			"iam:PutUserPolicy", "iam:DeleteUserPolicy", "iam:AttachUserPolicy", "iam:DetachUserPolicy",
+			s.AttachUserPolicy, s.DetachUserPolicy,
+		); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
 		if _, has := patch["Groups"]; has {
-			if err := s.replaceCFNUserGroups(accountID, u.UserName, patch); err != nil {
-				return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+			if err := s.replaceCFNUserGroups(accountID, u.UserName, patch, auth); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 			}
 		}
 		props, _ := json.Marshal(map[string]any{"UserName": u.UserName, "Arn": u.ARN})
@@ -606,8 +622,12 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if err != nil {
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
-		if err := s.replaceCFNPrincipalPolicies(accountID, g.ARN, g.GroupName, patch, s.AttachGroupPolicy, s.DetachGroupPolicy); err != nil {
-			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		if err := s.replaceCFNPrincipalPolicies(
+			accountID, g.ARN, g.GroupName, patch, auth,
+			"iam:PutGroupPolicy", "iam:DeleteGroupPolicy", "iam:AttachGroupPolicy", "iam:DetachGroupPolicy",
+			s.AttachGroupPolicy, s.DetachGroupPolicy,
+		); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
 		props, _ := json.Marshal(map[string]any{"GroupName": g.GroupName, "Arn": g.ARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, g.GroupName, props)
@@ -618,8 +638,8 @@ func (s *Store) CloudControlUpdateResource(accountID, typeName, identifier, patc
 		if _, err := s.GetManagedPolicy(identifier); err != nil {
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
-		if err := s.modifyCFNManagedPolicyDocument(accountID, identifier, map[string]any{}, patch); err != nil {
-			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
+		if err := s.modifyCFNManagedPolicyDocument(accountID, identifier, map[string]any{}, patch, auth); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
 		props, _ := json.Marshal(map[string]any{"Arn": identifier, "PolicyDocument": patch["PolicyDocument"]})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)

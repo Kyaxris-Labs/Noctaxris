@@ -94,10 +94,10 @@ Condition-key catalogs and ADR-0005 §7 evaluation:
 go test ./internal/catalog/conditionkeys ./internal/kernel/authz -count=1
 ```
 
-Compose up (publishes `127.0.0.1:4566` only, must not mount host `docker.sock`):
+Compose up (publishes `127.0.0.1:4566` only, must not mount host `docker.sock`). Compose binds `0.0.0.0` in-container; replace both `NOCTAXRIS_ROOT_*` values with unique lab credentials before `up` (the shipped `.env.example` pair is refused):
 
 ```bash
-cp docker/.env.example docker/.env   # set root keys if needed
+cp docker/.env.example docker/.env   # then set unique NOCTAXRIS_ROOT_* values
 docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
 curl http://127.0.0.1:4566/_noctaxris/health
 curl http://127.0.0.1:4566/_noctaxris/ready

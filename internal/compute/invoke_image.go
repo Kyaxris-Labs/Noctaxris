@@ -34,6 +34,8 @@ type ImageRunOpts struct {
 	EventHostPath string
 	// LayerHostPaths are unpacked layer directories as seen by DinD (mounted at /opt).
 	LayerHostPaths []string
+	// ListenAddr is the API listen address used to pin DinD lab registry pulls.
+	ListenAddr string
 	// LabRegistryPull requests an authenticated pull via PullLabRegistryImage (lab ECR).
 	LabRegistryPull bool
 	// RegistryUsername is the Docker registry username (lab: "AWS").
@@ -50,7 +52,7 @@ func ValidateImageRunOpts(opts ImageRunOpts) error {
 	if strings.TrimSpace(opts.ImageURI) == "" {
 		return fmt.Errorf("compute: ImageURI is required")
 	}
-	if err := AllowImagePull(opts.ImageURI); err != nil {
+	if err := AllowImagePull(opts.ImageURI, opts.ListenAddr); err != nil {
 		return err
 	}
 	if strings.TrimSpace(opts.EventHostPath) == "" {

@@ -68,9 +68,9 @@ func (s *Server) handleListAccounts(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListAccounts, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListAccounts, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListAccounts.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -127,9 +127,9 @@ func (s *Server) handleCreateOrganizationalUnit(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsCreateOrganizationalUnit, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsCreateOrganizationalUnit, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:CreateOrganizationalUnit.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -200,9 +200,9 @@ func (s *Server) handleListOrganizationalUnitsForParent(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListOrganizationalUnitsForParent, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListOrganizationalUnitsForParent, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListOrganizationalUnitsForParent.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -270,9 +270,9 @@ func (s *Server) handleEnablePolicyType(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsEnablePolicyType, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsEnablePolicyType, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:EnablePolicyType.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -363,9 +363,9 @@ func (s *Server) handleOrgsCreatePolicy(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsCreatePolicy, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsCreatePolicy, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:CreatePolicy.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -463,9 +463,9 @@ func (s *Server) handleOrgsAttachPolicy(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsAttachPolicy, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsAttachPolicy, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:AttachPolicy.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -517,9 +517,9 @@ func (s *Server) handleOrgsDetachPolicy(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsDetachPolicy, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsDetachPolicy, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:DetachPolicy.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -571,9 +571,9 @@ func (s *Server) handleOrgsDescribePolicy(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsDescribePolicy, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsDescribePolicy, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:DescribePolicy.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -653,9 +653,9 @@ func (s *Server) handleOrgsMoveAccount(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsMoveAccount, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsMoveAccount, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:MoveAccount.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -720,9 +720,9 @@ func (s *Server) handleOrgsListPolicies(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListPolicies, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListPolicies, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListPolicies.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -752,9 +752,9 @@ func (s *Server) handleOrgsListPoliciesForTarget(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListPoliciesForTarget, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListPoliciesForTarget, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListPoliciesForTarget.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -807,9 +807,9 @@ func (s *Server) handleOrgsListParents(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListParents, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListParents, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListParents.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -867,9 +867,9 @@ func (s *Server) handleOrgsListAccountsForParent(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsListAccountsForParent, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsListAccountsForParent, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:ListAccountsForParent.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}

@@ -20,22 +20,38 @@ const (
 	EnvAllowAnonymousS3 = "NOCTAXRIS_ALLOW_ANONYMOUS_S3"
 )
 
-// ListenIsLoopback reports whether addr binds only loopback (or is empty / port-only).
+// Shipped docker/.env.example root pair. Refused when listen is non-loopback.
+const (
+	exampleRootAccessKeyID     = "AKIAROOTEXAMPLE01"
+	exampleRootSecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+)
+
+// ExampleRootCredentials reports whether accessKey and secret match the shipped
+// docker/.env.example pair (AKIAROOTEXAMPLE01 / AWS example secret).
+func ExampleRootCredentials(accessKey, secret string) bool {
+	return accessKey == exampleRootAccessKeyID && secret == exampleRootSecretAccessKey
+}
+
+// ListenIsLoopback reports whether addr binds only loopback.
+// Empty host / ":port" / 0.0.0.0 / :: are non-loopback (all-interfaces bind).
+// localhost / 127.0.0.0/8 / ::1 are loopback.
 func ListenIsLoopback(addr string) bool {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
-		return true
+		return false
 	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		// ":4566" or bare hostname
 		if strings.HasPrefix(addr, ":") {
-			return true
+			return false
 		}
 		host = addr
 	}
 	host = strings.Trim(host, "[]")
-	if host == "" || strings.EqualFold(host, "localhost") {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)

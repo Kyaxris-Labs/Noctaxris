@@ -264,6 +264,18 @@ func (s *Server) ecsRegisterTaskDefinition(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
+	for _, def := range containerDefs {
+		img, _ := def["image"].(string)
+		img = strings.TrimSpace(img)
+		if img == "" {
+			continue
+		}
+		if err := compute.AllowImagePull(img, s.cfg.ListenAddr); err != nil {
+			s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "ClientException",
+				"container image is not an allowlisted lab registry or pinned base image.", readOnly, eventID, verified)
+			return
+		}
+	}
 
 	region := s.ecsRegion(verified)
 	td, err := s.store.RegisterTaskDefinition(verified.AccountID, region, store.RegisterTaskDefinitionInput{
@@ -619,6 +631,7 @@ func (s *Server) executeECSTask(
 		Command:          ecsContainerCommand(containerDef),
 		Env:              env,
 		EndpointURL:      endpoint,
+		ListenAddr:       s.cfg.ListenAddr,
 		LabRegistryPull:  useAuth,
 		RegistryUsername: username,
 		RegistryPassword: password,

@@ -107,6 +107,14 @@ func TestS3RejectTraversalKey(t *testing.T) {
 	if !errors.Is(err, store.ErrInvalidObjectKey) {
 		t.Fatalf("null byte err=%v want InvalidObjectKey", err)
 	}
+	_, err = st.PutObject(account, "safe-bucket", `..\evil`, store.PutObjectMeta{Data: []byte("x"), PlainSize: 1})
+	if !errors.Is(err, store.ErrInvalidObjectKey) {
+		t.Fatalf(`backslash traversal err=%v want InvalidObjectKey`, err)
+	}
+	_, err = st.PutObject(account, "safe-bucket", `foo\bar`, store.PutObjectMeta{Data: []byte("x"), PlainSize: 1})
+	if !errors.Is(err, store.ErrInvalidObjectKey) {
+		t.Fatalf(`backslash key err=%v want InvalidObjectKey`, err)
+	}
 }
 
 func TestSanitizeObjectKey(t *testing.T) {
@@ -120,6 +128,11 @@ func TestSanitizeObjectKey(t *testing.T) {
 	}
 	if got != "ok/path" {
 		t.Fatalf("got=%q", got)
+	}
+	for _, key := range []string{`..\evil`, `foo\bar`, `a\b\c`, `ok\..\escape`} {
+		if _, err := store.SanitizeObjectKey(key); !errors.Is(err, store.ErrInvalidObjectKey) {
+			t.Fatalf("key=%q err=%v want InvalidObjectKey", key, err)
+		}
 	}
 }
 

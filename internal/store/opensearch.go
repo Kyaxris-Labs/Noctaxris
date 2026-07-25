@@ -1,9 +1,13 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +31,15 @@ const (
 	OpenSearchDomainStatusCreateFailed = "CreateFailed"
 	OpenSearchDomainStatusActive       = "Active"
 )
+
+const (
+	openSearchLabHostPrefix    = "noctaxris-opensearch-"
+	openSearchLabHostPrefixAlt = "noctaxris-data-opensearch-"
+)
+
+// AWS OpenSearch DomainName: min 3, max 28, pattern [a-z][a-z0-9\-]+ (no dots).
+// https://docs.aws.amazon.com/opensearch-service/latest/APIReference/API_CreateDomain.html
+var openSearchDomainNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{2,27}$`)
 
 const openSearchSchema = `
 CREATE TABLE IF NOT EXISTS opensearch_domains (
@@ -81,6 +94,111 @@ func (s *Store) EnsureOpenSearchSchema() error {
 	return EnsureOpenSearchSchema(s.db)
 }
 
+// ValidateOpenSearchDomainName enforces AWS CreateDomain DomainName charset
+// (lowercase letters, digits, hyphen; 3-28 chars; no dots).
+func ValidateOpenSearchDomainName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("%w: DomainName is required", ErrOpenSearchBadRequest)
+	}
+	if !openSearchDomainNameRE.MatchString(name) {
+		return fmt.Errorf("%w: DomainName must be 3-28 chars matching [a-z][a-z0-9-]* (no dots)", ErrOpenSearchBadRequest)
+	}
+	return nil
+}
+
+// ValidateNestedOpenSearchHost allows only DinD nested OpenSearch hostnames.
+// Loopback, wildcards, raw IPs, and dotted suffixes after the lab prefix are rejected
+// so callers never dial attacker-controlled DNS (e.g. noctaxris-opensearch-ssrf.attacker.com).
+func ValidateNestedOpenSearchHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return fmt.Errorf("nested opensearch endpoint is empty")
+	}
+	lower := strings.ToLower(host)
+	switch lower {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0", "*", "host.docker.internal":
+		return fmt.Errorf("refusing non-nested opensearch host %q", host)
+	}
+	if strings.Contains(host, "/") || strings.Contains(host, "\\") {
+		return fmt.Errorf("invalid nested opensearch host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return fmt.Errorf("refusing IP opensearch host %q (nested container DNS name required)", host)
+	}
+	if !strings.HasPrefix(lower, openSearchLabHostPrefix) && !strings.HasPrefix(lower, openSearchLabHostPrefixAlt) {
+		return fmt.Errorf("nested opensearch host %q is not a data-plane endpoint", host)
+	}
+	suffix := strings.TrimPrefix(lower, openSearchLabHostPrefix)
+	if strings.HasPrefix(lower, openSearchLabHostPrefixAlt) {
+		suffix = strings.TrimPrefix(lower, openSearchLabHostPrefixAlt)
+	}
+	if suffix == "" {
+		return fmt.Errorf("nested opensearch host %q is missing a domain suffix", host)
+	}
+	if strings.Contains(suffix, ".") {
+		return fmt.Errorf("refusing dotted nested opensearch host %q", host)
+	}
+	return nil
+}
+
+// PinnedNestedOpenSearchDialContext resolves addr, re-validates the nested hostname
+// at dial time, and connects to a resolved IP (allows private Docker DNS addresses).
+// Unlike SNS/JWKS pinned dialers, it does not require public IPs.
+func PinnedNestedOpenSearchDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("opensearch: dial addr: %w", err)
+	}
+	if err := ValidateNestedOpenSearchHost(host); err != nil {
+		return nil, err
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return nil, fmt.Errorf("opensearch: refusing IP dial host %q", host)
+		}
+		return nil, fmt.Errorf("opensearch: resolve dial host: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("opensearch: dial host resolved to no addresses")
+	}
+	var dialer net.Dialer
+	var lastErr error
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("opensearch: no dial target")
+}
+
+// NestedOpenSearchHTTPClient returns an HTTP client that dials only allowlisted
+// nested OpenSearch hosts (pinned dial) and refuses off-network redirects.
+func NestedOpenSearchHTTPClient(timeout time.Duration, checkRedirect func(*http.Request, []*http.Request) error) *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	var transport *http.Transport
+	if ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.DialContext = PinnedNestedOpenSearchDialContext
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: checkRedirect,
+	}
+}
+
 // OpenSearchDomainARN builds arn:aws:es:REGION:ACCOUNT:domain/NAME.
 func OpenSearchDomainARN(region, accountID, name string) string {
 	if region == "" {
@@ -99,8 +217,8 @@ func OpenSearchNestedEndpoint(domainName string) string {
 // Never inserts Active. Without a healthy nested container the wire marks CreateFailed.
 func (s *Store) CreateOpenSearchDomain(accountID, region, name, engineVersion string) (OpenSearchDomain, error) {
 	name = strings.TrimSpace(name)
-	if name == "" {
-		return OpenSearchDomain{}, fmt.Errorf("%w: DomainName is required", ErrOpenSearchBadRequest)
+	if err := ValidateOpenSearchDomainName(name); err != nil {
+		return OpenSearchDomain{}, err
 	}
 	if engineVersion == "" {
 		engineVersion = "OpenSearch_2.11"

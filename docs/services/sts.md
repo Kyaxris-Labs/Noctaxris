@@ -14,7 +14,7 @@ All 11 STS actions are routed. Federation is fail-closed without configured IdP.
 | `GetFederationToken` | Calling IAM user identity ∩ session policy (empty session → no identity permissions) |
 | `AssumeRoleWithSAML` | Crypto against configured SAML IdP (no SigV4) |
 | `AssumeRoleWithWebIdentity` | Crypto against configured OIDC issuer (no SigV4) |
-| `AssumeRoot` | Member account only when org relationship exists |
+| `AssumeRoot` | Management account root only, into an org member account |
 | `DecodeAuthorizationMessage` | Lab decode path |
 | `GetAccessKeyInfo` | Lab access-key info |
 | `GetDelegatedAccessToken` | Fail-closed stub |

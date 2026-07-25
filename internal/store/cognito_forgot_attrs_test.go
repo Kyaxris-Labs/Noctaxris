@@ -26,7 +26,11 @@ func TestConfirmForgotPasswordHappyPath(t *testing.T) {
 	if _, err := st.ForgotPasswordCognitoUser(client.ClientID, "cfp-user"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ConfirmForgotPasswordCognitoUser(client.ClientID, "cfp-user", store.CognitoLabConfirmationCode, "NewPass9!"); err != nil {
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "cfp-user", store.CognitoConfirmPurposeForgotPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ConfirmForgotPasswordCognitoUser(client.ClientID, "cfp-user", code, "NewPass9!"); err != nil {
 		t.Fatal(err)
 	}
 	outcome, err := st.InitiateCognitoAuth(client.ClientID, "cfp-user", "NewPass9!")

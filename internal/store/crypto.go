@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,9 +20,112 @@ const (
 
 	ciphertextVersionV1 byte = 1
 	ciphertextVersionV2 byte = 2
+
+	// EnvAllowMasterKeyInDataRoot permits a master key path under NOCTAXRIS_DATA_ROOT
+	// (including the historical $DATA_ROOT/master.key default when this env is set).
+	EnvAllowMasterKeyInDataRoot = "NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT"
 )
 
 type MasterKey [masterKeySize]byte
+
+// AllowMasterKeyInDataRoot reports whether master.key may live under DATA_ROOT.
+func AllowMasterKeyInDataRoot() bool {
+	v := strings.TrimSpace(os.Getenv(EnvAllowMasterKeyInDataRoot))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// DefaultMasterKeyPath returns a path adjacent to but outside dataRoot.
+// Example: dataRoot=/var/lib/noctaxris → /var/lib/noctaxris-secrets/master.key
+func DefaultMasterKeyPath(dataRoot string) string {
+	abs, err := filepath.Abs(dataRoot)
+	if err != nil {
+		abs = dataRoot
+	}
+	parent := filepath.Dir(abs)
+	base := filepath.Base(abs)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = "noctaxris"
+	}
+	return filepath.Join(parent, base+"-secrets", "master.key")
+}
+
+// MasterKeyPathUnderDataRoot reports whether keyPath resolves under dataRoot.
+func MasterKeyPathUnderDataRoot(keyPath, dataRoot string) (bool, error) {
+	absKey, err := filepath.Abs(keyPath)
+	if err != nil {
+		return false, fmt.Errorf("resolve master key path: %w", err)
+	}
+	absRoot, err := filepath.Abs(dataRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve data root: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absKey)
+	if err != nil {
+		return false, fmt.Errorf("relate master key to data root: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// ResolveMasterKeyPath picks the master key file path.
+// Empty configured path defaults outside DATA_ROOT unless
+// NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT is set (then $DATA_ROOT/master.key).
+// Any path under DATA_ROOT requires that opt-in.
+func ResolveMasterKeyPath(configured, dataRoot string) (string, error) {
+	path := strings.TrimSpace(configured)
+	allow := AllowMasterKeyInDataRoot()
+	if path == "" {
+		if allow {
+			path = filepath.Join(dataRoot, "master.key")
+		} else {
+			path = DefaultMasterKeyPath(dataRoot)
+		}
+	}
+	under, err := MasterKeyPathUnderDataRoot(path, dataRoot)
+	if err != nil {
+		return "", err
+	}
+	if under && !allow {
+		return "", fmt.Errorf("master key path %q is under NOCTAXRIS_DATA_ROOT %q; set NOCTAXRIS_MASTER_KEY_FILE outside the data root, or %s=1 to allow colocation",
+			path, dataRoot, EnvAllowMasterKeyInDataRoot)
+	}
+	return path, nil
+}
+
+func ensureMasterKeyFileMode(path string) error {
+	// Windows ACL model does not expose Unix permission bits reliably.
+	if runtime.GOOS == "windows" {
+		_ = os.Chmod(path, 0o600)
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	mode := info.Mode().Perm()
+	if mode&0o004 != 0 {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return fmt.Errorf("master key file %s is world-readable and chmod 0600 failed: %w", path, err)
+		}
+		info, err = os.Stat(path)
+		if err != nil {
+			return err
+		}
+		mode = info.Mode().Perm()
+		if mode&0o004 != 0 {
+			return fmt.Errorf("master key file %s remains world-readable after chmod 0600 (mode %04o)", path, mode)
+		}
+		return nil
+	}
+	if mode != 0o600 {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return fmt.Errorf("master key file %s chmod 0600: %w", path, err)
+		}
+	}
+	return nil
+}
 
 func LoadOrCreateMasterKey(path string) (MasterKey, error) {
 	data, err := os.ReadFile(path)
@@ -32,10 +137,19 @@ func LoadOrCreateMasterKey(path string) (MasterKey, error) {
 		if _, err := io.ReadFull(rand.Reader, key[:]); err != nil {
 			return MasterKey{}, err
 		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return MasterKey{}, fmt.Errorf("create master key directory: %w", err)
+		}
 		if err := os.WriteFile(path, key[:], 0o600); err != nil {
 			return MasterKey{}, err
 		}
+		if err := ensureMasterKeyFileMode(path); err != nil {
+			return MasterKey{}, err
+		}
 		return key, nil
+	}
+	if err := ensureMasterKeyFileMode(path); err != nil {
+		return MasterKey{}, err
 	}
 	if len(data) != masterKeySize {
 		return MasterKey{}, fmt.Errorf("master key file %s: want %d bytes, got %d", path, masterKeySize, len(data))

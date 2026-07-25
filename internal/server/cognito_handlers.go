@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -917,12 +918,11 @@ func (s *Server) writeCognitoTriggerError(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, err error,
 ) {
-	msg := "Configured Lambda trigger failed."
 	if err != nil {
-		msg = err.Error()
+		log.Printf("cognito trigger failed: %v", err)
 	}
 	s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UnexpectedLambdaException",
-		msg, readOnly, eventID, verified)
+		"Configured Lambda trigger failed.", readOnly, eventID, verified)
 }
 
 func cognitoAuthParams(params map[string]any) (username, password, refreshToken, srpA string) {

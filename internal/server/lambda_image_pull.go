@@ -36,6 +36,7 @@ func (s *Server) prepareLambdaImageRunOpts(
 		EndpointURL:            endpoint,
 		EventHostPath:          eventHostPath,
 		LayerHostPaths:         layerPaths,
+		ListenAddr:             s.cfg.ListenAddr,
 		LabRegistryPull:        useAuth,
 		RegistryUsername:       username,
 		RegistryPassword:       password,

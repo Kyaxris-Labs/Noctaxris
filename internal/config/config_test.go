@@ -93,3 +93,22 @@ func TestLoadFromEnvComputeRuntimeUnknown(t *testing.T) {
 		t.Fatal("expected unknown runtime error")
 	}
 }
+
+func TestLoadFromEnvCognitoInsecureCodes(t *testing.T) {
+	t.Setenv(config.EnvCognitoInsecureCodes, "")
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CognitoInsecureCodes {
+		t.Fatal("CognitoInsecureCodes default want false")
+	}
+	t.Setenv(config.EnvCognitoInsecureCodes, "1")
+	cfg, err = config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CognitoInsecureCodes {
+		t.Fatal("CognitoInsecureCodes=1 want true")
+	}
+}

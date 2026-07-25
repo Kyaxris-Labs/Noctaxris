@@ -1,21 +1,77 @@
 package store
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
-// CognitoLabConfirmationCode is the stub code rendered into CustomMessage bodies and
-// accepted by ConfirmForgotPassword / VerifyUserAttribute (no SES).
+// CognitoLabConfirmationCode is the stub code used when Cognito insecure codes
+// are enabled, and for attribute-verify CustomMessage bodies (no SES).
 const CognitoLabConfirmationCode = "123456"
 
+// Confirmation-code purposes stored in cognito_confirmation_codes.
 const (
-	cognitoConfirmPurposeForgotPassword = "FORGOT_PASSWORD"
-	cognitoConfirmPurposeAttrVerify     = "ATTR_VERIFY"
+	CognitoConfirmPurposeForgotPassword = "FORGOT_PASSWORD"
+	CognitoConfirmPurposeSignUp         = "SIGN_UP"
+	CognitoConfirmPurposeAttrVerify     = "ATTR_VERIFY"
 )
+
+const (
+	cognitoConfirmPurposeForgotPassword = CognitoConfirmPurposeForgotPassword
+	cognitoConfirmPurposeSignUp         = CognitoConfirmPurposeSignUp
+	cognitoConfirmPurposeAttrVerify     = CognitoConfirmPurposeAttrVerify
+	cognitoConfirmationCodeTTL          = time.Hour
+	envCognitoInsecureCodes             = "NOCTAXRIS_COGNITO_INSECURE_CODES"
+)
+
+var cognitoInsecureCodesByStore sync.Map // *Store -> bool
+
+// SetCognitoInsecureCodes toggles fixed/any ConfirmSignUp stub behavior for this store.
+// When unset, NOCTAXRIS_COGNITO_INSECURE_CODES from the process env is used.
+func (s *Store) SetCognitoInsecureCodes(enabled bool) {
+	if s == nil {
+		return
+	}
+	cognitoInsecureCodesByStore.Store(s, enabled)
+}
+
+func (s *Store) cognitoInsecureCodesEnabled() bool {
+	if s != nil {
+		if v, ok := cognitoInsecureCodesByStore.Load(s); ok {
+			return v.(bool)
+		}
+	}
+	return strings.EqualFold(os.Getenv(envCognitoInsecureCodes), "1") ||
+		strings.EqualFold(os.Getenv(envCognitoInsecureCodes), "true")
+}
+
+func (s *Store) issueCognitoConfirmationCode() (string, error) {
+	if s.cognitoInsecureCodesEnabled() {
+		return CognitoLabConfirmationCode, nil
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate confirmation code: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func cognitoCodesEqual(stored, provided string) bool {
+	a := []byte(stored)
+	b := []byte(provided)
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare(a, b) == 1
+}
 
 const cognitoForgotAttrsSchema = `
 CREATE TABLE IF NOT EXISTS cognito_confirmation_codes (
@@ -101,21 +157,46 @@ func (s *Store) getCognitoConfirmationCode(accountID, poolID, username, purpose 
 	if err := s.EnsureCognitoForgotAttrsSchema(); err != nil {
 		return "", "", err
 	}
+	var createdAt int64
 	err = s.db.QueryRow(
-		`SELECT code, attribute_name FROM cognito_confirmation_codes
+		`SELECT code, attribute_name, created_at FROM cognito_confirmation_codes
 		 WHERE account_id = ? AND pool_id = ? AND username = ? AND purpose = ?`,
 		accountID, poolID, username, purpose,
-	).Scan(&code, &attributeName)
+	).Scan(&code, &attributeName, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", ErrCognitoCodeMismatch
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("get confirmation code: %w", err)
 	}
+	if createdAt > 0 {
+		age := time.Now().UTC().Sub(time.UnixMilli(createdAt))
+		if age > cognitoConfirmationCodeTTL {
+			_ = s.clearCognitoConfirmationCode(accountID, poolID, username, purpose)
+			return "", "", ErrCognitoCodeMismatch
+		}
+	}
 	return code, attributeName, nil
 }
 
-// ConfirmForgotPasswordCognitoUser sets a new password when the lab confirmation code matches.
+// PeekCognitoConfirmationCode returns the stored plaintext confirmation code (lab test helper).
+func (s *Store) PeekCognitoConfirmationCode(accountID, poolID, username, purpose string) (string, error) {
+	code, _, err := s.getCognitoConfirmationCode(accountID, poolID, username, purpose)
+	return code, err
+}
+
+func (s *Store) matchCognitoConfirmationCode(accountID, poolID, username, purpose, provided string) error {
+	stored, _, err := s.getCognitoConfirmationCode(accountID, poolID, username, purpose)
+	if err != nil {
+		return err
+	}
+	if !cognitoCodesEqual(stored, provided) {
+		return ErrCognitoCodeMismatch
+	}
+	return nil
+}
+
+// ConfirmForgotPasswordCognitoUser sets a new password when the confirmation code matches.
 func (s *Store) ConfirmForgotPasswordCognitoUser(clientID, username, confirmationCode, password string) error {
 	clientID = strings.TrimSpace(clientID)
 	username = strings.TrimSpace(username)
@@ -130,12 +211,8 @@ func (s *Store) ConfirmForgotPasswordCognitoUser(clientID, username, confirmatio
 	if _, _, _, err := s.getUser(acct, poolID, username); err != nil {
 		return err
 	}
-	stored, _, err := s.getCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeForgotPassword)
-	if err != nil {
+	if err := s.matchCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeForgotPassword, confirmationCode); err != nil {
 		return err
-	}
-	if stored != confirmationCode {
-		return ErrCognitoCodeMismatch
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
@@ -215,7 +292,7 @@ func (s *Store) UpdateUserAttributesCognitoUser(accessToken string, attrs map[st
 		if err != nil {
 			return nil, err
 		}
-		if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_UpdateUserAttribute", "{####}", cmPayload); err != nil {
+		if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_UpdateUserAttribute", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
 			return nil, err
 		}
 		if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, CognitoLabConfirmationCode, name); err != nil {
@@ -280,7 +357,7 @@ func (s *Store) GetUserAttributeVerificationCodeCognitoUser(accessToken, attribu
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_VerifyUserAttribute", "{####}", cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_VerifyUserAttribute", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
 	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, CognitoLabConfirmationCode, attributeName); err != nil {
@@ -318,7 +395,7 @@ func (s *Store) VerifyUserAttributeCognitoUser(accessToken, attributeName, code 
 	if err != nil {
 		return err
 	}
-	if stored != code || (attrName != "" && attrName != attributeName) {
+	if !cognitoCodesEqual(stored, code) || (attrName != "" && attrName != attributeName) {
 		return ErrCognitoCodeMismatch
 	}
 	res, err := s.db.Exec(

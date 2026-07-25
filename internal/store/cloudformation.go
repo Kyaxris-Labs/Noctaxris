@@ -137,11 +137,15 @@ func CFNStackARN(region, accountID, name, id string) string {
 }
 
 // CreateCFNStack validates a JSON/YAML template, provisions supported resources, and stores the stack.
-func (s *Store) CreateCFNStack(accountID, region, stackName, templateBody, roleARN string) (CFNStack, error) {
-	return s.createCFNStackWithParent(accountID, region, stackName, templateBody, roleARN, "")
+func (s *Store) CreateCFNStack(accountID, region, stackName, templateBody, roleARN string, capabilities ...string) (CFNStack, error) {
+	return s.CreateCFNStackAuthorized(accountID, region, stackName, templateBody, roleARN, capabilities, nil)
 }
 
-func (s *Store) createCFNStackWithParent(accountID, region, stackName, templateBody, roleARN, parentStackID string) (CFNStack, error) {
+func (s *Store) CreateCFNStackAuthorized(accountID, region, stackName, templateBody, roleARN string, capabilities []string, authz CFNAuthorizer) (CFNStack, error) {
+	return s.createCFNStackWithParent(accountID, region, stackName, templateBody, roleARN, "", cfnProvisionAuth{Authorizer: authz, Capabilities: capabilities})
+}
+
+func (s *Store) createCFNStackWithParent(accountID, region, stackName, templateBody, roleARN, parentStackID string, auth cfnProvisionAuth) (CFNStack, error) {
 	stackName = strings.TrimSpace(stackName)
 	templateBody = strings.TrimSpace(templateBody)
 	if stackName == "" {
@@ -158,6 +162,9 @@ func (s *Store) createCFNStackWithParent(accountID, region, stackName, templateB
 		if err := validateCFNProperties(logicalID, res.Type, res.Properties); err != nil {
 			return CFNStack{}, err
 		}
+	}
+	if err := s.requireCFNIAMCapabilities(tpl, auth.Capabilities); err != nil {
+		return CFNStack{}, err
 	}
 
 	var exists string
@@ -190,7 +197,7 @@ func (s *Store) createCFNStackWithParent(accountID, region, stackName, templateB
 			s.bestEffortRollbackCFNResources(accountID, resources)
 			return CFNStack{}, resolveErr
 		}
-		physicalID, attrs, provErr := s.provisionCFNResource(accountID, region, stackName, stackID, logicalID, res.Type, props)
+		physicalID, attrs, provErr := s.provisionCFNResource(accountID, region, stackName, stackID, logicalID, res.Type, props, auth)
 		if provErr != nil {
 			s.bestEffortRollbackCFNResources(accountID, resources)
 			return CFNStack{}, provErr

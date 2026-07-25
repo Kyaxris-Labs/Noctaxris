@@ -86,16 +86,21 @@ func ParseCognitoCustomMessageBodies(payload []byte) (CognitoCustomMessageBodies
 	return out, nil
 }
 
-// RenderCognitoCustomMessage substitutes codeParameter and username placeholders.
-func RenderCognitoCustomMessage(bodies CognitoCustomMessageBodies, codeParameter, username string) CognitoCustomMessageBodies {
+// RenderCognitoCustomMessage substitutes codeParameter and username placeholders
+// with confirmationCode (the issued code value).
+func RenderCognitoCustomMessage(bodies CognitoCustomMessageBodies, codeParameter, username, confirmationCode string) CognitoCustomMessageBodies {
 	code := strings.TrimSpace(codeParameter)
 	if code == "" {
 		code = "{####}"
 	}
+	issued := strings.TrimSpace(confirmationCode)
+	if issued == "" {
+		issued = CognitoLabConfirmationCode
+	}
 	userParam := "{username}"
 	repl := func(s string) string {
-		s = strings.ReplaceAll(s, code, "123456") // lab stub confirmation code
-		s = strings.ReplaceAll(s, "{####}", "123456")
+		s = strings.ReplaceAll(s, code, issued)
+		s = strings.ReplaceAll(s, "{####}", issued)
 		s = strings.ReplaceAll(s, userParam, username)
 		return s
 	}
@@ -183,7 +188,7 @@ func (s *Store) GetLastCognitoCustomMessage(accountID, poolID, username string) 
 
 // applyCustomMessagePayload validates, renders, and stores CustomMessage response bodies.
 func (s *Store) applyCustomMessagePayload(
-	accountID, poolID, username, triggerSource, codeParameter string, payload []byte,
+	accountID, poolID, username, triggerSource, codeParameter, confirmationCode string, payload []byte,
 ) error {
 	if len(payload) == 0 {
 		return nil
@@ -198,6 +203,6 @@ func (s *Store) applyCustomMessagePayload(
 	if err := ValidateCognitoCustomMessageBodies(bodies, codeParameter); err != nil {
 		return err
 	}
-	rendered := RenderCognitoCustomMessage(bodies, codeParameter, username)
+	rendered := RenderCognitoCustomMessage(bodies, codeParameter, username, confirmationCode)
 	return s.storeCognitoCustomMessage(accountID, poolID, username, triggerSource, rendered)
 }

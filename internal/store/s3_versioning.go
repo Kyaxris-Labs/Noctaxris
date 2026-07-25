@@ -137,8 +137,10 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 		versionID = uuid.NewString()
 	}
 
-	rel := filepath.Join("s3", accountID, bucket, filepath.FromSlash(key)+"."+versionID)
-	abs := filepath.Join(s.dataRoot, rel)
+	rel, abs, err := s3ObjectAbsPath(s.dataRoot, accountID, bucket, key+"."+versionID)
+	if err != nil {
+		return ObjectMeta{}, "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return ObjectMeta{}, "", fmt.Errorf("put object version mkdir: %w", err)
 	}

@@ -32,23 +32,7 @@ func (s *Server) handleIAM(
 	}
 	params := requestParams(r, body)
 	accountID := verified.AccountID
-	resource := "*"
-	switch action {
-	case catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion",
-		catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion",
-		catalog.ActionIAMListPolicyVersions, "ListPolicyVersions",
-		catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion",
-		catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion",
-		catalog.ActionIAMGetPolicy, "GetPolicy",
-		catalog.ActionIAMDeletePolicy, "DeletePolicy":
-		if arn := strings.TrimSpace(params["PolicyArn"]); arn != "" {
-			resource = arn
-		}
-	case catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed":
-		if id := strings.TrimSpace(params["AccessKeyId"]); id != "" {
-			resource = "arn:aws:iam::" + accountID + ":access-key/" + id
-		}
-	}
+	resource := s.iamRequestResource(accountID, action, params, verified)
 	if !s.authorize(verified, action, resource) {
 		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform "+action+".", readOnly, r, eventID,
@@ -140,7 +124,21 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.CreateAccessKeyXML(userName, keyID, secret, requestID)
 	case catalog.ActionIAMDeleteAccessKey, "DeleteAccessKey":
-		if err := s.store.DeleteAccessKeyInAccount(accountID, params["AccessKeyId"]); err != nil {
+		keyID := strings.TrimSpace(params["AccessKeyId"])
+		if ak, lookupErr := s.store.LookupAccessKeyRecord(keyID); lookupErr == nil {
+			if ak.IsRoot {
+				s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+					"Cannot delete root access keys.", readOnly, r, eventID,
+					verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			if accessKeyUserNameMismatch(params["UserName"], ak) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Access key not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+		}
+		if err := s.store.DeleteAccessKeyInAccount(accountID, keyID); err != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"Access key not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
@@ -159,7 +157,21 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.ListAccessKeysXML(keys, requestID)
 	case catalog.ActionIAMUpdateAccessKey, "UpdateAccessKey":
-		if err := s.store.UpdateAccessKeyInAccount(accountID, params["AccessKeyId"], params["Status"]); err != nil {
+		keyID := strings.TrimSpace(params["AccessKeyId"])
+		if ak, lookupErr := s.store.LookupAccessKeyRecord(keyID); lookupErr == nil {
+			if ak.IsRoot {
+				s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+					"Cannot update root access keys.", readOnly, r, eventID,
+					verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			if accessKeyUserNameMismatch(params["UserName"], ak) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"Access key not found.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+		}
+		if err := s.store.UpdateAccessKeyInAccount(accountID, keyID, params["Status"]); err != nil {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
 				"Unable to update access key.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
@@ -171,6 +183,13 @@ func (s *Server) handleIAM(
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
 				"AccessKeyId is required.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 			return
+		}
+		if ak, lookupErr := s.store.LookupAccessKeyRecord(keyID); lookupErr == nil {
+			if accessKeyUserNameMismatch(params["UserName"], ak) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"The specified access key does not exist.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
 		}
 		usage, getErr := s.store.GetAccessKeyLastUsed(accountID, keyID)
 		if getErr != nil {
@@ -626,4 +645,157 @@ func (s *Server) handleIAM(
 		eventName = action[i+1:]
 	}
 	s.writeSuccessAudit(r, requestID, eventID, verified, "iam.amazonaws.com", eventName, readOnly)
+}
+
+// iamRequestResource returns the AWS-shaped IAM resource ARN for authorize.
+// List-all and unknown create shapes fall back to "*".
+func (s *Server) iamRequestResource(accountID, action string, params map[string]string, verified *authn.Verified) string {
+	userName := strings.TrimSpace(params["UserName"])
+	roleName := strings.TrimSpace(params["RoleName"])
+	groupName := strings.TrimSpace(params["GroupName"])
+	policyArn := strings.TrimSpace(params["PolicyArn"])
+	profileName := strings.TrimSpace(params["InstanceProfileName"])
+	accessKeyID := strings.TrimSpace(params["AccessKeyId"])
+
+	switch action {
+	case catalog.ActionIAMCreateUser, "CreateUser",
+		catalog.ActionIAMGetUser, "GetUser",
+		catalog.ActionIAMDeleteUser, "DeleteUser",
+		catalog.ActionIAMAttachUserPolicy, "AttachUserPolicy",
+		catalog.ActionIAMDetachUserPolicy, "DetachUserPolicy",
+		catalog.ActionIAMListAttachedUserPolicies, "ListAttachedUserPolicies",
+		catalog.ActionIAMPutUserPolicy, "PutUserPolicy",
+		catalog.ActionIAMGetUserPolicy, "GetUserPolicy",
+		catalog.ActionIAMDeleteUserPolicy, "DeleteUserPolicy",
+		catalog.ActionIAMListUserPolicies, "ListUserPolicies",
+		catalog.ActionIAMPutUserPermissionsBoundary, "PutUserPermissionsBoundary",
+		catalog.ActionIAMGetUserPermissionsBoundary, "GetUserPermissionsBoundary",
+		catalog.ActionIAMDeleteUserPermissionsBoundary, "DeleteUserPermissionsBoundary",
+		catalog.ActionIAMListMFADevices, "ListMFADevices":
+		if userName == "" && verified != nil {
+			userName = verified.Principal.UserName
+		}
+		if userName != "" {
+			return store.UserARN(accountID, "/", userName)
+		}
+	case catalog.ActionIAMCreateAccessKey, "CreateAccessKey",
+		catalog.ActionIAMListAccessKeys, "ListAccessKeys":
+		if userName == "" && verified != nil {
+			userName = verified.Principal.UserName
+		}
+		if userName != "" {
+			return store.UserARN(accountID, "/", userName)
+		}
+	case catalog.ActionIAMDeleteAccessKey, "DeleteAccessKey",
+		catalog.ActionIAMUpdateAccessKey, "UpdateAccessKey",
+		catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed":
+		// Resource is always the key owner from AccessKeyId. Request UserName is
+		// only an optional consistency check in the handler (mismatch -> NoSuchEntity).
+		if accessKeyID != "" {
+			if ak, err := s.store.LookupAccessKeyRecord(accessKeyID); err == nil {
+				if ak.UserName != "" {
+					return store.UserARN(ak.AccountID, "/", ak.UserName)
+				}
+				if ak.IsRoot {
+					return "arn:aws:iam::" + ak.AccountID + ":root"
+				}
+			}
+			return "arn:aws:iam::" + accountID + ":access-key/" + accessKeyID
+		}
+	case catalog.ActionIAMCreateRole, "CreateRole",
+		catalog.ActionIAMGetRole, "GetRole",
+		catalog.ActionIAMDeleteRole, "DeleteRole",
+		catalog.ActionIAMAttachRolePolicy, "AttachRolePolicy",
+		catalog.ActionIAMDetachRolePolicy, "DetachRolePolicy",
+		catalog.ActionIAMListAttachedRolePolicies, "ListAttachedRolePolicies",
+		catalog.ActionIAMPutRolePolicy, "PutRolePolicy",
+		catalog.ActionIAMGetRolePolicy, "GetRolePolicy",
+		catalog.ActionIAMDeleteRolePolicy, "DeleteRolePolicy",
+		catalog.ActionIAMListRolePolicies, "ListRolePolicies",
+		catalog.ActionIAMUpdateAssumeRolePolicy, "UpdateAssumeRolePolicy",
+		catalog.ActionIAMPutRolePermissionsBoundary, "PutRolePermissionsBoundary",
+		catalog.ActionIAMGetRolePermissionsBoundary, "GetRolePermissionsBoundary",
+		catalog.ActionIAMDeleteRolePermissionsBoundary, "DeleteRolePermissionsBoundary",
+		catalog.ActionIAMListInstanceProfilesForRole, "ListInstanceProfilesForRole":
+		if roleName != "" {
+			return store.RoleARN(accountID, roleName)
+		}
+	case catalog.ActionIAMCreateGroup, "CreateGroup",
+		catalog.ActionIAMDeleteGroup, "DeleteGroup",
+		catalog.ActionIAMGetGroup, "GetGroup",
+		catalog.ActionIAMAddUserToGroup, "AddUserToGroup",
+		catalog.ActionIAMRemoveUserFromGroup, "RemoveUserFromGroup",
+		catalog.ActionIAMAttachGroupPolicy, "AttachGroupPolicy",
+		catalog.ActionIAMDetachGroupPolicy, "DetachGroupPolicy",
+		catalog.ActionIAMListAttachedGroupPolicies, "ListAttachedGroupPolicies",
+		catalog.ActionIAMPutGroupPolicy, "PutGroupPolicy",
+		catalog.ActionIAMGetGroupPolicy, "GetGroupPolicy",
+		catalog.ActionIAMDeleteGroupPolicy, "DeleteGroupPolicy",
+		catalog.ActionIAMListGroupPolicies, "ListGroupPolicies":
+		if groupName != "" {
+			return store.GroupARN(accountID, "/", groupName)
+		}
+	case catalog.ActionIAMCreatePolicy, "CreatePolicy":
+		if name := strings.TrimSpace(params["PolicyName"]); name != "" {
+			return store.PolicyARN(accountID, "/", name)
+		}
+	case catalog.ActionIAMGetPolicy, "GetPolicy",
+		catalog.ActionIAMDeletePolicy, "DeletePolicy",
+		catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion",
+		catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion",
+		catalog.ActionIAMListPolicyVersions, "ListPolicyVersions",
+		catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion",
+		catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion":
+		if policyArn != "" {
+			return policyArn
+		}
+	case catalog.ActionIAMCreateInstanceProfile, "CreateInstanceProfile",
+		catalog.ActionIAMDeleteInstanceProfile, "DeleteInstanceProfile",
+		catalog.ActionIAMGetInstanceProfile, "GetInstanceProfile",
+		catalog.ActionIAMAddRoleToInstanceProfile, "AddRoleToInstanceProfile",
+		catalog.ActionIAMRemoveRoleFromInstanceProfile, "RemoveRoleFromInstanceProfile":
+		if profileName != "" {
+			return store.InstanceProfileARN(accountID, "/", profileName)
+		}
+	case catalog.ActionIAMCreateOpenIDConnectProvider, "CreateOpenIDConnectProvider":
+		if u := strings.TrimSpace(params["Url"]); u != "" {
+			return store.OIDCProviderARN(accountID, u)
+		}
+	case catalog.ActionIAMDeleteOpenIDConnectProvider, "DeleteOpenIDConnectProvider",
+		catalog.ActionIAMGetOpenIDConnectProvider, "GetOpenIDConnectProvider":
+		if arn := strings.TrimSpace(params["OpenIDConnectProviderArn"]); arn != "" {
+			return arn
+		}
+	case catalog.ActionIAMCreateSAMLProvider, "CreateSAMLProvider":
+		if name := strings.TrimSpace(params["Name"]); name != "" {
+			return store.SAMLProviderARN(accountID, name)
+		}
+	case catalog.ActionIAMDeleteSAMLProvider, "DeleteSAMLProvider",
+		catalog.ActionIAMGetSAMLProvider, "GetSAMLProvider":
+		if arn := strings.TrimSpace(params["SAMLProviderArn"]); arn != "" {
+			return arn
+		}
+	case catalog.ActionIAMEnableMFADevice, "EnableMFADevice",
+		catalog.ActionIAMDeactivateMFADevice, "DeactivateMFADevice":
+		if serial := strings.TrimSpace(params["SerialNumber"]); serial != "" {
+			if strings.HasPrefix(serial, "arn:") {
+				return serial
+			}
+			return store.MFADeviceARN(accountID, serial)
+		}
+		if userName != "" {
+			return store.UserARN(accountID, "/", userName)
+		}
+	}
+	return "*"
+}
+
+// accessKeyUserNameMismatch reports whether optional request UserName disagrees
+// with the access-key owner. Empty UserName is ignored.
+func accessKeyUserNameMismatch(requestedUserName string, ak store.AccessKey) bool {
+	requestedUserName = strings.TrimSpace(requestedUserName)
+	if requestedUserName == "" {
+		return false
+	}
+	return ak.UserName != requestedUserName
 }

@@ -9,7 +9,7 @@ import (
 
 // applyCFNModify updates an existing physical resource in place for allowlisted types.
 // Unsupported type/property sets return ErrCFNBadTemplate (fail closed).
-func (s *Store) applyCFNModify(accountID, region, stackName, stackID, logicalID, resType, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) applyCFNModify(accountID, region, stackName, stackID, logicalID, resType, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	_ = stackName
 	_ = stackID
 	if newProps == nil {
@@ -27,25 +27,25 @@ func (s *Store) applyCFNModify(accountID, region, stackName, stackID, logicalID,
 	case "AWS::S3::Bucket":
 		return s.modifyCFNS3Bucket(accountID, physicalID, oldProps, newProps)
 	case "AWS::S3::BucketPolicy":
-		return s.modifyCFNBucketPolicy(accountID, physicalID, oldProps, newProps)
+		return s.modifyCFNBucketPolicy(accountID, physicalID, oldProps, newProps, auth)
 	case "AWS::IAM::Role":
-		return s.modifyCFNIAMRole(accountID, physicalID, oldProps, newProps)
+		return s.modifyCFNIAMRole(accountID, physicalID, oldProps, newProps, auth)
 	case "AWS::IAM::ManagedPolicy", "AWS::IAM::Policy":
-		return s.modifyCFNManagedPolicyDocument(accountID, physicalID, oldProps, newProps)
+		return s.modifyCFNManagedPolicyDocument(accountID, physicalID, oldProps, newProps, auth)
 	case "AWS::SQS::Queue":
 		return s.modifyCFNSQSQueue(accountID, physicalID, oldProps, newProps)
 	case "AWS::SQS::QueuePolicy":
-		return s.modifyCFNQueuePolicyResource(accountID, physicalID, oldProps, newProps)
+		return s.modifyCFNQueuePolicyResource(accountID, physicalID, oldProps, newProps, auth)
 	case "AWS::SNS::Topic":
 		return s.modifyCFNSNSTopic(accountID, physicalID, oldProps, newProps)
 	case "AWS::SNS::TopicPolicy":
-		return s.modifyCFNTopicPolicyResource(accountID, physicalID, oldProps, newProps)
+		return s.modifyCFNTopicPolicyResource(accountID, physicalID, oldProps, newProps, auth)
 	case "AWS::Lambda::Function":
-		return s.modifyCFNLambdaFunction(accountID, region, physicalID, oldProps, newProps)
+		return s.modifyCFNLambdaFunction(accountID, region, physicalID, oldProps, newProps, auth)
 	case "AWS::Lambda::Permission":
-		return s.modifyCFNLambdaPermission(accountID, physicalID, logicalID, oldProps, newProps)
+		return s.modifyCFNLambdaPermission(accountID, physicalID, logicalID, oldProps, newProps, auth)
 	case "AWS::Events::Rule":
-		return s.modifyCFNEventRule(accountID, region, physicalID, oldProps, newProps)
+		return s.modifyCFNEventRule(accountID, region, physicalID, oldProps, newProps, auth)
 	case "AWS::SecretsManager::Secret":
 		return s.modifyCFNSecret(accountID, physicalID, oldProps, newProps)
 	case "AWS::DynamoDB::Table":
@@ -127,15 +127,15 @@ func (s *Store) modifyCFNS3Bucket(accountID, physicalID string, oldProps, newPro
 	return nil
 }
 
-func (s *Store) modifyCFNBucketPolicy(accountID, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNBucketPolicy(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	if err := cfnRejectImmutablePropChange("AWS::S3::BucketPolicy", physicalID, oldProps, newProps, "Bucket"); err != nil {
 		return err
 	}
-	_, _, err := s.provisionCFNBucketPolicy(accountID, "BucketPolicy", newProps)
+	_, _, err := s.provisionCFNBucketPolicy(accountID, "BucketPolicy", newProps, auth)
 	return err
 }
 
-func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	if err := cfnRejectImmutablePropChange("AWS::IAM::Role", physicalID, oldProps, newProps, "RoleName", "Path"); err != nil {
 		return err
 	}
@@ -151,6 +151,9 @@ func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProp
 		roleARN = fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, roleName)
 	}
 	if doc, ok := newProps["AssumeRolePolicyDocument"]; ok && doc != nil {
+		if err := s.cfnAuthorizeAction(auth, "iam:UpdateAssumeRolePolicy", "*"); err != nil {
+			return err
+		}
 		raw, err := json.Marshal(doc)
 		if err != nil {
 			return fmt.Errorf("%w: Role trust on Modify", ErrCFNBadTemplate)
@@ -159,12 +162,14 @@ func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProp
 			return fmt.Errorf("%w: UpdateAssumeRolePolicy: %v", ErrCFNBadTemplate, err)
 		}
 	}
-	return s.replaceCFNRolePolicies(accountID, roleARN, roleName, newProps)
+	return s.replaceCFNRolePolicies(accountID, roleARN, roleName, newProps, auth)
 }
 
 func (s *Store) replaceCFNPrincipalPolicies(
 	accountID, principalARN, entityName string,
 	props map[string]any,
+	auth cfnProvisionAuth,
+	putAction, deleteAction, attachAction, detachAction string,
 	attachManaged func(accountID, name, policyARN string) error,
 	detachManaged func(accountID, name, policyARN string) error,
 ) error {
@@ -197,12 +202,18 @@ func (s *Store) replaceCFNPrincipalPolicies(
 		}
 		for _, p := range existing {
 			if _, ok := wantInline[p.PolicyName]; !ok {
+				if err := s.cfnAuthorizeAction(auth, deleteAction, principalARN); err != nil {
+					return err
+				}
 				if err := s.DeleteInlinePolicy(principalARN, p.PolicyName); err != nil {
 					return fmt.Errorf("%w: delete inline policy: %v", ErrCFNBadTemplate, err)
 				}
 			}
 		}
 		for name, doc := range wantInline {
+			if err := s.cfnAuthorizeAction(auth, putAction, principalARN); err != nil {
+				return err
+			}
 			if err := s.PutInlinePolicy(principalARN, name, doc); err != nil {
 				return fmt.Errorf("%w: put inline policy: %v", ErrCFNBadTemplate, err)
 			}
@@ -219,12 +230,18 @@ func (s *Store) replaceCFNPrincipalPolicies(
 		}
 		for _, ref := range attached {
 			if _, ok := want[ref.PolicyARN]; !ok {
+				if err := s.cfnAuthorizeAction(auth, detachAction, principalARN); err != nil {
+					return err
+				}
 				if err := detachManaged(accountID, entityName, ref.PolicyARN); err != nil {
 					return fmt.Errorf("%w: DetachPolicy: %v", ErrCFNBadTemplate, err)
 				}
 			}
 		}
 		for arn := range want {
+			if err := s.cfnAuthorizeAction(auth, attachAction, principalARN); err != nil {
+				return err
+			}
 			if err := attachManaged(accountID, entityName, arn); err != nil {
 				return fmt.Errorf("%w: AttachPolicy: %v", ErrCFNBadTemplate, err)
 			}
@@ -233,7 +250,7 @@ func (s *Store) replaceCFNPrincipalPolicies(
 	return nil
 }
 
-func (s *Store) replaceCFNUserGroups(accountID, userName string, props map[string]any) error {
+func (s *Store) replaceCFNUserGroups(accountID, userName string, props map[string]any, auth cfnProvisionAuth) error {
 	want := map[string]struct{}{}
 	for _, g := range cfnStringListProp(props, "Groups") {
 		name := cfnIAMEntityName(g)
@@ -247,12 +264,18 @@ func (s *Store) replaceCFNUserGroups(accountID, userName string, props map[strin
 	}
 	for _, g := range current {
 		if _, ok := want[g.GroupName]; !ok {
+			if err := s.cfnAuthorizeAction(auth, "iam:RemoveUserFromGroup", "*"); err != nil {
+				return err
+			}
 			if err := s.RemoveUserFromGroup(accountID, g.GroupName, userName); err != nil {
 				return fmt.Errorf("%w: RemoveUserFromGroup: %v", ErrCFNBadTemplate, err)
 			}
 		}
 	}
 	for name := range want {
+		if err := s.cfnAuthorizeAction(auth, "iam:AddUserToGroup", "*"); err != nil {
+			return err
+		}
 		if err := s.AddUserToGroup(accountID, name, userName); err != nil {
 			return fmt.Errorf("%w: AddUserToGroup: %v", ErrCFNBadTemplate, err)
 		}
@@ -260,73 +283,18 @@ func (s *Store) replaceCFNUserGroups(accountID, userName string, props map[strin
 	return nil
 }
 
-func (s *Store) replaceCFNRolePolicies(accountID, roleARN, roleName string, props map[string]any) error {
-	wantInline := map[string]string{}
-	if raw, ok := props["Policies"].([]any); ok {
-		for _, item := range raw {
-			m, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			name := cfnStringProp(m, "PolicyName")
-			if name == "" {
-				return fmt.Errorf("%w: Policies.PolicyName required", ErrCFNBadTemplate)
-			}
-			docRaw, ok := m["PolicyDocument"]
-			if !ok {
-				return fmt.Errorf("%w: Policies.PolicyDocument required", ErrCFNBadTemplate)
-			}
-			docBytes, err := json.Marshal(docRaw)
-			if err != nil {
-				return fmt.Errorf("%w: Policies.PolicyDocument", ErrCFNBadTemplate)
-			}
-			wantInline[name] = string(docBytes)
-		}
-	}
-	if _, has := props["Policies"]; has {
-		existing, err := s.ListInlinePolicies(roleARN)
-		if err != nil {
-			return fmt.Errorf("%w: list inline policies: %v", ErrCFNBadTemplate, err)
-		}
-		for _, p := range existing {
-			if _, ok := wantInline[p.PolicyName]; !ok {
-				if err := s.DeleteInlinePolicy(roleARN, p.PolicyName); err != nil {
-					return fmt.Errorf("%w: delete inline policy: %v", ErrCFNBadTemplate, err)
-				}
-			}
-		}
-		for name, doc := range wantInline {
-			if err := s.PutInlinePolicy(roleARN, name, doc); err != nil {
-				return fmt.Errorf("%w: put inline policy: %v", ErrCFNBadTemplate, err)
-			}
-		}
-	}
-	if _, has := props["ManagedPolicyArns"]; has {
-		want := map[string]struct{}{}
-		for _, arn := range cfnStringListProp(props, "ManagedPolicyArns") {
-			want[arn] = struct{}{}
-		}
-		attached, err := s.ListAttachedPolicyRefs(roleARN)
-		if err != nil {
-			return fmt.Errorf("%w: list attached policies: %v", ErrCFNBadTemplate, err)
-		}
-		for _, ref := range attached {
-			if _, ok := want[ref.PolicyARN]; !ok {
-				if err := s.DetachRolePolicy(accountID, roleName, ref.PolicyARN); err != nil {
-					return fmt.Errorf("%w: DetachRolePolicy: %v", ErrCFNBadTemplate, err)
-				}
-			}
-		}
-		for arn := range want {
-			if err := s.AttachRolePolicy(accountID, roleName, arn); err != nil {
-				return fmt.Errorf("%w: AttachRolePolicy: %v", ErrCFNBadTemplate, err)
-			}
-		}
-	}
-	return nil
+func (s *Store) replaceCFNRolePolicies(accountID, roleARN, roleName string, props map[string]any, auth cfnProvisionAuth) error {
+	return s.replaceCFNPrincipalPolicies(
+		accountID, roleARN, roleName, props, auth,
+		"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+		s.AttachRolePolicy, s.DetachRolePolicy,
+	)
 }
 
-func (s *Store) modifyCFNManagedPolicyDocument(accountID, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNManagedPolicyDocument(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
+	if err := s.cfnAuthorizeAction(auth, "iam:CreatePolicyVersion", "*"); err != nil {
+		return err
+	}
 	_ = accountID
 	if err := cfnRejectImmutablePropChange("AWS::IAM::ManagedPolicy", physicalID, oldProps, newProps, "ManagedPolicyName", "PolicyName", "Path"); err != nil {
 		return err
@@ -343,7 +311,7 @@ func (s *Store) modifyCFNManagedPolicyDocument(accountID, physicalID string, old
 		return fmt.Errorf("%w: %v", ErrCFNBadTemplate, err)
 	}
 	_ = s.clearManagedPolicyAttachments(physicalID)
-	return s.attachCFNManagedPolicyTargets(accountID, physicalID, newProps)
+	return s.attachCFNManagedPolicyTargets(accountID, physicalID, newProps, auth)
 }
 
 func (s *Store) replaceManagedPolicyDocument(policyARN, document string) error {
@@ -391,10 +359,10 @@ func (s *Store) modifyCFNSQSQueue(accountID, physicalID string, oldProps, newPro
 	return nil
 }
 
-func (s *Store) modifyCFNQueuePolicyResource(accountID, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNQueuePolicyResource(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	_ = oldProps
 	_ = physicalID
-	_, _, err := s.applyCFNQueuePolicy(accountID, newProps)
+	_, _, err := s.applyCFNQueuePolicy(accountID, newProps, auth)
 	return err
 }
 
@@ -425,10 +393,10 @@ func (s *Store) modifyCFNSNSTopic(accountID, physicalID string, oldProps, newPro
 	return nil
 }
 
-func (s *Store) modifyCFNTopicPolicyResource(accountID, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNTopicPolicyResource(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	_ = oldProps
 	_ = physicalID
-	_, _, err := s.applyCFNTopicPolicy(accountID, newProps)
+	_, _, err := s.applyCFNTopicPolicy(accountID, newProps, auth)
 	return err
 }
 
@@ -452,7 +420,7 @@ func cfnLambdaEnvVars(props map[string]any) (map[string]string, bool) {
 	return out, true
 }
 
-func (s *Store) modifyCFNLambdaFunction(accountID, region, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNLambdaFunction(accountID, region, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	if err := cfnRejectImmutablePropChange("AWS::Lambda::Function", physicalID, oldProps, newProps, "FunctionName"); err != nil {
 		return err
 	}
@@ -473,6 +441,14 @@ func (s *Store) modifyCFNLambdaFunction(accountID, region, physicalID string, ol
 			role = fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, role)
 		}
 		meta.RoleARN = role
+	}
+	if err := s.cfnAuthorizeAction(auth, "lambda:UpdateFunctionConfiguration", fn.FunctionARN); err != nil {
+		return err
+	}
+	if meta.RoleARN != "" && meta.RoleARN != fn.RoleARN {
+		if err := s.cfnAuthorizePassRole(auth, meta.RoleARN, cfnSvcPrincipalLambda, fn.FunctionARN); err != nil {
+			return err
+		}
 	}
 	if _, ok := newProps["Timeout"]; ok {
 		meta.Timeout = cfnIntProp(newProps, "Timeout", fn.Timeout)
@@ -508,16 +484,16 @@ func (s *Store) modifyCFNLambdaFunction(accountID, region, physicalID string, ol
 	return nil
 }
 
-func (s *Store) modifyCFNLambdaPermission(accountID, physicalID, logicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNLambdaPermission(accountID, physicalID, logicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	_ = oldProps
 	if fn, sid, ok := splitCFNLambdaPermissionPhysical(physicalID); ok {
 		_ = s.RemoveFunctionPermission(accountID, fn, sid)
 	}
-	_, _, err := s.provisionCFNLambdaPermission(accountID, logicalID, newProps)
+	_, _, err := s.provisionCFNLambdaPermission(accountID, logicalID, newProps, auth)
 	return err
 }
 
-func (s *Store) modifyCFNEventRule(accountID, region, physicalID string, oldProps, newProps map[string]any) error {
+func (s *Store) modifyCFNEventRule(accountID, region, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
 	if err := cfnRejectImmutablePropChange("AWS::Events::Rule", physicalID, oldProps, newProps, "Name", "EventBusName"); err != nil {
 		return err
 	}
@@ -536,7 +512,7 @@ func (s *Store) modifyCFNEventRule(accountID, region, physicalID string, oldProp
 	if cfnStringProp(props, "EventBusName") == "" && bus != "" {
 		props["EventBusName"] = bus
 	}
-	_, _, err := s.provisionCFNEventRule(accountID, region, rule, props)
+	_, _, err := s.provisionCFNEventRule(accountID, region, rule, props, auth)
 	return err
 }
 

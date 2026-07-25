@@ -30,6 +30,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Shipped docker/.env.example pair (refused on Compose 0.0.0.0 listen).
+EXAMPLE_ROOT_AKID="AKIAROOTEXAMPLE01"
+EXAMPLE_ROOT_SECRET="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
 if [[ ! -f "$ROOT/docker/.env" ]]; then
   cp "$ROOT/docker/.env.example" "$ROOT/docker/.env"
 fi
@@ -38,6 +42,23 @@ fi
 set -a
 source "$ROOT/docker/.env"
 set +a
+
+# Rewrite when .env still has the example pair (cp alone leaves refused roots).
+if [[ "${NOCTAXRIS_ROOT_ACCESS_KEY_ID:-}" == "$EXAMPLE_ROOT_AKID" && \
+      "${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY:-}" == "$EXAMPLE_ROOT_SECRET" ]]; then
+  ROOT_AKID="AKIANOCTAXRISSM$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')"
+  ROOT_SECRET="$(openssl rand -hex 32)"
+  awk -v akid="$ROOT_AKID" -v secret="$ROOT_SECRET" '
+    /^NOCTAXRIS_ROOT_ACCESS_KEY_ID=/ { print "NOCTAXRIS_ROOT_ACCESS_KEY_ID=" akid; next }
+    /^NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=/ { print "NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=" secret; next }
+    { print }
+  ' "$ROOT/docker/.env" > "$ROOT/docker/.env.tmp"
+  mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
+  # shellcheck disable=SC1091
+  set -a
+  source "$ROOT/docker/.env"
+  set +a
+fi
 
 export AWS_ACCESS_KEY_ID="${NOCTAXRIS_ROOT_ACCESS_KEY_ID:?missing NOCTAXRIS_ROOT_ACCESS_KEY_ID}"
 export AWS_SECRET_ACCESS_KEY="${NOCTAXRIS_ROOT_SECRET_ACCESS_KEY:?missing NOCTAXRIS_ROOT_SECRET_ACCESS_KEY}"

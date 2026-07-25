@@ -110,7 +110,22 @@ jobs:
           sudo /tmp/aws/install --update
           aws --version
       - name: Prepare Compose env
-        run: cp docker/.env.example docker/.env
+        run: |
+          set -euo pipefail
+          cp docker/.env.example docker/.env
+          # Compose binds 0.0.0.0; shipped example roots are refused. Inject unique CI roots.
+          ROOT_AKID="AKIANOCTAXRISCI$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')"
+          ROOT_SECRET="$(openssl rand -hex 32)"
+          awk -v akid="$ROOT_AKID" -v secret="$ROOT_SECRET" '
+            /^NOCTAXRIS_ROOT_ACCESS_KEY_ID=/ { print "NOCTAXRIS_ROOT_ACCESS_KEY_ID=" akid; next }
+            /^NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=/ { print "NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=" secret; next }
+            { print }
+          ' docker/.env > docker/.env.tmp
+          mv docker/.env.tmp docker/.env
+          {
+            echo "AWS_ACCESS_KEY_ID=${ROOT_AKID}"
+            echo "AWS_SECRET_ACCESS_KEY=${ROOT_SECRET}"
+          } >> "$GITHUB_ENV"
       - name: Compose up
         run: docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
       - name: Wait for readiness
@@ -127,8 +142,6 @@ jobs:
           exit 1
       - name: Core CLI smoke (STS/S3/KMS/DynamoDB)
         env:
-          AWS_ACCESS_KEY_ID: AKIAROOTEXAMPLE01
-          AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
           AWS_DEFAULT_REGION: us-east-1
           AWS_EC2_METADATA_DISABLED: "true"
           EP: http://127.0.0.1:4566
@@ -161,7 +174,7 @@ jobs:
             --output text | grep -qx smoke
       - name: Audit hygiene (root secret absent)
         env:
-          ROOT_SECRET: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+          ROOT_SECRET: ${{ env.AWS_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
           CID=$(docker compose -f docker/compose.yaml --env-file docker/.env ps -q noctaxris)
@@ -261,7 +274,22 @@ jobs:
           sudo /tmp/aws/install --update
       - name: Prepare Compose env
         if: steps.decide.outputs.run == 'true'
-        run: cp docker/.env.example docker/.env
+        run: |
+          set -euo pipefail
+          cp docker/.env.example docker/.env
+          # Compose binds 0.0.0.0; shipped example roots are refused. Inject unique CI roots.
+          ROOT_AKID="AKIANOCTAXRISCI$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')"
+          ROOT_SECRET="$(openssl rand -hex 32)"
+          awk -v akid="$ROOT_AKID" -v secret="$ROOT_SECRET" '
+            /^NOCTAXRIS_ROOT_ACCESS_KEY_ID=/ { print "NOCTAXRIS_ROOT_ACCESS_KEY_ID=" akid; next }
+            /^NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=/ { print "NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=" secret; next }
+            { print }
+          ' docker/.env > docker/.env.tmp
+          mv docker/.env.tmp docker/.env
+          {
+            echo "AWS_ACCESS_KEY_ID=${ROOT_AKID}"
+            echo "AWS_SECRET_ACCESS_KEY=${ROOT_SECRET}"
+          } >> "$GITHUB_ENV"
       - name: Compose up
         if: steps.decide.outputs.run == 'true'
         run: docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
@@ -302,8 +330,6 @@ jobs:
       - name: Integration suites
         if: steps.decide.outputs.run == 'true'
         env:
-          AWS_ACCESS_KEY_ID: AKIAROOTEXAMPLE01
-          AWS_SECRET_ACCESS_KEY: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
           AWS_DEFAULT_REGION: us-east-1
           AWS_EC2_METADATA_DISABLED: "true"
           NOCTAXRIS_ENDPOINT: http://127.0.0.1:4566

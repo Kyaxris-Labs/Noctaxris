@@ -88,7 +88,11 @@ func TestConfirmSignUpInvokesPostConfirmationTrigger(t *testing.T) {
 	if _, _, err := st.SignUpCognitoUser(account, client.ClientID, "alice", "Secret1!"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.ConfirmSignUpCognitoUser(client.ClientID, "alice", "123456"); err != nil {
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "alice", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ConfirmSignUpCognitoUser(client.ClientID, "alice", code); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -123,7 +127,11 @@ func TestConfirmSignUpTriggerFailClosed(t *testing.T) {
 	if _, _, err := st.SignUpCognitoUser(account, client.ClientID, "bob", "Secret1!"); err != nil {
 		t.Fatal(err)
 	}
-	err = st.ConfirmSignUpCognitoUser(client.ClientID, "bob", "123456")
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "bob", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.ConfirmSignUpCognitoUser(client.ClientID, "bob", code)
 	if !errors.Is(err, store.ErrCognitoTriggerFailed) {
 		t.Fatalf("err=%v want ErrCognitoTriggerFailed", err)
 	}

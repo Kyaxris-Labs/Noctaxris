@@ -61,8 +61,8 @@ func TestWriteEvent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if perm := info.Mode().Perm(); perm != 0o644 {
-			t.Fatalf("events.jsonl mode=%o want 0644", perm)
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("events.jsonl mode=%o want 0600", perm)
 		}
 	}
 }

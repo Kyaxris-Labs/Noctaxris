@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewClientEmptyHost(t *testing.T) {
-	_, err := compute.NewClient("", "")
+	_, err := compute.NewClient("", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty docker host")
 	}
@@ -19,7 +19,7 @@ func TestNewClientEmptyHost(t *testing.T) {
 
 func TestNewClientRejectsWithoutTLS(t *testing.T) {
 	t.Setenv(compute.EnvDockerHostAllowlist, "tcp://127.0.0.1:1")
-	_, err := compute.NewClient("tcp://127.0.0.1:1", "")
+	_, err := compute.NewClient("tcp://127.0.0.1:1", "", "")
 	if err == nil {
 		t.Fatal("expected error when TLS cert path is empty")
 	}
@@ -33,7 +33,7 @@ func TestNewClientInvalidTLSCertPath(t *testing.T) {
 		}
 	}
 	t.Setenv(compute.EnvDockerHostAllowlist, "tcp://127.0.0.1:1")
-	_, err := compute.NewClient("tcp://127.0.0.1:1", dir)
+	_, err := compute.NewClient("tcp://127.0.0.1:1", dir, "")
 	if err == nil {
 		t.Fatal("expected error for invalid TLS PEMs")
 	}
@@ -131,7 +131,7 @@ func TestPingSkipsWithoutEngine(t *testing.T) {
 		t.Skip("NOCTAXRIS_DOCKER_HOST unset")
 	}
 	certPath := os.Getenv("NOCTAXRIS_DOCKER_CERT_PATH")
-	cli, err := compute.NewClient(host, certPath)
+	cli, err := compute.NewClient(host, certPath, "127.0.0.1:4566")
 	if err != nil {
 		t.Fatal(err)
 	}

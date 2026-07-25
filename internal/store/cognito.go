@@ -535,7 +535,7 @@ func (s *Store) AdminCreateCognitoUser(accountID, poolID, username, password str
 	if err != nil {
 		return CognitoUser{}, err
 	}
-	if err := s.applyCustomMessagePayload(accountID, strings.TrimSpace(poolID), username, "CustomMessage_AdminCreateUser", "{####}", cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(accountID, strings.TrimSpace(poolID), username, "CustomMessage_AdminCreateUser", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
 		return CognitoUser{}, err
 	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "CONFIRMED", PoolID: poolID, CreatedAt: now}, nil
@@ -581,6 +581,10 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	if err := s.storeUserSRPVerifier(acct, poolID, username, password); err != nil {
 		return CognitoUser{}, "", err
 	}
+	code, err := s.issueCognitoConfirmationCode()
+	if err != nil {
+		return CognitoUser{}, "", err
+	}
 	// CustomMessage_SignUp: lab has no SES; Invoke, render/store body fields for tests.
 	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
 		TriggerSource: "CustomMessage_SignUp",
@@ -594,17 +598,22 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	if err != nil {
 		return CognitoUser{}, "", err
 	}
-	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_SignUp", "{####}", cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_SignUp", "{####}", code, cmPayload); err != nil {
+		return CognitoUser{}, "", err
+	}
+	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeSignUp, code, "email"); err != nil {
 		return CognitoUser{}, "", err
 	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now}, poolID, nil
 }
 
-// ConfirmSignUpCognitoUser marks a user CONFIRMED (lab: any confirmation code accepted if non-empty).
+// ConfirmSignUpCognitoUser marks a user CONFIRMED when the stored signup code matches.
+// With Cognito insecure codes enabled, any non-empty confirmation code is accepted.
 func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode string) error {
 	clientID = strings.TrimSpace(clientID)
 	username = strings.TrimSpace(username)
-	if clientID == "" || username == "" || strings.TrimSpace(confirmationCode) == "" {
+	confirmationCode = strings.TrimSpace(confirmationCode)
+	if clientID == "" || username == "" || confirmationCode == "" {
 		return fmt.Errorf("%w: ClientId, Username, and ConfirmationCode required", ErrCognitoBadRequest)
 	}
 	var acct, poolID, sub string
@@ -620,12 +629,20 @@ func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode st
 	if err != nil {
 		return fmt.Errorf("confirm signup: %w", err)
 	}
+	if !s.cognitoInsecureCodesEnabled() {
+		if err := s.matchCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeSignUp, confirmationCode); err != nil {
+			return err
+		}
+	}
 	_, err = s.db.Exec(
 		`UPDATE cognito_users SET user_status = 'CONFIRMED' WHERE account_id = ? AND pool_id = ? AND username = ?`,
 		acct, poolID, username,
 	)
 	if err != nil {
 		return fmt.Errorf("confirm signup update: %w", err)
+	}
+	if err := s.clearCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeSignUp); err != nil {
+		return err
 	}
 	if _, err := s.FireCognitoTriggerIfConfigured(
 		acct, poolID, clientID, username, sub, "CONFIRMED",
@@ -643,7 +660,7 @@ type CognitoCodeDeliveryDetails struct {
 	AttributeName  string
 }
 
-// ForgotPasswordCognitoUser fires CustomMessage_ForgotPassword (stub code {####} / 123456; no SES).
+// ForgotPasswordCognitoUser fires CustomMessage_ForgotPassword and stores a confirmation code (no SES).
 func (s *Store) ForgotPasswordCognitoUser(clientID, username string) (CognitoCodeDeliveryDetails, error) {
 	clientID = strings.TrimSpace(clientID)
 	username = strings.TrimSpace(username)
@@ -655,6 +672,10 @@ func (s *Store) ForgotPasswordCognitoUser(clientID, username string) (CognitoCod
 		return CognitoCodeDeliveryDetails{}, err
 	}
 	sub, _, status, err := s.getUser(acct, poolID, username)
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	code, err := s.issueCognitoConfirmationCode()
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
@@ -670,10 +691,10 @@ func (s *Store) ForgotPasswordCognitoUser(clientID, username string) (CognitoCod
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ForgotPassword", "{####}", cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ForgotPassword", "{####}", code, cmPayload); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeForgotPassword, CognitoLabConfirmationCode, "email"); err != nil {
+	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeForgotPassword, code, "email"); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
 	return CognitoCodeDeliveryDetails{
@@ -701,6 +722,10 @@ func (s *Store) ResendConfirmationCodeCognitoUser(clientID, username string) (Co
 	if status != "UNCONFIRMED" {
 		return CognitoCodeDeliveryDetails{}, fmt.Errorf("%w: User cannot be confirmed. Current status is %s", ErrCognitoBadRequest, status)
 	}
+	code, err := s.issueCognitoConfirmationCode()
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
 	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
 		TriggerSource: "CustomMessage_ResendCode",
 		UserPoolID:    poolID,
@@ -713,7 +738,10 @@ func (s *Store) ResendConfirmationCodeCognitoUser(clientID, username string) (Co
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ResendCode", "{####}", cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ResendCode", "{####}", code, cmPayload); err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeSignUp, code, "email"); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
 	return CognitoCodeDeliveryDetails{

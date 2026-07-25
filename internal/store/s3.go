@@ -130,12 +130,18 @@ func ValidateBucketName(name string) error {
 }
 
 // SanitizeObjectKey validates and returns a cleaned object key.
-// Rejects empty keys, null bytes, and "." / ".." path segments.
+// Rejects empty keys, null bytes, backslashes, OS path separators other than '/',
+// and "." / ".." path segments.
 func SanitizeObjectKey(key string) (string, error) {
 	if key == "" || !utf8.ValidString(key) {
 		return "", ErrInvalidObjectKey
 	}
 	if strings.ContainsRune(key, 0) {
+		return "", ErrInvalidObjectKey
+	}
+	// Always reject '\'; on Windows filepath.Separator is also '\', so this
+	// blocks Windows path escapes before Join/FromSlash can reinterpret them.
+	if strings.ContainsRune(key, '\\') || (strings.ContainsRune(key, filepath.Separator) && filepath.Separator != '/') {
 		return "", ErrInvalidObjectKey
 	}
 	if len(key) > 1024 {
@@ -152,6 +158,31 @@ func SanitizeObjectKey(key string) (string, error) {
 		}
 	}
 	return cleaned, nil
+}
+
+// s3ObjectAbsPath joins object bytes under dataRoot/s3/account/bucket and
+// fails closed if the cleaned path is not contained under the bucket root.
+func s3ObjectAbsPath(dataRoot, accountID, bucket, key string) (rel, abs string, err error) {
+	rel = filepath.Join("s3", accountID, bucket, filepath.FromSlash(key))
+	abs = filepath.Clean(filepath.Join(dataRoot, rel))
+	bucketRoot := filepath.Clean(filepath.Join(dataRoot, "s3", accountID, bucket))
+	if err := ensureS3PathWithinBucket(bucketRoot, abs); err != nil {
+		return "", "", err
+	}
+	return rel, abs, nil
+}
+
+func ensureS3PathWithinBucket(bucketRoot, absPath string) error {
+	bucketRoot = filepath.Clean(bucketRoot)
+	absPath = filepath.Clean(absPath)
+	rel, err := filepath.Rel(bucketRoot, absPath)
+	if err != nil {
+		return ErrInvalidObjectKey
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ErrInvalidObjectKey
+	}
+	return nil
 }
 
 // CreateBucket inserts a new empty bucket.
@@ -473,8 +504,10 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 	unlock := s.lockS3Object(accountID, bucket, key)
 	defer unlock()
 
-	rel := filepath.Join("s3", accountID, bucket, filepath.FromSlash(key))
-	abs := filepath.Join(s.dataRoot, rel)
+	rel, abs, err := s3ObjectAbsPath(s.dataRoot, accountID, bucket, key)
+	if err != nil {
+		return ObjectMeta{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return ObjectMeta{}, fmt.Errorf("put object mkdir: %w", err)
 	}

@@ -38,14 +38,17 @@ func run(args []string) error {
 	if cfg.RootAccessKeyID == "" || cfg.RootSecretAccessKey == "" {
 		return fmt.Errorf("set NOCTAXRIS_ROOT_ACCESS_KEY_ID and NOCTAXRIS_ROOT_SECRET_ACCESS_KEY")
 	}
+	if config.ExampleRootCredentials(cfg.RootAccessKeyID, cfg.RootSecretAccessKey) && !config.ListenIsLoopback(cfg.ListenAddr) {
+		return fmt.Errorf("example root credentials refused on non-loopback listen %q; set unique NOCTAXRIS_ROOT_ACCESS_KEY_ID and NOCTAXRIS_ROOT_SECRET_ACCESS_KEY (Compose binds 0.0.0.0 inside the container while host publish stays 127.0.0.1)", cfg.ListenAddr)
+	}
 
 	if err := os.MkdirAll(cfg.DataRoot, 0o700); err != nil {
 		return fmt.Errorf("create data root: %w", err)
 	}
 
-	masterKeyPath := cfg.MasterKeyPath
-	if masterKeyPath == "" {
-		masterKeyPath = filepath.Join(cfg.DataRoot, "master.key")
+	masterKeyPath, err := store.ResolveMasterKeyPath(cfg.MasterKeyPath, cfg.DataRoot)
+	if err != nil {
+		return fmt.Errorf("master key path: %w", err)
 	}
 
 	master, err := store.LoadOrCreateMasterKey(masterKeyPath)
