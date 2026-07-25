@@ -100,7 +100,7 @@ Failures on assertions happen only when the endpoint is up.
 - Default Lambda SDK tests cover Create/Get/List/Delete. Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
 - Edge / data / workflow / nested SDK rows (CloudFront edge, Transfer files, Glue crawler, AppConfig deploy, Config history, SFN Choice, CloudTrail delivery, Route53 Alias, ELBv2 rules, AppSync PassRole) run whenever the API is up. Nested OpenSearch / ActiveMQ / Firehose OpenSearch / Lambda MQ ESM rows skip when engines are not Active/RUNNING.
 - Terraform needs the Terraform binary on `PATH`. The runner skips when it is missing.
-- Prefer WSL or Linux for AWS CLI and Terraform against `127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host.
+- Compose publishes `127.0.0.1:4566` only. When the API runs on a Windows host, WSL cannot reach that loopback; `tests/terraform/run.sh` skips automatically when the endpoint host is `127.0.0.1` or `localhost` (override with `NOCTAXRIS_FORCE_WSL_TF=1` only if EP is reachable). Do not widen Compose publish. Run AWS CLI / Terraform from a host that shares the loopback with Compose (Windows host for Docker Desktop, or Linux where Compose listens locally).
 
 Gaps and follow-ups: [HANDOFF.md](HANDOFF.md).
 

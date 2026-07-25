@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Terraform apply + destroy against a running Noctaxris API.
 # STACK=lab-core (default) or STACK=lab-fullstack
+#
+# Lab-JSON edge/data surfaces (CloudFront, Transfer, Glue crawler, AppConfig, Config,
+# SFN, CloudTrail, Firehose OS, Route53 Alias, ELBv2, AppSync, MQ) are SDK-only —
+# do not add fake TF resources for them.
+# When Compose publishes 127.0.0.1:4566 on a Windows host, skip this runner from WSL
+# (WSL loopback is not the Windows host). Do not widen Compose publish to work around it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -12,6 +18,21 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-wJalrXUtnFEMI/K7MDENG/bPx
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 export AWS_EC2_METADATA_DISABLED="${AWS_EC2_METADATA_DISABLED:-true}"
 EP="${NOCTAXRIS_ENDPOINT:-http://127.0.0.1:4566}"
+
+# WSL cannot reach Windows-host 127.0.0.1 publish. Skip lab-fullstack (and any stack when
+# EP is loopback) unless NOCTAXRIS_FORCE_WSL_TF=1. Do not widen Compose to 0.0.0.0.
+is_wsl=0
+if [[ -r /proc/version ]] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+  is_wsl=1
+fi
+ep_host="${EP#*://}"
+ep_host="${ep_host%%[:/]*}"
+if [[ "$is_wsl" -eq 1 && -z "${NOCTAXRIS_FORCE_WSL_TF:-}" ]]; then
+  if [[ "$ep_host" == "127.0.0.1" || "$ep_host" == "localhost" ]]; then
+    echo "skip Terraform STACK=$STACK_NAME from WSL: endpoint $EP is loopback (Windows Compose publish is not this VM). Run from the host that shares the loopback, or set NOCTAXRIS_FORCE_WSL_TF=1 only when EP is reachable." >&2
+    exit 0
+  fi
+fi
 
 if ! command -v terraform >/dev/null 2>&1; then
   echo "terraform not on PATH — skip Terraform suite" >&2

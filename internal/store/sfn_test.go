@@ -294,3 +294,169 @@ func TestSFNParallelMergesBranchOutputs(t *testing.T) {
 		t.Fatalf("expected Parallel history events, got %+v", hist)
 	}
 }
+
+func TestSFNChoiceStringGreaterThan(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Pick",
+  "States": {
+    "Pick": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.name", "StringGreaterThan": "m", "Next": "Hi"}
+      ],
+      "Default": "Lo"
+    },
+    "Hi": {"Type": "Pass", "Result": {"tier": "hi"}, "End": true},
+    "Lo": {"Type": "Pass", "Result": {"tier": "lo"}, "End": true}
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "choice-gt-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-gt", `{"name":"zeta"}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" || !strings.Contains(exec.Output, `"hi"`) {
+		t.Fatalf("exec=%+v", exec)
+	}
+}
+
+func TestSFNChoiceIsPresent(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Pick",
+  "States": {
+    "Pick": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.flag", "IsPresent": true, "Next": "Yes"}
+      ],
+      "Default": "No"
+    },
+    "Yes": {"Type": "Pass", "Result": {"ok": true}, "End": true},
+    "No": {"Type": "Pass", "Result": {"ok": false}, "End": true}
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "choice-present-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-present", `{"flag":1}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" || !strings.Contains(exec.Output, `true`) {
+		t.Fatalf("exec=%+v", exec)
+	}
+	exec2, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-absent", `{}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec2.Status != "SUCCEEDED" || !strings.Contains(exec2.Output, `false`) {
+		t.Fatalf("exec2=%+v", exec2)
+	}
+}
+
+func TestSFNPassInputPathResultPath(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Wrap",
+  "States": {
+    "Wrap": {
+      "Type": "Pass",
+      "InputPath": "$.payload",
+      "Result": {"done": true},
+      "ResultPath": "$.out",
+      "End": true
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "path-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-path", `{"payload":{"n":1},"keep":true}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" {
+		t.Fatalf("status=%s error=%s cause=%s", exec.Status, exec.Error, exec.Cause)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(exec.Output), &obj); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := obj["keep"]; !ok {
+		t.Fatalf("want keep preserved, got %s", exec.Output)
+	}
+	out, ok := obj["out"].(map[string]any)
+	if !ok {
+		t.Fatalf("want out object, got %s", exec.Output)
+	}
+	if out["done"] != true {
+		t.Fatalf("want out.done true, got %s", exec.Output)
+	}
+}
+
+func TestSFNMapIterator(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Fan",
+  "States": {
+    "Fan": {
+      "Type": "Map",
+      "ItemsPath": "$.items",
+      "Iterator": {
+        "StartAt": "Echo",
+        "States": {
+          "Echo": {
+            "Type": "Pass",
+            "Result": {"mapped": true},
+            "End": true
+          }
+        }
+      },
+      "End": true
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "map-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-map", `{"items":[{"a":1},{"a":2}]}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" {
+		t.Fatalf("status=%s error=%s cause=%s", exec.Status, exec.Error, exec.Cause)
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal([]byte(exec.Output), &arr); err != nil {
+		t.Fatalf("output not JSON array: %s err=%v", exec.Output, err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("want array length 2, got %d (%s)", len(arr), exec.Output)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawMap bool
+	for _, ev := range hist {
+		if strings.HasPrefix(ev.Type, "Map") {
+			sawMap = true
+			break
+		}
+	}
+	if !sawMap {
+		t.Fatalf("expected Map history events, got %+v", hist)
+	}
+}

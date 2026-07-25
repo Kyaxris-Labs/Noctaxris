@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -76,9 +77,13 @@ type AthenaStartInput struct {
 }
 
 var (
-	athenaSelectRE = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+?)\s+FROM\s+([^\s;]+)\s*(.*?)\s*;?\s*$`)
-	athenaWhereRE  = regexp.MustCompile(`(?is)^WHERE\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
+	athenaSelectRE = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+)\s+FROM\s+(.+)$`)
+	athenaWhereRE  = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
 	athenaLimitRE  = regexp.MustCompile(`(?is)^LIMIT\s+(\d+)\s*(.*)$`)
+	athenaGroupRE  = regexp.MustCompile(`(?is)^GROUP\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(.*)$`)
+	athenaOrderRE  = regexp.MustCompile(`(?is)^ORDER\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(ASC|DESC))?\s*(.*)$`)
+	athenaJoinRE   = regexp.MustCompile(`(?is)^([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:INNER\s+)?JOIN\s+([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+ON\s+([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*$`)
+	athenaFromRE   = regexp.MustCompile(`(?is)^([^\s]+)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?\s*$`)
 )
 
 // EnsureAthenaSchema creates Athena tables if missing.
@@ -170,7 +175,32 @@ func (s *Store) StartAthenaQueryExecution(accountID string, in AthenaStartInput)
 		return exec, nil
 	}
 
-	cols, rows, err := s.readAthenaTableRows(accountID, table, parsed)
+	var cols []AthenaColumnInfo
+	var rows [][]string
+	if parsed.JoinTable != "" {
+		joinDB := parsed.JoinDatabase
+		if joinDB == "" {
+			joinDB = parsed.Database
+		}
+		right, jerr := s.GetGlueTable(accountID, joinDB, parsed.JoinTable)
+		if jerr != nil {
+			exec.State = "FAILED"
+			if errors.Is(jerr, ErrGlueNotFound) {
+				exec.StateChangeReason = fmt.Sprintf("TABLE_NOT_FOUND: %s.%s", joinDB, parsed.JoinTable)
+			} else {
+				exec.StateChangeReason = jerr.Error()
+			}
+			exec.ErrorMessage = exec.StateChangeReason
+			exec.CompletionMS = now
+			if saveErr := s.saveAthenaExecution(accountID, exec); saveErr != nil {
+				return AthenaQueryExecution{}, saveErr
+			}
+			return exec, nil
+		}
+		cols, rows, err = s.readAthenaJoinRows(accountID, table, right, parsed)
+	} else {
+		cols, rows, err = s.readAthenaTableRows(accountID, table, parsed)
+	}
 	if err != nil {
 		exec.State = "FAILED"
 		exec.StateChangeReason = err.Error()
@@ -210,16 +240,33 @@ type athenaParsedSelect struct {
 	WhereColumn string
 	WhereValue  string
 	CountStar   bool
+	OrderColumn string
+	OrderDesc   bool
+	GroupColumn string
+	// Join fields (empty TableAlias means no join)
+	TableAlias     string
+	JoinDatabase   string
+	JoinTable      string
+	JoinAlias      string
+	JoinLeftCol    string
+	JoinRightCol   string
+	JoinLeftAlias  string
+	JoinRightAlias string
 }
 
+const athenaSQLHelp = "unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [alias] [JOIN|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'] [GROUP BY col] [ORDER BY col [ASC|DESC]] [LIMIT n])"
+
 func parseAthenaSelect(q string) (athenaParsedSelect, error) {
+	q = strings.TrimSpace(q)
+	q = strings.TrimSuffix(q, ";")
+	q = strings.TrimSpace(q)
 	m := athenaSelectRE.FindStringSubmatch(q)
 	if m == nil {
-		return athenaParsedSelect{}, fmt.Errorf("%w: unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [WHERE col = 'literal'] [LIMIT n])", ErrAthenaBadRequest)
+		return athenaParsedSelect{}, fmt.Errorf("%w: %s", ErrAthenaBadRequest, athenaSQLHelp)
 	}
 	colPart := strings.TrimSpace(m[1])
-	fromPart := strings.TrimSpace(m[2])
-	suffix := strings.TrimSpace(m[3])
+	fromAndSuffix := strings.TrimSpace(m[2])
+	fromPart, suffix := splitAthenaFromAndSuffix(fromAndSuffix)
 
 	var cols []string
 	countStar := false
@@ -234,46 +281,119 @@ func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 			if c == "" {
 				continue
 			}
-			// strip simple aliases: col AS alias → col
 			if i := strings.Index(strings.ToUpper(c), " AS "); i >= 0 {
 				c = strings.TrimSpace(c[:i])
 			}
+			if strings.ReplaceAll(strings.ToLower(c), " ", "") == "count(*)" {
+				countStar = true
+				continue
+			}
 			cols = append(cols, c)
 		}
-		if len(cols) == 0 {
+		if !countStar && len(cols) == 0 {
 			return athenaParsedSelect{}, fmt.Errorf("%w: SELECT column list is empty", ErrAthenaBadRequest)
 		}
 	}
 
-	dbName, table := "", fromPart
-	if i := strings.LastIndex(fromPart, "."); i >= 0 {
-		dbName = strings.TrimSpace(fromPart[:i])
-		table = strings.TrimSpace(fromPart[i+1:])
+	out := athenaParsedSelect{Columns: cols, CountStar: countStar}
+	fromUpper := strings.ToUpper(fromPart)
+	if strings.Contains(fromUpper, " LEFT JOIN ") || strings.Contains(fromUpper, " RIGHT JOIN ") ||
+		strings.Contains(fromUpper, " FULL JOIN ") || strings.Contains(fromUpper, " CROSS JOIN ") ||
+		strings.Contains(fromUpper, " OUTER JOIN ") {
+		return athenaParsedSelect{}, fmt.Errorf("%w: %s", ErrAthenaBadRequest, athenaSQLHelp)
 	}
-	table = strings.Trim(table, "`\"")
-	dbName = strings.Trim(dbName, "`\"")
-	if table == "" {
-		return athenaParsedSelect{}, fmt.Errorf("%w: table name required", ErrAthenaBadRequest)
+	if jm := athenaJoinRE.FindStringSubmatch(fromPart); jm != nil {
+		leftRef, leftAlias := strings.TrimSpace(jm[1]), strings.TrimSpace(jm[2])
+		rightRef, rightAlias := strings.TrimSpace(jm[3]), strings.TrimSpace(jm[4])
+		onLeftAlias, onLeftCol := strings.TrimSpace(jm[5]), strings.TrimSpace(jm[6])
+		onRightAlias, onRightCol := strings.TrimSpace(jm[7]), strings.TrimSpace(jm[8])
+		ldb, ltbl := splitAthenaDBTable(leftRef)
+		rdb, rtbl := splitAthenaDBTable(rightRef)
+		if ltbl == "" || rtbl == "" {
+			return athenaParsedSelect{}, fmt.Errorf("%w: JOIN requires table names", ErrAthenaBadRequest)
+		}
+		// Normalize ON so JoinLeft* is left table and JoinRight* is right table.
+		switch {
+		case strings.EqualFold(onLeftAlias, leftAlias) && strings.EqualFold(onRightAlias, rightAlias):
+			// already oriented
+		case strings.EqualFold(onLeftAlias, rightAlias) && strings.EqualFold(onRightAlias, leftAlias):
+			onLeftAlias, onLeftCol, onRightAlias, onRightCol = onRightAlias, onRightCol, onLeftAlias, onLeftCol
+		default:
+			return athenaParsedSelect{}, fmt.Errorf("%w: JOIN ON aliases must match table aliases", ErrAthenaBadRequest)
+		}
+		out.Database, out.Table, out.TableAlias = ldb, ltbl, leftAlias
+		out.JoinDatabase, out.JoinTable, out.JoinAlias = rdb, rtbl, rightAlias
+		out.JoinLeftAlias, out.JoinLeftCol = onLeftAlias, onLeftCol
+		out.JoinRightAlias, out.JoinRightCol = onRightAlias, onRightCol
+	} else if strings.Contains(fromUpper, " JOIN ") {
+		return athenaParsedSelect{}, fmt.Errorf("%w: %s", ErrAthenaBadRequest, athenaSQLHelp)
+	} else {
+		fm := athenaFromRE.FindStringSubmatch(fromPart)
+		if fm == nil {
+			return athenaParsedSelect{}, fmt.Errorf("%w: %s", ErrAthenaBadRequest, athenaSQLHelp)
+		}
+		dbName, table := splitAthenaDBTable(strings.TrimSpace(fm[1]))
+		if table == "" {
+			return athenaParsedSelect{}, fmt.Errorf("%w: table name required", ErrAthenaBadRequest)
+		}
+		out.Database, out.Table = dbName, table
+		if len(fm) > 2 {
+			out.TableAlias = strings.TrimSpace(fm[2])
+		}
 	}
 
-	whereCol, whereVal, limit, err := parseAthenaSelectSuffix(suffix)
+	whereCol, whereVal, limit, orderCol, orderDesc, groupCol, err := parseAthenaSelectSuffix(suffix)
 	if err != nil {
 		return athenaParsedSelect{}, err
 	}
-
-	out := athenaParsedSelect{
-		Columns:     cols,
-		Database:    dbName,
-		Table:       table,
-		Limit:       limit,
-		WhereColumn: whereCol,
-		WhereValue:  whereVal,
-		CountStar:   countStar,
+	out.WhereColumn, out.WhereValue, out.Limit = whereCol, whereVal, limit
+	out.OrderColumn, out.OrderDesc, out.GroupColumn = orderCol, orderDesc, groupCol
+	if out.GroupColumn != "" && !out.CountStar {
+		hasCount := false
+		for _, c := range out.Columns {
+			if strings.EqualFold(strings.ReplaceAll(c, " ", ""), "COUNT(*)") {
+				hasCount = true
+				break
+			}
+		}
+		if !hasCount {
+			return athenaParsedSelect{}, fmt.Errorf("%w: GROUP BY requires COUNT(*) in SELECT list", ErrAthenaBadRequest)
+		}
 	}
 	return out, nil
 }
 
-func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, err error) {
+func splitAthenaDBTable(ref string) (dbName, table string) {
+	ref = strings.TrimSpace(ref)
+	if i := strings.LastIndex(ref, "."); i >= 0 {
+		dbName = strings.Trim(strings.TrimSpace(ref[:i]), "`\"")
+		table = strings.Trim(strings.TrimSpace(ref[i+1:]), "`\"")
+		return dbName, table
+	}
+	return "", strings.Trim(ref, "`\"")
+}
+
+func splitAthenaFromAndSuffix(s string) (fromPart, suffix string) {
+	upper := strings.ToUpper(s)
+	cut := -1
+	for _, kw := range []string{" WHERE ", " GROUP ", " ORDER ", " LIMIT "} {
+		if i := strings.Index(upper, kw); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
+	}
+	// also allow leading clause without preceding space when fromPart is exact
+	if cut < 0 {
+		for _, kw := range []string{"WHERE ", "GROUP ", "ORDER ", "LIMIT "} {
+			if strings.HasPrefix(upper, kw) {
+				return "", strings.TrimSpace(s)
+			}
+		}
+		return strings.TrimSpace(s), ""
+	}
+	return strings.TrimSpace(s[:cut]), strings.TrimSpace(s[cut:])
+}
+
+func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, orderCol string, orderDesc bool, groupCol string, err error) {
 	s = strings.TrimSpace(s)
 	for s != "" {
 		upper := strings.ToUpper(s)
@@ -281,33 +401,50 @@ func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, er
 		case strings.HasPrefix(upper, "WHERE "):
 			m := athenaWhereRE.FindStringSubmatch(s)
 			if m == nil {
-				return "", "", 0, fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal')", ErrAthenaBadRequest)
+				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal')", ErrAthenaBadRequest)
 			}
 			whereCol = strings.TrimSpace(m[1])
 			whereVal = m[2]
 			s = strings.TrimSpace(m[3])
+		case strings.HasPrefix(upper, "GROUP "):
+			m := athenaGroupRE.FindStringSubmatch(s)
+			if m == nil {
+				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid GROUP BY", ErrAthenaBadRequest)
+			}
+			groupCol = strings.TrimSpace(m[1])
+			s = strings.TrimSpace(m[2])
+		case strings.HasPrefix(upper, "ORDER "):
+			m := athenaOrderRE.FindStringSubmatch(s)
+			if m == nil {
+				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid ORDER BY", ErrAthenaBadRequest)
+			}
+			orderCol = strings.TrimSpace(m[1])
+			orderDesc = strings.EqualFold(strings.TrimSpace(m[2]), "DESC")
+			s = strings.TrimSpace(m[3])
 		case strings.HasPrefix(upper, "LIMIT "):
 			m := athenaLimitRE.FindStringSubmatch(s)
 			if m == nil {
-				return "", "", 0, fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
 			}
 			n, convErr := strconv.Atoi(m[1])
 			if convErr != nil || n < 0 {
-				return "", "", 0, fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
 			}
 			limit = n
 			s = strings.TrimSpace(m[2])
 		default:
-			return "", "", 0, fmt.Errorf("%w: unsupported SQL clause", ErrAthenaBadRequest)
+			return "", "", 0, "", false, "", fmt.Errorf("%w: unsupported SQL clause", ErrAthenaBadRequest)
 		}
 	}
-	return whereCol, whereVal, limit, nil
+	return whereCol, whereVal, limit, orderCol, orderDesc, groupCol, nil
 }
 
 func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed athenaParsedSelect) ([]AthenaColumnInfo, [][]string, error) {
 	loadCols := table.Columns
 	selected := table.Columns
-	if parsed.CountStar {
+	if parsed.GroupColumn != "" {
+		selected = nil
+	} else if parsed.CountStar && len(parsed.Columns) == 0 {
 		selected = nil
 	} else if len(parsed.Columns) > 0 && parsed.Columns[0] != "*" {
 		byName := map[string]GlueColumn{}
@@ -316,7 +453,7 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 		}
 		selected = nil
 		for _, name := range parsed.Columns {
-			c, ok := byName[strings.ToLower(name)]
+			c, ok := byName[strings.ToLower(athenaBareCol(name))]
 			if !ok {
 				return nil, nil, fmt.Errorf("%w: column not found: %s", ErrAthenaBadRequest, name)
 			}
@@ -338,7 +475,7 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 
 	jsonMode := isGlueJSON(table)
 	var dataRows [][]string
-	earlyLimit := parsed.Limit > 0 && parsed.WhereColumn == "" && !parsed.CountStar
+	earlyLimit := parsed.Limit > 0 && parsed.WhereColumn == "" && !parsed.CountStar && parsed.OrderColumn == "" && parsed.GroupColumn == ""
 	for _, obj := range listed.Contents {
 		_, data, err := s.GetObject(accountID, bucket, obj.Key)
 		if err != nil {
@@ -362,22 +499,31 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 		}
 	}
 	if parsed.WhereColumn != "" {
-		dataRows, err = filterAthenaRows(dataRows, table.Columns, parsed.WhereColumn, parsed.WhereValue)
+		dataRows, err = filterAthenaRows(dataRows, table.Columns, athenaBareCol(parsed.WhereColumn), parsed.WhereValue)
 		if err != nil {
 			return nil, nil, err
 		}
+	}
+	if parsed.GroupColumn != "" {
+		return athenaGroupByCount(dataRows, table.Columns, parsed)
 	}
 	if parsed.CountStar {
 		colInfos := []AthenaColumnInfo{{Name: "_col0", Type: "bigint"}}
 		out := [][]string{{"_col0"}, {strconv.Itoa(len(dataRows))}}
 		return colInfos, out, nil
 	}
+	dataRows = projectAthenaRows(dataRows, table.Columns, selected)
+	if parsed.OrderColumn != "" {
+		dataRows, err = sortAthenaRows(dataRows, selected, athenaBareCol(parsed.OrderColumn), parsed.OrderDesc)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	if earlyLimit && len(dataRows) > parsed.Limit {
 		dataRows = dataRows[:parsed.Limit]
 	} else if !earlyLimit && parsed.Limit > 0 && len(dataRows) > parsed.Limit {
 		dataRows = dataRows[:parsed.Limit]
 	}
-	dataRows = projectAthenaRows(dataRows, table.Columns, selected)
 
 	colInfos := make([]AthenaColumnInfo, 0, len(selected))
 	for _, c := range selected {
@@ -397,6 +543,374 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 	out = append(out, header)
 	out = append(out, dataRows...)
 	return colInfos, out, nil
+}
+
+func athenaBareCol(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+func athenaGroupByCount(dataRows [][]string, columns []GlueColumn, parsed athenaParsedSelect) ([]AthenaColumnInfo, [][]string, error) {
+	groupName := athenaBareCol(parsed.GroupColumn)
+	idx := -1
+	for i, c := range columns {
+		if strings.EqualFold(c.Name, groupName) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, nil, fmt.Errorf("%w: GROUP BY column not found: %s", ErrAthenaBadRequest, groupName)
+	}
+	counts := map[string]int{}
+	orderKeys := []string{}
+	for _, row := range dataRows {
+		if idx >= len(row) {
+			continue
+		}
+		k := row[idx]
+		if _, ok := counts[k]; !ok {
+			orderKeys = append(orderKeys, k)
+		}
+		counts[k]++
+	}
+	if parsed.OrderColumn != "" && strings.EqualFold(athenaBareCol(parsed.OrderColumn), groupName) {
+		sort.SliceStable(orderKeys, func(i, j int) bool {
+			if parsed.OrderDesc {
+				return orderKeys[i] > orderKeys[j]
+			}
+			return orderKeys[i] < orderKeys[j]
+		})
+	}
+
+	includeKey := false
+	hasCount := parsed.CountStar
+	for _, c := range parsed.Columns {
+		norm := strings.ReplaceAll(strings.ToLower(c), " ", "")
+		if norm == "count(*)" {
+			hasCount = true
+			continue
+		}
+		if c == "*" {
+			continue
+		}
+		if strings.EqualFold(athenaBareCol(c), groupName) {
+			includeKey = true
+		} else if athenaBareCol(c) != "" {
+			// Lab GROUP BY SELECT may list the group key under its bare name.
+			includeKey = true
+		}
+	}
+	if hasCount && len(parsed.Columns) > 0 && !includeKey {
+		// COUNT(*) was stripped from Columns at parse time; remaining cols are group keys.
+		includeKey = true
+	}
+	if !hasCount {
+		return nil, nil, fmt.Errorf("%w: GROUP BY requires COUNT(*) in SELECT list", ErrAthenaBadRequest)
+	}
+
+	var colInfos []AthenaColumnInfo
+	var header []string
+	if includeKey {
+		typ := "varchar"
+		for _, c := range columns {
+			if strings.EqualFold(c.Name, groupName) && c.Type != "" {
+				typ = c.Type
+			}
+		}
+		colInfos = append(colInfos, AthenaColumnInfo{Name: groupName, Type: typ})
+		header = append(header, groupName)
+	}
+	colInfos = append(colInfos, AthenaColumnInfo{Name: "_col0", Type: "bigint"})
+	header = append(header, "_col0")
+
+	out := [][]string{header}
+	for _, k := range orderKeys {
+		row := []string{}
+		if includeKey {
+			row = append(row, k)
+		}
+		row = append(row, strconv.Itoa(counts[k]))
+		out = append(out, row)
+	}
+	if parsed.Limit > 0 && len(out)-1 > parsed.Limit {
+		out = out[:1+parsed.Limit]
+	}
+	return colInfos, out, nil
+}
+
+func sortAthenaRows(rows [][]string, selected []GlueColumn, orderCol string, desc bool) ([][]string, error) {
+	idx := -1
+	for i, c := range selected {
+		if strings.EqualFold(c.Name, orderCol) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("%w: ORDER BY column not found: %s", ErrAthenaBadRequest, orderCol)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := "", ""
+		if idx < len(rows[i]) {
+			a = rows[i][idx]
+		}
+		if idx < len(rows[j]) {
+			b = rows[j][idx]
+		}
+		if desc {
+			return a > b
+		}
+		return a < b
+	})
+	return rows, nil
+}
+
+func (s *Store) loadAthenaRawRows(accountID string, table GlueTable) ([][]string, error) {
+	bucket, prefix, err := parseS3Location(table.StorageLocation)
+	if err != nil {
+		return nil, err
+	}
+	listed, err := s.ListObjectsV2(accountID, bucket, prefix, "")
+	if err != nil {
+		if errors.Is(err, ErrNoSuchBucket) {
+			return nil, fmt.Errorf("%w: S3 location bucket does not exist: %s", ErrAthenaBadRequest, bucket)
+		}
+		return nil, err
+	}
+	jsonMode := isGlueJSON(table)
+	var dataRows [][]string
+	for _, obj := range listed.Contents {
+		_, data, err := s.GetObject(accountID, bucket, obj.Key)
+		if err != nil {
+			return nil, fmt.Errorf("%w: GetObject failed for s3://%s/%s: %v", ErrAthenaBadRequest, bucket, obj.Key, err)
+		}
+		if jsonMode {
+			rows, err := parseJSONLines(data, table.Columns)
+			if err != nil {
+				return nil, err
+			}
+			dataRows = append(dataRows, rows...)
+		} else {
+			rows, err := parseCSVRows(data, table.Columns)
+			if err != nil {
+				return nil, err
+			}
+			dataRows = append(dataRows, rows...)
+		}
+	}
+	return dataRows, nil
+}
+
+func (s *Store) readAthenaJoinRows(accountID string, left, right GlueTable, parsed athenaParsedSelect) ([]AthenaColumnInfo, [][]string, error) {
+	leftRows, err := s.loadAthenaRawRows(accountID, left)
+	if err != nil {
+		return nil, nil, err
+	}
+	rightRows, err := s.loadAthenaRawRows(accountID, right)
+	if err != nil {
+		return nil, nil, err
+	}
+	leftOn := athenaBareCol(parsed.JoinLeftCol)
+	rightOn := athenaBareCol(parsed.JoinRightCol)
+	li, ri := -1, -1
+	for i, c := range left.Columns {
+		if strings.EqualFold(c.Name, leftOn) {
+			li = i
+			break
+		}
+	}
+	for i, c := range right.Columns {
+		if strings.EqualFold(c.Name, rightOn) {
+			ri = i
+			break
+		}
+	}
+	if li < 0 || ri < 0 {
+		return nil, nil, fmt.Errorf("%w: JOIN ON columns not found", ErrAthenaBadRequest)
+	}
+	rightByKey := map[string][][]string{}
+	for _, row := range rightRows {
+		if ri >= len(row) {
+			continue
+		}
+		k := row[ri]
+		rightByKey[k] = append(rightByKey[k], row)
+	}
+	var joined [][]string
+	joinedCols := append([]GlueColumn{}, left.Columns...)
+	joinedCols = append(joinedCols, right.Columns...)
+	for _, lrow := range leftRows {
+		if li >= len(lrow) {
+			continue
+		}
+		for _, rrow := range rightByKey[lrow[li]] {
+			merged := append(append([]string{}, lrow...), rrow...)
+			joined = append(joined, merged)
+		}
+	}
+	if parsed.WhereColumn != "" {
+		joined, err = filterAthenaJoinRows(joined, left, right, parsed)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if parsed.GroupColumn != "" {
+		return athenaGroupByCount(joined, joinedCols, parsed)
+	}
+	if parsed.CountStar {
+		colInfos := []AthenaColumnInfo{{Name: "_col0", Type: "bigint"}}
+		out := [][]string{{"_col0"}, {strconv.Itoa(len(joined))}}
+		return colInfos, out, nil
+	}
+	selected, colInfos, err := resolveAthenaJoinProjection(left, right, parsed)
+	if err != nil {
+		return nil, nil, err
+	}
+	var dataRows [][]string
+	for _, row := range joined {
+		proj := make([]string, len(selected))
+		for i, idx := range selected {
+			if idx < len(row) {
+				proj[i] = row[idx]
+			}
+		}
+		dataRows = append(dataRows, proj)
+	}
+	if parsed.OrderColumn != "" {
+		orderIdx := -1
+		want := strings.ToLower(parsed.OrderColumn)
+		for i, c := range colInfos {
+			qualLeft := strings.ToLower(parsed.TableAlias + "." + c.Name)
+			qualRight := strings.ToLower(parsed.JoinAlias + "." + c.Name)
+			if strings.ToLower(c.Name) == athenaBareCol(want) || strings.ToLower(c.Name) == want || qualLeft == want || qualRight == want {
+				orderIdx = i
+				break
+			}
+		}
+		if orderIdx < 0 {
+			return nil, nil, fmt.Errorf("%w: ORDER BY column not found: %s", ErrAthenaBadRequest, parsed.OrderColumn)
+		}
+		desc := parsed.OrderDesc
+		sort.SliceStable(dataRows, func(i, j int) bool {
+			a, b := dataRows[i][orderIdx], dataRows[j][orderIdx]
+			if desc {
+				return a > b
+			}
+			return a < b
+		})
+	}
+	if parsed.Limit > 0 && len(dataRows) > parsed.Limit {
+		dataRows = dataRows[:parsed.Limit]
+	}
+	header := make([]string, len(colInfos))
+	for i, c := range colInfos {
+		header[i] = c.Name
+	}
+	out := make([][]string, 0, 1+len(dataRows))
+	out = append(out, header)
+	out = append(out, dataRows...)
+	return colInfos, out, nil
+}
+
+func filterAthenaJoinRows(rows [][]string, left, right GlueTable, parsed athenaParsedSelect) ([][]string, error) {
+	col := parsed.WhereColumn
+	bare := athenaBareCol(col)
+	alias := ""
+	if i := strings.Index(col, "."); i >= 0 {
+		alias = col[:i]
+	}
+	idx := -1
+	if alias == "" || strings.EqualFold(alias, parsed.TableAlias) {
+		for i, c := range left.Columns {
+			if strings.EqualFold(c.Name, bare) {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 && (alias == "" || strings.EqualFold(alias, parsed.JoinAlias)) {
+		for i, c := range right.Columns {
+			if strings.EqualFold(c.Name, bare) {
+				idx = len(left.Columns) + i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("%w: WHERE column not found: %s", ErrAthenaBadRequest, col)
+	}
+	var out [][]string
+	for _, row := range rows {
+		if idx < len(row) && row[idx] == parsed.WhereValue {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func resolveAthenaJoinProjection(left, right GlueTable, parsed athenaParsedSelect) (indices []int, infos []AthenaColumnInfo, err error) {
+	if len(parsed.Columns) == 0 || (len(parsed.Columns) == 1 && parsed.Columns[0] == "*") {
+		for i, c := range left.Columns {
+			indices = append(indices, i)
+			typ := c.Type
+			if typ == "" {
+				typ = "varchar"
+			}
+			infos = append(infos, AthenaColumnInfo{Name: c.Name, Type: typ})
+		}
+		for i, c := range right.Columns {
+			indices = append(indices, len(left.Columns)+i)
+			typ := c.Type
+			if typ == "" {
+				typ = "varchar"
+			}
+			infos = append(infos, AthenaColumnInfo{Name: c.Name, Type: typ})
+		}
+		return indices, infos, nil
+	}
+	for _, name := range parsed.Columns {
+		alias, bare := "", athenaBareCol(name)
+		if i := strings.Index(name, "."); i >= 0 {
+			alias = name[:i]
+		}
+		found := false
+		if alias == "" || strings.EqualFold(alias, parsed.TableAlias) {
+			for i, c := range left.Columns {
+				if strings.EqualFold(c.Name, bare) {
+					indices = append(indices, i)
+					typ := c.Type
+					if typ == "" {
+						typ = "varchar"
+					}
+					infos = append(infos, AthenaColumnInfo{Name: c.Name, Type: typ})
+					found = true
+					break
+				}
+			}
+		}
+		if !found && (alias == "" || strings.EqualFold(alias, parsed.JoinAlias)) {
+			for i, c := range right.Columns {
+				if strings.EqualFold(c.Name, bare) {
+					indices = append(indices, len(left.Columns)+i)
+					typ := c.Type
+					if typ == "" {
+						typ = "varchar"
+					}
+					infos = append(infos, AthenaColumnInfo{Name: c.Name, Type: typ})
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("%w: column not found: %s", ErrAthenaBadRequest, name)
+		}
+	}
+	return indices, infos, nil
 }
 
 func filterAthenaRows(rows [][]string, columns []GlueColumn, whereCol, whereVal string) ([][]string, error) {

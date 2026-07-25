@@ -106,6 +106,37 @@ func SignUpJSON(u store.CognitoUser) ([]byte, error) {
 // ConfirmSignUpJSON is an empty OK body.
 func ConfirmSignUpJSON() ([]byte, error) { return []byte(`{}`), nil }
 
+// ConfirmForgotPasswordJSON is an empty OK body.
+func ConfirmForgotPasswordJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// CodeDeliveryDetailsJSON builds ForgotPassword / ResendConfirmationCode /
+// GetUserAttributeVerificationCode response.
+func CodeDeliveryDetailsJSON(d store.CognitoCodeDeliveryDetails) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"CodeDeliveryDetails": map[string]any{
+			"Destination":    d.Destination,
+			"DeliveryMedium": d.DeliveryMedium,
+			"AttributeName":  d.AttributeName,
+		},
+	})
+}
+
+// UpdateUserAttributesJSON builds UpdateUserAttributes response.
+func UpdateUserAttributesJSON(details []store.CognitoCodeDeliveryDetails) ([]byte, error) {
+	list := make([]map[string]any, 0, len(details))
+	for _, d := range details {
+		list = append(list, map[string]any{
+			"Destination":    d.Destination,
+			"DeliveryMedium": d.DeliveryMedium,
+			"AttributeName":  d.AttributeName,
+		})
+	}
+	return json.Marshal(map[string]any{"CodeDeliveryDetailsList": list})
+}
+
+// VerifyUserAttributeJSON is an empty OK body.
+func VerifyUserAttributeJSON() ([]byte, error) { return []byte(`{}`), nil }
+
 // AuthResultJSON builds InitiateAuth / AdminInitiateAuth AuthenticationResult.
 // Omits RefreshToken when empty (AWS refresh without a rotated refresh token).
 func AuthResultJSON(a store.CognitoAuthResult) ([]byte, error) {

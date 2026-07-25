@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS cognito_srp_sessions (
   srp_a TEXT NOT NULL,
   srp_b TEXT NOT NULL,
   sealed_b BLOB NOT NULL,
-  expires_at INTEGER NOT NULL
+  expires_at INTEGER NOT NULL,
+  custom_auth_prior_json TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_cognito_srp_sessions_client
   ON cognito_srp_sessions(account_id, pool_id, client_id);
@@ -85,6 +87,7 @@ func EnsureCognitoSRPSchema(db *sql.DB) error {
 	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE cognito_users ADD COLUMN srp_salt TEXT`,
 		`ALTER TABLE cognito_users ADD COLUMN srp_verifier TEXT`,
+		`ALTER TABLE cognito_srp_sessions ADD COLUMN custom_auth_prior_json TEXT NOT NULL DEFAULT ''`,
 	}); err != nil {
 		return fmt.Errorf("ensure cognito srp schema: migrate: %w", err)
 	}
@@ -363,6 +366,19 @@ func (s *Store) beginCognitoSRP(accountID, poolID, clientID, username, srpAHex s
 	); err != nil {
 		return CognitoAuthOutcome{}, err
 	}
+	return s.createPASSWORDVerifierChallenge(accountID, poolID, clientID, username, A, saltHex, verifierHex, "")
+}
+
+// createPASSWORDVerifierChallenge stores an SRP session and returns PASSWORD_VERIFIER params.
+// customAuthPriorJSON, when non-empty, marks the session as nested inside CUSTOM_AUTH so a
+// successful RespondToAuthChallenge re-enters DefineAuthChallenge instead of issuing tokens.
+func (s *Store) createPASSWORDVerifierChallenge(
+	accountID, poolID, clientID, username string,
+	A *big.Int, saltHex, verifierHex, customAuthPriorJSON string,
+) (CognitoAuthOutcome, error) {
+	if err := s.EnsureCognitoSRPSchema(); err != nil {
+		return CognitoAuthOutcome{}, err
+	}
 	if saltHex == "" || verifierHex == "" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: USER_SRP_AUTH unavailable for user", ErrCognitoUnauthorized)
 	}
@@ -398,10 +414,10 @@ func (s *Store) beginCognitoSRP(accountID, poolID, clientID, username, srpAHex s
 	expires := time.Now().UTC().Add(cognitoSRPSessionTTL).Unix()
 	_, err = s.db.Exec(
 		`INSERT INTO cognito_srp_sessions
-		 (session_id, account_id, pool_id, client_id, username, secret_block, srp_a, srp_b, sealed_b, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (session_id, account_id, pool_id, client_id, username, secret_block, srp_a, srp_b, sealed_b, expires_at, custom_auth_prior_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID, accountID, poolID, clientID, username, secretBlock,
-		strings.ToLower(A.Text(16)), strings.ToLower(B.Text(16)), sealedB, expires,
+		strings.ToLower(A.Text(16)), strings.ToLower(B.Text(16)), sealedB, expires, customAuthPriorJSON,
 	)
 	if err != nil {
 		return CognitoAuthOutcome{}, fmt.Errorf("store srp session: %w", err)
@@ -436,14 +452,15 @@ func (s *Store) RespondToCognitoPASSWORDVerifierChallenge(
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: PASSWORD_VERIFIER responses incomplete", ErrCognitoBadRequest)
 	}
 
-	var acct, poolID, sessUser, sessSecret, srpAHex, srpBHex string
+	var acct, poolID, sessUser, sessSecret, srpAHex, srpBHex, customAuthPriorJSON string
 	var sealedB []byte
 	var expiresAt int64
 	err := s.db.QueryRow(
-		`SELECT account_id, pool_id, username, secret_block, srp_a, srp_b, sealed_b, expires_at
+		`SELECT account_id, pool_id, username, secret_block, srp_a, srp_b, sealed_b, expires_at,
+		        COALESCE(custom_auth_prior_json, '')
 		 FROM cognito_srp_sessions WHERE session_id = ? AND client_id = ?`,
 		session, clientID,
-	).Scan(&acct, &poolID, &sessUser, &sessSecret, &srpAHex, &srpBHex, &sealedB, &expiresAt)
+	).Scan(&acct, &poolID, &sessUser, &sessSecret, &srpAHex, &srpBHex, &sealedB, &expiresAt, &customAuthPriorJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CognitoAuthOutcome{}, ErrCognitoUnauthorized
 	}
@@ -519,6 +536,18 @@ func (s *Store) RespondToCognitoPASSWORDVerifierChallenge(
 		return CognitoAuthOutcome{}, ErrCognitoUnauthorized
 	}
 	_, _ = s.db.Exec(`DELETE FROM cognito_srp_sessions WHERE session_id = ?`, session)
+
+	if strings.TrimSpace(customAuthPriorJSON) != "" {
+		var prior []CognitoChallengeResult
+		if err := json.Unmarshal([]byte(customAuthPriorJSON), &prior); err != nil {
+			return CognitoAuthOutcome{}, fmt.Errorf("%w: corrupt custom auth session", ErrCognitoUnauthorized)
+		}
+		prior = append(prior, CognitoChallengeResult{
+			ChallengeName:   "PASSWORD_VERIFIER",
+			ChallengeResult: true,
+		})
+		return s.runCustomAuthDefine(acct, poolID, clientID, username, prior, "")
+	}
 
 	mfaOn, err := s.userMFAEnabled(acct, poolID, username)
 	if err != nil {

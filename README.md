@@ -7,15 +7,22 @@
 </p>
 
 ```bash
-docker compose -f docker/compose.yaml --env-file docker/.env up --build
+docker pull kyaxris/noctaxris:latest
+docker run -d --name noctaxris -p 127.0.0.1:4566:4566 \
+  -e NOCTAXRIS_LISTEN=0.0.0.0:4566 \
+  -e NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1 \
+  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID=AKIAROOTEXAMPLE01 \
+  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' \
+  kyaxris/noctaxris:latest
 curl http://127.0.0.1:4566/_noctaxris/health
 # ok
 ```
 
 <p align="center">
-  <a href="https://github.com/Kyaxris-Labs/Noctaxris"><img src="https://img.shields.io/badge/GitHub-Kyaxris--Labs%2FNoctaxris-181717?logo=github" alt="GitHub"></a>
-  <a href="https://hub.docker.com/r/kyaxris/noctaxris"><img src="https://img.shields.io/badge/Docker_Hub-kyaxris%2Fnoctaxris-2496ED?logo=docker&logoColor=white" alt="Docker Hub"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  <a href="https://github.com/Kyaxris-Labs/Noctaxris/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Kyaxris-Labs/Noctaxris/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://hub.docker.com/r/kyaxris/noctaxris"><img src="https://img.shields.io/docker/pulls/kyaxris/noctaxris" alt="Docker pulls"></a>
+  <a href="https://hub.docker.com/r/kyaxris/noctaxris/tags"><img src="https://img.shields.io/docker/v/kyaxris/noctaxris?sort=semver&label=image" alt="Docker image version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Kyaxris-Labs/Noctaxris" alt="MIT License"></a>
 </p>
 
 Point the AWS CLI or SDK at it and call the lab services the same way you would against real AWS.
@@ -33,12 +40,17 @@ Go module: [`github.com/Kyaxris-Labs/Noctaxris`](https://github.com/Kyaxris-Labs
 
 ## Quick start
 
-Copy env, bring Compose up, then hit STS and S3 with the same root keys you put in `docker/.env`.
+Pull the Hub image, run it on loopback `:4566`, then hit STS and S3 with the same root keys you passed in.
 
 ```bash
-cp docker/.env.example docker/.env
+docker pull kyaxris/noctaxris:latest
 
-docker compose -f docker/compose.yaml --env-file docker/.env up --build
+docker run -d --name noctaxris -p 127.0.0.1:4566:4566 \
+  -e NOCTAXRIS_LISTEN=0.0.0.0:4566 \
+  -e NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1 \
+  -e NOCTAXRIS_ROOT_ACCESS_KEY_ID=AKIAROOTEXAMPLE01 \
+  -e NOCTAXRIS_ROOT_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' \
+  kyaxris/noctaxris:latest
 
 curl http://127.0.0.1:4566/_noctaxris/health
 curl http://127.0.0.1:4566/_noctaxris/ready
@@ -54,7 +66,7 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Per-service CLI smoke: [docs/services/](docs/services/index.md).
+Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine` (`docker compose -f docker/compose.yaml --env-file docker/.env up --build`). Per-service CLI smoke: [docs/services/](docs/services/index.md).
 
 ## Services
 
@@ -104,8 +116,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Cognito User Pools</td>
-      <td>Pool and app client CRUD (UpdateUserPool), AdminCreateUser / SignUp / ConfirmSignUp, InitiateAuth USER_PASSWORD_AUTH / USER_SRP_AUTH (PASSWORD_VERIFIER) / CUSTOM_AUTH (Define/Create/Verify) plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code>), lab <code>RoleArn</code> + <code>LambdaConfig</code> with PassRole for cognito-idp.amazonaws.com and sync Invoke of PreSignUp / PostConfirmation / PreAuthentication / PostAuthentication / PreTokenGeneration (V1 ID-token <code>claimsOverrideDetails</code>) / CustomMessage_SignUp and CustomMessage_AdminCreateUser (render/store SMS/email body; no SES) / UserMigration_Authentication (password auth) / custom-auth Define/Create/Verify, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
-      <td>Out of lab scope: Identity Pools, Hosted UI, SMS/email MFA, Adaptive auth / UI customization. Open: UserMigration on USER_SRP_AUTH (AWS requires password flow); CustomMessage sources beyond SignUp and AdminCreateUser; CUSTOM_AUTH SRP nesting.</td>
+      <td>Pool and app client CRUD (UpdateUserPool), AdminCreateUser / SignUp / ConfirmSignUp / ForgotPassword / ConfirmForgotPassword / ResendConfirmationCode / UpdateUserAttributes / GetUserAttributeVerificationCode / VerifyUserAttribute, InitiateAuth USER_PASSWORD_AUTH / USER_SRP_AUTH (PASSWORD_VERIFIER) / CUSTOM_AUTH (Define/Create/Verify; optional SRP nesting SRP_A → PASSWORD_VERIFIER → CUSTOM_CHALLENGE) plus REFRESH_TOKEN_AUTH / REFRESH_TOKEN with refresh rotation, RevokeToken (unsigned public IdP; Admin* stay SigV4), TOTP MFA (<code>AssociateSoftwareToken</code> / <code>VerifySoftwareToken</code> / <code>RespondToAuthChallenge</code>), lab <code>RoleArn</code> + <code>LambdaConfig</code> with PassRole for cognito-idp.amazonaws.com and sync Invoke of PreSignUp / PostConfirmation / PreAuthentication / PostAuthentication / PreTokenGeneration (V1 ID-token <code>claimsOverrideDetails</code>) / CustomMessage_SignUp / AdminCreateUser / ForgotPassword / ResendCode / UpdateUserAttribute / VerifyUserAttribute (render/store SMS/email body; no SES) / UserMigration_Authentication (password auth) / custom-auth Define/Create/Verify, RS256 ID and access tokens, JWKS on <code>/cognito-idp/REGION/POOL/.well-known/jwks.json</code>.</td>
+      <td>Out of lab scope: Identity Pools, Hosted UI, SMS/email MFA (<code>CustomMessage_Authentication</code>), Adaptive auth / UI customization. Blocked: UserMigration on USER_SRP_AUTH (AWS requires password auth; SRP obscures the password).</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
@@ -192,8 +204,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="3" align="center" valign="middle">Audit and tags</td>
       <td>CloudTrail</td>
-      <td>LookupEvents over local <code>cloudtrail/events.jsonl</code> with time and attribute filters. CreateTrail/DescribeTrails/DeleteTrail/StartLogging/StopLogging: StartLogging delivers one lab JSONL snapshot to in-account S3 and optional CloudWatch Logs then sets IsLogging (PassRole for Logs role; fail closed if Put fails).</td>
-      <td>Selectors, Insights, Lake, organization trails, continuous delivery after StartLogging, cross-account lookup.</td>
+      <td>LookupEvents over local <code>cloudtrail/events.jsonl</code> with time and attribute filters. CreateTrail/DescribeTrails/DeleteTrail/StartLogging/StopLogging: StartLogging delivers one lab JSONL snapshot to in-account S3 and optional CloudWatch Logs then sets IsLogging; while logging, new JSONL lines ship continuously to the same destinations (PassRole for Logs role; fail closed if Put fails).</td>
+      <td>Selectors, Insights, Lake, organization trails, cross-account lookup.</td>
     </tr>
     <tr>
       <td>CloudWatch Logs</td>
@@ -219,7 +231,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>Amazon MQ</td>
       <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. RabbitMQ or ActiveMQ nested DinD when engine up (CREATION_IN_PROGRESS→RUNNING, Internal AMQP). No DinD → CREATION_FAILED + stub://. PubliclyAccessible=true rejected. No host/WAN broker ports. Lambda MQ ESM Create when RUNNING (see Lambda row).</td>
-      <td>MSK/Kafka, full admin APIs, public broker endpoints, in-tree AMQP consumer (Lambda ESM default empty batch).</td>
+      <td>MSK/Kafka, full admin APIs, public broker endpoints. Blocked: ActiveMQ AMQP 1.0/JMS consumer for Lambda ESM (dial-only empty batch).</td>
     </tr>
     <tr>
       <td>Transfer Family</td>
@@ -238,8 +250,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Step Functions</td>
-      <td>Create/Delete/Describe/List state machines, StartExecution/DescribeExecution/GetExecutionHistory. ASL Pass/Succeed/Fail/Choice (Equals-only: StringEquals/NumericEquals/BooleanEquals)/Wait/Parallel and Task to Lambda (sync Invoke), SQS, SNS, or EventBridge bus. Wait Seconds clamped 0–5; Parallel branches run sequentially in-process (array merge). Task definitions require roleArn. EventBridge and Scheduler can StartExecution with RoleArn; EventBridge may omit RoleArn when a lab state-machine resource policy Allows events.amazonaws.com. PassRole with states.amazonaws.com when RoleArn set. Foreign Task targets AND destination resource policy; PutEvents dual-evals bus policy.</td>
-      <td>Map, Express workflows, Callback/Activity, non-Equals Choice operators, concurrent Parallel, Timestamp Wait, InputPath/ResultPath depth beyond Pass Result.</td>
+      <td>Create/Delete/Describe/List state machines, StartExecution/DescribeExecution/GetExecutionHistory. ASL Pass/Succeed/Fail/Choice (String/Numeric Equals/GreaterThan/LessThan, BooleanEquals, IsPresent)/Wait/Parallel/Map and Task to Lambda (sync Invoke), SQS, SNS, or EventBridge bus. Wait Seconds clamped 0–5; Parallel and Map run sequentially in-process (array merge). Top-level InputPath/ResultPath on Pass/Task/Parallel/Map. Task definitions require roleArn. EventBridge and Scheduler can StartExecution with RoleArn; EventBridge may omit RoleArn when a lab state-machine resource policy Allows events.amazonaws.com. PassRole with states.amazonaws.com when RoleArn set. Foreign Task targets AND destination resource policy; PutEvents dual-evals bus policy.</td>
+      <td>Express workflows, Callback/Activity, Choice And/Or/Not, concurrent Parallel/Map, Timestamp Wait, OutputPath, Map ItemProcessor/distributed mode.</td>
     </tr>
     <tr>
       <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
@@ -259,8 +271,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>WAF v2</td>
-      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / AppSync / Lambda function ARNs / ALB <code>loadbalancer/app/...</code> with an invoke gate (REST API, NLB, Cognito rejected), invoke-path DefaultAction gate, ByteMatch on UriPath/SingleHeader (CONTAINS/EXACTLY), labeled Evaluate helper. No real edge PoP.</td>
-      <td>Real PoP / CAPTCHA / Bot Control, full statement catalog.</td>
+      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / AppSync / Lambda function ARNs / ALB <code>loadbalancer/app/...</code> with an invoke gate (REST API, NLB, Cognito rejected), invoke-path DefaultAction gate, ByteMatch on UriPath/SingleHeader (CONTAINS/EXACTLY), SizeConstraint (UriPath/SingleHeader size compare), inline IPSetReference (CIDR vs SourceIP), labeled Evaluate helper. No real edge PoP.</td>
+      <td>Real PoP / CAPTCHA / Bot Control, full statement catalog, managed IPSet resources beyond inline Addresses.</td>
     </tr>
     <tr>
       <td>Config</td>
@@ -295,8 +307,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
-      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, Kinesis, and Amazon MQ event source mappings (MQ Create requires RUNNING nested broker; allowlisted <code>noctaxris-mq-*</code> dial; default receive returns empty batch after dial — no in-tree AMQP client; unit tests inject <code>MQReceiveFunc</code>), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys, NewImage, and OldImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign IAM principals and service-principal XA grants with SourceAccount/SourceArn), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM, in-tree AMQP/JMS consumer for MQ ESM (default empty batch after dial), FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
+      <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, Kinesis, and Amazon MQ event source mappings (MQ Create requires RUNNING nested broker; allowlisted <code>noctaxris-mq-*</code> only; RabbitMQ AMQP 0-9-1 Dial + <code>basic.get</code> on queue <code>noctaxris</code> returns real bodies; ActiveMQ stays dial-then-empty; unit tests may inject <code>MQReceiveFunc</code>), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys, NewImage, and OldImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign IAM principals and service-principal XA grants with SourceAccount/SourceArn), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
+      <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM, ActiveMQ AMQP 1.0/JMS consumer for MQ ESM (dial-only empty), FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -330,8 +342,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>AppSync</td>
-      <td>Create/Get/List/DeleteGraphqlApi, schema store, CreateApiKey, Lambda data sources with optional serviceRoleArn (PassRole + appsync.amazonaws.com trust), flat multi-field Query resolvers, GraphQL POST that Invokes Lambda. Auth API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS (Bearer JWT via lab Cognito JWKS).</td>
-      <td>Amplify, subscriptions/MQTT, nested selections, AppSync JS/VTL runtimes, OIDC beyond Cognito.</td>
+      <td>Create/Get/List/DeleteGraphqlApi, schema store, CreateApiKey, Lambda data sources with optional serviceRoleArn (PassRole + appsync.amazonaws.com trust), multi-field Query and nested object field resolvers (selection depth ≤ 3), GraphQL POST that Invokes Lambda. Auth API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS (Bearer JWT via lab Cognito JWKS).</td>
+      <td>Amplify, subscriptions/MQTT, AppSync JS/VTL runtimes, OIDC beyond Cognito, field arguments/aliases/fragments.</td>
     </tr>
     <tr>
       <td rowspan="1" align="center" valign="middle">API edge</td>
@@ -342,8 +354,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE col = 'literal' and COUNT(*). Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
-      <td>Full SQL, CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
+      <td>Full SQL (outer joins, LIKE/IN, multi-aggregate GROUP BY), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>
@@ -434,10 +446,9 @@ Full graph and request path: [docs/architecture.md](docs/architecture.md).
 | [docs/release.md](docs/release.md) | Cutting a release (`v1.1.1`, Hub `latest` / semver) |
 | [tests/README.md](tests/README.md) | SDK, Terraform, and CloudFormation suites (Compose required) |
 
-## Author
+## Contributors
 
-[![Kyaxris-Labs](https://img.shields.io/badge/GitHub-Kyaxris--Labs-181717?logo=github)](https://github.com/Kyaxris-Labs)
-[![Noctaxris](https://img.shields.io/badge/repo-Noctaxris-0A66C2?logo=go)](https://github.com/Kyaxris-Labs/Noctaxris)
+[![Contributors](https://contrib.rocks/image?repo=Kyaxris-Labs/Noctaxris)](https://github.com/Kyaxris-Labs/Noctaxris/graphs/contributors)
 
 ## License
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -262,7 +263,7 @@ func TestCustomAuthChallengeRoundTrip(t *testing.T) {
 		return b, nil
 	})
 
-	chal, err := st.InitiateCognitoCustomAuth(client.ClientID, "kara")
+	chal, err := st.InitiateCognitoCustomAuth(client.ClientID, "kara", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +335,7 @@ func TestCustomAuthWrongAnswerFails(t *testing.T) {
 		b, _ := json.Marshal(ev)
 		return b, nil
 	})
-	chal, err := st.InitiateCognitoCustomAuth(client.ClientID, "liam")
+	chal, err := st.InitiateCognitoCustomAuth(client.ClientID, "liam", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,5 +345,341 @@ func TestCustomAuthWrongAnswerFails(t *testing.T) {
 	})
 	if !errors.Is(err, store.ErrCognitoUnauthorized) {
 		t.Fatalf("err=%v want unauthorized", err)
+	}
+}
+
+func TestForgotPasswordRendersAndStoresCustomMessage(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-forgot-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "forgot-user", "Secret9!"); err != nil {
+		t.Fatal(err)
+	}
+	fnARN := "arn:aws:lambda:us-east-1:" + account + ":function:cm-forgot"
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: fnARN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenEvent string
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		seenEvent = eventJSON
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(eventJSON), &ev); err != nil {
+			return nil, err
+		}
+		ev["response"] = map[string]any{
+			"smsMessage":   "Reset code {####}",
+			"emailMessage": "Hello {username}, reset {####}",
+			"emailSubject": "Reset",
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	})
+	details, err := st.ForgotPasswordCognitoUser(client.ClientID, "forgot-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.DeliveryMedium != "EMAIL" {
+		t.Fatalf("details=%+v", details)
+	}
+	if !strings.Contains(seenEvent, "CustomMessage_ForgotPassword") {
+		t.Fatalf("event=%s", seenEvent)
+	}
+	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "forgot-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.TriggerSource != "CustomMessage_ForgotPassword" {
+		t.Fatalf("trigger=%q", msg.TriggerSource)
+	}
+	if !strings.Contains(msg.SMSMessage, "123456") {
+		t.Fatalf("sms=%q", msg.SMSMessage)
+	}
+	if !strings.Contains(msg.EmailMessage, "forgot-user") || !strings.Contains(msg.EmailMessage, "123456") {
+		t.Fatalf("email=%q", msg.EmailMessage)
+	}
+}
+
+func TestForgotPasswordCustomMessageRejectsMissingCodeParameter(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-forgot-bad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "forgot-bad", "Secret0!"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:cm-forgot-bad",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		var ev map[string]any
+		_ = json.Unmarshal([]byte(eventJSON), &ev)
+		ev["response"] = map[string]any{"emailMessage": "no code here"}
+		b, _ := json.Marshal(ev)
+		return b, nil
+	})
+	_, err = st.ForgotPasswordCognitoUser(client.ClientID, "forgot-bad")
+	if !errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		t.Fatalf("err=%v want InvalidLambdaResponse", err)
+	}
+}
+
+func TestForgotPasswordCustomMessageFailClosed(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-forgot-fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "forgot-fail", "Secret7!"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:missing-forgot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(_, _ string) ([]byte, error) {
+		return nil, errors.New("invoke failed")
+	})
+	_, err = st.ForgotPasswordCognitoUser(client.ClientID, "forgot-fail")
+	if !errors.Is(err, store.ErrCognitoTriggerFailed) {
+		t.Fatalf("err=%v want ErrCognitoTriggerFailed", err)
+	}
+}
+
+func TestResendConfirmationCodeRendersAndStoresCustomMessage(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-resend-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:cm-resend",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(eventJSON), &ev); err != nil {
+			return nil, err
+		}
+		src, _ := ev["triggerSource"].(string)
+		ev["response"] = map[string]any{
+			"smsMessage":   "Code {####}",
+			"emailMessage": "Hello {username}, code {####}",
+			"emailSubject": src,
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	})
+	if _, _, err := st.SignUpCognitoUser(account, client.ClientID, "resend-user", "Secret9!"); err != nil {
+		t.Fatal(err)
+	}
+	details, err := st.ResendConfirmationCodeCognitoUser(client.ClientID, "resend-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.AttributeName != "email" {
+		t.Fatalf("details=%+v", details)
+	}
+	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "resend-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.TriggerSource != "CustomMessage_ResendCode" {
+		t.Fatalf("trigger=%q", msg.TriggerSource)
+	}
+	if !strings.Contains(msg.EmailMessage, "123456") || !strings.Contains(msg.EmailMessage, "resend-user") {
+		t.Fatalf("email=%q", msg.EmailMessage)
+	}
+}
+
+func TestResendConfirmationCodeCustomMessageRejectsMissingCodeParameter(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-resend-bad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:cm-resend-bad",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := 0
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		call++
+		var ev map[string]any
+		_ = json.Unmarshal([]byte(eventJSON), &ev)
+		if call == 1 {
+			// SignUp CustomMessage OK
+			ev["response"] = map[string]any{"emailMessage": "code {####}"}
+		} else {
+			ev["response"] = map[string]any{"emailMessage": "no code"}
+		}
+		b, _ := json.Marshal(ev)
+		return b, nil
+	})
+	if _, _, err := st.SignUpCognitoUser(account, client.ClientID, "resend-bad", "Secret0!"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.ResendConfirmationCodeCognitoUser(client.ClientID, "resend-bad")
+	if !errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		t.Fatalf("err=%v want InvalidLambdaResponse", err)
+	}
+}
+
+func TestCustomAuthSRPNestingThenCustomChallenge(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "custom-srp-nest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := "SecretNest1!"
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "nest-user", password); err != nil {
+		t.Fatal(err)
+	}
+	defineARN := "arn:aws:lambda:us-east-1:" + account + ":function:define-nest"
+	createARN := "arn:aws:lambda:us-east-1:" + account + ":function:create-nest"
+	verifyARN := "arn:aws:lambda:us-east-1:" + account + ":function:verify-nest"
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		DefineAuthChallenge:         defineARN,
+		CreateAuthChallenge:         createARN,
+		VerifyAuthChallengeResponse: verifyARN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(arn, eventJSON string) ([]byte, error) {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(eventJSON), &ev); err != nil {
+			return nil, err
+		}
+		req, _ := ev["request"].(map[string]any)
+		switch arn {
+		case defineARN:
+			session, _ := req["session"].([]any)
+			switch len(session) {
+			case 1:
+				entry, _ := session[0].(map[string]any)
+				if entry["challengeName"] != "SRP_A" {
+					t.Fatalf("want SRP_A session entry: %+v", entry)
+				}
+				ev["response"] = map[string]any{
+					"challengeName": "PASSWORD_VERIFIER", "issueTokens": false, "failAuthentication": false,
+				}
+			case 2:
+				entry, _ := session[1].(map[string]any)
+				if entry["challengeName"] != "PASSWORD_VERIFIER" || entry["challengeResult"] != true {
+					t.Fatalf("want PASSWORD_VERIFIER true: %+v", entry)
+				}
+				ev["response"] = map[string]any{
+					"challengeName": "CUSTOM_CHALLENGE", "issueTokens": false, "failAuthentication": false,
+				}
+			case 3:
+				entry, _ := session[2].(map[string]any)
+				ok := entry["challengeResult"] == true
+				ev["response"] = map[string]any{"issueTokens": ok, "failAuthentication": !ok}
+			default:
+				t.Fatalf("unexpected session len=%d", len(session))
+			}
+		case createARN:
+			ev["response"] = map[string]any{
+				"publicChallengeParameters":  map[string]any{"prompt": "pin?"},
+				"privateChallengeParameters": map[string]any{"answer": "42"},
+			}
+		case verifyARN:
+			priv, _ := req["privateChallengeParameters"].(map[string]any)
+			ans, _ := req["challengeAnswer"].(string)
+			ev["response"] = map[string]any{"answerCorrect": priv["answer"] == ans}
+		default:
+			t.Fatalf("unexpected arn %s", arn)
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	})
+
+	srpClient, err := store.NewCognitoSRPClient(pool.PoolID, "nest-user", password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chal, err := st.InitiateCognitoCustomAuth(client.ClientID, "nest-user", srpClient.SRPAHex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chal.ChallengeName != "PASSWORD_VERIFIER" || chal.Session == "" {
+		t.Fatalf("challenge=%+v", chal)
+	}
+	if chal.ChallengeParameters["SALT"] == "" || chal.ChallengeParameters["SRP_B"] == "" {
+		t.Fatalf("missing SRP params: %+v", chal.ChallengeParameters)
+	}
+
+	responses, err := srpClient.PasswordVerifierChallengeResponses(chal.ChallengeParameters, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSRP, err := st.RespondToCognitoPASSWORDVerifierChallenge(client.ClientID, chal.Session, responses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterSRP.ChallengeName != "CUSTOM_CHALLENGE" || afterSRP.Session == "" {
+		t.Fatalf("want CUSTOM_CHALLENGE after SRP: %+v", afterSRP)
+	}
+	if afterSRP.ChallengeParameters["prompt"] != "pin?" {
+		t.Fatalf("params=%v", afterSRP.ChallengeParameters)
+	}
+
+	out, err := st.RespondToCognitoCUSTOMChallenge(client.ClientID, afterSRP.Session, map[string]string{
+		"USERNAME": "nest-user",
+		"ANSWER":   "42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.AccessToken == "" || out.IDToken == "" {
+		t.Fatalf("want tokens: %+v", out)
 	}
 }

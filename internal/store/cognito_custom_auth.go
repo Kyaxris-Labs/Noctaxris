@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -149,18 +150,29 @@ func stringMapFromAny(v any) map[string]string {
 	return out
 }
 
-// InitiateCognitoCustomAuth starts CUSTOM_AUTH (Define → optional Create → tokens or challenge).
-func (s *Store) InitiateCognitoCustomAuth(clientID, username string) (CognitoAuthOutcome, error) {
+// InitiateCognitoCustomAuth starts CUSTOM_AUTH (Define → optional Create/PASSWORD_VERIFIER → tokens or challenge).
+// When srpA is set (AuthParameters SRP_A, optionally CHALLENGE_NAME=SRP_A), Define receives
+// session [{challengeName:SRP_A,challengeResult:true}] per AWS custom-auth SRP nesting.
+func (s *Store) InitiateCognitoCustomAuth(clientID, username, srpA string) (CognitoAuthOutcome, error) {
 	accountID, poolID, err := s.lookupClient(clientID)
 	if err != nil {
 		return CognitoAuthOutcome{}, err
 	}
-	return s.runCustomAuthDefine(accountID, poolID, clientID, username, nil)
+	var session []CognitoChallengeResult
+	srpA = strings.TrimSpace(srpA)
+	if srpA != "" {
+		session = []CognitoChallengeResult{{
+			ChallengeName:   "SRP_A",
+			ChallengeResult: true,
+		}}
+	}
+	return s.runCustomAuthDefine(accountID, poolID, clientID, username, session, srpA)
 }
 
 func (s *Store) runCustomAuthDefine(
 	accountID, poolID, clientID, username string,
 	session []CognitoChallengeResult,
+	srpAHex string,
 ) (CognitoAuthOutcome, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -195,14 +207,14 @@ func (s *Store) runCustomAuthDefine(
 	}
 
 	payload, err := s.FireCognitoTriggerEvent(accountID, poolID, CognitoTriggerDefineAuthChallenge, CognitoTriggerEventInput{
-		TriggerSource:      "DefineAuthChallenge_Authentication",
-		UserPoolID:         poolID,
-		Username:           username,
-		ClientID:           clientID,
-		UserSub:            sub,
-		UserStatus:         status,
-		UserNotFound:       userNotFound,
-		ChallengeSession:   session,
+		TriggerSource:    "DefineAuthChallenge_Authentication",
+		UserPoolID:       poolID,
+		Username:         username,
+		ClientID:         clientID,
+		UserSub:          sub,
+		UserStatus:       status,
+		UserNotFound:     userNotFound,
+		ChallengeSession: session,
 	})
 	if err != nil {
 		return CognitoAuthOutcome{}, err
@@ -228,9 +240,53 @@ func (s *Store) runCustomAuthDefine(
 	if chalName == "" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: DefineAuthChallenge must set challengeName or issueTokens", ErrCognitoInvalidLambdaResponse)
 	}
-	if chalName != "CUSTOM_CHALLENGE" {
-		return CognitoAuthOutcome{}, fmt.Errorf("%w: lab CUSTOM_AUTH supports CUSTOM_CHALLENGE only (got %s)", ErrCognitoBadRequest, chalName)
+
+	switch chalName {
+	case "PASSWORD_VERIFIER":
+		return s.customAuthPASSWORDVerifier(accountID, poolID, clientID, username, session, srpAHex)
+	case "CUSTOM_CHALLENGE":
+		return s.customAuthCUSTOMChallenge(accountID, poolID, clientID, username, sub, status, userNotFound, session, pool)
+	default:
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: lab CUSTOM_AUTH supports CUSTOM_CHALLENGE or PASSWORD_VERIFIER (got %s)", ErrCognitoBadRequest, chalName)
 	}
+}
+
+func (s *Store) customAuthPASSWORDVerifier(
+	accountID, poolID, clientID, username string,
+	session []CognitoChallengeResult,
+	srpAHex string,
+) (CognitoAuthOutcome, error) {
+	srpAHex = strings.TrimSpace(srpAHex)
+	if srpAHex == "" {
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: PASSWORD_VERIFIER requires SRP_A from InitiateAuth AuthParameters", ErrCognitoBadRequest)
+	}
+	A, ok := new(big.Int).SetString(srpAHex, 16)
+	if !ok || A.Sign() == 0 || new(big.Int).Mod(A, cognitoSRPN).Sign() == 0 {
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: invalid SRP_A", ErrCognitoBadRequest)
+	}
+	_, status, saltHex, verifierHex, err := s.getUserSRP(accountID, poolID, username)
+	if err != nil {
+		if errors.Is(err, ErrCognitoUserNotFound) {
+			return CognitoAuthOutcome{}, ErrCognitoUnauthorized
+		}
+		return CognitoAuthOutcome{}, err
+	}
+	if status != "CONFIRMED" {
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
+	}
+	priorJSON, err := json.Marshal(session)
+	if err != nil {
+		return CognitoAuthOutcome{}, err
+	}
+	return s.createPASSWORDVerifierChallenge(accountID, poolID, clientID, username, A, saltHex, verifierHex, string(priorJSON))
+}
+
+func (s *Store) customAuthCUSTOMChallenge(
+	accountID, poolID, clientID, username, sub, status string,
+	userNotFound bool,
+	session []CognitoChallengeResult,
+	pool CognitoUserPool,
+) (CognitoAuthOutcome, error) {
 	if pool.LambdaConfig.ARNFor(CognitoTriggerCreateAuthChallenge) == "" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: CreateAuthChallenge trigger is required", ErrCognitoBadRequest)
 	}
@@ -375,5 +431,5 @@ func (s *Store) RespondToCognitoCUSTOMChallenge(
 		ChallengeMetadata: metadata,
 	})
 	_, _ = s.db.Exec(`DELETE FROM cognito_custom_auth_sessions WHERE session_id = ?`, session)
-	return s.runCustomAuthDefine(acct, poolID, clientID, username, prior)
+	return s.runCustomAuthDefine(acct, poolID, clientID, username, prior, "")
 }

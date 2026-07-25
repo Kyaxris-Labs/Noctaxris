@@ -3,8 +3,10 @@ package store_test
 import (
 	"encoding/base64"
 	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -231,5 +233,122 @@ func TestMQESMAuthzAndNestedHostAllowlist(t *testing.T) {
 	})
 	if !errors.Is(err, store.ErrESMMQHostNotAllowed) {
 		t.Fatalf("want ErrESMMQHostNotAllowed got %v", err)
+	}
+}
+
+func TestMQDefaultReceiveEmptyReasonProtocolSplit(t *testing.T) {
+	rabbit := store.MQDefaultReceiveEmptyReason("RABBITMQ")
+	if !strings.Contains(rabbit, "basic.get") {
+		t.Fatalf("rabbit reason=%q", rabbit)
+	}
+	if strings.Contains(rabbit, "no in-tree") || strings.Contains(rabbit, "dial-only") {
+		t.Fatalf("rabbit must not be empty-by-default dial-only: %q", rabbit)
+	}
+	active := store.MQDefaultReceiveEmptyReason("ACTIVEMQ")
+	if !strings.Contains(active, "AMQP 1.0") {
+		t.Fatalf("activemq reason=%q", active)
+	}
+	if !strings.Contains(active, "empty batch") {
+		t.Fatalf("activemq reason=%q", active)
+	}
+}
+
+func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	if err := st.EnsureLambdaESMSchema(); err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "lambda-mq-dial", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["mq:DescribeBroker"],"Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "esm-mq", allowDoc); err != nil {
+		t.Fatal(err)
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "mq-esm-dial-empty",
+		Runtime:      store.LambdaRuntimePython312,
+		RoleARN:      roleARN,
+		Handler:      "app.handler",
+		Zip:          zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ActiveMQ remains dial-only empty (AMQP 1.0); RabbitMQ uses amqp091 Dial+basic.get instead.
+	b, err := st.CreateMQBroker(account, "us-east-1", "dial-broker", "ACTIVEMQ", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := store.MQNestedAMQPEndpoint(b.BrokerID)
+	if err := st.SetMQContainerID(account, b.BrokerID, "ctr-dial", store.MQBrokerStateRunning, ep); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	var dialedAddr string
+	store.SetMQDialFunc(func(network, address string, timeout time.Duration) (net.Conn, error) {
+		dialedAddr = address
+		if network != "tcp" {
+			t.Fatalf("network=%q", network)
+		}
+		if timeout <= 0 {
+			t.Fatalf("timeout=%v", timeout)
+		}
+		host, _, splitErr := net.SplitHostPort(address)
+		if splitErr != nil {
+			t.Fatalf("SplitHostPort: %v", splitErr)
+		}
+		if err := store.ValidateNestedMQHost(host); err != nil {
+			t.Fatalf("dial address host not allowlisted: %v", err)
+		}
+		return net.DialTimeout("tcp", ln.Addr().String(), timeout)
+	})
+	t.Cleanup(func() { store.SetMQDialFunc(nil) })
+
+	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
+		AccountID:      account,
+		FunctionName:   fn.FunctionName,
+		EventSourceARN: b.BrokerARN,
+		BatchSize:      5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoked := false
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
+		invoked = true
+		return "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if invoked {
+		t.Fatal("ActiveMQ dial success must return empty batch and skip Invoke")
+	}
+	if dialedAddr == "" {
+		t.Fatal("expected ActiveMQ default path to dial allowlisted nested address")
+	}
+	if !strings.HasPrefix(dialedAddr, "noctaxris-mq-") {
+		t.Fatalf("dialedAddr=%q", dialedAddr)
 	}
 }

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,9 @@ var (
 	ErrCloudTrailS3Bucket      = errors.New("S3BucketDoesNotExistException")
 )
 
+// cloudtrailShipMu serializes StartLogging cursor updates and continuous delivery.
+var cloudtrailShipMu sync.Mutex
+
 const cloudtrailTrailSchema = `
 CREATE TABLE IF NOT EXISTS cloudtrail_trails (
   account_id TEXT NOT NULL,
@@ -36,6 +41,7 @@ CREATE TABLE IF NOT EXISTS cloudtrail_trails (
   cloudwatch_logs_log_group_arn TEXT NOT NULL DEFAULT '',
   cloudwatch_logs_role_arn TEXT NOT NULL DEFAULT '',
   is_logging INTEGER NOT NULL DEFAULT 0,
+  delivered_line_offset INTEGER NOT NULL DEFAULT 0,
   home_region TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, name)
@@ -81,6 +87,11 @@ func EnsureCloudTrailSchema(db *sql.DB) error {
 	if _, err := db.Exec(cloudtrailTrailSchema); err != nil {
 		return fmt.Errorf("ensure cloudtrail schema: %w", err)
 	}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE cloudtrail_trails ADD COLUMN delivered_line_offset INTEGER NOT NULL DEFAULT 0`,
+	}); err != nil {
+		return fmt.Errorf("ensure cloudtrail schema: %w", err)
+	}
 	return nil
 }
 
@@ -114,7 +125,7 @@ func normalizeCloudTrailS3KeyPrefix(prefix string) string {
 	return prefix
 }
 
-// CloudTrailDeliveryObjectKey returns the lab-shaped S3 key for a StartLogging snapshot.
+// CloudTrailDeliveryObjectKey returns the lab-shaped S3 key for a trail delivery object.
 func CloudTrailDeliveryObjectKey(accountID, keyPrefix, trailName string, tsMillis int64) string {
 	prefix := normalizeCloudTrailS3KeyPrefix(keyPrefix)
 	safeTrail := strings.ReplaceAll(strings.TrimSpace(trailName), "/", "-")
@@ -282,12 +293,16 @@ func (s *Store) DeleteCloudTrailTrail(accountID, name string) error {
 	return nil
 }
 
-// StartCloudTrailLogging delivers a lab JSONL snapshot to S3 (and optional Logs), then sets IsLogging=true.
+// StartCloudTrailLogging delivers a lab JSONL snapshot to S3 (and optional Logs), then sets IsLogging=true
+// and anchors delivered_line_offset at the current JSONL line count for continuous delivery.
 // If any configured destination Put fails, IsLogging stays false.
 func (s *Store) StartCloudTrailLogging(accountID, name, dataRoot string) error {
 	if err := s.EnsureCloudTrailSchema(); err != nil {
 		return err
 	}
+	cloudtrailShipMu.Lock()
+	defer cloudtrailShipMu.Unlock()
+
 	trail, err := s.GetCloudTrailTrail(accountID, name)
 	if err != nil {
 		return err
@@ -298,7 +313,7 @@ func (s *Store) StartCloudTrailLogging(accountID, name, dataRoot string) error {
 		}
 		return fmt.Errorf("start logging: get bucket: %w", err)
 	}
-	lines, err := readCloudTrailJSONLTail(dataRoot, cloudTrailDeliveryCap)
+	lines, total, err := readCloudTrailJSONLTail(dataRoot, cloudTrailDeliveryCap)
 	if err != nil {
 		return fmt.Errorf("start logging: read events: %w", err)
 	}
@@ -312,8 +327,8 @@ func (s *Store) StartCloudTrailLogging(accountID, name, dataRoot string) error {
 		}
 	}
 	_, err = s.db.Exec(
-		`UPDATE cloudtrail_trails SET is_logging = 1 WHERE account_id = ? AND name = ?`,
-		accountID, trail.Name,
+		`UPDATE cloudtrail_trails SET is_logging = 1, delivered_line_offset = ? WHERE account_id = ? AND name = ?`,
+		total, accountID, trail.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("start logging: set flag: %w", err)
@@ -321,7 +336,8 @@ func (s *Store) StartCloudTrailLogging(accountID, name, dataRoot string) error {
 	return nil
 }
 
-// StopCloudTrailLogging sets IsLogging=false without delivery.
+// StopCloudTrailLogging sets IsLogging=false without delivery. The delivery cursor is retained
+// so a later StartLogging snapshot + re-anchor does not re-ship historical continuous deltas.
 func (s *Store) StopCloudTrailLogging(accountID, name string) error {
 	if err := s.EnsureCloudTrailSchema(); err != nil {
 		return err
@@ -340,6 +356,115 @@ func (s *Store) StopCloudTrailLogging(accountID, name string) error {
 	return nil
 }
 
+// ShipCloudTrailContinuousDeliveries ships JSONL lines past each logging trail's delivery cursor
+// to that trail's in-account S3 (and optional Logs) destinations.
+// On Put failure for a trail: IsLogging is cleared (fail closed), the cursor is not advanced,
+// and the error is returned after other logging trails are attempted.
+func (s *Store) ShipCloudTrailContinuousDeliveries(dataRoot string) error {
+	if err := s.EnsureCloudTrailSchema(); err != nil {
+		return err
+	}
+	cloudtrailShipMu.Lock()
+	defer cloudtrailShipMu.Unlock()
+
+	if dataRoot == "" {
+		dataRoot = s.dataRoot
+	}
+	rows, err := s.db.Query(
+		`SELECT account_id, name, s3_bucket_name, s3_key_prefix, cloudwatch_logs_log_group_arn,
+		        cloudwatch_logs_role_arn, home_region, delivered_line_offset
+		 FROM cloudtrail_trails WHERE is_logging = 1 ORDER BY account_id, name`,
+	)
+	if err != nil {
+		return fmt.Errorf("cloudtrail continuous: list trails: %w", err)
+	}
+	defer rows.Close()
+
+	type loggingTrail struct {
+		accountID string
+		trail     CloudTrailTrail
+		offset    int
+	}
+	var active []loggingTrail
+	for rows.Next() {
+		var lt loggingTrail
+		if err := rows.Scan(
+			&lt.accountID, &lt.trail.Name, &lt.trail.S3BucketName, &lt.trail.S3KeyPrefix,
+			&lt.trail.CloudWatchLogsLogGroupArn, &lt.trail.CloudWatchLogsRoleArn,
+			&lt.trail.HomeRegion, &lt.offset,
+		); err != nil {
+			return fmt.Errorf("cloudtrail continuous: scan: %w", err)
+		}
+		lt.trail.IsLogging = true
+		active = append(active, lt)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("cloudtrail continuous: rows: %w", err)
+	}
+
+	var firstErr error
+	for _, lt := range active {
+		if err := s.shipCloudTrailTrailDelta(lt.accountID, lt.trail, dataRoot, lt.offset); err != nil {
+			log.Printf("cloudtrail continuous delivery failed account=%s trail=%s err=%v",
+				lt.accountID, lt.trail.Name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+func (s *Store) shipCloudTrailTrailDelta(accountID string, trail CloudTrailTrail, dataRoot string, offset int) error {
+	lines, newOffset, err := readCloudTrailJSONLAfter(dataRoot, offset, cloudTrailDeliveryCap)
+	if err != nil {
+		return fmt.Errorf("read events: %w", err)
+	}
+	if newOffset < offset {
+		// File shrank (rotated/truncated); re-anchor without delivery.
+		if _, err := s.db.Exec(
+			`UPDATE cloudtrail_trails SET delivered_line_offset = ? WHERE account_id = ? AND name = ?`,
+			newOffset, accountID, trail.Name,
+		); err != nil {
+			return fmt.Errorf("re-anchor cursor: %w", err)
+		}
+		return nil
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	ts := time.Now().UTC().UnixMilli()
+	if err := s.putCloudTrailS3Delivery(accountID, trail, lines, ts); err != nil {
+		_ = s.clearCloudTrailLogging(accountID, trail.Name)
+		return err
+	}
+	if strings.TrimSpace(trail.CloudWatchLogsLogGroupArn) != "" {
+		if err := s.putCloudTrailLogsDelivery(accountID, trail, lines, ts); err != nil {
+			_ = s.clearCloudTrailLogging(accountID, trail.Name)
+			return err
+		}
+	}
+	_, err = s.db.Exec(
+		`UPDATE cloudtrail_trails SET delivered_line_offset = ? WHERE account_id = ? AND name = ?`,
+		newOffset, accountID, trail.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("advance cursor: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) clearCloudTrailLogging(accountID, name string) error {
+	_, err := s.db.Exec(
+		`UPDATE cloudtrail_trails SET is_logging = 0 WHERE account_id = ? AND name = ?`,
+		accountID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("clear logging flag: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) putCloudTrailS3Delivery(accountID string, trail CloudTrailTrail, lines []string, tsMillis int64) error {
 	records := make([]json.RawMessage, 0, len(lines))
 	for _, line := range lines {
@@ -350,7 +475,7 @@ func (s *Store) putCloudTrailS3Delivery(accountID string, trail CloudTrailTrail,
 	}
 	body, err := json.Marshal(map[string]any{"Records": records})
 	if err != nil {
-		return fmt.Errorf("start logging: marshal s3 body: %w", err)
+		return fmt.Errorf("cloudtrail delivery: marshal s3 body: %w", err)
 	}
 	key := CloudTrailDeliveryObjectKey(accountID, trail.S3KeyPrefix, trail.Name, tsMillis)
 	if _, err := s.PutObject(accountID, trail.S3BucketName, key, PutObjectMeta{
@@ -358,7 +483,7 @@ func (s *Store) putCloudTrailS3Delivery(accountID string, trail CloudTrailTrail,
 		PlainSize:   int64(len(body)),
 		ContentType: "application/json",
 	}); err != nil {
-		return fmt.Errorf("start logging: put s3 object: %w", err)
+		return fmt.Errorf("cloudtrail delivery: put s3 object: %w", err)
 	}
 	return nil
 }
@@ -376,19 +501,19 @@ func (s *Store) putCloudTrailLogsDelivery(accountID string, trail CloudTrailTrai
 		if errors.Is(err, ErrLogGroupNotFound) {
 			return fmt.Errorf("%w: CloudWatch Logs log group does not exist", ErrCloudTrailBadRequest)
 		}
-		return fmt.Errorf("start logging: get log group: %w", err)
+		return fmt.Errorf("cloudtrail delivery: get log group: %w", err)
 	}
 	stream := CloudTrailLabLogStreamName(trail.Name)
 	if _, err := s.getLogStream(accountID, group, stream); errors.Is(err, ErrLogStreamNotFound) {
 		if _, err := s.CreateLogStream(accountID, region, group, stream); err != nil && !errors.Is(err, ErrLogStreamAlreadyExists) {
-			return fmt.Errorf("start logging: create log stream: %w", err)
+			return fmt.Errorf("cloudtrail delivery: create log stream: %w", err)
 		}
 	} else if err != nil {
-		return fmt.Errorf("start logging: get log stream: %w", err)
+		return fmt.Errorf("cloudtrail delivery: get log stream: %w", err)
 	}
 	st, err := s.getLogStream(accountID, group, stream)
 	if err != nil {
-		return fmt.Errorf("start logging: get log stream: %w", err)
+		return fmt.Errorf("cloudtrail delivery: get log stream: %w", err)
 	}
 	events := make([]LogEvent, 0, len(lines))
 	for i, line := range lines {
@@ -406,15 +531,54 @@ func (s *Store) putCloudTrailLogsDelivery(accountID string, trail CloudTrailTrai
 		})
 	}
 	if _, _, err := s.PutLogEvents(accountID, group, stream, st.UploadSequenceToken, events); err != nil {
-		return fmt.Errorf("start logging: put log events: %w", err)
+		return fmt.Errorf("cloudtrail delivery: put log events: %w", err)
 	}
 	return nil
 }
 
-func readCloudTrailJSONLTail(dataRoot string, max int) ([]string, error) {
+// readCloudTrailJSONLTail returns up to max trailing non-empty lines and the total line count.
+func readCloudTrailJSONLTail(dataRoot string, max int) ([]string, int, error) {
 	if max <= 0 {
 		max = cloudTrailDeliveryCap
 	}
+	all, err := readCloudTrailJSONLAll(dataRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(all)
+	if len(all) > max {
+		all = all[len(all)-max:]
+	}
+	return all, total, nil
+}
+
+// readCloudTrailJSONLAfter returns non-empty lines after the given 0-based line offset (capped),
+// and the absolute end offset after those lines (or total lines when empty / truncated).
+func readCloudTrailJSONLAfter(dataRoot string, after int, max int) ([]string, int, error) {
+	if max <= 0 {
+		max = cloudTrailDeliveryCap
+	}
+	all, err := readCloudTrailJSONLAll(dataRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(all)
+	if after < 0 {
+		after = 0
+	}
+	if after > total {
+		return nil, total, nil
+	}
+	delta := all[after:]
+	end := total
+	if len(delta) > max {
+		delta = delta[:max]
+		end = after + len(delta)
+	}
+	return delta, end, nil
+}
+
+func readCloudTrailJSONLAll(dataRoot string) ([]string, error) {
 	path := filepath.Join(dataRoot, "cloudtrail", cloudtrailEventsFile)
 	f, err := os.Open(path)
 	if err != nil {
@@ -438,9 +602,6 @@ func readCloudTrailJSONLTail(dataRoot string, max int) ([]string, error) {
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
-	}
-	if len(all) > max {
-		all = all[len(all)-max:]
 	}
 	return all, nil
 }

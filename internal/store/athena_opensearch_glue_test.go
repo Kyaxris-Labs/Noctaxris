@@ -144,6 +144,156 @@ func TestAthenaUnsupportedSQLFails(t *testing.T) {
 	}
 }
 
+func seedAthenaOrdersCSV(t *testing.T, st *store.Store, account string) {
+	t.Helper()
+	seedAthenaPeopleCSV(t, st, account)
+	csv := "order_id,person_id,amount\n10,1,100\n11,1,50\n12,2,75\n"
+	if _, err := st.PutObject(account, "athena-lab", "orders/o1.csv", store.PutObjectMeta{
+		Data: []byte(csv), PlainSize: int64(len(csv)), ContentType: "text/csv",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateGlueTable(account, store.GlueTableCreate{
+		DatabaseName:    "labdb",
+		Name:            "orders",
+		StorageLocation: "s3://athena-lab/orders/",
+		Columns: []store.GlueColumn{
+			{Name: "order_id", Type: "string"},
+			{Name: "person_id", Type: "string"},
+			{Name: "amount", Type: "string"},
+		},
+		SerDeInfo: store.GlueSerDeInfo{
+			SerializationLibrary: "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+			Parameters:           map[string]string{"field.delim": ","},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAthenaInnerJoin(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaOrdersCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT p.name, o.order_id FROM labdb.people p JOIN labdb.orders o ON p.id = o.person_id WHERE p.name = 'alice' ORDER BY o.order_id ASC",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	got, err := st.GetAthenaQueryResults(account, exec.QueryExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ResultRows) != 3 {
+		t.Fatalf("expected header+2 rows, got %#v", got.ResultRows)
+	}
+	if got.ResultRows[0][0] != "name" || got.ResultRows[0][1] != "order_id" {
+		t.Fatalf("header=%#v", got.ResultRows[0])
+	}
+	if got.ResultRows[1][0] != "alice" || got.ResultRows[1][1] != "10" {
+		t.Fatalf("row1=%#v", got.ResultRows[1])
+	}
+	if got.ResultRows[2][0] != "alice" || got.ResultRows[2][1] != "11" {
+		t.Fatalf("row2=%#v", got.ResultRows[2])
+	}
+}
+
+func TestAthenaInnerJoinKeyword(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaOrdersCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT p.name, o.amount FROM labdb.people p INNER JOIN labdb.orders o ON p.id = o.person_id LIMIT 1",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	if len(exec.ResultRows) != 2 {
+		t.Fatalf("expected header+1, got %#v", exec.ResultRows)
+	}
+}
+
+func TestAthenaGroupByCount(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaOrdersCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT person_id, COUNT(*) FROM labdb.orders GROUP BY person_id ORDER BY person_id ASC",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	got := exec.ResultRows
+	if len(got) != 3 {
+		t.Fatalf("expected header+2 groups, got %#v", got)
+	}
+	if got[0][0] != "person_id" || got[0][1] != "_col0" {
+		t.Fatalf("header=%#v", got[0])
+	}
+	if got[1][0] != "1" || got[1][1] != "2" {
+		t.Fatalf("group1=%#v", got[1])
+	}
+	if got[2][0] != "2" || got[2][1] != "1" {
+		t.Fatalf("group2=%#v", got[2])
+	}
+}
+
+func TestAthenaOrderByDescLimit(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaPeopleCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT id, name FROM labdb.people ORDER BY name DESC LIMIT 1",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	if len(exec.ResultRows) != 2 || exec.ResultRows[1][1] != "bob" {
+		t.Fatalf("rows=%#v", exec.ResultRows)
+	}
+}
+
+func TestAthenaJoinUnsupportedFails(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaOrdersCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT * FROM labdb.people p LEFT JOIN labdb.orders o ON p.id = o.person_id",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "FAILED" {
+		t.Fatalf("expected FAILED, got %s", exec.State)
+	}
+	if !strings.Contains(strings.ToLower(exec.ErrorMessage), "unsupported") {
+		t.Fatalf("error=%q", exec.ErrorMessage)
+	}
+}
+
 func TestAthenaOutputLocationWriteFails(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"

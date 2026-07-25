@@ -741,12 +741,18 @@ const (
 	ActionCognitoAdminCreateUser        = "cognito-idp:AdminCreateUser"
 	ActionCognitoSignUp                 = "cognito-idp:SignUp"
 	ActionCognitoConfirmSignUp          = "cognito-idp:ConfirmSignUp"
-	ActionCognitoInitiateAuth           = "cognito-idp:InitiateAuth"
-	ActionCognitoAdminInitiateAuth      = "cognito-idp:AdminInitiateAuth"
-	ActionCognitoRevokeToken            = "cognito-idp:RevokeToken"
-	ActionCognitoAssociateSoftwareToken = "cognito-idp:AssociateSoftwareToken"
-	ActionCognitoVerifySoftwareToken    = "cognito-idp:VerifySoftwareToken"
-	ActionCognitoRespondToAuthChallenge = "cognito-idp:RespondToAuthChallenge"
+	ActionCognitoForgotPassword                   = "cognito-idp:ForgotPassword"
+	ActionCognitoConfirmForgotPassword            = "cognito-idp:ConfirmForgotPassword"
+	ActionCognitoResendConfirmationCode           = "cognito-idp:ResendConfirmationCode"
+	ActionCognitoUpdateUserAttributes             = "cognito-idp:UpdateUserAttributes"
+	ActionCognitoGetUserAttributeVerificationCode = "cognito-idp:GetUserAttributeVerificationCode"
+	ActionCognitoVerifyUserAttribute              = "cognito-idp:VerifyUserAttribute"
+	ActionCognitoInitiateAuth                     = "cognito-idp:InitiateAuth"
+	ActionCognitoAdminInitiateAuth                = "cognito-idp:AdminInitiateAuth"
+	ActionCognitoRevokeToken                      = "cognito-idp:RevokeToken"
+	ActionCognitoAssociateSoftwareToken           = "cognito-idp:AssociateSoftwareToken"
+	ActionCognitoVerifySoftwareToken              = "cognito-idp:VerifySoftwareToken"
+	ActionCognitoRespondToAuthChallenge           = "cognito-idp:RespondToAuthChallenge"
 )
 
 // Cloud Control API lab actions.
@@ -1458,6 +1464,12 @@ func KnownAction(action string) bool {
 		ActionCognitoAdminCreateUser,
 		ActionCognitoSignUp,
 		ActionCognitoConfirmSignUp,
+		ActionCognitoForgotPassword,
+		ActionCognitoConfirmForgotPassword,
+		ActionCognitoResendConfirmationCode,
+		ActionCognitoUpdateUserAttributes,
+		ActionCognitoGetUserAttributeVerificationCode,
+		ActionCognitoVerifyUserAttribute,
 		ActionCognitoInitiateAuth,
 		ActionCognitoAdminInitiateAuth,
 		ActionCognitoRevokeToken,

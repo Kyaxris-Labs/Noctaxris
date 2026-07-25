@@ -2,17 +2,17 @@
 
 **Status:** shipped (lab core)
 
-GraphQL API CRUD lite, schema store, Lambda data sources with optional `serviceRoleArn`, flat multi-field Query resolvers, and minimal GraphQL evaluation that Invokes Lambda. No GraphQL library dependency (flat selection-set parser).
+GraphQL API CRUD lite, schema store, Lambda data sources with optional `serviceRoleArn`, Query and nested object field resolvers, and minimal GraphQL evaluation that Invokes Lambda. No GraphQL library dependency (selection-set parser with nesting depth limit 3).
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | API | `CreateGraphqlApi`, `GetGraphqlApi`, `ListGraphqlApis`, `DeleteGraphqlApi` |
-| Schema | `StartSchemaCreation` (stores SDL immediately) |
+| Schema | `StartSchemaCreation` (stores SDL immediately; used to map field return types for nested resolve) |
 | Auth prep | `CreateApiKey` (API_KEY APIs only) |
-| Data plane | `CreateDataSource` (AWS_LAMBDA, optional `serviceRoleArn`), `CreateResolver` |
-| Runtime | `POST /appsync/{apiId}/graphql` (flat multi-field Query) |
+| Data plane | `CreateDataSource` (AWS_LAMBDA, optional `serviceRoleArn`), `CreateResolver` (`typeName` + `fieldName`) |
+| Runtime | `POST /appsync/{apiId}/graphql` (multi-field Query + nested selections) |
 
 ### Auth shape
 
@@ -35,34 +35,46 @@ Lambda data-source invoke has two lab paths:
 
 ### GraphQL runtime limits
 
-- Flat top-level Query selection sets only, e.g. `{ hello world }` or `query { hello world }`
-- Nested selections rejected (`{ hello { nested } }` fails closed)
-- Each field Invokes its resolver independently; unknown fields return a GraphQL error entry for that field (partial `data` + `errors`)
-- No subscriptions; Mutation multi-field is not a separate path (operation prefix stripped; resolvers are Query-typed)
+- Selection sets with nesting up to depth 3, e.g. `{ getUser { name email } }` or `{ a { b { c } } }`
+- Deeper nesting (`{ a { b { c { d } } } }`), field arguments, aliases, and fragments fail closed
+- Each field with a `CreateResolver` entry Invokes its Lambda; nested fields use `typeName` from the parent field's schema return type
+- Fields without a unit resolver project from the parent JSON object (GraphQL default field resolver); missing keys become `null`
+- Nested Lambda events include `source` (parent object) and `info.parentTypeName`
+- List parents: nested selections apply per list item when the parent value is a JSON array of objects
+- Unknown root fields return a GraphQL error entry for that field (partial `data` + `errors`)
+- No subscriptions; Mutation multi-field is not a separate path (operation prefix stripped; root resolvers are Query-typed)
+- No AppSync JS/VTL mapping templates (Lambda Invoke only)
 
 ## How to verify / CLI smoke
 
 Shared Compose and env setup: [index.md](index.md#shared-verification).
 
-Resource-policy path:
+Resource-policy path (flat + nested):
 
 ```bash
-aws lambda add-permission --function-name hello --statement-id appsync \
+aws lambda add-permission --function-name get-user --statement-id appsync \
+  --action lambda:InvokeFunction --principal appsync.amazonaws.com --endpoint-url "$EP"
+aws lambda add-permission --function-name user-email --statement-id appsync \
   --action lambda:InvokeFunction --principal appsync.amazonaws.com --endpoint-url "$EP"
 aws appsync create-graphql-api --name lab --authentication-type API_KEY --endpoint-url "$EP"
-aws appsync start-schema-creation --api-id "$API" --definition 'type Query { hello: String world: String }' --endpoint-url "$EP"
+aws appsync start-schema-creation --api-id "$API" --definition \
+  'type Query { getUser: User } type User { name: String email: String }' --endpoint-url "$EP"
 aws appsync create-api-key --api-id "$API" --endpoint-url "$EP"
-aws appsync create-data-source --api-id "$API" --name HelloDS --type AWS_LAMBDA \
-  --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000001:function:hello --endpoint-url "$EP"
-aws appsync create-resolver --api-id "$API" --type-name Query --field-name hello --data-source-name HelloDS --endpoint-url "$EP"
-aws appsync create-resolver --api-id "$API" --type-name Query --field-name world --data-source-name HelloDS --endpoint-url "$EP"
+aws appsync create-data-source --api-id "$API" --name GetUserDS --type AWS_LAMBDA \
+  --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000001:function:get-user --endpoint-url "$EP"
+aws appsync create-data-source --api-id "$API" --name EmailDS --type AWS_LAMBDA \
+  --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000001:function:user-email --endpoint-url "$EP"
+aws appsync create-resolver --api-id "$API" --type-name Query --field-name getUser \
+  --data-source-name GetUserDS --endpoint-url "$EP"
+aws appsync create-resolver --api-id "$API" --type-name User --field-name email \
+  --data-source-name EmailDS --endpoint-url "$EP"
 curl -s -H "x-api-key: $KEY" -H "content-type: application/json" \
-  -d '{"query":"{ hello world }"}' "http://127.0.0.1:4566/appsync/$API/graphql"
+  -d '{"query":"{ getUser { name email } }"}' "http://127.0.0.1:4566/appsync/$API/graphql"
 ```
 
-Multi-field Query: create a second resolver on `world` (same or another Lambda data source). Flat selection `{ hello world }` Invokes each field independently; nested `{ hello { nested } }` fails closed.
+Flat multi-field Query still works: `{ hello world }` Invokes each Query resolver independently. Nested `{ getUser { name email } }` Invokes `Query.getUser`, projects `name` from the parent object when no `User.name` resolver exists, and Invokes `User.email` when that resolver is registered.
 
-PassRole path: create an IAM role trusted by `appsync.amazonaws.com` with `lambda:InvokeFunction`, then pass `--service-role-arn` on `create-data-source` (resource policy on the function is not required for same-account role-session invoke).
+PassRole path: create an IAM role trusted by `appsync.amazonaws.com` with `lambda:InvokeFunction`, then pass `--service-role-arn` on `create-data-source` (resource policy on the function is not required for same-account role-session invoke). Nested field resolvers use the same PassRole / resource-policy rules per data source.
 
 Cognito auth example: create the API with `--authentication-type AMAZON_COGNITO_USER_POOLS` and a `userPoolConfig`, obtain an **IdToken** from Cognito `InitiateAuth`, then:
 
@@ -76,6 +88,6 @@ GraphQL Invoke requires a registered Lambda function and DinD compute (or a test
 ## Not yet / deferred
 
 - Amplify, subscriptions/MQTT, full GraphQL spec
-- Nested selection sets, aliases, fragments, field arguments
-- AppSync JS/VTL runtimes beyond Lambda Invoke
+- Aliases, fragments, field arguments, selection depth beyond 3
+- AppSync JS/VTL mapping template runtimes
 - OIDC providers beyond Cognito User Pools, Lambda authorizer

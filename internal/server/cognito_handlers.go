@@ -96,6 +96,18 @@ func (s *Server) handleCognito(
 		s.cognitoSignUp(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoConfirmSignUp:
 		s.cognitoConfirmSignUp(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoForgotPassword:
+		s.cognitoForgotPassword(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoConfirmForgotPassword:
+		s.cognitoConfirmForgotPassword(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoResendConfirmationCode:
+		s.cognitoResendConfirmationCode(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoUpdateUserAttributes:
+		s.cognitoUpdateUserAttributes(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoGetUserAttributeVerificationCode:
+		s.cognitoGetUserAttributeVerificationCode(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoVerifyUserAttribute:
+		s.cognitoVerifyUserAttribute(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoInitiateAuth:
 		s.cognitoInitiateAuth(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoAdminInitiateAuth:
@@ -143,6 +155,18 @@ func cognitoAction(action string) string {
 		return catalog.ActionCognitoSignUp
 	case "ConfirmSignUp":
 		return catalog.ActionCognitoConfirmSignUp
+	case "ForgotPassword":
+		return catalog.ActionCognitoForgotPassword
+	case "ConfirmForgotPassword":
+		return catalog.ActionCognitoConfirmForgotPassword
+	case "ResendConfirmationCode":
+		return catalog.ActionCognitoResendConfirmationCode
+	case "UpdateUserAttributes":
+		return catalog.ActionCognitoUpdateUserAttributes
+	case "GetUserAttributeVerificationCode":
+		return catalog.ActionCognitoGetUserAttributeVerificationCode
+	case "VerifyUserAttribute":
+		return catalog.ActionCognitoVerifyUserAttribute
 	case "InitiateAuth":
 		return catalog.ActionCognitoInitiateAuth
 	case "AdminInitiateAuth":
@@ -617,6 +641,278 @@ func (s *Server) cognitoConfirmSignUp(
 	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ConfirmSignUp", readOnly)
 }
 
+func (s *Server) cognitoForgotPassword(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	clientID, _ := params["ClientId"].(string)
+	username, _ := params["Username"].(string)
+	if !s.authorize(verified, catalog.ActionCognitoForgotPassword, "*") {
+		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform cognito-idp:ForgotPassword.", readOnly, eventID, verified)
+		return
+	}
+	details, err := s.store.ForgotPasswordCognitoUser(clientID, username)
+	if errors.Is(err, store.ErrCognitoNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Client not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to forgot password.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.CodeDeliveryDetailsJSON(details)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ForgotPassword", readOnly)
+}
+
+func (s *Server) cognitoConfirmForgotPassword(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	clientID, _ := params["ClientId"].(string)
+	username, _ := params["Username"].(string)
+	code, _ := params["ConfirmationCode"].(string)
+	password, _ := params["Password"].(string)
+	// ConfirmForgotPassword is a public Cognito IdP API (no IAM evaluation on AWS).
+	err := s.store.ConfirmForgotPasswordCognitoUser(clientID, username, code, password)
+	if errors.Is(err, store.ErrCognitoNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Client not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoCodeMismatch) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "CodeMismatchException",
+			"Invalid verification code provided, please try again.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) || errors.Is(err, store.ErrCognitoInvalidPass) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to confirm forgot password.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.ConfirmForgotPasswordJSON()
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ConfirmForgotPassword", readOnly)
+}
+
+func cognitoUserAttributesMap(params map[string]any) map[string]string {
+	raw, _ := params["UserAttributes"].([]any)
+	if raw == nil {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["Name"].(string)
+		value, _ := m["Value"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = value
+	}
+	return out
+}
+
+func (s *Server) cognitoUpdateUserAttributes(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	accessToken, _ := params["AccessToken"].(string)
+	attrs := cognitoUserAttributesMap(params)
+	// Public IdP: access token authorizes (no IAM evaluation).
+	details, err := s.store.UpdateUserAttributesCognitoUser(accessToken, attrs)
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid access token.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update user attributes.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.UpdateUserAttributesJSON(details)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "UpdateUserAttributes", readOnly)
+}
+
+func (s *Server) cognitoGetUserAttributeVerificationCode(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	accessToken, _ := params["AccessToken"].(string)
+	attrName, _ := params["AttributeName"].(string)
+	// Public IdP: access token authorizes (no IAM evaluation).
+	details, err := s.store.GetUserAttributeVerificationCodeCognitoUser(accessToken, attrName)
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid access token.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get user attribute verification code.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.CodeDeliveryDetailsJSON(details)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "GetUserAttributeVerificationCode", readOnly)
+}
+
+func (s *Server) cognitoVerifyUserAttribute(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	accessToken, _ := params["AccessToken"].(string)
+	attrName, _ := params["AttributeName"].(string)
+	code, _ := params["Code"].(string)
+	// Public IdP: access token authorizes (no IAM evaluation).
+	err := s.store.VerifyUserAttributeCognitoUser(accessToken, attrName, code)
+	if errors.Is(err, store.ErrCognitoUnauthorized) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "NotAuthorizedException",
+			"Invalid access token.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoCodeMismatch) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "CodeMismatchException",
+			"Invalid verification code provided, please try again.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to verify user attribute.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.VerifyUserAttributeJSON()
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "VerifyUserAttribute", readOnly)
+}
+
+func (s *Server) cognitoResendConfirmationCode(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	clientID, _ := params["ClientId"].(string)
+	username, _ := params["Username"].(string)
+	if !s.authorize(verified, catalog.ActionCognitoResendConfirmationCode, "*") {
+		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform cognito-idp:ResendConfirmationCode.", readOnly, eventID, verified)
+		return
+	}
+	details, err := s.store.ResendConfirmationCodeCognitoUser(clientID, username)
+	if errors.Is(err, store.ErrCognitoNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Client not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoUserNotFound) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "UserNotFoundException",
+			"User not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoTriggerFailed) {
+		s.writeCognitoTriggerError(w, r, body, requestID, eventID, verified, readOnly, err)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidLambdaResponseException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCognitoBadRequest) {
+		s.writeCognitoError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCognitoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to resend confirmation code.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cognitosvc.CodeDeliveryDetailsJSON(details)
+	s.writeCognitoOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cognitoEventSource, "ResendConfirmationCode", readOnly)
+}
+
 func (s *Server) writeCognitoTriggerError(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, err error,
@@ -663,7 +959,7 @@ func (s *Server) cognitoInitiateAuth(
 	case flowNorm == "USER_SRP_AUTH":
 		outcome, err = s.store.InitiateCognitoSRPAuth(clientID, username, srpA)
 	case flowNorm == "CUSTOM_AUTH":
-		outcome, err = s.store.InitiateCognitoCustomAuth(clientID, username)
+		outcome, err = s.store.InitiateCognitoCustomAuth(clientID, username, srpA)
 	case cognitoIsRefreshFlow(flow):
 		result, refreshErr := s.store.RefreshCognitoTokens("", clientID, refreshToken)
 		err = refreshErr

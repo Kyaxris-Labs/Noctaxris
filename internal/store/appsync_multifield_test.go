@@ -7,7 +7,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-func TestParseAppSyncQueryFieldsMultiAndNestReject(t *testing.T) {
+func TestParseAppSyncQueryFieldsMulti(t *testing.T) {
 	fields, err := store.ParseAppSyncQueryFields("{ hello world }")
 	if err != nil || len(fields) != 2 || fields[0] != "hello" || fields[1] != "world" {
 		t.Fatalf("multi: %v %#v", err, fields)
@@ -15,12 +15,6 @@ func TestParseAppSyncQueryFieldsMultiAndNestReject(t *testing.T) {
 	fields, err = store.ParseAppSyncQueryFields("query { hello world }")
 	if err != nil || len(fields) != 2 {
 		t.Fatalf("query prefix: %v %#v", err, fields)
-	}
-	if _, err := store.ParseAppSyncQueryFields("{ hello { nested } world }"); err == nil {
-		t.Fatal("expected nested reject")
-	}
-	if _, err := store.ParseAppSyncQueryFields("{ hello { } world }"); err == nil {
-		t.Fatal("expected empty nest reject")
 	}
 	one, err := store.ParseAppSyncQueryField("{ hello }")
 	if err != nil || one != "hello" {

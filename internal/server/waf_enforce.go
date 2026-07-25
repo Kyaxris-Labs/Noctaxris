@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"strings"
 
@@ -45,9 +46,36 @@ func wafRequestViewFromHTTP(r *http.Request) *store.WAFRequestView {
 		}
 	}
 	return &store.WAFRequestView{
-		URI:     r.URL.Path,
-		Headers: headers,
+		URI:      r.URL.Path,
+		Headers:  headers,
+		SourceIP: wafSourceIPFromHTTP(r),
 	}
+}
+
+// wafSourceIPFromHTTP picks the client IP for IPSet matching.
+// Prefer the first parseable hop in allowlisted X-Forwarded-For when present;
+// otherwise use RemoteAddr (host only). Invalid XFF falls back to RemoteAddr.
+func wafSourceIPFromHTTP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		first := strings.TrimSpace(strings.Split(xff, ",")[0])
+		if ip := net.ParseIP(first); ip != nil {
+			return ip.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+		return host
+	}
+	if ip := net.ParseIP(r.RemoteAddr); ip != nil {
+		return ip.String()
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func wafRequestViewFromEvaluateParams(params map[string]any) *store.WAFRequestView {
@@ -58,8 +86,9 @@ func wafRequestViewFromEvaluateParams(params map[string]any) *store.WAFRequestVi
 	if uri == "" {
 		uri, _ = params["Uri"].(string)
 	}
+	sourceIP, _ := params["SourceIP"].(string)
 	rawHeaders, _ := params["Headers"].(map[string]any)
-	if uri == "" && len(rawHeaders) == 0 {
+	if uri == "" && sourceIP == "" && len(rawHeaders) == 0 {
 		return nil
 	}
 	headers := map[string]string{}
@@ -68,7 +97,31 @@ func wafRequestViewFromEvaluateParams(params map[string]any) *store.WAFRequestVi
 			headers[k] = s
 		}
 	}
-	return &store.WAFRequestView{URI: uri, Headers: headers}
+	if sourceIP == "" {
+		if xff := wafHeaderValueMap(headers, "X-Forwarded-For"); xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if ip := net.ParseIP(first); ip != nil {
+				sourceIP = ip.String()
+			}
+		}
+	}
+	return &store.WAFRequestView{URI: uri, Headers: headers, SourceIP: sourceIP}
+}
+
+func wafHeaderValueMap(headers map[string]string, name string) string {
+	if headers == nil {
+		return ""
+	}
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	lower := strings.ToLower(name)
+	for k, v := range headers {
+		if strings.ToLower(k) == lower {
+			return v
+		}
+	}
+	return ""
 }
 
 func httpAPIWAFCandidateARNs(region, accountID, apiID, stage string) []string {

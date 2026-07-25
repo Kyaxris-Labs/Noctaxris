@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 const (
@@ -19,7 +21,14 @@ const (
 	// LambdaESMLabMQQueue is the lab default destination queue for MQ ESM polls.
 	LambdaESMLabMQQueue = "noctaxris"
 
+	// MQLabAMQPUser / MQLabAMQPPassword are nested RabbitMQ credentials (DinD image env).
+	// Endpoint URLs from MQNestedAMQPEndpoint omit userinfo; Rabbit ESM Dial uses these.
+	MQLabAMQPUser     = "noctaxris"
+	MQLabAMQPPassword = "noctaxris-mq-lab"
+
 	mqLabHostPrefix = "noctaxris-mq-"
+
+	mqESMDialTimeout = 2 * time.Second
 )
 
 var (
@@ -38,16 +47,21 @@ type MQESMMessage struct {
 }
 
 // MQReceiveFunc receives up to batchSize messages from a validated nested AMQP endpoint.
-// Unit tests inject this to avoid DinD/broker. When nil, the poller dials the allowlisted host only.
+// Unit tests inject this to avoid DinD/broker. When nil, the poller uses engine-specific receive.
 type MQReceiveFunc func(endpoint string, batchSize int) ([]MQESMMessage, error)
+
+// MQDialFunc is an optional TCP dial override for unit tests (ActiveMQ success→empty default path).
+// Production ActiveMQ path uses net.DialTimeout to the allowlisted nested host:port only.
+type MQDialFunc func(network, address string, timeout time.Duration) (net.Conn, error)
 
 var (
 	mqReceiveMu   sync.Mutex
 	mqReceiveFunc MQReceiveFunc
+	mqDialFunc    MQDialFunc
 )
 
 // SetMQReceiveFunc registers an injectable MQ receive hook for unit tests.
-// Pass nil to restore the default allowlisted TCP dial path.
+// Pass nil to restore the default engine-specific receive path.
 func SetMQReceiveFunc(fn MQReceiveFunc) {
 	mqReceiveMu.Lock()
 	defer mqReceiveMu.Unlock()
@@ -58,6 +72,34 @@ func getMQReceiveFunc() MQReceiveFunc {
 	mqReceiveMu.Lock()
 	defer mqReceiveMu.Unlock()
 	return mqReceiveFunc
+}
+
+// SetMQDialFunc registers an injectable TCP dial for unit tests of the ActiveMQ default receive path.
+// Pass nil to restore net.DialTimeout. The dial address is still built only after ValidateNestedMQHost.
+func SetMQDialFunc(fn MQDialFunc) {
+	mqReceiveMu.Lock()
+	defer mqReceiveMu.Unlock()
+	mqDialFunc = fn
+}
+
+func getMQDialFunc() MQDialFunc {
+	mqReceiveMu.Lock()
+	defer mqReceiveMu.Unlock()
+	return mqDialFunc
+}
+
+// MQDefaultReceiveEmptyReason explains empty default (non-injected) batches.
+// RabbitMQ uses AMQP 0-9-1 basic.get (empty only when the queue has no messages).
+// ActiveMQ classic AMQP on 5672 is AMQP 1.0 — no in-tree client, so dial-only empty.
+func MQDefaultReceiveEmptyReason(engineType string) string {
+	switch strings.ToUpper(strings.TrimSpace(engineType)) {
+	case "RABBITMQ":
+		return "RabbitMQ: empty batch when basic.get finds no messages on queue " + LambdaESMLabMQQueue
+	case "ACTIVEMQ":
+		return "dial-only: ActiveMQ needs AMQP 1.0/JMS (no in-tree client); empty batch"
+	default:
+		return "dial-only: no in-tree AMQP client for this engine; empty batch after allowlisted dial"
+	}
 }
 
 // parseMQBrokerARN parses arn:aws:mq:region:account:broker:NAME:ID (MQBrokerARN shape).
@@ -207,7 +249,7 @@ func (s *Store) pollMQEventSourceMappingOnce(m LambdaEventSourceMapping, invoke 
 	if batchSize <= 0 {
 		batchSize = LambdaESMDefaultBatchSize
 	}
-	msgs, err := s.receiveMQESMMessages(ep, batchSize)
+	msgs, err := s.receiveMQESMMessages(ep, b.EngineType, batchSize)
 	if err != nil {
 		return err
 	}
@@ -222,7 +264,7 @@ func (s *Store) pollMQEventSourceMappingOnce(m LambdaEventSourceMapping, invoke 
 	return invErr
 }
 
-func (s *Store) receiveMQESMMessages(endpoint string, batchSize int) ([]MQESMMessage, error) {
+func (s *Store) receiveMQESMMessages(endpoint, engineType string, batchSize int) ([]MQESMMessage, error) {
 	host, port, err := parseMQAMQPEndpoint(endpoint)
 	if err != nil {
 		return nil, err
@@ -230,21 +272,121 @@ func (s *Store) receiveMQESMMessages(endpoint string, batchSize int) ([]MQESMMes
 	if fn := getMQReceiveFunc(); fn != nil {
 		return fn(endpoint, batchSize)
 	}
-	return defaultMQReceiveDial(host, port)
+	return defaultMQReceiveDial(host, port, engineType, batchSize)
 }
 
-// defaultMQReceiveDial dials the allowlisted nested host:port only (no operator hosts).
-// Without an injectable MQReceiveFunc / AMQP client, lab lite returns an empty batch after a successful dial.
-func defaultMQReceiveDial(host string, port int) ([]MQESMMessage, error) {
+// defaultMQReceiveDial receives from an allowlisted nested host only (no operator/WAN hosts).
+//
+//   - RABBITMQ: AMQP 0-9-1 Dial + basic.get on LambdaESMLabMQQueue (lab user MQLabAMQPUser).
+//   - ACTIVEMQ: nested classic AMQP connector on 5672 speaks AMQP 1.0 (not 0-9-1); TCP probe then empty.
+//
+// MQReceiveFunc injection takes precedence for unit tests.
+func defaultMQReceiveDial(host string, port int, engineType string, batchSize int) ([]MQESMMessage, error) {
+	if err := ValidateNestedMQHost(host); err != nil {
+		return nil, err
+	}
+	switch strings.ToUpper(strings.TrimSpace(engineType)) {
+	case "RABBITMQ":
+		return rabbitMQBasicGet(host, port, batchSize)
+	default:
+		return activeMQDialEmpty(host, port)
+	}
+}
+
+// rabbitMQBasicGet dials AMQP 0-9-1 on the allowlisted host and Get+Acks up to batchSize
+// messages from LambdaESMLabMQQueue. Dial/auth/protocol errors fail closed (returned, not silent empty).
+func rabbitMQBasicGet(host string, port int, batchSize int) ([]MQESMMessage, error) {
+	if err := ValidateNestedMQHost(host); err != nil {
+		return nil, err
+	}
+	if batchSize <= 0 {
+		batchSize = LambdaESMDefaultBatchSize
+	}
+	u := &url.URL{
+		Scheme: "amqp",
+		User:   url.UserPassword(MQLabAMQPUser, MQLabAMQPPassword),
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/",
+	}
+	cfg := amqp.Config{
+		Dial:      amqp.DefaultDial(mqESMDialTimeout),
+		Heartbeat: 5 * time.Second,
+		Locale:    "en_US",
+	}
+	conn, err := amqp.DialConfig(u.String(), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("mq esm rabbit dial %s: %w", net.JoinHostPort(host, strconv.Itoa(port)), err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("mq esm rabbit channel: %w", err)
+	}
+	defer func() { _ = ch.Close() }()
+
+	// Ensure lab queue exists so empty polls return [] (not NOT_FOUND). Durable, not exclusive.
+	if _, err := ch.QueueDeclare(LambdaESMLabMQQueue, true, false, false, false, nil); err != nil {
+		return nil, fmt.Errorf("mq esm rabbit queue declare: %w", err)
+	}
+
+	out := make([]MQESMMessage, 0, batchSize)
+	for i := 0; i < batchSize; i++ {
+		d, ok, gerr := ch.Get(LambdaESMLabMQQueue, false)
+		if gerr != nil {
+			return nil, fmt.Errorf("mq esm rabbit basic.get: %w", gerr)
+		}
+		if !ok {
+			break
+		}
+		if aerr := d.Ack(false); aerr != nil {
+			return nil, fmt.Errorf("mq esm rabbit ack: %w", aerr)
+		}
+		id := strings.TrimSpace(d.MessageId)
+		if id == "" {
+			id = fmt.Sprintf("lab-rmq-%d", i+1)
+		}
+		body := d.Body
+		if body == nil {
+			body = []byte{}
+		}
+		out = append(out, MQESMMessage{
+			MessageID:   id,
+			Data:        body,
+			Destination: LambdaESMLabMQQueue,
+			Redelivered: d.Redelivered,
+		})
+	}
+	return out, nil
+}
+
+// activeMQDialEmpty TCP-probes the allowlisted host then returns an empty batch (AMQP 1.0 out of scope).
+func activeMQDialEmpty(host string, port int) ([]MQESMMessage, error) {
 	if err := ValidateNestedMQHost(host); err != nil {
 		return nil, err
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	dial := getMQDialFunc()
+	var (
+		conn net.Conn
+		err  error
+	)
+	if dial != nil {
+		conn, err = dial("tcp", addr, mqESMDialTimeout)
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, mqESMDialTimeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mq esm dial %s: %w", addr, err)
 	}
-	_ = conn.Close()
+	return postDialMQReceive(conn)
+}
+
+// postDialMQReceive closes the ActiveMQ TCP probe and returns an empty batch.
+func postDialMQReceive(conn net.Conn) ([]MQESMMessage, error) {
+	if conn != nil {
+		_ = conn.Close()
+	}
 	return nil, nil
 }
 
@@ -269,21 +411,21 @@ func buildActiveMQLambdaEventJSON(eventSourceARN string, msgs []MQESMMessage) (s
 			id = fmt.Sprintf("lab-mq-%d", i+1)
 		}
 		out = append(out, map[string]any{
-			"messageID":    id,
-			"messageType":  "jms/text-message",
-			"deliveryMode": 1,
-			"replyTo":      nil,
-			"type":         nil,
-			"expiration":   nil,
-			"priority":     0,
+			"messageID":     id,
+			"messageType":   "jms/text-message",
+			"deliveryMode":  1,
+			"replyTo":       nil,
+			"type":          nil,
+			"expiration":    nil,
+			"priority":      0,
 			"correlationId": nil,
-			"redelivered":  msg.Redelivered,
-			"destination":  map[string]any{"physicalName": dest},
-			"data":         base64.StdEncoding.EncodeToString(msg.Data),
-			"timestamp":    now,
-			"brokerInTime": now,
+			"redelivered":   msg.Redelivered,
+			"destination":   map[string]any{"physicalName": dest},
+			"data":          base64.StdEncoding.EncodeToString(msg.Data),
+			"timestamp":     now,
+			"brokerInTime":  now,
 			"brokerOutTime": now,
-			"properties":   map[string]any{},
+			"properties":    map[string]any{},
 		})
 	}
 	raw, err := json.Marshal(map[string]any{

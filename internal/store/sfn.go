@@ -379,14 +379,21 @@ type sfnState struct {
 	Seconds     *int              `json:"Seconds"`
 	SecondsPath string            `json:"SecondsPath"`
 	Branches    []json.RawMessage `json:"Branches"`
+	ItemsPath   string            `json:"ItemsPath"`
+	Iterator    json.RawMessage   `json:"Iterator"`
 }
 
 type sfnChoice struct {
-	Variable      string   `json:"Variable"`
-	StringEquals  *string  `json:"StringEquals"`
-	NumericEquals *float64 `json:"NumericEquals"`
-	BooleanEquals *bool    `json:"BooleanEquals"`
-	Next          string   `json:"Next"`
+	Variable            string   `json:"Variable"`
+	StringEquals        *string  `json:"StringEquals"`
+	StringGreaterThan   *string  `json:"StringGreaterThan"`
+	StringLessThan      *string  `json:"StringLessThan"`
+	NumericEquals       *float64 `json:"NumericEquals"`
+	NumericGreaterThan  *float64 `json:"NumericGreaterThan"`
+	NumericLessThan     *float64 `json:"NumericLessThan"`
+	BooleanEquals       *bool    `json:"BooleanEquals"`
+	IsPresent           *bool    `json:"IsPresent"`
+	Next                string   `json:"Next"`
 }
 
 type sfnBranch struct {
@@ -456,6 +463,28 @@ func validateSFNStates(states map[string]json.RawMessage) error {
 					return err
 				}
 			}
+		case "Map":
+			if len(st.Iterator) == 0 {
+				return fmt.Errorf("%w: Map %s missing Iterator", ErrSFNInvalidDefinition, name)
+			}
+			var it sfnBranch
+			if err := json.Unmarshal(st.Iterator, &it); err != nil {
+				return fmt.Errorf("%w: Map %s Iterator invalid", ErrSFNInvalidDefinition, name)
+			}
+			if it.StartAt == "" || len(it.States) == 0 {
+				return fmt.Errorf("%w: Map %s Iterator missing StartAt/States", ErrSFNInvalidDefinition, name)
+			}
+			if _, ok := it.States[it.StartAt]; !ok {
+				return fmt.Errorf("%w: Map %s Iterator StartAt unknown", ErrSFNInvalidDefinition, name)
+			}
+			if strings.TrimSpace(st.ItemsPath) != "" {
+				if _, ok := sfnTopLevelField(st.ItemsPath); !ok {
+					return fmt.Errorf("%w: Map %s ItemsPath must be $.field", ErrSFNInvalidDefinition, name)
+				}
+			}
+			if err := validateSFNStates(it.States); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%w: unsupported state type %q in %s", ErrSFNInvalidDefinition, st.Type, name)
 		}
@@ -478,7 +507,9 @@ func validateSFNChoiceRule(stateName string, index int, raw json.RawMessage) err
 	}
 	allowed := map[string]bool{
 		"Variable": true, "Next": true,
-		"StringEquals": true, "NumericEquals": true, "BooleanEquals": true,
+		"StringEquals": true, "StringGreaterThan": true, "StringLessThan": true,
+		"NumericEquals": true, "NumericGreaterThan": true, "NumericLessThan": true,
+		"BooleanEquals": true, "IsPresent": true,
 	}
 	var opCount int
 	for k := range keys {
@@ -486,7 +517,9 @@ func validateSFNChoiceRule(stateName string, index int, raw json.RawMessage) err
 			return fmt.Errorf("%w: Choice %s rule %d unknown operator %q", ErrSFNInvalidDefinition, stateName, index, k)
 		}
 		switch k {
-		case "StringEquals", "NumericEquals", "BooleanEquals":
+		case "StringEquals", "StringGreaterThan", "StringLessThan",
+			"NumericEquals", "NumericGreaterThan", "NumericLessThan",
+			"BooleanEquals", "IsPresent":
 			opCount++
 		}
 	}
@@ -501,7 +534,7 @@ func validateSFNChoiceRule(stateName string, index int, raw json.RawMessage) err
 		return fmt.Errorf("%w: Choice %s rule %d Variable must be $.field", ErrSFNInvalidDefinition, stateName, index)
 	}
 	if opCount != 1 {
-		return fmt.Errorf("%w: Choice %s rule %d requires exactly one equals operator", ErrSFNInvalidDefinition, stateName, index)
+		return fmt.Errorf("%w: Choice %s rule %d requires exactly one comparison operator", ErrSFNInvalidDefinition, stateName, index)
 	}
 	return nil
 }
@@ -545,6 +578,14 @@ func sfnStatesHaveTask(states map[string]json.RawMessage) bool {
 					return true
 				}
 			}
+		case "Map":
+			var it sfnBranch
+			if err := json.Unmarshal(st.Iterator, &it); err != nil {
+				continue
+			}
+			if sfnStatesHaveTask(it.States) {
+				return true
+			}
 		}
 	}
 	return false
@@ -572,9 +613,19 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 
 		switch st.Type {
 		case "Pass":
-			out := current
+			effective, err := sfnApplyInputPath(current, st.InputPath)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
+			}
+			out := effective
 			if len(st.Result) > 0 {
 				out = string(st.Result)
+			}
+			out, err = sfnApplyResultPath(current, out, st.ResultPath)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
 			}
 			hist = append(hist, sfnHist{Type: "PassStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
@@ -602,9 +653,14 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": "Task invoker unavailable"}})
 				return "", "FAILED", "States.TaskFailed", "Task invoker unavailable", hist
 			}
-			hist = append(hist, sfnHist{Type: "TaskScheduled", DetailsMap: map[string]any{"resource": st.Resource, "parameters": current}})
+			effective, err := sfnApplyInputPath(current, st.InputPath)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
+			}
+			hist = append(hist, sfnHist{Type: "TaskScheduled", DetailsMap: map[string]any{"resource": st.Resource, "parameters": effective}})
 			hist = append(hist, sfnHist{Type: "TaskStarted", DetailsMap: map[string]any{}})
-			out, err := invoke(st.Resource, current)
+			out, err := invoke(st.Resource, effective)
 			if err != nil {
 				cause = err.Error()
 				hist = append(hist, sfnHist{Type: "TaskFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": cause}})
@@ -613,6 +669,11 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			}
 			if out == "" {
 				out = "{}"
+			}
+			out, err = sfnApplyResultPath(current, out, st.ResultPath)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
 			}
 			hist = append(hist, sfnHist{Type: "TaskSucceeded", DetailsMap: map[string]any{"output": out}})
 			hist = append(hist, sfnHist{Type: "TaskStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
@@ -679,7 +740,26 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			}
 			merged, _ := json.Marshal(branchOutputs)
 			out := string(merged)
+			var err error
+			out, err = sfnApplyResultPath(current, out, st.ResultPath)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
+			}
 			hist = append(hist, sfnHist{Type: "ParallelStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
+			current = out
+			if st.End || st.Next == "" {
+				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
+				return current, "SUCCEEDED", "", "", hist
+			}
+			stateName = st.Next
+		case "Map":
+			out, mapErr := sfnRunMap(st, current, invoke, &hist)
+			if mapErr != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": mapErr.Error()}})
+				return "", "FAILED", "States.Runtime", mapErr.Error(), hist
+			}
+			hist = append(hist, sfnHist{Type: "MapStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
@@ -702,17 +782,30 @@ func sfnEvalChoice(st sfnState, inputJSON string) (next string, ok bool) {
 			continue
 		}
 		val, present := obj[field]
-		if !present {
-			continue
-		}
 		matched := false
 		switch {
+		case c.IsPresent != nil:
+			matched = present == *c.IsPresent
+		case !present:
+			continue
 		case c.StringEquals != nil:
 			s, isStr := val.(string)
 			matched = isStr && s == *c.StringEquals
+		case c.StringGreaterThan != nil:
+			s, isStr := val.(string)
+			matched = isStr && s > *c.StringGreaterThan
+		case c.StringLessThan != nil:
+			s, isStr := val.(string)
+			matched = isStr && s < *c.StringLessThan
 		case c.NumericEquals != nil:
 			n, isNum := sfnAsFloat(val)
 			matched = isNum && n == *c.NumericEquals
+		case c.NumericGreaterThan != nil:
+			n, isNum := sfnAsFloat(val)
+			matched = isNum && n > *c.NumericGreaterThan
+		case c.NumericLessThan != nil:
+			n, isNum := sfnAsFloat(val)
+			matched = isNum && n < *c.NumericLessThan
 		case c.BooleanEquals != nil:
 			b, isBool := val.(bool)
 			matched = isBool && b == *c.BooleanEquals
@@ -725,6 +818,105 @@ func sfnEvalChoice(st sfnState, inputJSON string) (next string, ok bool) {
 		return st.Default, true
 	}
 	return "", false
+}
+
+// sfnApplyInputPath returns the effective state input. Empty path keeps raw input.
+// "$" selects the whole input. "$.field" selects a top-level field (JSON-encoded).
+func sfnApplyInputPath(inputJSON, inputPath string) (string, error) {
+	inputPath = strings.TrimSpace(inputPath)
+	if inputPath == "" || inputPath == "$" {
+		return inputJSON, nil
+	}
+	field, ok := sfnTopLevelField(inputPath)
+	if !ok {
+		return "", fmt.Errorf("InputPath must be $.field")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(inputJSON), &obj); err != nil {
+		return "", fmt.Errorf("InputPath input is not a JSON object")
+	}
+	v, present := obj[field]
+	if !present {
+		return "null", nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// sfnApplyResultPath merges result into input. Empty path replaces input with result.
+// "$.field" sets that top-level field on a copy of the original input object.
+func sfnApplyResultPath(inputJSON, resultJSON, resultPath string) (string, error) {
+	resultPath = strings.TrimSpace(resultPath)
+	if resultPath == "" || resultPath == "$" {
+		return resultJSON, nil
+	}
+	field, ok := sfnTopLevelField(resultPath)
+	if !ok {
+		return "", fmt.Errorf("ResultPath must be $.field")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(inputJSON), &obj); err != nil {
+		return "", fmt.Errorf("ResultPath input is not a JSON object")
+	}
+	var result any
+	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+		return "", fmt.Errorf("ResultPath result is not valid JSON")
+	}
+	obj[field] = result
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func sfnRunMap(st sfnState, inputJSON string, invoke SFNTaskInvoker, hist *[]sfnHist) (string, error) {
+	var it sfnBranch
+	if err := json.Unmarshal(st.Iterator, &it); err != nil {
+		return "", fmt.Errorf("Map Iterator invalid: %w", err)
+	}
+	itemsJSON := inputJSON
+	if strings.TrimSpace(st.ItemsPath) != "" {
+		var err error
+		itemsJSON, err = sfnApplyInputPath(inputJSON, st.ItemsPath)
+		if err != nil {
+			return "", err
+		}
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(itemsJSON), &items); err != nil {
+		return "", fmt.Errorf("Map ItemsPath must select a JSON array")
+	}
+	outputs := make([]json.RawMessage, 0, len(items))
+	for i, item := range items {
+		itemInput := string(item)
+		itDef, _ := json.Marshal(sfnDef{StartAt: it.StartAt, States: it.States})
+		bout, bstatus, berr, bcause, bhist := runSFNDefinition(string(itDef), itemInput, invoke)
+		for _, h := range bhist {
+			if h.Type == "ExecutionSucceeded" || h.Type == "ExecutionFailed" {
+				continue
+			}
+			*hist = append(*hist, h)
+		}
+		if bstatus != "SUCCEEDED" {
+			if bcause == "" {
+				bcause = berr
+			}
+			return "", fmt.Errorf("Map item %d failed: %s", i, bcause)
+		}
+		if bout == "" {
+			bout = "{}"
+		}
+		outputs = append(outputs, json.RawMessage(bout))
+	}
+	merged, err := json.Marshal(outputs)
+	if err != nil {
+		return "", err
+	}
+	return sfnApplyResultPath(inputJSON, string(merged), st.ResultPath)
 }
 
 func sfnAsFloat(v any) (float64, bool) {

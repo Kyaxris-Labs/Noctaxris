@@ -166,6 +166,9 @@ func EnsureCognitoSchema(db *sql.DB) error {
 	if err := EnsureCognitoCustomAuthSchema(db); err != nil {
 		return err
 	}
+	if err := EnsureCognitoForgotAttrsSchema(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -343,6 +346,8 @@ func (s *Store) DeleteCognitoUserPool(accountID, poolID string) error {
 	_, _ = tx.Exec(`DELETE FROM cognito_srp_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_custom_auth_sessions WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	_, _ = tx.Exec(`DELETE FROM cognito_custom_messages WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_confirmation_codes WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
+	_, _ = tx.Exec(`DELETE FROM cognito_user_attributes WHERE account_id = ? AND pool_id = ?`, accountID, poolID)
 	return tx.Commit()
 }
 
@@ -629,6 +634,93 @@ func (s *Store) ConfirmSignUpCognitoUser(clientID, username, confirmationCode st
 		return err
 	}
 	return nil
+}
+
+// CognitoCodeDeliveryDetails is the lite ForgotPassword / ResendConfirmationCode delivery stub (no SES).
+type CognitoCodeDeliveryDetails struct {
+	Destination    string
+	DeliveryMedium string
+	AttributeName  string
+}
+
+// ForgotPasswordCognitoUser fires CustomMessage_ForgotPassword (stub code {####} / 123456; no SES).
+func (s *Store) ForgotPasswordCognitoUser(clientID, username string) (CognitoCodeDeliveryDetails, error) {
+	clientID = strings.TrimSpace(clientID)
+	username = strings.TrimSpace(username)
+	if clientID == "" || username == "" {
+		return CognitoCodeDeliveryDetails{}, fmt.Errorf("%w: ClientId and Username required", ErrCognitoBadRequest)
+	}
+	acct, poolID, err := s.lookupClient(clientID)
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	sub, _, status, err := s.getUser(acct, poolID, username)
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
+		TriggerSource: "CustomMessage_ForgotPassword",
+		UserPoolID:    poolID,
+		Username:      username,
+		ClientID:      clientID,
+		UserSub:       sub,
+		UserStatus:    status,
+		CodeParameter: "{####}",
+	})
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ForgotPassword", "{####}", cmPayload); err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeForgotPassword, CognitoLabConfirmationCode, "email"); err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	return CognitoCodeDeliveryDetails{
+		Destination:    "t***@example.com",
+		DeliveryMedium: "EMAIL",
+		AttributeName:  "email",
+	}, nil
+}
+
+// ResendConfirmationCodeCognitoUser fires CustomMessage_ResendCode for an UNCONFIRMED user (stub; no SES).
+func (s *Store) ResendConfirmationCodeCognitoUser(clientID, username string) (CognitoCodeDeliveryDetails, error) {
+	clientID = strings.TrimSpace(clientID)
+	username = strings.TrimSpace(username)
+	if clientID == "" || username == "" {
+		return CognitoCodeDeliveryDetails{}, fmt.Errorf("%w: ClientId and Username required", ErrCognitoBadRequest)
+	}
+	acct, poolID, err := s.lookupClient(clientID)
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	sub, _, status, err := s.getUser(acct, poolID, username)
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	if status != "UNCONFIRMED" {
+		return CognitoCodeDeliveryDetails{}, fmt.Errorf("%w: User cannot be confirmed. Current status is %s", ErrCognitoBadRequest, status)
+	}
+	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
+		TriggerSource: "CustomMessage_ResendCode",
+		UserPoolID:    poolID,
+		Username:      username,
+		ClientID:      clientID,
+		UserSub:       sub,
+		UserStatus:    status,
+		CodeParameter: "{####}",
+	})
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_ResendCode", "{####}", cmPayload); err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
+	return CognitoCodeDeliveryDetails{
+		Destination:    "t***@example.com",
+		DeliveryMedium: "EMAIL",
+		AttributeName:  "email",
+	}, nil
 }
 
 func (s *Store) lookupClient(clientID string) (accountID, poolID string, err error) {

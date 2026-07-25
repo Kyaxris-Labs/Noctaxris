@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -89,19 +90,35 @@ type WAFByteMatchStatement struct {
 	HeaderName           string `json:"HeaderName,omitempty"` // required for SingleHeader
 }
 
-// WAFRequestView carries invoke-path fields used for ByteMatch evaluation.
-type WAFRequestView struct {
-	URI     string
-	Headers map[string]string
+// WAFSizeConstraintStatement is a lab subset of AWS WAFv2 SizeConstraintStatement.
+type WAFSizeConstraintStatement struct {
+	FieldToMatchType   string `json:"FieldToMatchType"`     // UriPath or SingleHeader
+	HeaderName         string `json:"HeaderName,omitempty"` // required for SingleHeader
+	ComparisonOperator string `json:"ComparisonOperator"`   // EQ NE LE LT GE GT
+	Size               int64  `json:"Size"`
 }
 
-// WAFRule is an allow/block rule with optional label or ByteMatch statement.
+// WAFIPSetReferenceStatement is a lab lite IP set match (inline CIDRs on the rule).
+type WAFIPSetReferenceStatement struct {
+	Addresses []string `json:"Addresses"` // CIDR or host (host becomes /32 or /128)
+}
+
+// WAFRequestView carries invoke-path fields used for statement evaluation.
+type WAFRequestView struct {
+	URI      string
+	Headers  map[string]string
+	SourceIP string // client address for IPSet; from RemoteAddr or first XFF hop
+}
+
+// WAFRule is an allow/block rule with optional label or statement.
 type WAFRule struct {
-	Name               string                 `json:"Name"`
-	Priority           int                    `json:"Priority"`
-	Action             string                 `json:"Action"` // Allow or Block
-	Label              string                 `json:"Label,omitempty"`
-	ByteMatchStatement *WAFByteMatchStatement `json:"ByteMatchStatement,omitempty"`
+	Name                    string                      `json:"Name"`
+	Priority                int                         `json:"Priority"`
+	Action                  string                      `json:"Action"` // Allow or Block
+	Label                   string                      `json:"Label,omitempty"`
+	ByteMatchStatement      *WAFByteMatchStatement      `json:"ByteMatchStatement,omitempty"`
+	SizeConstraintStatement *WAFSizeConstraintStatement `json:"SizeConstraintStatement,omitempty"`
+	IPSetReferenceStatement *WAFIPSetReferenceStatement `json:"IPSetReferenceStatement,omitempty"`
 }
 
 // EnsureWAFSchema creates WAFv2 tables if missing.
@@ -493,6 +510,12 @@ func wafRuleMatches(rule WAFRule, requestLabel string, view *WAFRequestView) (bo
 	if rule.ByteMatchStatement != nil {
 		return evaluateWAFByteMatch(rule.ByteMatchStatement, view)
 	}
+	if rule.SizeConstraintStatement != nil {
+		return evaluateWAFSizeConstraint(rule.SizeConstraintStatement, view)
+	}
+	if rule.IPSetReferenceStatement != nil {
+		return evaluateWAFIPSet(rule.IPSetReferenceStatement, view)
+	}
 	if rule.Label != "" {
 		return rule.Label == requestLabel, nil
 	}
@@ -517,19 +540,9 @@ func evaluateWAFByteMatch(bm *WAFByteMatchStatement, view *WAFRequestView) (bool
 	if constraint != "CONTAINS" && constraint != "EXACTLY" {
 		return false, fmt.Errorf("evaluate waf bytematch: unsupported PositionalConstraint %q", bm.PositionalConstraint)
 	}
-	fieldType := strings.TrimSpace(bm.FieldToMatchType)
-	var haystack string
-	switch fieldType {
-	case "UriPath":
-		haystack = view.URI
-	case "SingleHeader":
-		name := strings.TrimSpace(bm.HeaderName)
-		if name == "" {
-			return false, fmt.Errorf("evaluate waf bytematch: HeaderName required for SingleHeader")
-		}
-		haystack = wafHeaderValue(view.Headers, name)
-	default:
-		return false, fmt.Errorf("evaluate waf bytematch: unsupported FieldToMatch %q", fieldType)
+	haystack, err := wafFieldToMatchValue(bm.FieldToMatchType, bm.HeaderName, view)
+	if err != nil {
+		return false, fmt.Errorf("evaluate waf bytematch: %w", err)
 	}
 	switch constraint {
 	case "CONTAINS":
@@ -538,6 +551,120 @@ func evaluateWAFByteMatch(bm *WAFByteMatchStatement, view *WAFRequestView) (bool
 		return haystack == search, nil
 	default:
 		return false, nil
+	}
+}
+
+func evaluateWAFSizeConstraint(sc *WAFSizeConstraintStatement, view *WAFRequestView) (bool, error) {
+	if sc == nil {
+		return false, fmt.Errorf("evaluate waf sizeconstraint: statement is nil")
+	}
+	if view == nil {
+		return false, nil
+	}
+	op := strings.ToUpper(strings.TrimSpace(sc.ComparisonOperator))
+	switch op {
+	case "EQ", "NE", "LE", "LT", "GE", "GT":
+	default:
+		return false, fmt.Errorf("evaluate waf sizeconstraint: unsupported ComparisonOperator %q", sc.ComparisonOperator)
+	}
+	if sc.Size < 0 {
+		return false, fmt.Errorf("evaluate waf sizeconstraint: Size must be >= 0")
+	}
+	value, err := wafFieldToMatchValue(sc.FieldToMatchType, sc.HeaderName, view)
+	if err != nil {
+		return false, fmt.Errorf("evaluate waf sizeconstraint: %w", err)
+	}
+	n := int64(len(value))
+	switch op {
+	case "EQ":
+		return n == sc.Size, nil
+	case "NE":
+		return n != sc.Size, nil
+	case "LE":
+		return n <= sc.Size, nil
+	case "LT":
+		return n < sc.Size, nil
+	case "GE":
+		return n >= sc.Size, nil
+	case "GT":
+		return n > sc.Size, nil
+	default:
+		return false, nil
+	}
+}
+
+func evaluateWAFIPSet(ipset *WAFIPSetReferenceStatement, view *WAFRequestView) (bool, error) {
+	if ipset == nil {
+		return false, fmt.Errorf("evaluate waf ipset: statement is nil")
+	}
+	if view == nil {
+		return false, nil
+	}
+	src := strings.TrimSpace(view.SourceIP)
+	if src == "" {
+		return false, nil
+	}
+	ip := net.ParseIP(src)
+	if ip == nil {
+		return false, nil
+	}
+	if len(ipset.Addresses) == 0 {
+		return false, fmt.Errorf("evaluate waf ipset: Addresses required")
+	}
+	for _, addr := range ipset.Addresses {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		network, err := wafParseCIDR(addr)
+		if err != nil {
+			return false, fmt.Errorf("evaluate waf ipset: %w", err)
+		}
+		if network.Contains(ip) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func wafParseCIDR(addr string) (*net.IPNet, error) {
+	if strings.Contains(addr, "/") {
+		_, network, err := net.ParseCIDR(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", addr, err)
+		}
+		return network, nil
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid address %q", addr)
+	}
+	if ip.To4() != nil {
+		_, network, err := net.ParseCIDR(addr + "/32")
+		if err != nil {
+			return nil, fmt.Errorf("invalid IPv4 host %q: %w", addr, err)
+		}
+		return network, nil
+	}
+	_, network, err := net.ParseCIDR(addr + "/128")
+	if err != nil {
+		return nil, fmt.Errorf("invalid IPv6 host %q: %w", addr, err)
+	}
+	return network, nil
+}
+
+func wafFieldToMatchValue(fieldType, headerName string, view *WAFRequestView) (string, error) {
+	switch strings.TrimSpace(fieldType) {
+	case "UriPath":
+		return view.URI, nil
+	case "SingleHeader":
+		name := strings.TrimSpace(headerName)
+		if name == "" {
+			return "", fmt.Errorf("HeaderName required for SingleHeader")
+		}
+		return wafHeaderValue(view.Headers, name), nil
+	default:
+		return "", fmt.Errorf("unsupported FieldToMatch %q", fieldType)
 	}
 }
 

@@ -504,7 +504,7 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 
 	params := jsonBodyMap(body)
 	query, _ := params["query"].(string)
-	fields, err := store.ParseAppSyncQueryFields(query)
+	sels, err := store.ParseAppSyncQuerySelections(query)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -517,19 +517,15 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 	if verified != nil && verified.Region != "" {
 		region = verified.Region
 	}
-	data := make(map[string]any, len(fields))
+	fieldTypes := store.ParseAppSyncSchemaFieldReturnTypes(api.SchemaSDL)
+	data := make(map[string]any, len(sels))
 	var gqlErrs []map[string]any
-	for _, field := range fields {
-		value, fieldErr := s.appsyncResolveInvokeField(r, accountID, apiID, api.ARN, region, field)
-		if fieldErr != "" {
-			data[field] = nil
-			gqlErrs = append(gqlErrs, map[string]any{
-				"message": fieldErr,
-				"path":    []any{field},
-			})
-			continue
-		}
-		data[field] = value
+	for _, sel := range sels {
+		value, pathErrs := s.appsyncResolveSelection(
+			r, accountID, apiID, api.ARN, region, "Query", nil, sel, fieldTypes, []any{sel.Name},
+		)
+		data[sel.Name] = value
+		gqlErrs = append(gqlErrs, pathErrs...)
 	}
 	envelope := map[string]any{"data": data}
 	if len(gqlErrs) > 0 {
@@ -542,13 +538,129 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GraphQL", readOnly)
 }
 
-// appsyncResolveInvokeField resolves one Query field and Invokes its Lambda data source.
+// appsyncResolveSelection resolves one selection (and nested children) via Lambda resolvers or parent projection.
+func (s *Server) appsyncResolveSelection(
+	r *http.Request,
+	accountID, apiID, apiARN, region, parentType string,
+	source any,
+	sel store.AppSyncSelection,
+	fieldTypes map[string]map[string]string,
+	path []any,
+) (value any, errs []map[string]any) {
+	resolved, errMsg := s.appsyncResolveInvokeField(r, accountID, apiID, apiARN, region, parentType, sel.Name, source)
+	if errMsg != "" {
+		// No unit resolver: GraphQL default field resolver projects from parent object (null if missing).
+		if source != nil {
+			projected, _ := appsyncProjectField(source, sel.Name)
+			if len(sel.Children) == 0 {
+				return projected, nil
+			}
+			if projected == nil {
+				return nil, nil
+			}
+			return s.appsyncApplyNestedSelections(r, accountID, apiID, apiARN, region, parentType, sel, projected, fieldTypes, path)
+		}
+		return nil, []map[string]any{{"message": errMsg, "path": append([]any(nil), path...)}}
+	}
+	if len(sel.Children) == 0 {
+		return resolved, nil
+	}
+	return s.appsyncApplyNestedSelections(r, accountID, apiID, apiARN, region, parentType, sel, resolved, fieldTypes, path)
+}
+
+func (s *Server) appsyncApplyNestedSelections(
+	r *http.Request,
+	accountID, apiID, apiARN, region, parentType string,
+	sel store.AppSyncSelection,
+	parentValue any,
+	fieldTypes map[string]map[string]string,
+	path []any,
+) (value any, errs []map[string]any) {
+	childType := ""
+	if ft, ok := fieldTypes[parentType]; ok {
+		childType = ft[sel.Name]
+	}
+	if childType == "" {
+		return nil, []map[string]any{{
+			"message": "unable to resolve nested type for field " + sel.Name,
+			"path":    append([]any(nil), path...),
+		}}
+	}
+	switch v := parentValue.(type) {
+	case nil:
+		return nil, nil
+	case map[string]any:
+		return s.appsyncResolveChildrenOnObject(r, accountID, apiID, apiARN, region, childType, v, sel.Children, fieldTypes, path)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			itemPath := append(append([]any(nil), path...), i)
+			obj, ok := item.(map[string]any)
+			if !ok {
+				if item == nil {
+					out[i] = nil
+					continue
+				}
+				errs = append(errs, map[string]any{
+					"message": "Cannot query fields on a non-object list item",
+					"path":    itemPath,
+				})
+				out[i] = nil
+				continue
+			}
+			resolved, itemErrs := s.appsyncResolveChildrenOnObject(
+				r, accountID, apiID, apiARN, region, childType, obj, sel.Children, fieldTypes, itemPath,
+			)
+			out[i] = resolved
+			errs = append(errs, itemErrs...)
+		}
+		return out, errs
+	default:
+		return nil, []map[string]any{{
+			"message": "Cannot query fields on a scalar value",
+			"path":    append([]any(nil), path...),
+		}}
+	}
+}
+
+func (s *Server) appsyncResolveChildrenOnObject(
+	r *http.Request,
+	accountID, apiID, apiARN, region, typeName string,
+	source map[string]any,
+	children []store.AppSyncSelection,
+	fieldTypes map[string]map[string]string,
+	path []any,
+) (map[string]any, []map[string]any) {
+	out := make(map[string]any, len(children))
+	var errs []map[string]any
+	for _, child := range children {
+		childPath := append(append([]any(nil), path...), child.Name)
+		val, childErrs := s.appsyncResolveSelection(
+			r, accountID, apiID, apiARN, region, typeName, source, child, fieldTypes, childPath,
+		)
+		out[child.Name] = val
+		errs = append(errs, childErrs...)
+	}
+	return out, errs
+}
+
+func appsyncProjectField(source any, field string) (any, bool) {
+	m, ok := source.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	v, ok := m[field]
+	return v, ok
+}
+
+// appsyncResolveInvokeField resolves one type.field and Invokes its Lambda data source.
 // When the data source has serviceRoleArn, requires role-session Allow on lambda:InvokeFunction;
 // otherwise requires a Lambda resource policy Allow for appsync.amazonaws.com.
+// source is the parent object (nil for Query root); it is passed as the Lambda event "source".
 func (s *Server) appsyncResolveInvokeField(
-	r *http.Request, accountID, apiID, apiARN, region, field string,
+	r *http.Request, accountID, apiID, apiARN, region, typeName, field string, source any,
 ) (value any, errMsg string) {
-	_, ds, err := s.store.ResolveAppSyncQueryField(accountID, apiID, field)
+	_, ds, err := s.store.ResolveAppSyncField(accountID, apiID, typeName, field)
 	if err != nil {
 		return nil, "resolver not found for field " + field
 	}
@@ -574,11 +686,15 @@ func (s *Server) appsyncResolveInvokeField(
 	) {
 		return nil, "UnauthorizedException"
 	}
-	eventJSON, _ := json.Marshal(map[string]any{
+	event := map[string]any{
 		"field":     field,
 		"arguments": map[string]any{},
-		"info":      map[string]any{"fieldName": field, "parentTypeName": "Query"},
-	})
+		"info":      map[string]any{"fieldName": field, "parentTypeName": typeName},
+	}
+	if source != nil {
+		event["source"] = source
+	}
+	eventJSON, _ := json.Marshal(event)
 	result, err := s.executeLambdaInvoke(r.Context(), fnAccount, fnName, fn, executedVersion, string(eventJSON))
 	if err != nil {
 		return nil, err.Error()

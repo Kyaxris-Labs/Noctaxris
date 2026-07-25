@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Lab LookupEvents over the existing JSONL audit under the data root `cloudtrail/` directory, plus CreateTrail with StartLogging delivery to in-account S3 and/or CloudWatch Logs. Identity authz. PassRole when `CloudWatchLogsRoleArn` is set (`cloudtrail.amazonaws.com` trust).
+Lab LookupEvents over the existing JSONL audit under the data root `cloudtrail/` directory, plus CreateTrail with StartLogging delivery to in-account S3 and/or CloudWatch Logs. After StartLogging, new JSONL lines are shipped continuously to the same destinations. Identity authz. PassRole when `CloudWatchLogsRoleArn` is set (`cloudtrail.amazonaws.com` trust).
 
 ## Implemented
 
@@ -17,12 +17,14 @@ Filters for LookupEvents: `StartTime` / `EndTime`, one `LookupAttributes` entry 
 
 `CreateTrail` requires an in-account S3 bucket (`S3BucketName`, optional `S3KeyPrefix`). Optional `CloudWatchLogsLogGroupArn` + `CloudWatchLogsRoleArn` (PassRole + trust). Trails start with `IsLogging=false`.
 
-`StartLogging` delivers a lab snapshot of recent JSONL lines (capped) once to configured destinations, then sets `IsLogging=true`:
+`StartLogging` delivers a lab snapshot of recent JSONL lines (capped) once to configured destinations, sets `IsLogging=true`, and anchors a per-trail delivery cursor at the current JSONL line count:
 
 - S3 key `{prefix}AWSLogs/{account}/CloudTrail/noctaxris-{trail}-{ts}.json`
 - and/or Logs stream `noctaxris-trail-{name}` via `PutLogEvents`
 
-If a configured destination Put fails, StartLogging fails and `IsLogging` stays false. `StopLogging` clears the flag only (no further delivery). LookupEvents remains JSONL-based (StartLogging delivery is additive, not a continuous trail shipper).
+While `IsLogging=true`, each new audit JSONL append triggers continuous delivery of lines past the cursor to the same in-account S3 (and optional Logs) destinations. Each ship writes a new S3 object (and optional Logs events) for the delta, then advances the cursor. Delivery stays in-account only (loopback secure defaults).
+
+If a configured destination Put fails on StartLogging, the call fails and `IsLogging` stays false. If a continuous Put fails, that trail's `IsLogging` is cleared (fail closed), the cursor is not advanced, and the failure is logged; call StartLogging again after fixing the destination. `StopLogging` clears the flag only (no further continuous delivery). LookupEvents remains JSONL-based (S3/Logs delivery is additive).
 
 ### Authz notes
 
@@ -46,7 +48,10 @@ aws cloudtrail create-trail \
 aws sts get-caller-identity --endpoint-url "$EP"
 aws cloudtrail start-logging --name lab-trail --endpoint-url "$EP"
 
+# Further API calls append audit JSONL and ship additional S3/Logs objects while logging.
+aws sts get-caller-identity --endpoint-url "$EP"
 aws s3api list-objects-v2 --bucket ct-lab --endpoint-url "$EP"
+
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetCallerIdentity \
   --max-results 10 \
@@ -58,7 +63,6 @@ PassRole for the Logs role requires `cloudtrail.amazonaws.com` trust and caller 
 
 ## Not yet / deferred
 
-- Continuous delivery after StartLogging (lab ships one snapshot per StartLogging call)
 - PutEventSelectors / Insights / Lake / organization trails
 - Multi-attribute LookupAttributes (AWS allows one today in this lab as well)
 - Event history retention policies beyond the lab JSONL file

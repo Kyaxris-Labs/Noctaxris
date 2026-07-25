@@ -10,8 +10,8 @@ User Pool and app client CRUD, AdminCreateUser / SignUp lite, InitiateAuth `USER
 |------|---------|
 | Pool | `CreateUserPool`, `DescribeUserPool`, `UpdateUserPool`, `ListUserPools`, `DeleteUserPool` |
 | Client | `CreateUserPoolClient`, `DescribeUserPoolClient`, `ListUserPoolClients`, `DeleteUserPoolClient` |
-| Users | `AdminCreateUser`, `SignUp`, `ConfirmSignUp` |
-| Auth | `InitiateAuth` (unsigned public IdP API; AWS CLI shape without `Authorization`): `USER_PASSWORD_AUTH`, `USER_SRP_AUTH` (`SRP_A` → `PASSWORD_VERIFIER`), `CUSTOM_AUTH` (Define/Create/Verify challenge loop), `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN`; `AdminInitiateAuth` (password and refresh flows; SigV4); `RevokeToken` (unsigned public IdP; `ClientId` + refresh `Token`) |
+| Users | `AdminCreateUser`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`, `ResendConfirmationCode`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute` |
+| Auth | `InitiateAuth` (unsigned public IdP API; AWS CLI shape without `Authorization`): `USER_PASSWORD_AUTH`, `USER_SRP_AUTH` (`SRP_A` → `PASSWORD_VERIFIER`), `CUSTOM_AUTH` (Define/Create/Verify; optional SRP nesting `SRP_A` → `PASSWORD_VERIFIER` → `CUSTOM_CHALLENGE`), `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN`; `AdminInitiateAuth` (password and refresh flows; SigV4); `RevokeToken` (unsigned public IdP; `ClientId` + refresh `Token`) |
 | MFA (TOTP) | `AssociateSoftwareToken`, `VerifySoftwareToken`, `RespondToAuthChallenge` (`SOFTWARE_TOKEN_MFA`, `PASSWORD_VERIFIER`) — unsigned public IdP. After Verify, password or SRP auth returns `ChallengeName=SOFTWARE_TOKEN_MFA` + `Session` (no tokens) until a valid TOTP is submitted |
 | Triggers | `LambdaConfig` lab subset store ARNs (`PreSignUp`, `PostConfirmation`, `PreAuthentication`, `PostAuthentication`, `PreTokenGeneration`, `CustomMessage`, `UserMigration`, `DefineAuthChallenge`, `CreateAuthChallenge`, `VerifyAuthChallengeResponse`) and lab top-level `RoleArn` on Create/Update/Describe; PassRole for `cognito-idp.amazonaws.com` when `RoleArn` is set (`aws:SourceArn` = pool ARN). Sync Invoke on lifecycle events below |
 | JWKS | `GET /cognito-idp/{region}/{userPoolId}/.well-known/jwks.json` (no SigV4) |
@@ -38,16 +38,18 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 - `UpdateUserPool` replace semantics: omit `LambdaConfig` / `RoleArn` to clear those lab fields.
 - When a trigger ARN is configured, the lab Invokes it synchronously (RequestResponse) on the matching lifecycle event:
   - `PreSignUp` → `SignUp` (before the user row is created)
-  - `CustomMessage` → `SignUp` after the user row is created (`CustomMessage_SignUp`) and `AdminCreateUser` after the user row is created (`CustomMessage_AdminCreateUser`); lab stub `codeParameter` `{####}`; response `smsMessage` / `emailMessage` / `emailSubject` are validated to include the codeParameter, rendered with stub code `123456` and `{username}`, and stored for tests — no SES send
+  - `CustomMessage` → `SignUp` after the user row is created (`CustomMessage_SignUp`), `AdminCreateUser` after the user row is created (`CustomMessage_AdminCreateUser`), `ForgotPassword` (`CustomMessage_ForgotPassword`), `ResendConfirmationCode` (`CustomMessage_ResendCode`), `UpdateUserAttributes` when `email` or `phone_number` is present (`CustomMessage_UpdateUserAttribute`), and `GetUserAttributeVerificationCode` (`CustomMessage_VerifyUserAttribute`); lab stub `codeParameter` `{####}`; response `smsMessage` / `emailMessage` / `emailSubject` are validated to include the codeParameter, rendered with stub code `123456` and `{username}`, and stored for tests — no SES send
   - `PostConfirmation` → `ConfirmSignUp` (after the user is marked `CONFIRMED`)
   - `PreAuthentication` → password / SRP auth start
   - `UserMigration` → `USER_PASSWORD_AUTH` when the username is missing (`UserMigration_Authentication`); if the Lambda response includes non-empty `response.userAttributes`, the lab creates a `CONFIRMED` user with the auth password and continues; otherwise `UserNotFoundException`. Fail closed on Invoke error
   - `PreTokenGeneration` → before access/id tokens are minted (including refresh; trigger source `TokenGeneration_RefreshTokens` on refresh)
   - `PostAuthentication` → after a successful password / SRP / MFA auth that returns tokens (not on refresh)
-  - Custom auth (`CUSTOM_AUTH`): sync Invoke of `DefineAuthChallenge` → optional `CreateAuthChallenge` → `CUSTOM_CHALLENGE` response; `RespondToAuthChallenge` Invokes `VerifyAuthChallengeResponse` then Define again until `issueTokens` or `failAuthentication`. Lab supports `CUSTOM_CHALLENGE` only (no SRP nesting inside custom auth)
+  - Custom auth (`CUSTOM_AUTH`): sync Invoke of `DefineAuthChallenge` → optional `CreateAuthChallenge` → `CUSTOM_CHALLENGE` response; `RespondToAuthChallenge` Invokes `VerifyAuthChallengeResponse` then Define again until `issueTokens` or `failAuthentication`. When `InitiateAuth` includes `SRP_A` (optional `CHALLENGE_NAME=SRP_A`), Define receives session `[{challengeName:SRP_A,challengeResult:true}]`; Define may return `PASSWORD_VERIFIER` and the lab reuses the same SRP challenge params as `USER_SRP_AUTH`; after a successful `RespondToAuthChallenge` `PASSWORD_VERIFIER`, Define runs again (may return `CUSTOM_CHALLENGE`)
 - Fail closed: missing function, Invoke error, or unparseable PreToken/UserMigration/custom-auth/CustomMessage payload returns `UnexpectedLambdaException` / `InvalidLambdaResponseException` (or `UserNotFoundException` when migration returns no attributes) and the Cognito API fails.
 - PreTokenGeneration V1 claim overrides: apply `response.claimsOverrideDetails.claimsToAddOrOverride` and `claimsToSuppress` to the **ID** token only. Reserved claims (`iss`, `aud`, `client_id`, `exp`, `iat`, `auth_time`, `token_use`, `sub`) are ignored for add/suppress. V2/V3 `claimsAndScopeOverrideDetails`, access-token custom claims, and `groupOverrideDetails` are not applied.
 - CustomMessage lab helper: `GetLastCognitoCustomMessage` (store) returns the last rendered SMS/email body for a user (tests only; no public API).
+- `ForgotPassword` persists lab confirmation code `123456`; `ConfirmForgotPassword` accepts that code, updates the password hash and SRP verifier, and clears the code. Wrong or missing code returns `CodeMismatchException`.
+- `UpdateUserAttributes` / `GetUserAttributeVerificationCode` / `VerifyUserAttribute` are AccessToken public IdP APIs. Lab attributes live in SQLite; `email` / `phone_number` start unverified and accept lab code `123456` on `VerifyUserAttribute`.
 
 ### MFA lab rules
 
@@ -58,7 +60,7 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 
 ### Authz notes
 
-Identity `EvaluateFull` on management `cognito-idp:*`. `InitiateAuth`, `RevokeToken`, `AssociateSoftwareToken`, `VerifySoftwareToken`, and `RespondToAuthChallenge` do not require SigV4 (public IdP). JWKS is public on loopback. PassRole applies only when configuring `RoleArn`.
+Identity `EvaluateFull` on management `cognito-idp:*`. `InitiateAuth`, `ConfirmForgotPassword`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `RevokeToken`, `AssociateSoftwareToken`, `VerifySoftwareToken`, and `RespondToAuthChallenge` do not require SigV4 (public IdP). JWKS is public on loopback. PassRole applies only when configuring `RoleArn`.
 
 ## How to verify / CLI smoke
 
@@ -97,8 +99,7 @@ Document skip when Docker is unavailable (unit tests still cover issue/verify/re
 
 - PreTokenGeneration V2/V3 `claimsAndScopeOverrideDetails` (access-token claims/scopes) and `groupOverrideDetails`
 - UserMigration on `USER_SRP_AUTH` (AWS requires password auth so the migrate Lambda can verify credentials; SRP obscures the password)
-- Other CustomMessage trigger sources beyond SignUp and AdminCreateUser
-- Custom-auth nesting of `SRP_A` / `PASSWORD_VERIFIER` inside `CUSTOM_AUTH`
+- `CustomMessage_Authentication` (SMS MFA out of lab scope)
 - `SECRET_HASH` for app clients with a client secret
 - `NEW_PASSWORD_REQUIRED` and device SRP challenges
 

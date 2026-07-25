@@ -25,9 +25,9 @@ var (
 const DefaultAppSyncRegion = "us-east-1"
 
 const (
-	AppSyncAuthAPIKey   = "API_KEY"
-	AppSyncAuthIAM      = "AWS_IAM"
-	AppSyncAuthCognito  = "AMAZON_COGNITO_USER_POOLS"
+	AppSyncAuthAPIKey  = "API_KEY"
+	AppSyncAuthIAM     = "AWS_IAM"
+	AppSyncAuthCognito = "AMAZON_COGNITO_USER_POOLS"
 )
 
 const appSyncSchema = `
@@ -477,13 +477,25 @@ func (s *Store) GetAppSyncResolver(accountID, apiID, typeName, fieldName string)
 }
 
 var (
-	gqlOpPrefixRe = regexp.MustCompile(`(?is)^\s*(?:query|mutation|subscription)\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*`)
-	gqlIdentRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	gqlOpPrefixRe  = regexp.MustCompile(`(?is)^\s*(?:query|mutation|subscription)\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*`)
+	gqlIdentRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	gqlTypeDeclRe  = regexp.MustCompile(`(?is)\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([^}]*)\}`)
+	gqlFieldDeclRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s*:\s*(\[(?:[A-Za-z_][A-Za-z0-9_]*!?)\]!?|[A-Za-z_][A-Za-z0-9_]*!?)`)
 )
 
-// ParseAppSyncQueryFields extracts top-level flat Query selection field names.
-// Supports `{ hello world }` and `query { hello world }`. Rejects nested selections.
-func ParseAppSyncQueryFields(query string) ([]string, error) {
+// MaxAppSyncSelectionDepth is the max nesting of selection sets (Query field = depth 1).
+const MaxAppSyncSelectionDepth = 3
+
+// AppSyncSelection is one GraphQL selection field with optional nested children.
+type AppSyncSelection struct {
+	Name     string
+	Children []AppSyncSelection
+}
+
+// ParseAppSyncQuerySelections parses a lab GraphQL query into a selection tree.
+// Supports `{ hello world }`, `query { parent { child } }`, and nesting up to MaxAppSyncSelectionDepth.
+// Rejects field arguments, aliases, fragments, and deeper nesting.
+func ParseAppSyncQuerySelections(query string) ([]AppSyncSelection, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("%w: query required", ErrAppSyncBadRequest)
@@ -493,9 +505,24 @@ func ParseAppSyncQueryFields(query string) ([]string, error) {
 	if !strings.HasPrefix(query, "{") {
 		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
 	}
+	inner, rest, err := takeGQLSelectionSet(query)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(rest) != "" {
+		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
+	return parseAppSyncSelections(inner, 1)
+}
+
+func takeGQLSelectionSet(s string) (inner, rest string, err error) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "{") {
+		return "", "", fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
 	depth := 0
 	end := -1
-	for i, r := range query {
+	for i, r := range s {
 		switch r {
 		case '{':
 			depth++
@@ -510,34 +537,84 @@ func ParseAppSyncQueryFields(query string) ([]string, error) {
 		}
 	}
 	if end < 0 {
-		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+		return "", "", fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
 	}
-	inner := strings.TrimSpace(query[1:end])
+	return s[1:end], s[end+1:], nil
+}
+
+func parseAppSyncSelections(inner string, depth int) ([]AppSyncSelection, error) {
+	if depth > MaxAppSyncSelectionDepth {
+		return nil, fmt.Errorf("%w: selection set depth exceeds %d", ErrAppSyncBadRequest, MaxAppSyncSelectionDepth)
+	}
+	inner = strings.TrimSpace(inner)
 	if inner == "" {
 		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
 	}
-	if strings.ContainsAny(inner, "{}") {
-		return nil, fmt.Errorf("%w: nested selections are not supported", ErrAppSyncBadRequest)
-	}
-	parts := strings.FieldsFunc(inner, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
-	fields := make([]string, 0, len(parts))
-	for _, tok := range parts {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
+	var out []AppSyncSelection
+	i := 0
+	for i < len(inner) {
+		for i < len(inner) && (inner[i] == ' ' || inner[i] == '\t' || inner[i] == '\n' || inner[i] == '\r' || inner[i] == ',') {
+			i++
 		}
-		if strings.ContainsAny(tok, "()") {
-			return nil, fmt.Errorf("%w: field arguments are not supported", ErrAppSyncBadRequest)
+		if i >= len(inner) {
+			break
 		}
-		if !gqlIdentRe.MatchString(tok) {
+		start := i
+		for i < len(inner) && gqlIdentByte(inner[i]) {
+			i++
+		}
+		if start == i {
 			return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
 		}
-		fields = append(fields, tok)
+		name := inner[start:i]
+		if !gqlIdentRe.MatchString(name) {
+			return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+		}
+		for i < len(inner) && (inner[i] == ' ' || inner[i] == '\t' || inner[i] == '\n' || inner[i] == '\r') {
+			i++
+		}
+		if i < len(inner) && inner[i] == '(' {
+			return nil, fmt.Errorf("%w: field arguments are not supported", ErrAppSyncBadRequest)
+		}
+		sel := AppSyncSelection{Name: name}
+		if i < len(inner) && inner[i] == '{' {
+			if depth >= MaxAppSyncSelectionDepth {
+				return nil, fmt.Errorf("%w: selection set depth exceeds %d", ErrAppSyncBadRequest, MaxAppSyncSelectionDepth)
+			}
+			childInner, rest, err := takeGQLSelectionSet(inner[i:])
+			if err != nil {
+				return nil, err
+			}
+			children, err := parseAppSyncSelections(childInner, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			sel.Children = children
+			// rest is relative to inner[i:]; map back to absolute index in inner
+			consumed := len(inner[i:]) - len(rest)
+			i += consumed
+		}
+		out = append(out, sel)
 	}
-	if len(fields) == 0 {
+	if len(out) == 0 {
 		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
+	return out, nil
+}
+
+func gqlIdentByte(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// ParseAppSyncQueryFields extracts top-level Query selection field names (ignores nested children).
+func ParseAppSyncQueryFields(query string) ([]string, error) {
+	sels, err := ParseAppSyncQuerySelections(query)
+	if err != nil {
+		return nil, err
+	}
+	fields := make([]string, len(sels))
+	for i, s := range sels {
+		fields[i] = s.Name
 	}
 	return fields, nil
 }
@@ -551,9 +628,48 @@ func ParseAppSyncQueryField(query string) (fieldName string, err error) {
 	return fields[0], nil
 }
 
-// ResolveAppSyncQueryField looks up resolver + data source for a Query field.
-func (s *Store) ResolveAppSyncQueryField(accountID, apiID, fieldName string) (resolver AppSyncResolver, ds AppSyncDataSource, err error) {
-	resolver, err = s.GetAppSyncResolver(accountID, apiID, "Query", fieldName)
+// ParseAppSyncSchemaFieldReturnTypes maps typeName -> fieldName -> bare return type (list/non-null stripped).
+func ParseAppSyncSchemaFieldReturnTypes(sdl string) map[string]map[string]string {
+	out := make(map[string]map[string]string)
+	for _, m := range gqlTypeDeclRe.FindAllStringSubmatch(sdl, -1) {
+		typeName := m[1]
+		body := m[2]
+		fields := make(map[string]string)
+		for _, fm := range gqlFieldDeclRe.FindAllStringSubmatch(body, -1) {
+			fields[fm[1]] = stripGQLTypeWrappers(fm[2])
+		}
+		if len(fields) > 0 {
+			out[typeName] = fields
+		}
+	}
+	return out
+}
+
+func stripGQLTypeWrappers(t string) string {
+	t = strings.TrimSpace(t)
+	for {
+		changed := false
+		if strings.HasSuffix(t, "!") {
+			t = strings.TrimSuffix(t, "!")
+			t = strings.TrimSpace(t)
+			changed = true
+		}
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			t = strings.TrimPrefix(t, "[")
+			t = strings.TrimSuffix(t, "]")
+			t = strings.TrimSpace(t)
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	return t
+}
+
+// ResolveAppSyncField looks up resolver + data source for typeName.fieldName.
+func (s *Store) ResolveAppSyncField(accountID, apiID, typeName, fieldName string) (resolver AppSyncResolver, ds AppSyncDataSource, err error) {
+	resolver, err = s.GetAppSyncResolver(accountID, apiID, typeName, fieldName)
 	if err != nil {
 		return AppSyncResolver{}, AppSyncDataSource{}, err
 	}
@@ -562,4 +678,9 @@ func (s *Store) ResolveAppSyncQueryField(accountID, apiID, fieldName string) (re
 		return AppSyncResolver{}, AppSyncDataSource{}, err
 	}
 	return resolver, ds, nil
+}
+
+// ResolveAppSyncQueryField looks up resolver + data source for a Query field.
+func (s *Store) ResolveAppSyncQueryField(accountID, apiID, fieldName string) (resolver AppSyncResolver, ds AppSyncDataSource, err error) {
+	return s.ResolveAppSyncField(accountID, apiID, "Query", fieldName)
 }

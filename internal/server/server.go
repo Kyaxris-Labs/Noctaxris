@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -94,6 +95,14 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 	st.SetOnAsyncEnqueue(func(job store.LambdaAsyncInvocation) {
 		s.startAsyncInvoke(job, job.AccountID, job.FunctionName, "")
 	})
+	if aud != nil {
+		dataRoot := cfg.DataRoot
+		aud.SetAfterWrite(func() {
+			if err := st.ShipCloudTrailContinuousDeliveries(dataRoot); err != nil {
+				log.Printf("cloudtrail continuous delivery: %v", err)
+			}
+		})
+	}
 	s.wireCognitoTriggerInvoker()
 	return s
 }
@@ -1019,6 +1028,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCognitoAdminCreateUser, "AdminCreateUser",
 		catalog.ActionCognitoSignUp, "SignUp",
 		catalog.ActionCognitoConfirmSignUp, "ConfirmSignUp",
+		catalog.ActionCognitoForgotPassword, "ForgotPassword",
+		catalog.ActionCognitoConfirmForgotPassword, "ConfirmForgotPassword",
+		catalog.ActionCognitoResendConfirmationCode, "ResendConfirmationCode",
+		catalog.ActionCognitoUpdateUserAttributes, "UpdateUserAttributes",
+		catalog.ActionCognitoGetUserAttributeVerificationCode, "GetUserAttributeVerificationCode",
+		catalog.ActionCognitoVerifyUserAttribute, "VerifyUserAttribute",
 		catalog.ActionCognitoInitiateAuth, "InitiateAuth",
 		catalog.ActionCognitoAdminInitiateAuth, "AdminInitiateAuth",
 		catalog.ActionCognitoRevokeToken, "RevokeToken",
@@ -2185,6 +2200,10 @@ func isUnauthenticatedSTSAction(action string) bool {
 func isUnauthenticatedCognitoAction(action string) bool {
 	switch action {
 	case catalog.ActionCognitoInitiateAuth, "InitiateAuth",
+		catalog.ActionCognitoConfirmForgotPassword, "ConfirmForgotPassword",
+		catalog.ActionCognitoUpdateUserAttributes, "UpdateUserAttributes",
+		catalog.ActionCognitoGetUserAttributeVerificationCode, "GetUserAttributeVerificationCode",
+		catalog.ActionCognitoVerifyUserAttribute, "VerifyUserAttribute",
 		catalog.ActionCognitoRevokeToken, "RevokeToken",
 		catalog.ActionCognitoAssociateSoftwareToken, "AssociateSoftwareToken",
 		catalog.ActionCognitoVerifySoftwareToken, "VerifySoftwareToken",

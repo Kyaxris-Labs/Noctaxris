@@ -86,13 +86,26 @@ func parseWAFRules(params map[string]any) []store.WAFRule {
 		case float64:
 			prio = int(p)
 		}
+		rule := store.WAFRule{Name: name, Priority: prio, Action: action, Label: label}
 		if bm := parseWAFByteMatchStatement(m); bm != nil {
-			rules = append(rules, store.WAFRule{
-				Name: name, Priority: prio, Action: action, ByteMatchStatement: bm,
-			})
+			rule.ByteMatchStatement = bm
+			rule.Label = ""
+			rules = append(rules, rule)
 			continue
 		}
-		rules = append(rules, store.WAFRule{Name: name, Priority: prio, Action: action, Label: label})
+		if sc := parseWAFSizeConstraintStatement(m); sc != nil {
+			rule.SizeConstraintStatement = sc
+			rule.Label = ""
+			rules = append(rules, rule)
+			continue
+		}
+		if ip := parseWAFIPSetReferenceStatement(m); ip != nil {
+			rule.IPSetReferenceStatement = ip
+			rule.Label = ""
+			rules = append(rules, rule)
+			continue
+		}
+		rules = append(rules, rule)
 	}
 	return rules
 }
@@ -109,14 +122,20 @@ func wafRuleActionFromMap(m map[string]any) string {
 	return action
 }
 
-func parseWAFByteMatchStatement(rule map[string]any) *store.WAFByteMatchStatement {
-	var bm map[string]any
+func parseWAFStatementMap(rule map[string]any, key string) map[string]any {
 	if stmt, ok := rule["Statement"].(map[string]any); ok {
-		bm, _ = stmt["ByteMatchStatement"].(map[string]any)
+		if m, ok := stmt[key].(map[string]any); ok {
+			return m
+		}
 	}
-	if bm == nil {
-		bm, _ = rule["ByteMatchStatement"].(map[string]any)
+	if m, ok := rule[key].(map[string]any); ok {
+		return m
 	}
+	return nil
+}
+
+func parseWAFByteMatchStatement(rule map[string]any) *store.WAFByteMatchStatement {
+	bm := parseWAFStatementMap(rule, "ByteMatchStatement")
 	if bm == nil {
 		return nil
 	}
@@ -140,6 +159,75 @@ func parseWAFByteMatchStatement(rule map[string]any) *store.WAFByteMatchStatemen
 		return out
 	}
 	return nil
+}
+
+func parseWAFSizeConstraintStatement(rule map[string]any) *store.WAFSizeConstraintStatement {
+	sc := parseWAFStatementMap(rule, "SizeConstraintStatement")
+	if sc == nil {
+		return nil
+	}
+	op, _ := sc["ComparisonOperator"].(string)
+	ftm, _ := sc["FieldToMatch"].(map[string]any)
+	if ftm == nil {
+		return nil
+	}
+	var size int64
+	switch v := sc["Size"].(type) {
+	case float64:
+		size = int64(v)
+	case int:
+		size = int64(v)
+	case int64:
+		size = v
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return nil
+		}
+		size = n
+	default:
+		return nil
+	}
+	out := &store.WAFSizeConstraintStatement{
+		ComparisonOperator: op,
+		Size:               size,
+	}
+	if _, ok := ftm["UriPath"]; ok {
+		out.FieldToMatchType = "UriPath"
+		return out
+	}
+	if sh, ok := ftm["SingleHeader"].(map[string]any); ok {
+		out.FieldToMatchType = "SingleHeader"
+		out.HeaderName, _ = sh["Name"].(string)
+		return out
+	}
+	return nil
+}
+
+func parseWAFIPSetReferenceStatement(rule map[string]any) *store.WAFIPSetReferenceStatement {
+	ip := parseWAFStatementMap(rule, "IPSetReferenceStatement")
+	if ip == nil {
+		return nil
+	}
+	raw, _ := ip["Addresses"].([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	addrs := make([]string, 0, len(raw))
+	for _, a := range raw {
+		s, ok := a.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			addrs = append(addrs, s)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil
+	}
+	return &store.WAFIPSetReferenceStatement{Addresses: addrs}
 }
 
 func parseWAFDefaultAction(params map[string]any) string {

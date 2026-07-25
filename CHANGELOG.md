@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Close remaining gaps
+
+- Cognito: `ConfirmForgotPassword` (lab code `123456`); `UpdateUserAttributes` / `GetUserAttributeVerificationCode` / `VerifyUserAttribute` with `CustomMessage_UpdateUserAttribute` / `CustomMessage_VerifyUserAttribute`; UserMigration on `USER_SRP_AUTH` and `CustomMessage_Authentication` (SMS MFA) remain blocked
+- Lambda MQ ESM: RabbitMQ AMQP 0-9-1 Dial + `basic.get` on allowlisted nested hosts (`github.com/rabbitmq/amqp091-go`); ActiveMQ stays dial-then-empty (AMQP 1.0)
+- Terraform: skip from WSL when endpoint is loopback (`127.0.0.1`/`localhost`) unless `NOCTAXRIS_FORCE_WSL_TF=1`; do not widen Compose publish
+
+### Polish and lab depth
+
+- Cognito: lite `ForgotPassword` / `ResendConfirmationCode` with `CustomMessage_ForgotPassword` / `CustomMessage_ResendCode`; `CUSTOM_AUTH` SRP nesting (`SRP_A` → `PASSWORD_VERIFIER` → optional `CUSTOM_CHALLENGE`); UserMigration on `USER_SRP_AUTH` still deferred
+- Lambda MQ ESM: RabbitMQ AMQP 0-9-1 allowlisted Dial + `basic.get` (superseded empty-batch wording for Rabbit; ActiveMQ still dial-empty); injectable `MQReceiveFunc` for tests
+- Step Functions: ASL `Map` (sequential Iterator), non-Equals Choice (`StringGreaterThan` / `StringLessThan` / `NumericGreaterThan` / `NumericLessThan` / `IsPresent`), top-level `InputPath` / `ResultPath`
+- CloudTrail: continuous JSONL delivery to in-account S3/Logs after `StartLogging` (cursor + fail-closed Put)
+- WAFv2: `SizeConstraintStatement` and inline `IPSetReferenceStatement` on invoke path (`SourceIP` from XFF/RemoteAddr)
+- Athena: in-process `JOIN` / `INNER JOIN`, `GROUP BY` + `COUNT(*)`, `ORDER BY` (no Trino)
+- AppSync: nested GraphQL selections (depth ≤ 3) with per-type resolvers; JWT/PassRole unchanged
+- Docs: Terraform lab-JSON surfaces stay SDK-only; skip `lab-fullstack` from WSL when Compose publishes `127.0.0.1:4566` only; nested OpenSearch/MQ/Firehose OS smoke remains skip-without-engine
+
 ### Stub depth: cron weekdays, Cognito CustomMessage, ELBv2 host-header
 
 - Shared Scheduler/Secrets cron matcher accepts DOM `nW` (nearest weekday, month-bounded) and `LW` (last weekday of month)
