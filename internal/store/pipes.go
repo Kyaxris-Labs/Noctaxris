@@ -61,11 +61,8 @@ func EnsurePipesSchema(db *sql.DB) error {
 	if _, err := db.Exec(pipesSchema); err != nil {
 		return fmt.Errorf("ensure pipes schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE pipes ADD COLUMN enrichment_arn TEXT NOT NULL DEFAULT ''`); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure pipes schema: enrichment_arn: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE pipes ADD COLUMN enrichment_arn TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure pipes schema: enrichment_arn: %w", err)
 	}
 	return nil
 }

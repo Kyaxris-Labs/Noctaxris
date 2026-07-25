@@ -74,8 +74,7 @@ func EnsureS3NotificationsSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure s3 notifications schema: db is nil")
 	}
-	_, err := db.Exec(`ALTER TABLE s3_buckets ADD COLUMN notification_json TEXT NOT NULL DEFAULT ''`)
-	if err != nil && !isDuplicateColumnErr(err) {
+	if err := execMigrateStmt(db, `ALTER TABLE s3_buckets ADD COLUMN notification_json TEXT NOT NULL DEFAULT ''`, nil); err != nil {
 		return fmt.Errorf("ensure s3 notifications schema: %w", err)
 	}
 	return nil

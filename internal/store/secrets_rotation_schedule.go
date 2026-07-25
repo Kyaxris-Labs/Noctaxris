@@ -31,18 +31,15 @@ var (
 
 // EnsureSecretsRotationScheduleSchema adds RotationRules schedule columns.
 func EnsureSecretsRotationScheduleSchema(db *sql.DB) error {
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN automatically_after_days INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN schedule_expression TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_duration TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN next_rotation_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN last_rotated_date TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure secrets rotation schedule schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure secrets rotation schedule schema: %w", err)
 	}
 	return nil
 }

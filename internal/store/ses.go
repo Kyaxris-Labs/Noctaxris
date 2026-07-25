@@ -77,11 +77,8 @@ func EnsureSESSchema(db *sql.DB) error {
 	if _, err := db.Exec(sesSchema); err != nil {
 		return fmt.Errorf("ensure ses schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE ses_identities ADD COLUMN bounce_topic_arn TEXT NOT NULL DEFAULT ''`); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure ses schema: bounce_topic_arn: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE ses_identities ADD COLUMN bounce_topic_arn TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure ses schema: bounce_topic_arn: %w", err)
 	}
 	return nil
 }

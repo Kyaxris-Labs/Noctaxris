@@ -72,33 +72,21 @@ func EnsureDynamoDBStreamsSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure dynamodb streams schema: db is nil")
 	}
-	tableAlters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_view_type TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN stream_label TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, q := range tableAlters {
-		if _, err := db.Exec(q); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-				return fmt.Errorf("ensure dynamodb streams schema: %w", err)
-			}
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure dynamodb streams schema: %w", err)
 	}
 	if _, err := db.Exec(dynamodbStreamsSchema); err != nil {
 		return fmt.Errorf("ensure dynamodb streams schema: records: %w", err)
 	}
-	recordAlters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE dynamodb_stream_records ADD COLUMN old_image_json TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_stream_records ADD COLUMN stream_view_type TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, q := range recordAlters {
-		if _, err := db.Exec(q); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-				return fmt.Errorf("ensure dynamodb streams schema: %w", err)
-			}
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure dynamodb streams schema: %w", err)
 	}
 	return nil
 }

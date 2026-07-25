@@ -77,21 +77,12 @@ func EnsureECSServiceSchema(db *sql.DB) error {
 	if _, err := db.Exec(ecsServiceSchema); err != nil {
 		return fmt.Errorf("ensure ecs service schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE ecs_tasks ADD COLUMN service_name TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return fmt.Errorf("ensure ecs service schema: %w", err)
-		}
-	}
-	for _, col := range []string{
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE ecs_tasks ADD COLUMN service_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ecs_services ADD COLUMN passed_task_role_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ecs_services ADD COLUMN passed_execution_role_arn TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, err := db.Exec(col); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-				return fmt.Errorf("ensure ecs service schema: %w", err)
-			}
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure ecs service schema: %w", err)
 	}
 	return nil
 }

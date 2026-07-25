@@ -185,11 +185,8 @@ func EnsureEventsSchema(db *sql.DB) error {
 	if _, err := db.Exec(eventsSchema); err != nil {
 		return fmt.Errorf("ensure events schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE event_targets ADD COLUMN input_transformer_json TEXT NOT NULL DEFAULT ''`); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure events schema: input_transformer_json: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE event_targets ADD COLUMN input_transformer_json TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure events schema: input_transformer_json: %w", err)
 	}
 	return nil
 }

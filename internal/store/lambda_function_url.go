@@ -68,10 +68,8 @@ func EnsureLambdaFunctionURLSchema(db *sql.DB) error {
 	if _, err := db.Exec(lambdaFunctionURLSchema); err != nil {
 		return fmt.Errorf("ensure lambda function url schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE lambda_function_urls ADD COLUMN cors_allow_origins_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return fmt.Errorf("ensure lambda function url schema alter: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE lambda_function_urls ADD COLUMN cors_allow_origins_json TEXT NOT NULL DEFAULT '[]'`, nil); err != nil {
+		return fmt.Errorf("ensure lambda function url schema alter: %w", err)
 	}
 	return nil
 }

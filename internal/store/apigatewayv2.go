@@ -168,21 +168,15 @@ func EnsureAPIGatewayV2Schema(db *sql.DB) error {
 	if _, err := db.Exec(apiGatewayV2Schema); err != nil {
 		return fmt.Errorf("ensure apigatewayv2 schema: %w", err)
 	}
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE apigwv2_integrations ADD COLUMN credentials_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_uri TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_credentials_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN authorizer_payload_format_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apigwv2_authorizers ADD COLUMN enable_simple_responses INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE apigwv2_apis ADD COLUMN cors_json TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure apigatewayv2 schema alter: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure apigatewayv2 schema alter: %w", err)
 	}
 	return nil
 }

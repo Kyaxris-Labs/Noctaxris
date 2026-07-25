@@ -793,8 +793,9 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE s3_object_versions ADD COLUMN canned_acl TEXT NOT NULL DEFAULT 'private'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_s3_buckets_name ON s3_buckets(name)`,
 	}
+	cache := map[string]map[string]bool{}
 	for _, stmt := range alters {
-		if _, err := s.db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) && !isNoSuchTableErr(err) {
+		if err := execMigrateStmt(s.db, stmt, cache); err != nil {
 			return fmt.Errorf("migrate schema: %w", err)
 		}
 	}
@@ -816,6 +817,135 @@ func isNoSuchTableErr(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "no such table")
+}
+
+func isSafeSQLiteIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			continue
+		}
+		if i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// parseAlterAddColumn extracts table and column from ALTER TABLE t ADD COLUMN c ...
+func parseAlterAddColumn(stmt string) (table, column string, ok bool) {
+	stmt = strings.TrimSpace(stmt)
+	upper := strings.ToUpper(stmt)
+	const prefix = "ALTER TABLE "
+	if !strings.HasPrefix(upper, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimSpace(stmt[len(prefix):])
+	idx := strings.Index(strings.ToUpper(rest), " ADD COLUMN ")
+	if idx < 0 {
+		return "", "", false
+	}
+	table = strings.TrimSpace(rest[:idx])
+	after := strings.TrimSpace(rest[idx+len(" ADD COLUMN "):])
+	fields := strings.Fields(after)
+	if len(fields) < 1 {
+		return "", "", false
+	}
+	column = fields[0]
+	if !isSafeSQLiteIdent(table) || !isSafeSQLiteIdent(column) {
+		return "", "", false
+	}
+	return table, column, true
+}
+
+func sqliteColumnSet(db *sql.DB, table string) (map[string]bool, error) {
+	if !isSafeSQLiteIdent(table) {
+		return nil, fmt.Errorf("sqlite column set: unsafe table %q", table)
+	}
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		if isNoSuchTableErr(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols[strings.ToLower(name)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return cols, nil
+}
+
+func cachedColumnSet(db *sql.DB, table string, cache map[string]map[string]bool) (map[string]bool, error) {
+	if cache != nil {
+		if cols, ok := cache[table]; ok {
+			return cols, nil
+		}
+	}
+	cols, err := sqliteColumnSet(db, table)
+	if err != nil {
+		return nil, err
+	}
+	if cache != nil {
+		cache[table] = cols
+	}
+	return cols, nil
+}
+
+// execMigrateStmt runs additive DDL. ALTER TABLE ... ADD COLUMN is skipped when the
+// column already exists (avoids expensive parse+error on every Open under -race tests).
+func execMigrateStmt(db *sql.DB, stmt string, cache map[string]map[string]bool) error {
+	stmt = strings.TrimSpace(stmt)
+	if table, col, ok := parseAlterAddColumn(stmt); ok {
+		cols, err := cachedColumnSet(db, table, cache)
+		if err != nil {
+			return err
+		}
+		if cols[strings.ToLower(col)] {
+			return nil
+		}
+		if _, err := db.Exec(stmt); err != nil {
+			if isDuplicateColumnErr(err) || isNoSuchTableErr(err) {
+				return nil
+			}
+			return err
+		}
+		if cache != nil {
+			if cache[table] == nil {
+				cache[table] = map[string]bool{}
+			}
+			cache[table][strings.ToLower(col)] = true
+		}
+		return nil
+	}
+	if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) && !isNoSuchTableErr(err) {
+		return err
+	}
+	return nil
+}
+
+// execMigrateStmts runs stmts with a shared per-call column cache.
+func execMigrateStmts(db *sql.DB, stmts []string) error {
+	cache := map[string]map[string]bool{}
+	for _, stmt := range stmts {
+		if err := execMigrateStmt(db, stmt, cache); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error {

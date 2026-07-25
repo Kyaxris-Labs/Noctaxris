@@ -127,19 +127,13 @@ func EnsureAppSyncSchema(db *sql.DB) error {
 	if _, err := db.Exec(appSyncSchema); err != nil {
 		return fmt.Errorf("ensure appsync schema: %w", err)
 	}
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_region TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_client_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_issuer TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure appsync schema alter: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure appsync schema alter: %w", err)
 	}
 	return nil
 }

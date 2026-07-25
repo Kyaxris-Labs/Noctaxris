@@ -91,10 +91,8 @@ func EnsureLogsSchema(db *sql.DB) error {
 	if _, err := db.Exec(logsSchema); err != nil {
 		return fmt.Errorf("ensure logs schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE logs_groups ADD COLUMN retention_in_days INTEGER NOT NULL DEFAULT 0`); err != nil {
-		if !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure logs schema: retention column: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE logs_groups ADD COLUMN retention_in_days INTEGER NOT NULL DEFAULT 0`, nil); err != nil {
+		return fmt.Errorf("ensure logs schema: retention column: %w", err)
 	}
 	return nil
 }

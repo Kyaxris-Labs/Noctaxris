@@ -55,13 +55,11 @@ func EnsureCognitoMFASchema(db *sql.DB) error {
 	if _, err := db.Exec(cognitoMFASchema); err != nil {
 		return fmt.Errorf("ensure cognito mfa schema: %w", err)
 	}
-	for _, stmt := range []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE cognito_users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE cognito_users ADD COLUMN sealed_totp_secret BLOB`,
-	} {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure cognito mfa schema: migrate: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure cognito mfa schema: migrate: %w", err)
 	}
 	return nil
 }

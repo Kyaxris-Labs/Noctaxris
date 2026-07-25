@@ -131,15 +131,13 @@ func EnsureSNSSchema(db *sql.DB) error {
 	if _, err := db.Exec(snsSchema); err != nil {
 		return fmt.Errorf("ensure sns schema: %w", err)
 	}
-	for _, stmt := range []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE sns_published_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_published_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_subscriptions ADD COLUMN confirm_token TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sns_subscriptions ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '{}'`,
-	} {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure sns schema: migrate: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure sns schema: migrate: %w", err)
 	}
 	if _, err := db.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_sns_fifo_dedup ON sns_published_messages(topic_arn, message_deduplication_id)`,

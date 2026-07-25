@@ -451,19 +451,13 @@ const lambdaSelectCols = `account_id, function_name, function_arn, role_arn, run
 
 // EnsureLambdaImageSchema adds package_type and image_uri columns for container images.
 func EnsureLambdaImageSchema(db *sql.DB) error {
-	stmts := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE lambda_functions ADD COLUMN package_type TEXT NOT NULL DEFAULT 'Zip'`,
 		`ALTER TABLE lambda_functions ADD COLUMN image_uri TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_versions ADD COLUMN package_type TEXT NOT NULL DEFAULT 'Zip'`,
 		`ALTER TABLE lambda_versions ADD COLUMN image_uri TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure lambda image schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure lambda image schema: %w", err)
 	}
 	return nil
 }
@@ -1348,7 +1342,7 @@ func validateFunctionLayers(s *Store, accountID string, layerARNs []string) ([]s
 
 // EnsureLambdaLayerSchema creates lambda_layers and adds layers_json columns.
 func EnsureLambdaLayerSchema(db *sql.DB) error {
-	stmts := []string{
+	if err := execMigrateStmts(db, []string{
 		`CREATE TABLE IF NOT EXISTS lambda_layers (
 		  account_id TEXT NOT NULL,
 		  layer_name TEXT NOT NULL,
@@ -1362,14 +1356,8 @@ func EnsureLambdaLayerSchema(db *sql.DB) error {
 		)`,
 		`ALTER TABLE lambda_functions ADD COLUMN layers_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE lambda_versions ADD COLUMN layers_json TEXT NOT NULL DEFAULT '[]'`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure lambda layer schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure lambda layer schema: %w", err)
 	}
 	return nil
 }

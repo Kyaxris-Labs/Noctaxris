@@ -34,7 +34,7 @@ type LambdaAsyncInvocation struct {
 
 // EnsureLambdaAsyncSchema adds DLQ columns and the async invocation queue table.
 func EnsureLambdaAsyncSchema(db *sql.DB) error {
-	stmts := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE lambda_functions ADD COLUMN dead_letter_target_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_functions ADD COLUMN destination_on_failure_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE lambda_functions ADD COLUMN destination_on_success_arn TEXT NOT NULL DEFAULT ''`,
@@ -52,14 +52,8 @@ func EnsureLambdaAsyncSchema(db *sql.DB) error {
 		  last_error TEXT NOT NULL DEFAULT '',
 		  created_at TEXT NOT NULL
 		)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure lambda async schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure lambda async schema: %w", err)
 	}
 	return nil
 }

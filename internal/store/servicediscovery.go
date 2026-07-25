@@ -90,10 +90,8 @@ func EnsureServiceDiscoverySchema(db *sql.DB) error {
 	if _, err := db.Exec(serviceDiscoverySchema); err != nil {
 		return fmt.Errorf("ensure servicediscovery schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE sd_namespaces ADD COLUMN vpc TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column") {
-			return fmt.Errorf("ensure servicediscovery schema: migrate vpc: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE sd_namespaces ADD COLUMN vpc TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure servicediscovery schema: migrate vpc: %w", err)
 	}
 	return nil
 }

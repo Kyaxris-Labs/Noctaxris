@@ -71,10 +71,8 @@ func EnsureMQSchema(db *sql.DB) error {
 	if _, err := db.Exec(mqSchema); err != nil {
 		return fmt.Errorf("ensure mq schema: %w", err)
 	}
-	if _, err := db.Exec(`ALTER TABLE mq_brokers ADD COLUMN container_id TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure mq schema: migrate container_id: %w", err)
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE mq_brokers ADD COLUMN container_id TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure mq schema: migrate container_id: %w", err)
 	}
 	return nil
 }

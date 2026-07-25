@@ -82,13 +82,11 @@ func EnsureCognitoSRPSchema(db *sql.DB) error {
 	if _, err := db.Exec(cognitoSRPSchema); err != nil {
 		return fmt.Errorf("ensure cognito srp schema: %w", err)
 	}
-	for _, stmt := range []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE cognito_users ADD COLUMN srp_salt TEXT`,
 		`ALTER TABLE cognito_users ADD COLUMN srp_verifier TEXT`,
-	} {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure cognito srp schema: migrate: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure cognito srp schema: migrate: %w", err)
 	}
 	return nil
 }

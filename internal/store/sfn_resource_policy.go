@@ -16,11 +16,7 @@ func EnsureSFNResourcePolicySchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure sfn resource policy schema: db is nil")
 	}
-	_, err := db.Exec(`ALTER TABLE sfn_state_machines ADD COLUMN resource_policy TEXT NOT NULL DEFAULT ''`)
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return nil
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE sfn_state_machines ADD COLUMN resource_policy TEXT NOT NULL DEFAULT ''`, nil); err != nil {
 		return fmt.Errorf("ensure sfn resource policy schema: %w", err)
 	}
 	return nil

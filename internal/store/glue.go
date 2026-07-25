@@ -100,21 +100,15 @@ func EnsureGlueSchema(db *sql.DB) error {
 	if _, err := db.Exec(glueSchema); err != nil {
 		return fmt.Errorf("ensure glue schema: %w", err)
 	}
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE glue_tables ADD COLUMN partition_keys_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE glue_tables ADD COLUMN input_format TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE glue_tables ADD COLUMN output_format TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE glue_tables ADD COLUMN serde_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE glue_tables ADD COLUMN serde_library TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE glue_tables ADD COLUMN serde_params_json TEXT NOT NULL DEFAULT '{}'`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				continue
-			}
-			return fmt.Errorf("ensure glue schema alter: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure glue schema alter: %w", err)
 	}
 	return nil
 }

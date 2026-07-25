@@ -81,13 +81,11 @@ func EnsureKinesisSchema(db *sql.DB) error {
 	if _, err := db.Exec(kinesisSchema); err != nil {
 		return fmt.Errorf("ensure kinesis schema: %w", err)
 	}
-	if _, err := db.Exec(
+	if err := execMigrateStmt(db,
 		`ALTER TABLE kinesis_records ADD COLUMN shard_id TEXT NOT NULL DEFAULT 'shardId-000000000000'`,
+		nil,
 	); err != nil {
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-			return fmt.Errorf("ensure kinesis schema: shard_id: %w", err)
-		}
+		return fmt.Errorf("ensure kinesis schema: shard_id: %w", err)
 	}
 	if _, err := db.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_kinesis_records_shard ON kinesis_records(account_id, stream_name, shard_id, seq_ord)`,

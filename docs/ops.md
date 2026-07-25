@@ -73,7 +73,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | Job | When |
 |-----|------|
 | unit / compose-static / govulncheck | Every push and PR (`go run ./scripts/govulncheck-ci`; allowlists only documented daemon-side Docker GO IDs with Fixed in: N/A) |
-| race | Scoped `-race` on `internal/kernel` and `internal/store` |
+| race | Scoped `-race` on `internal/kernel` and `internal/store` (`-timeout 30m`; job `timeout-minutes: 40`) |
 | image | `docker build -f docker/Dockerfile .` |
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |
 | smoke-nested | Weekly schedule on `main` plus Actions `workflow_dispatch` with `nested_smoke=true`. Runs `docker/smoke-nested.sh` (ready + engine healthy, nested RDS Describe, Data API nested-psql, Lambda zip/Image Invoke, short ECS RunTask). Skips cleanly if Docker is unavailable. **Not** on push/PR |

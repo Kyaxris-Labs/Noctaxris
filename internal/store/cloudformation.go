@@ -117,7 +117,9 @@ func EnsureCFNSchema(db *sql.DB) error {
 	if _, err := db.Exec(cfnSchema); err != nil {
 		return fmt.Errorf("ensure cfn schema: %w", err)
 	}
-	_, _ = db.Exec(`ALTER TABLE cfn_stacks ADD COLUMN parent_stack_id TEXT NOT NULL DEFAULT ''`)
+	if err := execMigrateStmt(db, `ALTER TABLE cfn_stacks ADD COLUMN parent_stack_id TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure cfn schema: parent_stack_id: %w", err)
+	}
 	return nil
 }
 

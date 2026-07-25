@@ -40,15 +40,12 @@ type SecretRotationInvoker func(eventJSON string) error
 
 // EnsureSecretsRecoverySchema adds recovery-window columns.
 func EnsureSecretsRecoverySchema(db *sql.DB) error {
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN deleted_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN deletion_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN recovery_window_in_days INTEGER NOT NULL DEFAULT 0`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure secrets recovery schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure secrets recovery schema: %w", err)
 	}
 	if err := EnsureSecretsRotationSchema(db); err != nil {
 		return err
@@ -65,14 +62,11 @@ func (s *Store) EnsureSecretsRecoverySchema() error {
 
 // EnsureSecretsRotationSchema adds optional Lambda rotator columns.
 func EnsureSecretsRotationSchema(db *sql.DB) error {
-	alters := []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_lambda_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE secretsmanager_secrets ADD COLUMN rotation_role_arn TEXT NOT NULL DEFAULT ''`,
-	}
-	for _, stmt := range alters {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure secrets rotation schema: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure secrets rotation schema: %w", err)
 	}
 	return nil
 }

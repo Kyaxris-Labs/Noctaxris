@@ -129,21 +129,13 @@ func EnsureLambdaESMSchema(db *sql.DB) error {
 	if _, err := db.Exec(lambdaESMSchema); err != nil {
 		return fmt.Errorf("ensure lambda esm schema: %w", err)
 	}
-	for _, col := range []struct {
-		stmt string
-		name string
-	}{
-		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN source_cursor TEXT NOT NULL DEFAULT ''`, "source_cursor"},
-		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN filter_criteria_json TEXT NOT NULL DEFAULT ''`, "filter_criteria_json"},
-		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_response_types_json TEXT NOT NULL DEFAULT ''`, "function_response_types_json"},
-		{`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_qualifier TEXT NOT NULL DEFAULT '$LATEST'`, "function_qualifier"},
-	} {
-		if _, err := db.Exec(col.stmt); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !strings.Contains(msg, "duplicate column") && !strings.Contains(msg, "already exists") {
-				return fmt.Errorf("ensure lambda esm schema: %s: %w", col.name, err)
-			}
-		}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE lambda_event_source_mappings ADD COLUMN source_cursor TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE lambda_event_source_mappings ADD COLUMN filter_criteria_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_response_types_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE lambda_event_source_mappings ADD COLUMN function_qualifier TEXT NOT NULL DEFAULT '$LATEST'`,
+	}); err != nil {
+		return fmt.Errorf("ensure lambda esm schema: %w", err)
 	}
 	return nil
 }

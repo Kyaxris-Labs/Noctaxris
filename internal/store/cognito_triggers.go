@@ -12,13 +12,11 @@ func EnsureCognitoTriggerSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure cognito trigger schema: db is nil")
 	}
-	for _, stmt := range []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE cognito_user_pools ADD COLUMN role_arn TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cognito_user_pools ADD COLUMN lambda_config_json TEXT NOT NULL DEFAULT '{}'`,
-	} {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure cognito trigger schema: migrate: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure cognito trigger schema: migrate: %w", err)
 	}
 	return nil
 }

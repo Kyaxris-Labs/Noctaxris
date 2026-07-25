@@ -67,13 +67,11 @@ func EnsureOpenSearchSchema(db *sql.DB) error {
 	if _, err := db.Exec(openSearchSchema); err != nil {
 		return fmt.Errorf("ensure opensearch schema: %w", err)
 	}
-	for _, stmt := range []string{
+	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE opensearch_domains ADD COLUMN container_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE opensearch_domains ADD COLUMN failure_reason TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumnErr(err) {
-			return fmt.Errorf("ensure opensearch schema: migrate: %w", err)
-		}
+	}); err != nil {
+		return fmt.Errorf("ensure opensearch schema: migrate: %w", err)
 	}
 	return nil
 }

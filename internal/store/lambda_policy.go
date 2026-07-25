@@ -15,11 +15,7 @@ var (
 
 // EnsureLambdaPolicySchema adds the function resource policy column.
 func EnsureLambdaPolicySchema(db *sql.DB) error {
-	stmt := `ALTER TABLE lambda_functions ADD COLUMN resource_policy TEXT NOT NULL DEFAULT ''`
-	if _, err := db.Exec(stmt); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return nil
-		}
+	if err := execMigrateStmt(db, `ALTER TABLE lambda_functions ADD COLUMN resource_policy TEXT NOT NULL DEFAULT ''`, nil); err != nil {
 		return fmt.Errorf("ensure lambda policy schema: %w", err)
 	}
 	return nil
