@@ -22,6 +22,8 @@ type ECSRunOpts struct {
 	Command     []string
 	Env         map[string]string
 	EndpointURL string
+	// ListenAddr is the API listen address used to pin DinD lab registry pulls.
+	ListenAddr string
 	// MemoryMB is the optional Docker memory limit in megabytes (0 = engine default).
 	MemoryMB int
 	// LabRegistryPull requests an authenticated pull via PullLabRegistryImage (lab ECR).
@@ -38,7 +40,7 @@ func ValidateECSRunOpts(opts ECSRunOpts) error {
 	if strings.TrimSpace(opts.ImageURI) == "" {
 		return fmt.Errorf("compute: ImageURI is required")
 	}
-	if err := AllowImagePull(opts.ImageURI); err != nil {
+	if err := AllowImagePull(opts.ImageURI, opts.ListenAddr); err != nil {
 		return err
 	}
 	return RequireLabRegistryCreds(opts.LabRegistryPull, LabRegistryPullCreds{

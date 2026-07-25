@@ -107,6 +107,7 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 			}
 		})
 	}
+	st.SetCognitoInsecureCodes(cfg.CognitoInsecureCodes)
 	s.wireCognitoTriggerInvoker()
 	return s
 }

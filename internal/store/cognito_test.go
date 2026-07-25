@@ -150,7 +150,11 @@ func TestCognitoSignUpConfirm(t *testing.T) {
 	if _, err := st.InitiateCognitoAuth(client.ClientID, "bob", "Secret2!"); err == nil {
 		t.Fatal("unconfirmed user must not auth")
 	}
-	if err := st.ConfirmSignUpCognitoUser(client.ClientID, "bob", "123456"); err != nil {
+	code, err := st.PeekCognitoConfirmationCode(acct, pool.PoolID, "bob", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ConfirmSignUpCognitoUser(client.ClientID, "bob", code); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := st.InitiateCognitoAuth(client.ClientID, "bob", "Secret2!")

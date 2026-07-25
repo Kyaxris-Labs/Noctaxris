@@ -15,7 +15,7 @@ import (
 )
 
 func TestCognitoPostConfirmationTriggerInvoke(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -84,11 +84,15 @@ func TestCognitoPostConfirmationTriggerInvoke(t *testing.T) {
 	if signUp.Code != http.StatusOK {
 		t.Fatalf("SignUp status=%d body=%q", signUp.Code, signUp.Body.String())
 	}
+	code, err := st.PeekCognitoConfirmationCode(testAccountID, poolID, "dave", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	confirm := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.ConfirmSignUp", "cognito-idp", map[string]any{
 		"ClientId":         clientID,
 		"Username":         "dave",
-		"ConfirmationCode": "123456",
+		"ConfirmationCode": code,
 	}, now)
 	if confirm.Code != http.StatusOK {
 		t.Fatalf("ConfirmSignUp status=%d body=%q", confirm.Code, confirm.Body.String())
@@ -105,7 +109,7 @@ func TestCognitoPostConfirmationTriggerInvoke(t *testing.T) {
 }
 
 func TestCognitoPostConfirmationMissingFunctionFailClosed(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -146,17 +150,27 @@ func TestCognitoPostConfirmationMissingFunctionFailClosed(t *testing.T) {
 	if signUp.Code != http.StatusOK {
 		t.Fatalf("SignUp status=%d body=%q", signUp.Code, signUp.Body.String())
 	}
+	code, err := st.PeekCognitoConfirmationCode(testAccountID, poolID, "erin", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	confirm := mustJSONTarget(t, handler, "AWSCognitoIdentityProviderService.ConfirmSignUp", "cognito-idp", map[string]any{
 		"ClientId":         clientID,
 		"Username":         "erin",
-		"ConfirmationCode": "123456",
+		"ConfirmationCode": code,
 	}, now)
 	if confirm.Code != http.StatusBadRequest {
 		t.Fatalf("ConfirmSignUp status=%d want 400 body=%q", confirm.Code, confirm.Body.String())
 	}
 	if !strings.Contains(confirm.Body.String(), "UnexpectedLambdaException") {
 		t.Fatalf("body=%q", confirm.Body.String())
+	}
+	if !strings.Contains(confirm.Body.String(), "Configured Lambda trigger failed.") {
+		t.Fatalf("expected opaque trigger message in %q", confirm.Body.String())
+	}
+	if strings.Contains(confirm.Body.String(), "does-not-exist") || strings.Contains(confirm.Body.String(), "no such") {
+		t.Fatalf("client error leaked trigger detail: %q", confirm.Body.String())
 	}
 }
 

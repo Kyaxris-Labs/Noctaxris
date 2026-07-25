@@ -6,21 +6,32 @@ Endpoint default: `http://127.0.0.1:4566`. Use the same root keys as `docker/.en
 
 ## Prerequisites
 
-1. Compose up and ready:
+1. Compose up and ready (Compose binds `0.0.0.0` in-container; the shipped `.env.example` root pair is refused):
 
 ```bash
 cp docker/.env.example docker/.env
+ROOT_AKID="AKIANOCTAXRIS$(openssl rand -hex 6 | tr '[:lower:]' '[:upper:]')"
+ROOT_SECRET="$(openssl rand -hex 32)"
+awk -v akid="$ROOT_AKID" -v secret="$ROOT_SECRET" '
+  /^NOCTAXRIS_ROOT_ACCESS_KEY_ID=/ { print "NOCTAXRIS_ROOT_ACCESS_KEY_ID=" akid; next }
+  /^NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=/ { print "NOCTAXRIS_ROOT_SECRET_ACCESS_KEY=" secret; next }
+  { print }
+' docker/.env > docker/.env.tmp && mv docker/.env.tmp docker/.env
+
 docker compose -f docker/compose.yaml --env-file docker/.env up --build -d
 
 curl -fsS http://127.0.0.1:4566/_noctaxris/health
 curl -fsS http://127.0.0.1:4566/_noctaxris/ready
 ```
 
+Or copy `.env.example` and replace both `NOCTAXRIS_ROOT_*` values yourself before `compose up`.
+
 2. Export credentials (match `docker/.env`):
 
 ```bash
-export AWS_ACCESS_KEY_ID=AKIAROOTEXAMPLE01
-export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+set -a && source docker/.env && set +a
+export AWS_ACCESS_KEY_ID="$NOCTAXRIS_ROOT_ACCESS_KEY_ID"
+export AWS_SECRET_ACCESS_KEY="$NOCTAXRIS_ROOT_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_EC2_METADATA_DISABLED=true
 export NOCTAXRIS_ENDPOINT=http://127.0.0.1:4566

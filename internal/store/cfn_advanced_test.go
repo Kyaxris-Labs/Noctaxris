@@ -31,7 +31,7 @@ Resources:
     Properties:
       QueueName: !Sub "${LabBucket}-q"
 `
-	created, err := st.CreateCFNStack(account, "us-east-1", "yaml-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "yaml-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestCFNIntrinsicsGetAttAndJoin(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "getatt-stack", tpl, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "getatt-stack", tpl, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	fn, err := st.GetFunction(account, "cfn-getatt-fn")
@@ -128,7 +128,7 @@ func TestCFNDynamoDBTableType(t *testing.T) {
     }
   }
 }`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "ddb-stack", tpl, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "ddb-stack", tpl, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.GetTable(account, "cfn-ddb-1"); err != nil {

@@ -24,9 +24,13 @@ func OrganizationAccountAccessRoleTrustPolicy(mgmtAccountID string) string {
 
 // CreateMemberAccount creates a member account under mgmtAccountID with
 // OrganizationAccountAccessRole and a SUCCEEDED create-account request.
+// Only the lab management account may create members.
 func (s *Store) CreateMemberAccount(mgmtAccountID, email, accountName string) (requestID, accountID string, err error) {
 	if err := validate.AccountID(mgmtAccountID); err != nil {
 		return "", "", fmt.Errorf("create member account: %w", err)
+	}
+	if !s.IsManagementAccount(mgmtAccountID) {
+		return "", "", fmt.Errorf("create member account: %w: management account required", validate.ErrInvalid)
 	}
 	if err := validate.Email(email); err != nil {
 		return "", "", fmt.Errorf("create member account: %w", err)
@@ -81,22 +85,25 @@ func (s *Store) CreateMemberAccount(mgmtAccountID, email, accountName string) (r
 	return requestID, accountID, nil
 }
 
-// DescribeCreateAccountStatus returns the status of a CreateAccount request.
-func (s *Store) DescribeCreateAccountStatus(requestID string) (status, accountID, email, failure string, err error) {
+// DescribeCreateAccountStatus returns the status of a CreateAccount request,
+// including the account that requested creation.
+func (s *Store) DescribeCreateAccountStatus(requestID string) (status, accountID, email, failure, requestedBy string, err error) {
 	var (
 		acc  sql.NullString
 		em   sql.NullString
 		fail sql.NullString
+		by   sql.NullString
 		st   string
 	)
 	err = s.db.QueryRow(
-		`SELECT status, account_id, email, failure_reason FROM create_account_requests WHERE request_id = ?`,
+		`SELECT status, account_id, email, failure_reason, requested_by_account_id
+		 FROM create_account_requests WHERE request_id = ?`,
 		requestID,
-	).Scan(&st, &acc, &em, &fail)
+	).Scan(&st, &acc, &em, &fail, &by)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
-	return st, acc.String, em.String, fail.String, nil
+	return st, acc.String, em.String, fail.String, by.String, nil
 }
 
 func (s *Store) allocateAccountID(mgmtAccountID string) (string, error) {

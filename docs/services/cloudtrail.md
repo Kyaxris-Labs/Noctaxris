@@ -41,6 +41,7 @@ AWS CloudTrail has no public API to inject arbitrary event history. Noctaxris ex
 - Authz: `cloudtrail:InjectEvents`
 - Body: single `Event` object, top-level event fields, or `Events` array (cap 50)
 - Authorable fields: `eventTime`, `sourceIPAddress`, `userIdentity` (including `userName`), `eventSource`, `eventName`, optional `resources`, `requestParameters`, `responseElements`, `errorCode` / `errorMessage`, `readOnly`, `awsRegion`, `userAgent`, `eventID` (generated when omitted)
+- Before write, inject redacts password-like / secret keys in `requestParameters`, `responseElements`, and Insights `insightDetails` (for example `SecretString`, `SecretAccessKey`, `Password`, `*Token`, `credentials`) and applies nested size/depth caps. Prefer forensic metadata over secret material in inject payloads.
 
 Injected lines append to the same `events.jsonl` file, so LookupEvents and trail StartLogging / continuous delivery behave unchanged.
 

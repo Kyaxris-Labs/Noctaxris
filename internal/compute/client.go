@@ -39,7 +39,8 @@ const (
 
 // Client talks to a nested Docker engine (never the host docker.sock by default).
 type Client struct {
-	cli *client.Client
+	cli        *client.Client
+	listenAddr string
 }
 
 // NewClient connects to dockerHost (e.g. tcp://noctaxris-engine:2376).
@@ -48,7 +49,8 @@ type Client struct {
 // An empty dockerHost returns an error so callers can treat compute as disabled.
 // Host must be allowlisted (default tcp://noctaxris-engine:2376); unix://, npipe://,
 // and docker.sock are always rejected. TLS client PEMs are required when host is set.
-func NewClient(dockerHost, tlsCertPath string) (*Client, error) {
+// listenAddr is the API listen address used to pin DinD lab registry image pulls.
+func NewClient(dockerHost, tlsCertPath, listenAddr string) (*Client, error) {
 	if strings.TrimSpace(dockerHost) == "" {
 		return nil, fmt.Errorf("compute: NOCTAXRIS_DOCKER_HOST is empty (compute disabled)")
 	}
@@ -69,7 +71,7 @@ func NewClient(dockerHost, tlsCertPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compute: docker client: %w", err)
 	}
-	return &Client{cli: cli}, nil
+	return &Client{cli: cli, listenAddr: strings.TrimSpace(listenAddr)}, nil
 }
 
 // Close releases the underlying Docker HTTP client.
@@ -113,7 +115,11 @@ func (c *Client) EnsureImage(ctx context.Context, runtime string) (string, error
 }
 
 func (c *Client) pullImage(ctx context.Context, ref string) error {
-	if err := AllowImagePull(ref); err != nil {
+	listen := ""
+	if c != nil {
+		listen = c.listenAddr
+	}
+	if err := AllowImagePull(ref, listen); err != nil {
 		return err
 	}
 	rc, err := c.cli.ImagePull(ctx, ref, image.PullOptions{})

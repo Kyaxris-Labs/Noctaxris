@@ -104,9 +104,16 @@ func (s *Server) handleCreateAccount(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsCreateAccount, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsCreateAccount, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:CreateAccount.", readOnly, eventID,
+			deny, readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	// Defense in depth: store also rejects non-management callers.
+	if !s.store.IsManagementAccount(verified.AccountID) {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"organizations API requires management account", readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -176,9 +183,9 @@ func (s *Server) handleDescribeCreateAccountStatus(
 	verified *authn.Verified,
 	readOnly bool,
 ) {
-	if !s.authorizeOrgs(verified, catalog.ActionOrgsDescribeCreateAccountStatus, "*") {
+	if deny := s.authorizeOrgs(verified, catalog.ActionOrgsDescribeCreateAccountStatus, "*"); deny != "" {
 		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform organizations:DescribeCreateAccountStatus.", readOnly, eventID,
+			deny, readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
@@ -192,8 +199,14 @@ func (s *Server) handleDescribeCreateAccountStatus(
 		return
 	}
 
-	status, accountID, _, failure, err := s.store.DescribeCreateAccountStatus(createID)
+	status, accountID, _, failure, requestedBy, err := s.store.DescribeCreateAccountStatus(createID)
 	if err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "CreateAccountStatusNotFoundException",
+			"CreateAccount request not found.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	if requestedBy != verified.AccountID && !s.store.IsManagementAccount(verified.AccountID) {
 		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "CreateAccountStatusNotFoundException",
 			"CreateAccount request not found.", readOnly, eventID,
 			verified.AccessKeyID, verified.AccountID, true)
@@ -427,8 +440,20 @@ func (s *Server) handleAssumeRole(
 	)
 }
 
-func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string) bool {
-	return s.authorize(verified, action, resource)
+// authorizeOrgs enforces IAM Allow plus management-account for Organizations
+// mutate/list APIs. DescribeCreateAccountStatus is IAM-only here; the handler
+// scopes by requester or management. Empty return means allowed.
+func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string) string {
+	if !s.authorize(verified, action, resource) {
+		return fmt.Sprintf("User is not authorized to perform %s.", action)
+	}
+	if action == catalog.ActionOrgsDescribeCreateAccountStatus {
+		return ""
+	}
+	if !s.store.IsManagementAccount(verified.AccountID) {
+		return "organizations API requires management account"
+	}
+	return ""
 }
 
 // isRoleChainingCaller reports whether AssumeRole is called with temporary

@@ -452,9 +452,21 @@ func TestLambdaCreateFunctionImageWithoutCompute(t *testing.T) {
 		t.Fatalf("Code=%v", got["Code"])
 	}
 
+	denyRec := mustLambdaJSON(t, handler, "UpdateFunctionCode", map[string]any{
+		"FunctionName": "img-lab",
+		"ImageUri":     "evil.registry.example/malware:latest",
+	}, now)
+	if denyRec.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateFunctionCode deny status=%d want 400 body=%q", denyRec.Code, denyRec.Body.String())
+	}
+	if !strings.Contains(denyRec.Body.String(), "allowlisted") {
+		t.Fatalf("UpdateFunctionCode deny body=%q", denyRec.Body.String())
+	}
+
+	updateURI := "public.ecr.aws/lambda/python:3.11"
 	updateRec := mustLambdaJSON(t, handler, "UpdateFunctionCode", map[string]any{
 		"FunctionName": "img-lab",
-		"ImageUri":     "public.ecr.aws/lambda/python:3.12-updated",
+		"ImageUri":     updateURI,
 	}, now)
 	if updateRec.Code != http.StatusOK {
 		t.Fatalf("UpdateFunctionCode status=%d body=%q", updateRec.Code, updateRec.Body.String())

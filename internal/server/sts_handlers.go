@@ -278,6 +278,12 @@ func (s *Server) handleGetAccessKeyInfo(
 			verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
+	if !s.authorize(verified, catalog.ActionSTSGetAccessKeyInfo, "*") {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:GetAccessKeyInfo.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	params := formParams(r, body)
 	akid := params.Get("AccessKeyId")
 	if akid == "" {
@@ -358,6 +364,12 @@ func (s *Server) handleAssumeRoot(
 	target := params.Get("TargetAccount")
 	if target == "" {
 		target = params.Get("TargetPrincipal")
+	}
+	if !s.store.IsManagementAccount(verified.AccountID) {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:AssumeRoot.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
 	}
 	if !verified.Principal.IsRoot || !s.store.IsOrgMemberAccount(verified.AccountID, target) {
 		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",

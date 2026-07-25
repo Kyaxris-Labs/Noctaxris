@@ -537,6 +537,7 @@ func (s *Server) startBatchJobContainer(ctx context.Context, accountID string, j
 		Command:          cmd,
 		Env:              env,
 		EndpointURL:      endpoint,
+		ListenAddr:       s.cfg.ListenAddr,
 		LabRegistryPull:  useAuth,
 		RegistryUsername: username,
 		RegistryPassword: password,

@@ -35,6 +35,8 @@ func TestOpenSearchNestedHostAllowlist(t *testing.T) {
 		"noctaxris-data-rds-lab1",
 		"noctaxris-opensearch-",
 		"noctaxris-data-opensearch-",
+		"noctaxris-opensearch-ssrf.attacker.com",
+		"noctaxris-data-opensearch-ssrf.attacker.com",
 	} {
 		if err := validateNestedOpenSearchHost(host); err == nil {
 			t.Fatalf("expected reject for host %q", host)

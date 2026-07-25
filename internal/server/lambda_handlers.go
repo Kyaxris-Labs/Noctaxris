@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -557,6 +558,11 @@ func (s *Server) lambdaCreateFunction(
 				"Code.ImageUri is required for PackageType Image.", readOnly, eventID, verified)
 			return
 		}
+		if err := compute.AllowImagePull(imageURI, s.cfg.ListenAddr); err != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"ImageUri is not an allowlisted lab registry or pinned base image.", readOnly, eventID, verified)
+			return
+		}
 	} else {
 		zipBytes, err = s.lambdaZipFromCode(params, verified.AccountID)
 		if err != nil {
@@ -807,6 +813,11 @@ func (s *Server) lambdaUpdateFunctionCode(
 		if imgErr != nil {
 			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				"ImageUri is required and must be a pullable container image.", readOnly, eventID, verified)
+			return
+		}
+		if allowErr := compute.AllowImagePull(imageURI, s.cfg.ListenAddr); allowErr != nil {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"ImageUri is not an allowlisted lab registry or pinned base image.", readOnly, eventID, verified)
 			return
 		}
 		updated, err = s.store.UpdateFunctionImageCode(verified.AccountID, name, imageURI)
@@ -2058,8 +2069,9 @@ func (s *Server) lambdaInvoke(
 				"compute unavailable", readOnly, eventID, verified)
 			return
 		}
+		log.Printf("lambda invoke failed function=%s: %v", name, err)
 		s.writeLambdaError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
-			"Invoke failed: "+err.Error(), readOnly, eventID, verified)
+			"Invoke failed.", readOnly, eventID, verified)
 		return
 	}
 	if strings.Contains(r.URL.Path, "/invocations") {
@@ -2396,7 +2408,7 @@ func invokeEventJSON(v any) (string, error) {
 
 func (s *Server) computeClient() (*compute.Client, error) {
 	s.computeOnce.Do(func() {
-		s.compute, s.computeErr = compute.NewClient(s.cfg.DockerHost, s.cfg.DockerTLSCertPath)
+		s.compute, s.computeErr = compute.NewClient(s.cfg.DockerHost, s.cfg.DockerTLSCertPath, s.cfg.ListenAddr)
 	})
 	return s.compute, s.computeErr
 }
@@ -2407,6 +2419,7 @@ func (s *Server) lambdaInvoker() (compute.FunctionInvoker, error) {
 			Runtime:           s.cfg.ComputeRuntime,
 			DockerHost:        s.cfg.DockerHost,
 			DockerTLSCertPath: s.cfg.DockerTLSCertPath,
+			ListenAddr:        s.cfg.ListenAddr,
 		})
 	})
 	return s.invoker, s.invokerErr

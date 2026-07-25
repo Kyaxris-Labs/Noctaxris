@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 func openTestStore(t *testing.T) *store.Store {
@@ -46,12 +47,15 @@ func TestCreateMemberAccount(t *testing.T) {
 		t.Fatal("member account id must not equal management")
 	}
 
-	status, gotAcc, email, failure, err := st.DescribeCreateAccountStatus(reqID)
+	status, gotAcc, email, failure, requestedBy, err := st.DescribeCreateAccountStatus(reqID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status != "SUCCEEDED" || gotAcc != accountID || email != "member@example.com" || failure != "" {
 		t.Fatalf("status=%q acc=%q email=%q failure=%q", status, gotAcc, email, failure)
+	}
+	if requestedBy != mgmt {
+		t.Fatalf("requestedBy = %q, want %q", requestedBy, mgmt)
 	}
 
 	roleARN, trust, err := st.GetRole(accountID, store.OrganizationAccountAccessRoleName)
@@ -74,10 +78,30 @@ func TestCreateMemberAccount(t *testing.T) {
 	}
 }
 
+func TestCreateMemberAccountRequiresManagement(t *testing.T) {
+	st := openTestStore(t)
+	const nonMgmt = "000000000002"
+	if err := st.EnsureRoot(nonMgmt, "AKIAROOTEXAMPLE02", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := st.CreateMemberAccount(nonMgmt, "a@example.com", "A")
+	if err == nil {
+		t.Fatal("expected CreateMemberAccount to reject non-management account")
+	}
+	if !validate.IsInvalid(err) {
+		t.Fatalf("want invalid error, got %v", err)
+	}
+}
+
 func TestCreateMemberAccountSkipsMgmtID(t *testing.T) {
 	st := openTestStore(t)
-	const mgmt = "000000000002"
+	const mgmt = store.ManagementAccountID
 	if err := st.EnsureRoot(mgmt, "AKIAROOTEXAMPLE01", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-seed an account that would collide with sequential allocation start,
+	// forcing allocateAccountID to skip past ManagementAccountID when scanning.
+	if err := st.EnsureRoot("000000000002", "AKIAROOTPRESEED02", "secret-pre"); err != nil {
 		t.Fatal(err)
 	}
 	_, accountID, err := st.CreateMemberAccount(mgmt, "a@example.com", "A")
@@ -88,7 +112,7 @@ func TestCreateMemberAccountSkipsMgmtID(t *testing.T) {
 		t.Fatal("allocated mgmt id")
 	}
 	if accountID != "000000000003" {
-		t.Fatalf("accountID = %q, want 000000000003 (skip mgmt 000000000002)", accountID)
+		t.Fatalf("accountID = %q, want 000000000003 (skip existing 000000000002)", accountID)
 	}
 }
 
@@ -171,7 +195,7 @@ func TestLookupAccessKeyRecordLongLivedEmptySession(t *testing.T) {
 
 func TestDescribeCreateAccountStatusMissing(t *testing.T) {
 	st := openTestStore(t)
-	_, _, _, _, err := st.DescribeCreateAccountStatus("car-missing")
+	_, _, _, _, _, err := st.DescribeCreateAccountStatus("car-missing")
 	if err == nil {
 		t.Fatal("expected error")
 	}

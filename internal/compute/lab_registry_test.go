@@ -57,6 +57,7 @@ func TestValidateImageRunOptsLabRegistryAuth(t *testing.T) {
 		ImageURI:        "host.docker.internal:4566/000000000001/repo:tag",
 		Handler:         "app.handler",
 		EventHostPath:   "/tmp/noctaxris-event",
+		ListenAddr:      "127.0.0.1:4566",
 		LabRegistryPull: true,
 	}
 	err := compute.ValidateImageRunOpts(base)

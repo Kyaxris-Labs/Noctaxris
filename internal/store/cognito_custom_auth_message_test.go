@@ -46,15 +46,19 @@ func TestSignUpRendersAndStoresCustomMessage(t *testing.T) {
 	if _, _, err := st.SignUpCognitoUser(account, client.ClientID, "iris", "Secret9!"); err != nil {
 		t.Fatal(err)
 	}
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "iris", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
 	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "iris")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(msg.SMSMessage, "123456") {
-		t.Fatalf("sms=%q", msg.SMSMessage)
+	if !strings.Contains(msg.SMSMessage, code) {
+		t.Fatalf("sms=%q want code %q", msg.SMSMessage, code)
 	}
-	if !strings.Contains(msg.EmailMessage, "iris") || !strings.Contains(msg.EmailMessage, "123456") {
-		t.Fatalf("email=%q", msg.EmailMessage)
+	if !strings.Contains(msg.EmailMessage, "iris") || !strings.Contains(msg.EmailMessage, code) {
+		t.Fatalf("email=%q want code %q", msg.EmailMessage, code)
 	}
 	if msg.EmailSubject != "Welcome" {
 		t.Fatalf("subject=%q", msg.EmailSubject)
@@ -396,6 +400,10 @@ func TestForgotPasswordRendersAndStoresCustomMessage(t *testing.T) {
 	if !strings.Contains(seenEvent, "CustomMessage_ForgotPassword") {
 		t.Fatalf("event=%s", seenEvent)
 	}
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "forgot-user", store.CognitoConfirmPurposeForgotPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
 	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "forgot-user")
 	if err != nil {
 		t.Fatal(err)
@@ -403,11 +411,11 @@ func TestForgotPasswordRendersAndStoresCustomMessage(t *testing.T) {
 	if msg.TriggerSource != "CustomMessage_ForgotPassword" {
 		t.Fatalf("trigger=%q", msg.TriggerSource)
 	}
-	if !strings.Contains(msg.SMSMessage, "123456") {
-		t.Fatalf("sms=%q", msg.SMSMessage)
+	if !strings.Contains(msg.SMSMessage, code) {
+		t.Fatalf("sms=%q want code %q", msg.SMSMessage, code)
 	}
-	if !strings.Contains(msg.EmailMessage, "forgot-user") || !strings.Contains(msg.EmailMessage, "123456") {
-		t.Fatalf("email=%q", msg.EmailMessage)
+	if !strings.Contains(msg.EmailMessage, "forgot-user") || !strings.Contains(msg.EmailMessage, code) {
+		t.Fatalf("email=%q want code %q", msg.EmailMessage, code)
 	}
 }
 
@@ -514,6 +522,10 @@ func TestResendConfirmationCodeRendersAndStoresCustomMessage(t *testing.T) {
 	if details.AttributeName != "email" {
 		t.Fatalf("details=%+v", details)
 	}
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "resend-user", store.CognitoConfirmPurposeSignUp)
+	if err != nil {
+		t.Fatal(err)
+	}
 	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "resend-user")
 	if err != nil {
 		t.Fatal(err)
@@ -521,8 +533,8 @@ func TestResendConfirmationCodeRendersAndStoresCustomMessage(t *testing.T) {
 	if msg.TriggerSource != "CustomMessage_ResendCode" {
 		t.Fatalf("trigger=%q", msg.TriggerSource)
 	}
-	if !strings.Contains(msg.EmailMessage, "123456") || !strings.Contains(msg.EmailMessage, "resend-user") {
-		t.Fatalf("email=%q", msg.EmailMessage)
+	if !strings.Contains(msg.EmailMessage, code) || !strings.Contains(msg.EmailMessage, "resend-user") {
+		t.Fatalf("email=%q want code %q", msg.EmailMessage, code)
 	}
 }
 

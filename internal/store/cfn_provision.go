@@ -79,7 +79,7 @@ func (s *Store) deleteCFNPhysical(accountID string, res CFNStackResource) {
 	}
 }
 
-func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID, logicalID, resType string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID, logicalID, resType string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
 	if props == nil {
 		props = map[string]any{}
 	}
@@ -88,6 +88,9 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 	}
 	switch resType {
 	case "AWS::S3::Bucket":
+		if err := s.cfnAuthorizeAction(auth, "s3:CreateBucket", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "BucketName")
 		if name == "" {
 			name = strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
@@ -109,8 +112,11 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			"Ref": b.Name, "Arn": arn, "DomainName": b.Name + ".s3.amazonaws.com",
 		}, nil
 	case "AWS::S3::BucketPolicy":
-		return s.provisionCFNBucketPolicy(accountID, logicalID, props)
+		return s.provisionCFNBucketPolicy(accountID, logicalID, props, auth)
 	case "AWS::IAM::Role":
+		if err := s.cfnAuthorizeAction(auth, "iam:CreateRole", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "RoleName")
 		if name == "" {
 			name = logicalID + shortID()
@@ -127,20 +133,23 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: IAM role %s: %v", ErrCFNBadTemplate, logicalID, err)
 		}
-		if err := s.applyCFNRolePolicies(accountID, arn, name, props); err != nil {
+		if err := s.applyCFNRolePolicies(accountID, arn, name, props, auth); err != nil {
 			_ = s.DeleteRole(accountID, name)
 			return "", nil, err
 		}
 		return arn, map[string]string{"Ref": name, "Arn": arn}, nil
 	case "AWS::IAM::User":
-		return s.provisionCFNIAMUser(accountID, logicalID, props)
+		return s.provisionCFNIAMUser(accountID, logicalID, props, auth)
 	case "AWS::IAM::Group":
-		return s.provisionCFNIAMGroup(accountID, logicalID, props)
+		return s.provisionCFNIAMGroup(accountID, logicalID, props, auth)
 	case "AWS::IAM::ManagedPolicy":
-		return s.provisionCFNManagedPolicy(accountID, logicalID, props)
+		return s.provisionCFNManagedPolicy(accountID, logicalID, props, auth)
 	case "AWS::IAM::Policy":
-		return s.provisionCFNIAMPolicy(accountID, logicalID, props)
+		return s.provisionCFNIAMPolicy(accountID, logicalID, props, auth)
 	case "AWS::SQS::Queue":
+		if err := s.cfnAuthorizeAction(auth, "sqs:CreateQueue", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "QueueName")
 		if name == "" {
 			name = strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
@@ -153,8 +162,11 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			"Ref": q.QueueURL, "Arn": q.QueueARN, "QueueName": q.QueueName, "QueueUrl": q.QueueURL,
 		}, nil
 	case "AWS::SQS::QueuePolicy":
-		return s.applyCFNQueuePolicy(accountID, props)
+		return s.applyCFNQueuePolicy(accountID, props, auth)
 	case "AWS::DynamoDB::Table":
+		if err := s.cfnAuthorizeAction(auth, "dynamodb:CreateTable", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "TableName")
 		if name == "" {
 			name = strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
@@ -186,6 +198,13 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		if !strings.HasPrefix(role, "arn:aws:iam::") {
 			role = fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, role)
 		}
+		fnARN := fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", region, accountID, fnName)
+		if err := s.cfnAuthorizeAction(auth, "lambda:CreateFunction", fnARN); err != nil {
+			return "", nil, err
+		}
+		if err := s.cfnAuthorizePassRole(auth, role, cfnSvcPrincipalLambda, fnARN); err != nil {
+			return "", nil, err
+		}
 		runtime := cfnStringProp(props, "Runtime")
 		if runtime == "" {
 			runtime = LambdaRuntimePython312
@@ -211,8 +230,11 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 			"Ref": fn.FunctionARN, "Arn": fn.FunctionARN,
 		}, nil
 	case "AWS::Lambda::Permission":
-		return s.provisionCFNLambdaPermission(accountID, logicalID, props)
+		return s.provisionCFNLambdaPermission(accountID, logicalID, props, auth)
 	case "AWS::KMS::Key":
+		if err := s.cfnAuthorizeAction(auth, "kms:CreateKey", "*"); err != nil {
+			return "", nil, err
+		}
 		creator := fmt.Sprintf("arn:aws:iam::%s:root", accountID)
 		policy := ""
 		if doc, ok := props["KeyPolicy"]; ok && doc != nil {
@@ -231,8 +253,11 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		}
 		return key.KeyID, map[string]string{"Ref": key.KeyID, "Arn": key.ARN}, nil
 	case "AWS::KMS::Alias":
-		return s.provisionCFNKMSAlias(accountID, logicalID, props)
+		return s.provisionCFNKMSAlias(accountID, logicalID, props, auth)
 	case "AWS::SNS::Topic":
+		if err := s.cfnAuthorizeAction(auth, "sns:CreateTopic", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "TopicName")
 		if name == "" {
 			name = strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
@@ -250,12 +275,15 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		}
 		return topic.TopicARN, map[string]string{"Ref": topic.TopicARN, "TopicName": topic.TopicName}, nil
 	case "AWS::SNS::TopicPolicy":
-		return s.applyCFNTopicPolicy(accountID, props)
+		return s.applyCFNTopicPolicy(accountID, props, auth)
 	case "AWS::SNS::Subscription":
-		return s.provisionCFNSNSSubscription(accountID, logicalID, props)
+		return s.provisionCFNSNSSubscription(accountID, logicalID, props, auth)
 	case "AWS::Logs::LogGroup":
-		return s.provisionCFNLogGroup(accountID, region, logicalID, props)
+		return s.provisionCFNLogGroup(accountID, region, logicalID, props, auth)
 	case "AWS::Events::EventBus":
+		if err := s.cfnAuthorizeAction(auth, "events:CreateEventBus", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "Name")
 		if name == "" {
 			name = logicalID
@@ -277,8 +305,11 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		}
 		return bus.Name, map[string]string{"Ref": bus.Name, "Arn": bus.ARN, "Name": bus.Name}, nil
 	case "AWS::Events::Rule":
-		return s.provisionCFNEventRule(accountID, region, logicalID, props)
+		return s.provisionCFNEventRule(accountID, region, logicalID, props, auth)
 	case "AWS::SSM::Parameter":
+		if err := s.cfnAuthorizeAction(auth, "ssm:PutParameter", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "Name")
 		if name == "" {
 			name = "/" + logicalID
@@ -298,6 +329,9 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		}
 		return p.Name, map[string]string{"Ref": p.Name, "Type": p.Type}, nil
 	case "AWS::SecretsManager::Secret":
+		if err := s.cfnAuthorizeAction(auth, "secretsmanager:CreateSecret", "*"); err != nil {
+			return "", nil, err
+		}
 		name := cfnStringProp(props, "Name")
 		if name == "" {
 			name = logicalID + "-" + shortID()
@@ -312,7 +346,7 @@ func (s *Store) provisionCFNResource(accountID, region, stackName, parentStackID
 		return sec.Name, map[string]string{"Ref": sec.ARN, "Arn": sec.ARN, "Name": sec.Name}, nil
 	case "AWS::CloudFormation::Stack":
 		_ = stackName
-		return s.provisionCFNNestedStack(accountID, region, parentStackID, logicalID, props)
+		return s.provisionCFNNestedStack(accountID, region, parentStackID, logicalID, props, auth)
 	default:
 		return "", nil, fmt.Errorf("%w: unsupported resource type %q", ErrCFNBadTemplate, resType)
 	}

@@ -16,6 +16,7 @@ type InvokerConfig struct {
 	Runtime           string // dind (default) or empty
 	DockerHost        string
 	DockerTLSCertPath string
+	ListenAddr        string
 }
 
 // NewFunctionInvoker returns a DinD Client for Lambda zip/Image Invoke.
@@ -27,7 +28,7 @@ func NewFunctionInvoker(cfg InvokerConfig) (FunctionInvoker, error) {
 	}
 	switch kind {
 	case RuntimeDinD:
-		return NewClient(cfg.DockerHost, cfg.DockerTLSCertPath)
+		return NewClient(cfg.DockerHost, cfg.DockerTLSCertPath, cfg.ListenAddr)
 	default:
 		return nil, fmt.Errorf("compute: unknown runtime %q", kind)
 	}

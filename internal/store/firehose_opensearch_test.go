@@ -150,3 +150,45 @@ func TestFirehoseOpenSearchDefaultIndexerAllowlistsHost(t *testing.T) {
 		t.Fatal("expected default indexer to refuse non-nested host")
 	}
 }
+
+func TestFirehoseOpenSearchRejectsDottedAllowlistHost(t *testing.T) {
+	host := "noctaxris-opensearch-ssrf.attacker.com"
+	if err := store.ValidateNestedOpenSearchHost(host); err == nil {
+		t.Fatalf("expected host validation reject for %q", host)
+	}
+
+	st := openTestStore(t)
+	account := "000000000001"
+	domain := "fh-os-ssrf"
+	if _, err := st.CreateOpenSearchDomain(account, "us-east-1", domain, ""); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := store.OpenSearchNestedEndpoint(domain)
+	if err := st.SetOpenSearchContainerID(account, domain, "ctr", store.OpenSearchDomainStatusActive, endpoint, ""); err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"firehose.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "fh-os-ssrf-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "os-put", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"es:ESHttpPut","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateFirehoseOpenSearchStream(account, "us-east-1", "ssrf-stream", roleARN, domain, "idx"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetOpenSearchContainerID(
+		account, domain, "ctr", store.OpenSearchDomainStatusActive,
+		host+":9200", "",
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.PutFirehoseRecord(account, "ssrf-stream", []byte(`{}`))
+	if err == nil {
+		t.Fatal("expected default indexer to refuse dotted allowlist host")
+	}
+	if !strings.Contains(err.Error(), "nested") && !strings.Contains(err.Error(), "refusing") && !strings.Contains(err.Error(), "dot") {
+		t.Fatalf("want host-validation reject, got %v", err)
+	}
+}

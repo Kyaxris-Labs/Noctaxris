@@ -252,3 +252,55 @@ func TestCloudTrailInjectCategoryAndSessionContext(t *testing.T) {
 		t.Fatalf("userIdentity missing sessionContext: %v", ui)
 	}
 }
+
+func TestCloudTrailInjectRedactsSecretFields(t *testing.T) {
+	srv, _, auditDir := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.CloudTrailInject = true
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const secretVal = "super-secret-value-do-not-persist"
+	const passwordVal = "lab-password-should-not-land"
+	rec := mustCloudTrailInject(t, handler, map[string]any{
+		"Event": map[string]any{
+			"eventName":   "GetSecretValue",
+			"eventSource": "secretsmanager.amazonaws.com",
+			"eventTime":   "2026-07-20T19:00:00Z",
+			"eventID":     "inj-redact-secret",
+			"requestParameters": map[string]any{
+				"secretId":     "app/db",
+				"SecretString": secretVal,
+				"nested": map[string]any{
+					"Password": passwordVal,
+					"userName": "alice",
+				},
+			},
+			"responseElements": map[string]any{
+				"SecretAccessKey": "AKIAEXAMPLESECRET",
+				"accessKeyId":     "AKIAEXAMPLE",
+			},
+		},
+	}, now)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inject status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "inj-redact-secret") {
+		t.Fatalf("missing injected line: %s", text)
+	}
+	if strings.Contains(text, secretVal) || strings.Contains(text, passwordVal) || strings.Contains(text, "AKIAEXAMPLESECRET") {
+		t.Fatalf("events.jsonl leaked secret material: %s", text)
+	}
+	if !strings.Contains(text, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] markers in %s", text)
+	}
+	if !strings.Contains(text, "app/db") || !strings.Contains(text, "alice") || !strings.Contains(text, "AKIAEXAMPLE") {
+		t.Fatalf("expected non-secret fields retained: %s", text)
+	}
+}

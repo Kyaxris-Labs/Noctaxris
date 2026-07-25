@@ -6,13 +6,14 @@ All settings come from environment variables. Defaults favor a locked-down local
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NOCTAXRIS_LISTEN` | `127.0.0.1:4566` | Bind address (process). Compose overrides to `0.0.0.0:4566` inside the container so the published host port works. |
+| `NOCTAXRIS_LISTEN` | `127.0.0.1:4566` | Bind address (process). Only `localhost`, `127.0.0.0/8`, and `::1` count as loopback. Port-only (`:4566`), empty host, `0.0.0.0`, and `::` are non-loopback (all-interfaces). Compose overrides to `0.0.0.0:4566` inside the container so the published host port works. |
 | `NOCTAXRIS_DATA_ROOT` | `/var/lib/noctaxris` | Persistent data directory |
-| `NOCTAXRIS_MASTER_KEY_FILE` | `$DATA_ROOT/master.key` when empty | 32-byte master key path |
+| `NOCTAXRIS_MASTER_KEY_FILE` | sibling `$PARENT/$BASENAME-secrets/master.key` when empty | 32-byte master key path. Must stay outside `NOCTAXRIS_DATA_ROOT` unless `NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT=1`. |
+| `NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT` | empty (off) | Set to `1` to allow `master.key` under the data root (historical `$DATA_ROOT/master.key` when `NOCTAXRIS_MASTER_KEY_FILE` is empty). Opt-in only; prefer a path outside the data root. |
 | `NOCTAXRIS_TLS_CERT` | empty | PEM cert path (TLS only if both cert and key set) |
 | `NOCTAXRIS_TLS_KEY` | empty | PEM key path |
-| `NOCTAXRIS_ROOT_ACCESS_KEY_ID` | required | Bootstrap root access key id |
-| `NOCTAXRIS_ROOT_SECRET_ACCESS_KEY` | required | Bootstrap root secret (encrypted before disk) |
+| `NOCTAXRIS_ROOT_ACCESS_KEY_ID` | required | Bootstrap root access key id. The shipped `docker/.env.example` pair is refused when listen is non-loopback (including Compose `0.0.0.0`); generate unique values for Compose. |
+| `NOCTAXRIS_ROOT_SECRET_ACCESS_KEY` | required | Bootstrap root secret (encrypted before disk). Same example-root refuse rule as the access key id. |
 | `NOCTAXRIS_ACCOUNT_ID` | `000000000001` | 12-character account id |
 | `NOCTAXRIS_SAML_IDP_METADATA` | empty | Path to SAML IdP metadata XML. When set, seeded into the store at startup for `AssumeRoleWithSAML`. |
 | `NOCTAXRIS_SAML_IDP_NAME` | `default` | SAML provider name used when seeding metadata |
@@ -44,6 +45,13 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_VPCFLOW_INJECT` | disabled | Set to `1` to enable lab-only `ec2:InjectFlowLogs` (`NoctaxrisEC2.InjectFlowLogs`). Default off returns AccessDenied. |
 | `NOCTAXRIS_LAB_FORENSICS` | disabled | Set to `1` to enable lab FreezeClock/UnfreezeClock/SetClock/BulkSeed (`NoctaxrisLab.*`). Default off returns AccessDenied. |
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
+| `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` / any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
+
+### Cognito confirmation codes (`NOCTAXRIS_COGNITO_INSECURE_CODES`)
+
+Default Cognito forgot-password and sign-up confirmation codes are random (8+ hex characters), single-use, and expire after one hour. `ConfirmForgotPassword` and `ConfirmSignUp` reject wrong or reused codes with `CodeMismatchException`.
+
+Set `NOCTAXRIS_COGNITO_INSECURE_CODES=1` only for intentional insecure labs: ForgotPassword stores fixed `123456`, and `ConfirmSignUp` accepts any non-empty code (previous stub behavior). Attribute verify still uses lab code `123456` either way (no SES).
 
 ### Lab forensics helpers (`NOCTAXRIS_LAB_FORENSICS`)
 
@@ -65,7 +73,6 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 
 | Path | Role |
 |------|------|
-| `master.key` | 32-byte AEAD key (mode `0600` when created). Loss of this key makes sealed material unrecoverable. |
 | `state.db` | SQLite accounts, users, keys, policies, roles, KMS, S3 bucket/object metadata, IdP config, Cognito pools, Gateway APIs, and other lab service rows |
 | `s3/` | Object bytes (path-style layout under account and bucket) |
 | `cloudtrail/events.jsonl` | Audit trail |
@@ -74,6 +81,12 @@ Federation is fail-closed. If these are unset and no IdP rows exist in the store
 | `transfer/` | Transfer Family SFTP-shaped user sandboxes (`transfer/ACCOUNT/SERVER/home/USER/`) |
 | `transcribe/` | Canned Transcribe transcript JSON under account folders |
 | `ecr/` | Registry V2 blob/manifest content when the lab registry stores image layers on disk |
+
+### Master key location
+
+The AEAD master key is **not** colocated with ciphertext by default. When `NOCTAXRIS_MASTER_KEY_FILE` is empty, the process uses a sibling path outside the data root (for `NOCTAXRIS_DATA_ROOT=/var/lib/noctaxris`, that is `/var/lib/noctaxris-secrets/master.key`). On load and create, the file mode is enforced to `0600`; a world-readable key is refused after a best-effort `chmod 0600` (Unix hosts; Windows is best-effort ACL/`chmod` only).
+
+Default Compose mounts `noctaxris-secrets` at `/var/lib/noctaxris-secrets` and sets `NOCTAXRIS_MASTER_KEY_FILE` there (writable for UID `65532` under `read_only: true`). To keep the historical `$DATA_ROOT/master.key` layout instead, set `NOCTAXRIS_ALLOW_MASTER_KEY_IN_DATA_ROOT=1` and point `NOCTAXRIS_MASTER_KEY_FILE` at the colocated path. Without that opt-in, any master key path under the data root fails process start. Loss of the master key makes sealed material unrecoverable.
 
 **Single API replica only.** Do not run multiple Noctaxris API processes against one data root. SQLite sets `busy_timeout=5000` on every connection via the DSN. Multi-instance access is unsupported and can corrupt state. WAL is not enabled by default; one API process is the durable-lab posture. SQS receive/send serialize in-process so concurrent claims stay atomic without a global `_txlock=immediate` (which would deadlock nested writers such as CloudFormation → CreateBucket).
 
@@ -88,7 +101,7 @@ Operator runbook (stop → tar volumes → restore verify → start, plus image-
 Files live under `docker/`:
 
 - `Dockerfile`: multi-stage build (`golang:1.26.5-bookworm` → distroless nonroot), `CGO_ENABLED=0`
-- `compose.yaml`: publish `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566` (default loopback), `noctaxris-data` for API state, `noctaxris-compute` for Lambda code (API RW, engine `:ro`), digest-pinned `docker:27-dind` / `busybox` init, restricted DinD engine (`privileged: false` + caps/devices + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`), `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports, healthchecks on API and engine. Privileged engine opt-in: `compose.engine-privileged.yaml`. Lab overlays: `compose.lab-open.yaml` (open data plane), `compose.lab-host-gateway.yaml` (Lambda ExtraHosts), `compose.lab-ecs-host-gateway.yaml` (ECS / CodeBuild / Batch ExtraHosts)
+- `compose.yaml`: publish `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566` (default loopback), `noctaxris-data` for API sealed state, `noctaxris-secrets` for `master.key` (`NOCTAXRIS_MASTER_KEY_FILE`), `noctaxris-compute` for Lambda code (API RW, engine `:ro`), digest-pinned `docker:27-dind` / `busybox` init (chowns compute + secrets to UID `65532`), restricted DinD engine (`privileged: false` + caps/devices + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`), `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports, healthchecks on API and engine. Privileged engine opt-in: `compose.engine-privileged.yaml`. Lab overlays: `compose.lab-open.yaml` (open data plane), `compose.lab-host-gateway.yaml` (Lambda ExtraHosts), `compose.lab-ecs-host-gateway.yaml` (ECS / CodeBuild / Batch ExtraHosts)
 - `.env.example`: sample root keys for local Compose
 
 Copy `.env.example` to `.env`, set real lab keys, then:

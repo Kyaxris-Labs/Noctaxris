@@ -51,7 +51,7 @@ func TestValidateDockerHostRequiresAllowlistAndTLS(t *testing.T) {
 }
 
 func TestNewClientRejectsUnixSock(t *testing.T) {
-	_, err := compute.NewClient("unix:///var/run/docker.sock", t.TempDir())
+	_, err := compute.NewClient("unix:///var/run/docker.sock", t.TempDir(), "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -63,7 +63,7 @@ func TestNewClientRejectsUnixSock(t *testing.T) {
 func TestNewClientAllowlistedWithTLS(t *testing.T) {
 	dir := writeTestTLSCerts(t)
 	t.Setenv(compute.EnvDockerHostAllowlist, "tcp://127.0.0.1:1")
-	cli, err := compute.NewClient("tcp://127.0.0.1:1", dir)
+	cli, err := compute.NewClient("tcp://127.0.0.1:1", dir, "127.0.0.1:4566")
 	if err != nil {
 		t.Fatal(err)
 	}

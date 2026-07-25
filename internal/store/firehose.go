@@ -30,11 +30,7 @@ const DefaultFirehoseRegion = "us-east-1"
 
 const actionESHttpPut = "es:ESHttpPut"
 
-const (
-	firehoseOSHostPrefix    = "noctaxris-opensearch-"
-	firehoseOSHostPrefixAlt = "noctaxris-data-opensearch-"
-	firehoseOSHTTPTimeout   = 10 * time.Second
-)
+const firehoseOSHTTPTimeout = 10 * time.Second
 
 const firehoseSchema = `
 CREATE TABLE IF NOT EXISTS firehose_streams (
@@ -487,26 +483,23 @@ func (s *Store) defaultFirehoseOpenSearchIndex(accountID string, st FirehoseStre
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{
-		Timeout: firehoseOSHTTPTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("stopped after %d redirects", len(via))
-			}
-			if err := firehoseValidateNestedOpenSearchHost(req.URL.Hostname()); err != nil {
-				return fmt.Errorf("refusing redirect off nested network: %w", err)
-			}
-			p := req.URL.Port()
-			if p == "" {
-				p = "80"
-			}
-			portNum, aerr := strconv.Atoi(p)
-			if aerr != nil || portNum != OpenSearchNestedPort {
-				return fmt.Errorf("refusing redirect to non-nested opensearch port %q", p)
-			}
-			return nil
-		},
-	}
+	client := NestedOpenSearchHTTPClient(firehoseOSHTTPTimeout, func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		if err := firehoseValidateNestedOpenSearchHost(req.URL.Hostname()); err != nil {
+			return fmt.Errorf("refusing redirect off nested network: %w", err)
+		}
+		p := req.URL.Port()
+		if p == "" {
+			p = "80"
+		}
+		portNum, aerr := strconv.Atoi(p)
+		if aerr != nil || portNum != OpenSearchNestedPort {
+			return fmt.Errorf("refusing redirect to non-nested opensearch port %q", p)
+		}
+		return nil
+	})
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -533,35 +526,10 @@ func firehoseOpenSearchDocBody(data []byte) []byte {
 	return wrapped
 }
 
-// firehoseValidateNestedOpenSearchHost mirrors the OpenSearch query-plane allowlist
-// (noctaxris-opensearch-* / noctaxris-data-opensearch-*; no loopback/IP/WAN).
+// firehoseValidateNestedOpenSearchHost delegates to the shared nested-host allowlist
+// (rejects dotted suffixes after the lab prefix; see ValidateNestedOpenSearchHost).
 func firehoseValidateNestedOpenSearchHost(host string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return fmt.Errorf("nested opensearch endpoint is empty")
-	}
-	lower := strings.ToLower(host)
-	switch lower {
-	case "localhost", "127.0.0.1", "::1", "0.0.0.0", "*", "host.docker.internal":
-		return fmt.Errorf("refusing non-nested opensearch host %q", host)
-	}
-	if strings.Contains(host, "/") || strings.Contains(host, "\\") {
-		return fmt.Errorf("invalid nested opensearch host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return fmt.Errorf("refusing IP opensearch host %q (nested container DNS name required)", host)
-	}
-	if !strings.HasPrefix(lower, firehoseOSHostPrefix) && !strings.HasPrefix(lower, firehoseOSHostPrefixAlt) {
-		return fmt.Errorf("nested opensearch host %q is not a data-plane endpoint", host)
-	}
-	suffix := strings.TrimPrefix(lower, firehoseOSHostPrefix)
-	if strings.HasPrefix(lower, firehoseOSHostPrefixAlt) {
-		suffix = strings.TrimPrefix(lower, firehoseOSHostPrefixAlt)
-	}
-	if suffix == "" {
-		return fmt.Errorf("nested opensearch host %q is missing a domain suffix", host)
-	}
-	return nil
+	return ValidateNestedOpenSearchHost(host)
 }
 
 func parseFirehoseOpenSearchEndpoint(endpoint string) (host string, port int, err error) {

@@ -53,7 +53,7 @@ func TestCFNManagedPolicyAndPolicyAttachRole(t *testing.T) {
 	    }
 	  }
 	}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "pol-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "pol-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCFNManagedPolicyAttachGroupAndUser(t *testing.T) {
 	    }
 	  }
 	}`
-	if _, err := st.CreateCFNStack(account, "us-east-1", "pol-ug-stack", tpl, ""); err != nil {
+	if _, err := st.CreateCFNStack(account, "us-east-1", "pol-ug-stack", tpl, "", "CAPABILITY_NAMED_IAM"); err != nil {
 		t.Fatal(err)
 	}
 	userARN := store.UserARN(account, "/", "cfn-pol-user")
@@ -185,7 +185,7 @@ func TestCFNBucketPolicyAndLambdaPermission(t *testing.T) {
 	    }
 	  }
 	}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "bp-perm-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "bp-perm-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestCFNLambdaPermissionRejectsEventSourceToken(t *testing.T) {
 	      }
 	    }
 	  }
-	}`, "")
+	}`, "", "CAPABILITY_NAMED_IAM")
 	if err == nil || !strings.Contains(err.Error(), "EventSourceToken") {
 		t.Fatalf("expected EventSourceToken reject, err=%v", err)
 	}

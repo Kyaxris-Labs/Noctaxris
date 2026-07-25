@@ -16,7 +16,7 @@ func TestStartDataPlaneLiveSkipsWithoutEngine(t *testing.T) {
 		t.Skip("NOCTAXRIS_DOCKER_HOST unset; skip nested data-plane live test")
 	}
 	certPath := strings.TrimSpace(os.Getenv("NOCTAXRIS_DOCKER_CERT_PATH"))
-	cli, err := NewClient(host, certPath)
+	cli, err := NewClient(host, certPath, "127.0.0.1:4566")
 	if err != nil {
 		t.Skipf("compute client unavailable: %v", err)
 	}

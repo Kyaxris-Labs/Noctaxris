@@ -43,7 +43,7 @@ func (c *Client) PullLabRegistryImage(ctx context.Context, ref, username, passwo
 	if c == nil || c.cli == nil {
 		return fmt.Errorf("compute: client is nil")
 	}
-	if err := AllowImagePull(ref); err != nil {
+	if err := AllowImagePull(ref, c.listenAddr); err != nil {
 		return err
 	}
 	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))

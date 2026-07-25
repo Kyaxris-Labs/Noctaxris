@@ -167,7 +167,7 @@ func (s *Store) applyCFNS3Encryption(accountID, bucket string, props map[string]
 	return s.PutBucketEncryption(accountID, bucket, BucketEncryption{Algorithm: algo, KMSKeyID: kms})
 }
 
-func (s *Store) applyCFNRolePolicies(accountID, roleARN, roleName string, props map[string]any) error {
+func (s *Store) applyCFNRolePolicies(accountID, roleARN, roleName string, props map[string]any, auth cfnProvisionAuth) error {
 	if raw, ok := props["Policies"].([]any); ok {
 		for _, item := range raw {
 			m, ok := item.(map[string]any)
@@ -186,6 +186,9 @@ func (s *Store) applyCFNRolePolicies(accountID, roleARN, roleName string, props 
 			if err != nil {
 				return fmt.Errorf("%w: Policies.PolicyDocument", ErrCFNBadTemplate)
 			}
+			if err := s.cfnAuthorizeAction(auth, "iam:PutRolePolicy", roleARN); err != nil {
+				return err
+			}
 			if err := s.PutInlinePolicy(roleARN, name, string(docBytes)); err != nil {
 				return fmt.Errorf("%w: put inline policy: %v", ErrCFNBadTemplate, err)
 			}
@@ -197,6 +200,9 @@ func (s *Store) applyCFNRolePolicies(accountID, roleARN, roleName string, props 
 			if arn == "" {
 				continue
 			}
+			if err := s.cfnAuthorizeAction(auth, "iam:AttachRolePolicy", roleARN); err != nil {
+				return err
+			}
 			if err := s.AttachRolePolicy(accountID, roleName, arn); err != nil {
 				return fmt.Errorf("%w: AttachRolePolicy: %v", ErrCFNBadTemplate, err)
 			}
@@ -205,7 +211,10 @@ func (s *Store) applyCFNRolePolicies(accountID, roleARN, roleName string, props 
 	return nil
 }
 
-func (s *Store) applyCFNQueuePolicy(accountID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) applyCFNQueuePolicy(accountID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "sqs:SetQueueAttributes", "*"); err != nil {
+		return "", nil, err
+	}
 	queues, ok := props["Queues"].([]any)
 	if !ok || len(queues) == 0 {
 		return "", nil, fmt.Errorf("%w: QueuePolicy Queues required", ErrCFNBadTemplate)
@@ -282,7 +291,7 @@ func splitCFNLambdaPermissionPhysical(physicalID string) (functionName, statemen
 	return parts[0], parts[1], true
 }
 
-func (s *Store) provisionCFNEventRule(accountID, region, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNEventRule(accountID, region, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
 	name := cfnStringProp(props, "Name")
 	if name == "" {
 		name = logicalID
@@ -309,6 +318,9 @@ func (s *Store) provisionCFNEventRule(accountID, region, logicalID string, props
 		state = "ENABLED"
 	}
 	desc := cfnStringProp(props, "Description")
+	if err := s.cfnAuthorizeAction(auth, "events:PutRule", "*"); err != nil {
+		return "", nil, err
+	}
 	rule, err := s.PutRule(accountID, region, busName, name, pattern, desc, state)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: Events rule %s: %v", ErrCFNBadTemplate, logicalID, err)
@@ -326,6 +338,14 @@ func (s *Store) provisionCFNEventRule(accountID, region, logicalID string, props
 				RoleARN: cfnStringProp(m, "RoleArn"),
 				Input:   cfnStringProp(m, "Input"),
 			})
+		}
+		if err := s.cfnAuthorizeAction(auth, "events:PutTargets", "*"); err != nil {
+			return "", nil, err
+		}
+		for _, tgt := range targets {
+			if err := s.cfnAuthorizePassRole(auth, tgt.RoleARN, cfnSvcPrincipalEvents, rule.ARN); err != nil {
+				return "", nil, err
+			}
 		}
 		if err := s.PutTargets(accountID, busName, name, targets); err != nil {
 			return "", nil, fmt.Errorf("%w: Events targets %s: %v", ErrCFNBadTemplate, logicalID, err)
@@ -387,14 +407,14 @@ func (s *Store) resolveLabCFNTemplateURL(accountID, templateURL string) (string,
 	return body, nil
 }
 
-func (s *Store) provisionCFNNestedStack(accountID, region, parentStackID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNNestedStack(accountID, region, parentStackID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
 	templateURL := cfnStringProp(props, "TemplateURL")
 	body, err := s.resolveLabCFNTemplateURL(accountID, templateURL)
 	if err != nil {
 		return "", nil, err
 	}
 	childName := strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
-	st, err := s.createCFNStackWithParent(accountID, region, childName, body, "", parentStackID)
+	st, err := s.createCFNStackWithParent(accountID, region, childName, body, "", parentStackID, auth)
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: nested stack %s: %v", ErrCFNBadTemplate, logicalID, err)
 	}
@@ -468,11 +488,14 @@ func cfnIAMEntityName(ref string) string {
 	return ref
 }
 
-func (s *Store) attachCFNManagedPolicyTargets(accountID, policyARN string, props map[string]any) error {
+func (s *Store) attachCFNManagedPolicyTargets(accountID, policyARN string, props map[string]any, auth cfnProvisionAuth) error {
 	for _, roleRef := range cfnStringListProp(props, "Roles") {
 		name := cfnIAMEntityName(roleRef)
 		if name == "" {
 			continue
+		}
+		if err := s.cfnAuthorizeAction(auth, "iam:AttachRolePolicy", "*"); err != nil {
+			return err
 		}
 		if err := s.AttachRolePolicy(accountID, name, policyARN); err != nil {
 			return fmt.Errorf("%w: AttachRolePolicy %s: %v", ErrCFNBadTemplate, name, err)
@@ -483,6 +506,9 @@ func (s *Store) attachCFNManagedPolicyTargets(accountID, policyARN string, props
 		if name == "" {
 			continue
 		}
+		if err := s.cfnAuthorizeAction(auth, "iam:AttachUserPolicy", "*"); err != nil {
+			return err
+		}
 		if err := s.AttachUserPolicy(accountID, name, policyARN); err != nil {
 			return fmt.Errorf("%w: AttachUserPolicy %s: %v", ErrCFNBadTemplate, name, err)
 		}
@@ -491,6 +517,9 @@ func (s *Store) attachCFNManagedPolicyTargets(accountID, policyARN string, props
 		name := cfnIAMEntityName(groupRef)
 		if name == "" {
 			continue
+		}
+		if err := s.cfnAuthorizeAction(auth, "iam:AttachGroupPolicy", "*"); err != nil {
+			return err
 		}
 		if err := s.AttachGroupPolicy(accountID, name, policyARN); err != nil {
 			return fmt.Errorf("%w: AttachGroupPolicy %s: %v", ErrCFNBadTemplate, name, err)
@@ -507,7 +536,10 @@ func (s *Store) clearManagedPolicyAttachments(policyARN string) error {
 	return nil
 }
 
-func (s *Store) provisionCFNManagedPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNManagedPolicy(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "iam:CreatePolicy", "*"); err != nil {
+		return "", nil, err
+	}
 	name := cfnStringProp(props, "ManagedPolicyName")
 	if name == "" {
 		name = logicalID + shortID()
@@ -528,7 +560,7 @@ func (s *Store) provisionCFNManagedPolicy(accountID, logicalID string, props map
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: ManagedPolicy %s: %v", ErrCFNBadTemplate, logicalID, err)
 	}
-	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props); err != nil {
+	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props, auth); err != nil {
 		_ = s.clearManagedPolicyAttachments(arn)
 		_ = s.DeleteManagedPolicy(arn)
 		return "", nil, err
@@ -536,7 +568,10 @@ func (s *Store) provisionCFNManagedPolicy(accountID, logicalID string, props map
 	return arn, map[string]string{"Ref": arn, "Arn": arn}, nil
 }
 
-func (s *Store) provisionCFNIAMPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNIAMPolicy(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "iam:CreatePolicy", "*"); err != nil {
+		return "", nil, err
+	}
 	name := cfnStringProp(props, "PolicyName")
 	if name == "" {
 		return "", nil, fmt.Errorf("%w: Policy PolicyName required for %s", ErrCFNBadTemplate, logicalID)
@@ -560,7 +595,7 @@ func (s *Store) provisionCFNIAMPolicy(accountID, logicalID string, props map[str
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: Policy %s: %v", ErrCFNBadTemplate, logicalID, err)
 	}
-	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props); err != nil {
+	if err := s.attachCFNManagedPolicyTargets(accountID, arn, props, auth); err != nil {
 		_ = s.clearManagedPolicyAttachments(arn)
 		_ = s.DeleteManagedPolicy(arn)
 		return "", nil, err
@@ -568,7 +603,10 @@ func (s *Store) provisionCFNIAMPolicy(accountID, logicalID string, props map[str
 	return arn, map[string]string{"Ref": name, "Arn": arn, "Id": arn}, nil
 }
 
-func (s *Store) provisionCFNBucketPolicy(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNBucketPolicy(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "s3:PutBucketPolicy", "*"); err != nil {
+		return "", nil, err
+	}
 	bucket := cfnStringProp(props, "Bucket")
 	if bucket == "" {
 		return "", nil, fmt.Errorf("%w: BucketPolicy Bucket required for %s", ErrCFNBadTemplate, logicalID)
@@ -588,7 +626,10 @@ func (s *Store) provisionCFNBucketPolicy(accountID, logicalID string, props map[
 	return phys, map[string]string{"Ref": phys, "Bucket": bucket}, nil
 }
 
-func (s *Store) provisionCFNLambdaPermission(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNLambdaPermission(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "lambda:AddPermission", "*"); err != nil {
+		return "", nil, err
+	}
 	fn := cfnStringProp(props, "FunctionName")
 	if fn == "" {
 		return "", nil, fmt.Errorf("%w: Lambda Permission FunctionName required for %s", ErrCFNBadTemplate, logicalID)
@@ -686,7 +727,10 @@ func cfnPropTruthyString(props map[string]any, key string) string {
 	}
 }
 
-func (s *Store) applyCFNTopicPolicy(accountID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) applyCFNTopicPolicy(accountID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "sns:SetTopicAttributes", "*"); err != nil {
+		return "", nil, err
+	}
 	topics, ok := props["Topics"].([]any)
 	if !ok || len(topics) == 0 {
 		return "", nil, fmt.Errorf("%w: TopicPolicy Topics required", ErrCFNBadTemplate)
@@ -724,7 +768,10 @@ func (s *Store) applyCFNTopicPolicy(accountID string, props map[string]any) (phy
 	return phys, map[string]string{"Ref": phys, "TopicArn": firstARN}, nil
 }
 
-func (s *Store) provisionCFNSNSSubscription(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNSNSSubscription(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "sns:Subscribe", "*"); err != nil {
+		return "", nil, err
+	}
 	topicARN := cfnStringProp(props, "TopicArn")
 	if topicARN == "" {
 		return "", nil, fmt.Errorf("%w: Subscription TopicArn required for %s", ErrCFNBadTemplate, logicalID)
@@ -783,7 +830,10 @@ func (s *Store) provisionCFNSNSSubscription(accountID, logicalID string, props m
 	}, nil
 }
 
-func (s *Store) provisionCFNLogGroup(accountID, region, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNLogGroup(accountID, region, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "logs:CreateLogGroup", "*"); err != nil {
+		return "", nil, err
+	}
 	name := cfnStringProp(props, "LogGroupName")
 	if name == "" {
 		name = "/cfn/" + strings.ToLower(strings.ReplaceAll(logicalID, " ", "-")) + "-" + shortID()
@@ -806,7 +856,10 @@ func (s *Store) provisionCFNLogGroup(accountID, region, logicalID string, props 
 	return g.LogGroupName, map[string]string{"Ref": g.LogGroupName, "Arn": g.Arn}, nil
 }
 
-func (s *Store) provisionCFNKMSAlias(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNKMSAlias(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "kms:CreateAlias", "*"); err != nil {
+		return "", nil, err
+	}
 	aliasName := cfnStringProp(props, "AliasName")
 	if aliasName == "" {
 		return "", nil, fmt.Errorf("%w: Alias AliasName required for %s", ErrCFNBadTemplate, logicalID)
@@ -864,7 +917,10 @@ func (s *Store) applyCFNPrincipalPolicies(accountID, principalARN, entityName st
 	return nil
 }
 
-func (s *Store) provisionCFNIAMUser(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNIAMUser(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "iam:CreateUser", "*"); err != nil {
+		return "", nil, err
+	}
 	name := cfnStringProp(props, "UserName")
 	if name == "" {
 		name = logicalID + shortID()
@@ -894,7 +950,10 @@ func (s *Store) provisionCFNIAMUser(accountID, logicalID string, props map[strin
 	return name, map[string]string{"Ref": name, "Arn": arn}, nil
 }
 
-func (s *Store) provisionCFNIAMGroup(accountID, logicalID string, props map[string]any) (physicalID string, attrs map[string]string, err error) {
+func (s *Store) provisionCFNIAMGroup(accountID, logicalID string, props map[string]any, auth cfnProvisionAuth) (physicalID string, attrs map[string]string, err error) {
+	if err := s.cfnAuthorizeAction(auth, "iam:CreateGroup", "*"); err != nil {
+		return "", nil, err
+	}
 	name := cfnStringProp(props, "GroupName")
 	if name == "" {
 		name = logicalID + shortID()

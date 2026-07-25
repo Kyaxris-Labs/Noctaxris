@@ -12,7 +12,9 @@ CreateResource, GetResource, ListResources, UpdateResource, DeleteResource, and 
 
 ### Authz notes
 
-Identity `EvaluateFull` on `cloudcontrol:*`.
+Identity `EvaluateFull` on `cloudcontrol:*`. Create provision uses the same underlying-action and PassRole hooks as CloudFormation (for example `iam:CreateRole`, `lambda:CreateFunction` + PassRole). UpdateResource gates privileged mutate paths with those hooks for IAM Role (including `iam:PutRolePolicy` / `iam:AttachRolePolicy` on policy replace), IAM User/Group policy and group membership, IAM ManagedPolicy document replace, Lambda UpdateFunctionConfiguration (+ PassRole when Role changes), and Events Rule `events:PutRule`. There is no Capabilities parameter; IAM types still require the caller (or effective principal) to hold the concrete IAM actions.
+
+Remaining Update gaps (no per-action authz beyond `cloudcontrol:UpdateResource`; same as CFN Modify helpers that lack action checks for these types): `AWS::SSM::Parameter`, `AWS::S3::Bucket`, `AWS::SQS::Queue`, `AWS::SNS::Topic`, `AWS::SecretsManager::Secret`, `AWS::DynamoDB::Table`, `AWS::KMS::Key`, `AWS::KMS::Alias`, `AWS::Logs::LogGroup`, `AWS::Events::EventBus` policy patches.
 
 ### Allowlist
 

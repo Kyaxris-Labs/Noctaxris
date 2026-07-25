@@ -41,9 +41,23 @@ type LabRegistryPullCreds struct {
 }
 
 // ResolveLabImagePull prepares a DinD pull reference and whether lab ECR auth is required.
-// Public and third-party refs return useAuth=false. Lab host refs require credentials at pull time.
+// Public and third-party refs return useAuth=false. Lab host refs (127.0.0.1 lab registry
+// rewrite or already-rewritten DinDPullHost(listenAddr)/ACCOUNT/REPO) require credentials.
+// host.docker.internal on any other port does not set useAuth.
 func ResolveLabImagePull(imageURI, listenAddr string) (pullRef string, useAuth bool) {
-	return LabImageForDinD(imageURI, listenAddr)
+	uri := strings.TrimSpace(imageURI)
+	pullRef, isLab := LabImageForDinD(uri, listenAddr)
+	if isLab {
+		return pullRef, true
+	}
+	if strings.TrimSpace(listenAddr) == "" {
+		return uri, false
+	}
+	dindPrefix := DinDPullHost(listenAddr) + "/"
+	if strings.HasPrefix(uri, dindPrefix) && isLabECRPath(strings.TrimPrefix(uri, dindPrefix)) {
+		return uri, true
+	}
+	return uri, false
 }
 
 // RequireLabRegistryCreds fails closed when a lab registry pull is requested without credentials.

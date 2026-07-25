@@ -70,7 +70,7 @@ func TestCFNTopicPolicySubscriptionAndLogGroup(t *testing.T) {
 	    }
 	  }
 	}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "cfn-tp-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "cfn-tp-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestCFNKMSAliasAndIAMUserGroup(t *testing.T) {
 	    }
 	  }
 	}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "cfn-alias-ug", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "cfn-alias-ug", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestCFNRejectsScheduleExpression(t *testing.T) {
 	      }
 	    }
 	  }
-	}`, "")
+	}`, "", "CAPABILITY_NAMED_IAM")
 	if err == nil || !strings.Contains(err.Error(), "ScheduleExpression") {
 		t.Fatalf("want ScheduleExpression reject, got %v", err)
 	}
@@ -259,7 +259,7 @@ func TestCFNSubscriptionRejectsUnknownProperty(t *testing.T) {
 	      }
 	    }
 	  }
-	}`, "")
+	}`, "", "CAPABILITY_NAMED_IAM")
 	if err == nil || !strings.Contains(err.Error(), "SubscriptionRoleArn") {
 		t.Fatalf("want SubscriptionRoleArn reject, got %v", err)
 	}

@@ -366,7 +366,12 @@ func (s *Server) cloudtrailStopLogging(
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudtrailEventSource, "StopLogging", readOnly)
 }
 
-const cloudTrailInjectBatchCap = 50
+const (
+	cloudTrailInjectBatchCap   = 50
+	cloudTrailInjectMaxDepth   = 8
+	cloudTrailInjectMaxEntries = 64
+	cloudTrailInjectMaxStrLen  = 4096
+)
 
 func (s *Server) cloudtrailInjectEvents(
 	w http.ResponseWriter,
@@ -562,11 +567,11 @@ func buildInjectedAuditEvent(
 
 	var reqParams map[string]any
 	if v, ok := raw["requestParameters"].(map[string]any); ok {
-		reqParams = v
+		reqParams = redactCloudTrailInjectMap(v, cloudTrailInjectMaxDepth)
 	}
 	var respElems map[string]any
 	if v, ok := raw["responseElements"].(map[string]any); ok {
-		respElems = v
+		respElems = redactCloudTrailInjectMap(v, cloudTrailInjectMaxDepth)
 	}
 
 	var managementEvent *bool
@@ -708,8 +713,82 @@ func buildInjectedInsightAuditEvent(
 		RecipientAccountID: verified.AccountID,
 		EventCategory:      "Insight",
 		SharedEventID:      sharedID,
-		InsightDetails:     details,
+		InsightDetails:     redactCloudTrailInjectMap(details, cloudTrailInjectMaxDepth),
 	}, nil
+}
+
+func cloudtrailInjectSensitiveKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	switch k {
+	case "secretstring", "secretbinary", "secretaccesskey",
+		"password", "masteruserpassword", "temporarypassword",
+		"sessiontoken", "idtoken", "accesstoken", "refreshtoken",
+		"clientsecret", "privatekey", "credentials", "authorization":
+		return true
+	case "secretid", "secretarn", "secretname":
+		return false
+	}
+	if strings.HasSuffix(k, "password") {
+		return true
+	}
+	if strings.HasPrefix(k, "secret") {
+		return true
+	}
+	if strings.HasSuffix(k, "token") {
+		return true
+	}
+	return false
+}
+
+func redactCloudTrailInjectMap(m map[string]any, depth int) map[string]any {
+	if m == nil {
+		return nil
+	}
+	if depth <= 0 {
+		return map[string]any{"_redacted": "depth"}
+	}
+	out := make(map[string]any)
+	count := 0
+	for k, v := range m {
+		if count >= cloudTrailInjectMaxEntries {
+			out["_truncated"] = true
+			break
+		}
+		count++
+		if cloudtrailInjectSensitiveKey(k) {
+			out[k] = "[REDACTED]"
+			continue
+		}
+		out[k] = redactCloudTrailInjectValue(v, depth-1)
+	}
+	return out
+}
+
+func redactCloudTrailInjectValue(v any, depth int) any {
+	if depth <= 0 {
+		return "[redacted:depth]"
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		return redactCloudTrailInjectMap(t, depth)
+	case []any:
+		n := len(t)
+		if n > cloudTrailInjectMaxEntries {
+			n = cloudTrailInjectMaxEntries
+		}
+		out := make([]any, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, redactCloudTrailInjectValue(t[i], depth-1))
+		}
+		return out
+	case string:
+		if len(t) > cloudTrailInjectMaxStrLen {
+			return t[:cloudTrailInjectMaxStrLen] + "..."
+		}
+		return t
+	default:
+		return t
+	}
 }
 
 func cloudtrailInjectString(raw map[string]any, keys ...string) string {
@@ -1078,4 +1157,3 @@ func (s *Server) writeCloudTrailError(
 	}
 	s.auditAPIError(r, requestID, eventID, code, message, readOnly, accessKeyID, accountID, verified != nil)
 }
-

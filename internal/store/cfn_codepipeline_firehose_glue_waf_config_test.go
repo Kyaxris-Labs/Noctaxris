@@ -12,7 +12,7 @@ func TestCFNStackS3BucketRoundTrip(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 	tpl := `{"Resources":{"LabBucket":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-lab-bucket-1"}}}}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestCFNStackS3BucketRoundTrip(t *testing.T) {
 func TestCFNRejectsUnknownType(t *testing.T) {
 	st := openTestStore(t)
 	tpl := `{"Resources":{"X":{"Type":"AWS::EC2::Instance","Properties":{}}}}`
-	_, err := st.CreateCFNStack("000000000001", "us-east-1", "bad", tpl, "")
+	_, err := st.CreateCFNStack("000000000001", "us-east-1", "bad", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -44,7 +44,7 @@ func TestCFNStackS3AndIAMRoleRoundTrip(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 	tpl := `{"Resources":{"LabBucket":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-lab-bucket-2"}},"LabRole":{"Type":"AWS::IAM::Role","Properties":{"RoleName":"CfnLabRole2","AssumeRolePolicyDocument":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}}}}}`
-	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack-2", tpl, "")
+	created, err := st.CreateCFNStack(account, "us-east-1", "lab-stack-2", tpl, "", "CAPABILITY_NAMED_IAM")
 	if err != nil {
 		t.Fatal(err)
 	}
