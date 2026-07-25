@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.2
+
+Patch after 1.1.1: edge, search, analytics, governance, and workflow lab depth; Cognito and Lambda MQ gap closure; SDK/docs polish; CloudTrail continuous JSONL delivery. Docker Hub: `kyaxris/noctaxris` (`1.1.2`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 ### Close remaining gaps
 
 - Cognito: `ConfirmForgotPassword` (lab code `123456`); `UpdateUserAttributes` / `GetUserAttributeVerificationCode` / `VerifyUserAttribute` with `CustomMessage_UpdateUserAttribute` / `CustomMessage_VerifyUserAttribute`; UserMigration on `USER_SRP_AUTH` and `CustomMessage_Authentication` (SMS MFA) remain blocked
