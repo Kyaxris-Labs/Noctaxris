@@ -332,6 +332,9 @@ const (
 	ActionTransferDeleteServer   = "transfer:DeleteServer"
 	ActionTransferCreateUser     = "transfer:CreateUser"
 	ActionTransferDeleteUser     = "transfer:DeleteUser"
+	ActionTransferPutFile        = "transfer:PutFile"
+	ActionTransferGetFile        = "transfer:GetFile"
+	ActionTransferListDirectory  = "transfer:ListDirectory"
 )
 
 // SQS lab actions.
@@ -470,7 +473,12 @@ const (
 
 // CloudTrail lab actions.
 const (
-	ActionCloudTrailLookupEvents = "cloudtrail:LookupEvents"
+	ActionCloudTrailLookupEvents  = "cloudtrail:LookupEvents"
+	ActionCloudTrailCreateTrail   = "cloudtrail:CreateTrail"
+	ActionCloudTrailDescribeTrails = "cloudtrail:DescribeTrails"
+	ActionCloudTrailDeleteTrail   = "cloudtrail:DeleteTrail"
+	ActionCloudTrailStartLogging  = "cloudtrail:StartLogging"
+	ActionCloudTrailStopLogging   = "cloudtrail:StopLogging"
 )
 
 // CloudWatch Logs lab actions.
@@ -527,6 +535,9 @@ const (
 	ActionAppConfigCreateConfigurationProfile       = "appconfig:CreateConfigurationProfile"
 	ActionAppConfigCreateHostedConfigurationVersion = "appconfig:CreateHostedConfigurationVersion"
 	ActionAppConfigGetConfiguration                 = "appconfig:GetConfiguration"
+	ActionAppConfigStartDeployment                  = "appconfig:StartDeployment"
+	ActionAppConfigGetDeployment                    = "appconfig:GetDeployment"
+	ActionAppConfigListDeployments                  = "appconfig:ListDeployments"
 	ActionAppConfigDataStartConfigurationSession    = "appconfigdata:StartConfigurationSession"
 	ActionAppConfigDataGetLatestConfiguration       = "appconfigdata:GetLatestConfiguration"
 )
@@ -599,6 +610,11 @@ const (
 	ActionGlueGetTable       = "glue:GetTable"
 	ActionGlueGetTables      = "glue:GetTables"
 	ActionGlueDeleteTable    = "glue:DeleteTable"
+	ActionGlueCreateCrawler  = "glue:CreateCrawler"
+	ActionGlueStartCrawler   = "glue:StartCrawler"
+	ActionGlueGetCrawler     = "glue:GetCrawler"
+	ActionGlueDeleteCrawler  = "glue:DeleteCrawler"
+	ActionGlueListCrawlers   = "glue:ListCrawlers"
 )
 
 // Athena lab actions.
@@ -795,6 +811,9 @@ const (
 	ActionELBv2DeleteListener        = "elasticloadbalancing:DeleteListener"
 	ActionELBv2RegisterTargets       = "elasticloadbalancing:RegisterTargets"
 	ActionELBv2DescribeTargetHealth  = "elasticloadbalancing:DescribeTargetHealth"
+	ActionELBv2CreateRule            = "elasticloadbalancing:CreateRule"
+	ActionELBv2DescribeRules         = "elasticloadbalancing:DescribeRules"
+	ActionELBv2DeleteRule            = "elasticloadbalancing:DeleteRule"
 )
 
 // S3 Vectors lab actions.
@@ -1104,6 +1123,9 @@ func KnownAction(action string) bool {
 		ActionTransferDeleteServer,
 		ActionTransferCreateUser,
 		ActionTransferDeleteUser,
+		ActionTransferPutFile,
+		ActionTransferGetFile,
+		ActionTransferListDirectory,
 		ActionSQSCreateQueue,
 		ActionSQSGetQueueUrl,
 		ActionSQSGetQueueAttributes,
@@ -1247,6 +1269,11 @@ func KnownAction(action string) bool {
 		ActionECSDescribeServices,
 		ActionECSListServices,
 		ActionCloudTrailLookupEvents,
+		ActionCloudTrailCreateTrail,
+		ActionCloudTrailDescribeTrails,
+		ActionCloudTrailDeleteTrail,
+		ActionCloudTrailStartLogging,
+		ActionCloudTrailStopLogging,
 		ActionLogsCreateLogGroup,
 		ActionLogsCreateLogStream,
 		ActionLogsDeleteLogGroup,
@@ -1287,6 +1314,9 @@ func KnownAction(action string) bool {
 		ActionAppConfigCreateConfigurationProfile,
 		ActionAppConfigCreateHostedConfigurationVersion,
 		ActionAppConfigGetConfiguration,
+		ActionAppConfigStartDeployment,
+		ActionAppConfigGetDeployment,
+		ActionAppConfigListDeployments,
 		ActionAppConfigDataStartConfigurationSession,
 		ActionAppConfigDataGetLatestConfiguration,
 		ActionSESVerifyEmailIdentity,
@@ -1347,6 +1377,11 @@ func KnownAction(action string) bool {
 		ActionGlueGetTable,
 		ActionGlueGetTables,
 		ActionGlueDeleteTable,
+		ActionGlueCreateCrawler,
+		ActionGlueStartCrawler,
+		ActionGlueGetCrawler,
+		ActionGlueDeleteCrawler,
+		ActionGlueListCrawlers,
 		ActionAthenaStartQueryExecution,
 		ActionAthenaGetQueryExecution,
 		ActionAthenaGetQueryResults,
@@ -1465,6 +1500,9 @@ func KnownAction(action string) bool {
 		ActionELBv2DeleteListener,
 		ActionELBv2RegisterTargets,
 		ActionELBv2DescribeTargetHealth,
+		ActionELBv2CreateRule,
+		ActionELBv2DescribeRules,
+		ActionELBv2DeleteRule,
 		ActionS3VectorsCreateVectorBucket,
 		ActionS3VectorsListVectorBuckets,
 		ActionS3VectorsDeleteVectorBucket,

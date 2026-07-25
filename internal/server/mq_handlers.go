@@ -102,12 +102,9 @@ func (s *Server) mqCreate(
 			"Unable to create broker.", readOnly, eventID, verified)
 		return
 	}
-	if strings.EqualFold(b.EngineType, "RABBITMQ") {
-		// Nested RabbitMQ on Internal noctaxris-data; no host port publish.
-		_ = tryStartNestedDataEngine(s, verified.AccountID, "mq", b.BrokerID, map[string]string{
-			"RABBITMQ_DEFAULT_USER": "noctaxris",
-			"RABBITMQ_DEFAULT_PASS": "noctaxris-mq-lab",
-		})
+	if strings.EqualFold(b.EngineType, "RABBITMQ") || strings.EqualFold(b.EngineType, "ACTIVEMQ") {
+		// Nested MQ on Internal noctaxris-data; no host port publish (5672/61616).
+		_ = tryStartNestedMQ(s, verified.AccountID, b.BrokerID, b.EngineType)
 		if updated, err := s.store.DescribeMQBroker(verified.AccountID, b.BrokerID); err == nil {
 			b = updated
 		}
@@ -224,5 +221,22 @@ func publiclyAccessibleTrue(v any) bool {
 		return strings.EqualFold(strings.TrimSpace(t), "true")
 	default:
 		return false
+	}
+}
+
+// mqNestedBootstrapEnv returns engine-specific bootstrap env for nested DinD.
+// Never log returned values (may include lab passwords).
+func mqNestedBootstrapEnv(engineType string) map[string]string {
+	switch strings.ToUpper(strings.TrimSpace(engineType)) {
+	case "ACTIVEMQ":
+		// Official apache/activemq-classic image: AMQP on 5672.
+		// Omit ACTIVEMQ_CONNECTION_* on 5.18.3 (entrypoint auth bug AMQ-9412);
+		// nested lab allows connector access without those vars when unset.
+		return nil
+	default:
+		return map[string]string{
+			"RABBITMQ_DEFAULT_USER": "noctaxris",
+			"RABBITMQ_DEFAULT_PASS": "noctaxris-mq-lab",
+		}
 	}
 }

@@ -53,3 +53,6 @@ tests/**/.terraform.lock.hcl
 __pycache__/
 *.pyc
 .venv/
+
+# Go
+.gocache/

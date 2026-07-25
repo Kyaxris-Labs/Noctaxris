@@ -132,3 +132,21 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 		t.Fatalf("opensearch image=%q", DefaultDataPlaneImage(DataKindOpenSearch))
 	}
 }
+
+func TestDefaultDataPlaneImageForMQActiveMQ(t *testing.T) {
+	if DefaultDataPlaneImageForMQ("RABBITMQ") != defaultRabbitMQImage {
+		t.Fatalf("rabbit image=%q", DefaultDataPlaneImageForMQ("RABBITMQ"))
+	}
+	if DefaultDataPlaneImageForMQ("ACTIVEMQ") != defaultActiveMQImage {
+		t.Fatalf("activemq image=%q", DefaultDataPlaneImageForMQ("ACTIVEMQ"))
+	}
+	if DefaultDataPlaneImageForMQ("activemq") != defaultActiveMQImage {
+		t.Fatalf("activemq case fold image=%q", DefaultDataPlaneImageForMQ("activemq"))
+	}
+	if DefaultDataPlaneImageForMQ("") != defaultRabbitMQImage {
+		t.Fatalf("empty engine default image=%q", DefaultDataPlaneImageForMQ(""))
+	}
+	if defaultActiveMQImage != "apache/activemq-classic:5.18.3" {
+		t.Fatalf("pinned ActiveMQ image=%q", defaultActiveMQImage)
+	}
+}

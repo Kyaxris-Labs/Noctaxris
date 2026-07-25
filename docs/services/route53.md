@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Hosted zone and A/CNAME resource record set lite. Identity authz. Lab uses JSON control-plane shape on the shared listener.
+Hosted zone and A/CNAME resource record set lite, plus Alias A records to in-account CloudFront or ELB DNS names. Identity authz. Lab uses JSON control-plane shape on the shared listener.
 
 ## Implemented
 
@@ -10,6 +10,7 @@ Hosted zone and A/CNAME resource record set lite. Identity authz. Lab uses JSON 
 |------|---------|
 | Zones | `CreateHostedZone`, `DeleteHostedZone`, `ListHostedZones` |
 | Records | `ChangeResourceRecordSets`, `ListResourceRecordSets` (A and CNAME) |
+| Alias | Type `A` `AliasTarget` when `DNSName` matches an in-account CloudFront `DomainName` or ELB `DNSName` (case-insensitive; trailing dot normalized). Unknown targets fail closed (`InvalidChangeBatch`). `EvaluateTargetHealth` is stored and returned but not evaluated. No recursive DNS and no HTTP fetch of the target. |
 
 ### Authz notes
 
@@ -25,10 +26,29 @@ aws route53 change-resource-record-sets --hosted-zone-id "$ZID" --change-batch f
 aws route53 list-resource-record-sets --hosted-zone-id "$ZID" --endpoint-url "$EP"
 ```
 
+Example Alias change batch (substitute a Deployed CloudFront `DomainName` or ELB `DNSName`):
+
+```json
+{
+  "Changes": [{
+    "Action": "CREATE",
+    "ResourceRecordSet": {
+      "Name": "www.lab.example.com",
+      "Type": "A",
+      "AliasTarget": {
+        "HostedZoneId": "Z2FDTNDATAQYW2",
+        "DNSName": "dEXAMPLE.cloudfront.noctaxris.local",
+        "EvaluateTargetHealth": false
+      }
+    }
+  }]
+}
+```
+
 Local resolver stub is not included. Live Compose smoke skipped when Docker is unavailable.
 
 ## Not yet / deferred
 
-- Alias targets to CloudFront/ELB
-- Traffic policies, health checks, Resolver endpoints
+- Alias Type AAAA; health-check evaluation and traffic policies
+- Resolver endpoints
 - Full REST/XML Route 53 protocol parity

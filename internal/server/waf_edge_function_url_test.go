@@ -121,6 +121,84 @@ func TestWAFAssociateBlocksHTTPAPIInvoke(t *testing.T) {
 	}
 }
 
+func TestWAFByteMatchBlocksHTTPAPIInvoke(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "waf-bm-role", lambdaTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/waf-bm-role"
+	fnRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
+		"FunctionName": "waf-bm-fn",
+		"Runtime":      "python3.12",
+		"Role":         roleARN,
+		"Handler":      "app.handler",
+		"Code":         map[string]any{"ZipFile": testLambdaZipB64(t)},
+	}, now)
+	if fnRec.Code != http.StatusOK {
+		t.Fatalf("CreateFunction status=%d", fnRec.Code)
+	}
+	lambdaARN := "arn:aws:lambda:us-east-1:" + testAccountID + ":function:waf-bm-fn"
+	apiID, integrationID := mustCreateHTTPAPIWithIntegration(t, handler, "waf-bm-http", lambdaARN, now)
+	mustAddLambdaServicePermission(t, handler, "waf-bm-fn", "apigateway.amazonaws.com", "waf-bm-apigw", now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
+		"ApiId": apiID, "RouteKey": "GET /admin", "Target": "integrations/" + integrationID,
+		"AuthorizationType": "NONE",
+	}, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateRoute", "apigateway", map[string]any{
+		"ApiId": apiID, "RouteKey": "GET /public", "Target": "integrations/" + integrationID,
+		"AuthorizationType": "NONE",
+	}, now)
+	mustJSONTarget(t, handler, "ApiGatewayV2.CreateStage", "apigateway", map[string]any{
+		"ApiId": apiID, "StageName": "$default",
+	}, now)
+
+	create := mustJSONTarget(t, handler, "AWSWAF_20190729.CreateWebACL", "wafv2", map[string]any{
+		"Name": "bytematch-acl", "Scope": "REGIONAL",
+		"DefaultAction": map[string]any{"Allow": map[string]any{}},
+		"Rules": []map[string]any{{
+			"Name": "block-admin", "Priority": 1,
+			"Action": map[string]any{"Block": map[string]any{}},
+			"Statement": map[string]any{
+				"ByteMatchStatement": map[string]any{
+					"SearchString":         "/admin",
+					"PositionalConstraint": "CONTAINS",
+					"FieldToMatch":         map[string]any{"UriPath": map[string]any{}},
+				},
+			},
+		}},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateWebACL status=%d body=%q", create.Code, create.Body.String())
+	}
+	var out map[string]any
+	_ = json.Unmarshal(create.Body.Bytes(), &out)
+	sum, _ := out["Summary"].(map[string]any)
+	aclARN, _ := sum["ARN"].(string)
+
+	assoc := mustJSONTarget(t, handler, "AWSWAF_20190729.AssociateWebACL", "wafv2", map[string]any{
+		"WebACLArn":   aclARN,
+		"ResourceArn": "arn:aws:apigateway:us-east-1::/apis/" + apiID + "/stages/$default",
+	}, now)
+	if assoc.Code != http.StatusOK {
+		t.Fatalf("AssociateWebACL status=%d body=%q", assoc.Code, assoc.Body.String())
+	}
+
+	blockReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/admin", nil)
+	blockRec := httptest.NewRecorder()
+	handler.ServeHTTP(blockRec, blockReq)
+	if blockRec.Code != http.StatusForbidden {
+		t.Fatalf("admin invoke status=%d want 403 body=%q", blockRec.Code, blockRec.Body.String())
+	}
+
+	okReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/http-api/"+apiID+"/$default/public", nil)
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, okReq)
+	if okRec.Code == http.StatusForbidden {
+		t.Fatalf("public invoke blocked body=%q", okRec.Body.String())
+	}
+}
+
 func TestCloudFrontCreateListDelete(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
@@ -174,14 +252,12 @@ func TestCloudFrontCreateListDelete(t *testing.T) {
 		t.Fatalf("missing id: %s", create.Body.String())
 	}
 	status, _ := dist["Status"].(string)
-	if status != "InProgress" {
-		t.Fatalf("Status=%q want InProgress body=%q", status, create.Body.String())
+	if status != "Deployed" {
+		t.Fatalf("Status=%q want Deployed body=%q", status, create.Body.String())
 	}
-	if _, ok := dist["DomainName"]; ok {
-		t.Fatalf("DomainName must be omitted until fake-edge: %q", create.Body.String())
-	}
-	if strings.Contains(create.Body.String(), `"Deployed"`) {
-		t.Fatalf("must not claim Deployed without PoP: %q", create.Body.String())
+	domain, _ := dist["DomainName"].(string)
+	if domain == "" || !strings.Contains(domain, "cloudfront.noctaxris.local") {
+		t.Fatalf("DomainName=%q want lab fake-edge host body=%q", domain, create.Body.String())
 	}
 
 	list := mustJSONTarget(t, handler, "CloudFront_2016_01_28.ListDistributions", "cloudfront", map[string]any{}, now)

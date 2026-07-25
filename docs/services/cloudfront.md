@@ -1,21 +1,21 @@
 # CloudFront
 
-**Status:** shipped (lab core, control-plane stub)
+**Status:** shipped (lab core)
 
-Distribution CRUD lite. Origins must resolve to an existing lab S3 bucket name or HTTP API id. Identity authz. No real PoP or WAN edge. Create returns `Status=InProgress` and omits `DomainName` until a documented fake-edge path exists.
+Distribution CRUD lite plus a loopback fake-edge fetch path. Origins must resolve to an existing lab S3 bucket name or HTTP API id. Create returns `Status=Deployed` and a lab `DomainName` string (`d{id}.cloudfront.noctaxris.local`). There is no real PoP, DNS, or WAN CDN.
 
 ## Implemented
 
-| Area | Actions |
-|------|---------|
+| Area | Actions / paths |
+|------|-----------------|
 | Distribution | `CreateDistribution`, `GetDistribution`, `ListDistributions`, `DeleteDistribution` |
 | Origins | `OriginType` `s3` or `apigateway` (DomainName must exist in-account; fail closed) |
+| Fake-edge | SigV4 `GET /cloudfront/{distributionId}/{objectKey...}` on `:4566` (first origin only) |
+| Edge fetch | S3 → in-store `GetObject`; apigateway → internal `/http-api/...` invoke (never dials arbitrary hosts) |
 
 ### Authz notes
 
-Identity `EvaluateFull` on `cloudfront:*`.
-
-Missing buckets or API ids are rejected at Create. Status stays `InProgress` (not `Deployed`) because there is no PoP.
+Identity `EvaluateFull` on `cloudfront:*`. Fake-edge requires SigV4 with service `cloudfront` and `cloudfront:GetDistribution` on the distribution ARN. Disabled distributions return 403. Associated WAFv2 ACLs (when present) are evaluated on the edge request.
 
 ## How to verify / CLI smoke
 
@@ -27,12 +27,18 @@ aws cloudfront create-distribution \
   --endpoint-url "$EP"
 ```
 
-Lab JSON target API also works when the CLI shape is awkward. Skip live smoke when Docker is unavailable (unit tests cover CRUD, origin resolve, and non-Deployed status).
+Fake-edge fetch (SigV4; substitute distribution id and object key):
+
+```bash
+# Example with curl + AWS SigV4 tooling, or any SigV4 client signed for service=cloudfront:
+# GET $EP/cloudfront/<DistributionId>/path/to/object
+```
+
+Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName, SigV4-required edge, S3 origin bytes, and disabled-distribution 403).
 
 ## Not yet / deferred
 
 - Real CloudFront PoPs and cache behaviors matrix
-- Fake-edge DomainName / Deployed status
+- Multi-origin selection / path pattern routing
 - Signed cookies / URLs depth
 - Custom domain ACM linkage beyond string fields
-- WAF association enforcement at a fake edge

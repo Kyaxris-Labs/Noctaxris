@@ -11,6 +11,32 @@ import (
 func TestAthenaSelectCSVFromGlue(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
+	seedAthenaPeopleCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT id, name FROM labdb.people LIMIT 10",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	got, err := st.GetAthenaQueryResults(account, exec.QueryExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ResultRows) < 3 {
+		t.Fatalf("expected header+2 rows, got %#v", got.ResultRows)
+	}
+	if got.ResultRows[0][0] != "id" || got.ResultRows[1][1] != "alice" {
+		t.Fatalf("rows=%#v", got.ResultRows)
+	}
+}
+
+func seedAthenaPeopleCSV(t *testing.T, st *store.Store, account string) {
+	t.Helper()
 	if _, err := st.CreateBucket(account, "athena-lab"); err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +64,15 @@ func TestAthenaSelectCSVFromGlue(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAthenaWhereEquality(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaPeopleCSV(t, st, account)
 
 	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
-		QueryString: "SELECT id, name FROM labdb.people LIMIT 10",
+		QueryString: "SELECT id, name FROM labdb.people WHERE name = 'alice' LIMIT 10",
 		Database:    "labdb",
 	})
 	if err != nil {
@@ -53,11 +85,45 @@ func TestAthenaSelectCSVFromGlue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.ResultRows) < 3 {
-		t.Fatalf("expected header+2 rows, got %#v", got.ResultRows)
+	if len(got.ResultRows) != 2 {
+		t.Fatalf("expected header+1 row, got %#v", got.ResultRows)
 	}
-	if got.ResultRows[0][0] != "id" || got.ResultRows[1][1] != "alice" {
+	if got.ResultRows[1][0] != "1" || got.ResultRows[1][1] != "alice" {
 		t.Fatalf("rows=%#v", got.ResultRows)
+	}
+}
+
+func TestAthenaCountStar(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaPeopleCSV(t, st, account)
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT COUNT(*) FROM labdb.people",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec.State, exec.StateChangeReason)
+	}
+	if len(exec.ResultRows) != 2 || exec.ResultRows[1][0] != "2" {
+		t.Fatalf("count all rows=%#v", exec.ResultRows)
+	}
+
+	exec2, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT COUNT(*) FROM labdb.people WHERE name = 'alice'",
+		Database:    "labdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec2.State != "SUCCEEDED" {
+		t.Fatalf("state=%s reason=%s", exec2.State, exec2.StateChangeReason)
+	}
+	if len(exec2.ResultRows) != 2 || exec2.ResultRows[1][0] != "1" {
+		t.Fatalf("count filtered rows=%#v", exec2.ResultRows)
 	}
 }
 

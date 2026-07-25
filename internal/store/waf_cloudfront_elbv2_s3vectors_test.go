@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -100,14 +101,14 @@ func TestCloudFrontDistributionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Status != store.CloudFrontStatusInProgress {
-		t.Fatalf("status=%q want %q", d.Status, store.CloudFrontStatusInProgress)
+	if d.Status != store.CloudFrontStatusDeployed {
+		t.Fatalf("status=%q want %q", d.Status, store.CloudFrontStatusDeployed)
 	}
-	if d.DomainName != "" {
-		t.Fatalf("DomainName=%q want empty until fake-edge", d.DomainName)
+	if d.DomainName == "" || !strings.Contains(d.DomainName, "cloudfront.noctaxris.local") {
+		t.Fatalf("DomainName=%q", d.DomainName)
 	}
 	got, err := st.GetCloudFrontDistribution(account, d.ID)
-	if err != nil || got.Status != store.CloudFrontStatusInProgress || got.DomainName != "" {
+	if err != nil || got.Status != store.CloudFrontStatusDeployed || got.DomainName != d.DomainName {
 		t.Fatalf("get: %+v err=%v", got, err)
 	}
 	list, err := st.ListCloudFrontDistributions(account)

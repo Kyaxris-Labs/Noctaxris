@@ -30,6 +30,8 @@ const (
 	defaultValkeyImage     = "valkey/valkey:8-alpine"
 	defaultMongoImage      = "mongo:7"
 	defaultRabbitMQImage   = "rabbitmq:3.13-alpine"
+	// apache/activemq-classic exposes AMQP on 5672 (plus OpenWire 61616 nested-only).
+	defaultActiveMQImage   = "apache/activemq-classic:5.18.3"
 	defaultOpenSearchImage = "opensearchproject/opensearch:2.11.1"
 
 	defaultPostgresPort   = 5432
@@ -97,7 +99,8 @@ func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 }
 
 // DefaultDataPlaneImage returns the pinned lab image for a kind when callers
-// omit Image. Empty kind returns empty.
+// omit Image. Empty kind returns empty. DataKindMQ defaults to RabbitMQ;
+// use DefaultDataPlaneImageForMQ for EngineType-specific pins.
 func DefaultDataPlaneImage(kind DataKind) string {
 	switch kind {
 	case DataKindRDS:
@@ -112,6 +115,17 @@ func DefaultDataPlaneImage(kind DataKind) string {
 		return defaultOpenSearchImage
 	default:
 		return ""
+	}
+}
+
+// DefaultDataPlaneImageForMQ returns the pinned nested image for Amazon MQ EngineType.
+// ACTIVEMQ → apache/activemq-classic (AMQP 5672); anything else → RabbitMQ.
+func DefaultDataPlaneImageForMQ(engineType string) string {
+	switch strings.ToUpper(strings.TrimSpace(engineType)) {
+	case "ACTIVEMQ":
+		return defaultActiveMQImage
+	default:
+		return defaultRabbitMQImage
 	}
 }
 

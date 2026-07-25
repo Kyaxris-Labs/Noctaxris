@@ -18,7 +18,8 @@ var (
 
 const DefaultMQRegion = "us-east-1"
 
-// Nested RabbitMQ AMQP port inside the DinD network (never published on the host).
+// Nested MQ AMQP port inside the DinD network (never published on the host).
+// Shared by RabbitMQ and ActiveMQ classic (AMQP connector on 5672).
 const MQNestedPort = 5672
 
 // Amazon MQ broker states used by the lab control plane.
@@ -48,7 +49,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mq_brokers_name ON mq_brokers(account_id, 
 `
 
 // MQBroker is an Amazon MQ broker control-plane row.
-// Endpoint is stub:// until a nested RabbitMQ container is RUNNING.
+// Endpoint is stub:// until a nested MQ container is RUNNING.
 type MQBroker struct {
 	BrokerID         string
 	BrokerName       string
@@ -97,8 +98,8 @@ func MQNestedAMQPEndpoint(brokerID string) string {
 }
 
 // CreateMQBroker creates a control-plane broker.
-// RABBITMQ starts CREATION_IN_PROGRESS (nested DinD may promote to RUNNING).
-// ACTIVEMQ stays CREATION_FAILED (no nested ActiveMQ engine).
+// RABBITMQ and ACTIVEMQ start CREATION_IN_PROGRESS (nested DinD may promote to RUNNING).
+// Without a healthy nested start, handlers fail closed to CREATION_FAILED + stub://.
 func (s *Store) CreateMQBroker(accountID, region, name, engineType, engineVersion, deploymentMode, instanceType string) (MQBroker, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -135,13 +136,9 @@ func (s *Store) CreateMQBroker(accountID, region, name, engineType, engineVersio
 	id := uuid.NewString()
 	arn := MQBrokerARN(region, accountID, name, id)
 	now := time.Now().UTC().UnixMilli()
-	state := MQBrokerStateCreationFailed
-	endpoint := fmt.Sprintf("stub://127.0.0.1/mq/%s", id)
-	if engineType == "RABBITMQ" {
-		// Nested RabbitMQ path: CREATING until promote/fail; never claim RUNNING without container.
-		state = MQBrokerStateCreationInProgress
-		endpoint = MQNestedAMQPEndpoint(id)
-	}
+	// Nested MQ path: CREATING until promote/fail; never claim RUNNING without container.
+	state := MQBrokerStateCreationInProgress
+	endpoint := MQNestedAMQPEndpoint(id)
 	_, err = s.db.Exec(
 		`INSERT INTO mq_brokers
 		 (account_id, broker_id, broker_name, broker_arn, engine_type, engine_version, deployment_mode, broker_state, host_instance_type, stub_endpoint, container_id, created_at)
@@ -158,7 +155,7 @@ func (s *Store) CreateMQBroker(accountID, region, name, engineType, engineVersio
 	}, nil
 }
 
-// SetMQContainerID records a nested RabbitMQ container after dataplane start.
+// SetMQContainerID records a nested MQ container after dataplane start.
 // endpoint may be empty to leave the existing endpoint unchanged.
 // RUNNING requires a non-empty containerID and must not use stub://.
 func (s *Store) SetMQContainerID(accountID, brokerID, containerID, status, endpoint string) error {

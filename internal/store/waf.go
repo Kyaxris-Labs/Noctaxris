@@ -2,9 +2,11 @@ package store
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,12 +81,27 @@ type WAFRuleGroup struct {
 	CreatedAt int64
 }
 
-// WAFRule is a simple allow/block rule with a label match string.
+// WAFByteMatchStatement is a lab subset of AWS WAFv2 ByteMatchStatement.
+type WAFByteMatchStatement struct {
+	SearchString         string `json:"SearchString"`
+	PositionalConstraint string `json:"PositionalConstraint"` // CONTAINS or EXACTLY
+	FieldToMatchType     string `json:"FieldToMatchType"`     // UriPath or SingleHeader
+	HeaderName           string `json:"HeaderName,omitempty"` // required for SingleHeader
+}
+
+// WAFRequestView carries invoke-path fields used for ByteMatch evaluation.
+type WAFRequestView struct {
+	URI     string
+	Headers map[string]string
+}
+
+// WAFRule is an allow/block rule with optional label or ByteMatch statement.
 type WAFRule struct {
-	Name     string `json:"Name"`
-	Priority int    `json:"Priority"`
-	Action   string `json:"Action"` // Allow or Block
-	Label    string `json:"Label"`  // request label to match
+	Name               string                 `json:"Name"`
+	Priority           int                    `json:"Priority"`
+	Action             string                 `json:"Action"` // Allow or Block
+	Label              string                 `json:"Label,omitempty"`
+	ByteMatchStatement *WAFByteMatchStatement `json:"ByteMatchStatement,omitempty"`
 }
 
 // EnsureWAFSchema creates WAFv2 tables if missing.
@@ -390,6 +407,15 @@ func (s *Store) LookupWAFAssociation(accountID, resourceARN string) (webACLARN s
 // the Web ACL (empty request label uses DefaultAction). Returns associated=false when
 // no association matches.
 func (s *Store) EvaluateAssociatedWAF(accountID string, candidateARNs []string, requestLabel string) (action string, associated bool, err error) {
+	return s.evaluateAssociatedWAF(accountID, candidateARNs, requestLabel, nil)
+}
+
+// EvaluateAssociatedWAFWithView is EvaluateAssociatedWAF with optional ByteMatch fields.
+func (s *Store) EvaluateAssociatedWAFWithView(accountID string, candidateARNs []string, requestLabel string, view *WAFRequestView) (action string, associated bool, err error) {
+	return s.evaluateAssociatedWAF(accountID, candidateARNs, requestLabel, view)
+}
+
+func (s *Store) evaluateAssociatedWAF(accountID string, candidateARNs []string, requestLabel string, view *WAFRequestView) (action string, associated bool, err error) {
 	seen := map[string]struct{}{}
 	for _, arn := range candidateARNs {
 		arn = strings.TrimSpace(arn)
@@ -407,7 +433,7 @@ func (s *Store) EvaluateAssociatedWAF(accountID string, candidateARNs []string, 
 		if !ok {
 			continue
 		}
-		action, evalErr := s.EvaluateWAFRequest(accountID, webACLARN, requestLabel)
+		action, evalErr := s.EvaluateWAFRequestWithView(accountID, webACLARN, requestLabel, view)
 		if evalErr != nil {
 			return "", true, evalErr
 		}
@@ -418,6 +444,11 @@ func (s *Store) EvaluateAssociatedWAF(accountID string, candidateARNs []string, 
 
 // EvaluateWAFRequest applies Web ACL rules to a labeled request. Returns Allow or Block.
 func (s *Store) EvaluateWAFRequest(accountID, webACLARN, requestLabel string) (string, error) {
+	return s.EvaluateWAFRequestWithView(accountID, webACLARN, requestLabel, nil)
+}
+
+// EvaluateWAFRequestWithView evaluates rules in priority order (first match wins), else DefaultAction.
+func (s *Store) EvaluateWAFRequestWithView(accountID, webACLARN, requestLabel string, view *WAFRequestView) (string, error) {
 	var rulesJSON, defaultAction string
 	err := s.db.QueryRow(
 		`SELECT rules_json, default_action FROM wafv2_web_acls WHERE account_id = ? AND arn = ?`,
@@ -430,17 +461,98 @@ func (s *Store) EvaluateWAFRequest(accountID, webACLARN, requestLabel string) (s
 		return "", fmt.Errorf("evaluate waf: %w", err)
 	}
 	var rules []WAFRule
-	_ = json.Unmarshal([]byte(rulesJSON), &rules)
-	for _, rule := range rules {
-		if rule.Label != "" && rule.Label == requestLabel {
-			if strings.EqualFold(rule.Action, "Block") {
-				return "Block", nil
-			}
-			return "Allow", nil
+	if err := json.Unmarshal([]byte(rulesJSON), &rules); err != nil {
+		return "", fmt.Errorf("evaluate waf: parse rules: %w", err)
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].Priority != rules[j].Priority {
+			return rules[i].Priority < rules[j].Priority
 		}
+		return rules[i].Name < rules[j].Name
+	})
+	for _, rule := range rules {
+		matched, matchErr := wafRuleMatches(rule, requestLabel, view)
+		if matchErr != nil {
+			return "", matchErr
+		}
+		if !matched {
+			continue
+		}
+		if strings.EqualFold(rule.Action, "Block") {
+			return "Block", nil
+		}
+		return "Allow", nil
 	}
 	if strings.EqualFold(defaultAction, "Block") {
 		return "Block", nil
 	}
 	return "Allow", nil
+}
+
+func wafRuleMatches(rule WAFRule, requestLabel string, view *WAFRequestView) (bool, error) {
+	if rule.ByteMatchStatement != nil {
+		return evaluateWAFByteMatch(rule.ByteMatchStatement, view)
+	}
+	if rule.Label != "" {
+		return rule.Label == requestLabel, nil
+	}
+	return false, nil
+}
+
+func evaluateWAFByteMatch(bm *WAFByteMatchStatement, view *WAFRequestView) (bool, error) {
+	if bm == nil {
+		return false, fmt.Errorf("evaluate waf bytematch: statement is nil")
+	}
+	if view == nil {
+		return false, nil
+	}
+	search := strings.TrimSpace(bm.SearchString)
+	if search == "" {
+		return false, fmt.Errorf("evaluate waf bytematch: SearchString required")
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(search); err == nil && len(decoded) > 0 {
+		search = string(decoded)
+	}
+	constraint := strings.ToUpper(strings.TrimSpace(bm.PositionalConstraint))
+	if constraint != "CONTAINS" && constraint != "EXACTLY" {
+		return false, fmt.Errorf("evaluate waf bytematch: unsupported PositionalConstraint %q", bm.PositionalConstraint)
+	}
+	fieldType := strings.TrimSpace(bm.FieldToMatchType)
+	var haystack string
+	switch fieldType {
+	case "UriPath":
+		haystack = view.URI
+	case "SingleHeader":
+		name := strings.TrimSpace(bm.HeaderName)
+		if name == "" {
+			return false, fmt.Errorf("evaluate waf bytematch: HeaderName required for SingleHeader")
+		}
+		haystack = wafHeaderValue(view.Headers, name)
+	default:
+		return false, fmt.Errorf("evaluate waf bytematch: unsupported FieldToMatch %q", fieldType)
+	}
+	switch constraint {
+	case "CONTAINS":
+		return strings.Contains(haystack, search), nil
+	case "EXACTLY":
+		return haystack == search, nil
+	default:
+		return false, nil
+	}
+}
+
+func wafHeaderValue(headers map[string]string, name string) string {
+	if headers == nil {
+		return ""
+	}
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	lower := strings.ToLower(name)
+	for k, v := range headers {
+		if strings.ToLower(k) == lower {
+			return v
+		}
+	}
+	return ""
 }

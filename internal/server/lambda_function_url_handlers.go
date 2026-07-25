@@ -252,7 +252,7 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !s.enforceAssociatedWAF(w, accountID, []string{u.FunctionARN}) {
+	if !s.enforceAssociatedWAF(w, r, accountID, []string{u.FunctionARN}) {
 		return
 	}
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,9 +14,12 @@ import (
 )
 
 var (
-	ErrELBv2NotFound   = errors.New("LoadBalancerNotFound")
-	ErrELBv2TGNotFound = errors.New("TargetGroupNotFound")
-	ErrELBv2BadRequest = errors.New("ValidationError")
+	ErrELBv2NotFound       = errors.New("LoadBalancerNotFound")
+	ErrELBv2TGNotFound     = errors.New("TargetGroupNotFound")
+	ErrELBv2ListenerNotFound = errors.New("ListenerNotFound")
+	ErrELBv2RuleNotFound   = errors.New("RuleNotFound")
+	ErrELBv2PriorityInUse  = errors.New("PriorityInUse")
+	ErrELBv2BadRequest     = errors.New("ValidationError")
 )
 
 const DefaultELBv2Region = "us-east-1"
@@ -60,6 +64,19 @@ CREATE TABLE IF NOT EXISTS elbv2_targets (
   port INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, target_group_arn, target_id)
 );
+CREATE TABLE IF NOT EXISTS elbv2_rules (
+  account_id TEXT NOT NULL,
+  rule_arn TEXT NOT NULL,
+  listener_arn TEXT NOT NULL,
+  priority INTEGER NOT NULL,
+  path_patterns TEXT NOT NULL,
+  host_headers TEXT NOT NULL DEFAULT '[]',
+  target_group_arn TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, rule_arn)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_elbv2_rule_priority
+  ON elbv2_rules(account_id, listener_arn, priority);
 `
 
 // ELBv2LoadBalancer is a lite load balancer row.
@@ -98,6 +115,17 @@ type ELBv2Target struct {
 	Port int
 }
 
+// ELBv2Rule is a listener rule with path-pattern and/or host-header conditions (non-default).
+type ELBv2Rule struct {
+	RuleARN        string
+	ListenerARN    string
+	Priority       int
+	PathPatterns   []string
+	HostHeaders    []string
+	TargetGroupARN string
+	CreatedAt      int64
+}
+
 // ELBv2TargetHealthDesc is one DescribeTargetHealth row.
 type ELBv2TargetHealthDesc struct {
 	Target      ELBv2Target
@@ -106,13 +134,18 @@ type ELBv2TargetHealthDesc struct {
 	Description string
 }
 
-// EnsureELBv2Schema creates ELBv2 tables if missing.
+// EnsureELBv2Schema creates ELBv2 tables if missing and migrates columns.
 func EnsureELBv2Schema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure elbv2 schema: db is nil")
 	}
 	if _, err := db.Exec(elbv2Schema); err != nil {
 		return fmt.Errorf("ensure elbv2 schema: %w", err)
+	}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE elbv2_rules ADD COLUMN host_headers TEXT NOT NULL DEFAULT '[]'`,
+	}); err != nil {
+		return fmt.Errorf("ensure elbv2 schema: migrate: %w", err)
 	}
 	return nil
 }
@@ -213,6 +246,10 @@ func (s *Store) DeleteELBv2LoadBalancer(accountID, arn string) error {
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return ErrELBv2NotFound
+	}
+	ls, _ := s.DescribeELBv2Listeners(accountID, arn)
+	for _, l := range ls {
+		_, _ = s.db.Exec(`DELETE FROM elbv2_rules WHERE account_id = ? AND listener_arn = ?`, accountID, l.ListenerARN)
 	}
 	_, _ = s.db.Exec(`DELETE FROM elbv2_listeners WHERE account_id = ? AND load_balancer_arn = ?`, accountID, arn)
 	return nil
@@ -373,8 +410,9 @@ func (s *Store) DescribeELBv2Listeners(accountID, loadBalancerARN string) ([]ELB
 
 // DeleteELBv2Listener deletes a listener by ARN.
 func (s *Store) DeleteELBv2Listener(accountID, listenerARN string) error {
+	listenerARN = strings.TrimSpace(listenerARN)
 	res, err := s.db.Exec(`DELETE FROM elbv2_listeners WHERE account_id = ? AND listener_arn = ?`,
-		accountID, strings.TrimSpace(listenerARN))
+		accountID, listenerARN)
 	if err != nil {
 		return fmt.Errorf("delete listener: %w", err)
 	}
@@ -382,6 +420,7 @@ func (s *Store) DeleteELBv2Listener(accountID, listenerARN string) error {
 	if n == 0 {
 		return ErrELBv2NotFound
 	}
+	_, _ = s.db.Exec(`DELETE FROM elbv2_rules WHERE account_id = ? AND listener_arn = ?`, accountID, listenerARN)
 	return nil
 }
 
@@ -419,15 +458,26 @@ func (s *Store) GetELBv2ListenerByPort(accountID, loadBalancerARN string, port i
 	return l, nil
 }
 
-// ELBv2TargetGroupHasListener reports whether any listener forwards to the target group.
+// ELBv2TargetGroupHasListener reports whether any listener or rule forwards to the target group.
 func (s *Store) ELBv2TargetGroupHasListener(accountID, targetGroupARN string) (bool, error) {
+	tgARN := strings.TrimSpace(targetGroupARN)
 	var n int
 	err := s.db.QueryRow(
 		`SELECT COUNT(1) FROM elbv2_listeners WHERE account_id = ? AND target_group_arn = ?`,
-		accountID, strings.TrimSpace(targetGroupARN),
+		accountID, tgARN,
 	).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("target group has listener: %w", err)
+	}
+	if n > 0 {
+		return true, nil
+	}
+	err = s.db.QueryRow(
+		`SELECT COUNT(1) FROM elbv2_rules WHERE account_id = ? AND target_group_arn = ?`,
+		accountID, tgARN,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("target group has rule: %w", err)
 	}
 	return n > 0, nil
 }
@@ -597,4 +647,322 @@ func (s *Store) ListELBv2Targets(accountID, targetGroupARN string) ([]ELBv2Targe
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// MatchELBv2PathPattern reports whether routePath matches a lite path-pattern.
+// Exact `/foo` requires equality. Prefix `/foo*` (single trailing `*` only) uses HasPrefix.
+func MatchELBv2PathPattern(routePath, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	routePath = strings.TrimSpace(routePath)
+	if pattern == "" {
+		return false
+	}
+	if strings.Count(pattern, "*") > 1 {
+		return false
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(routePath, strings.TrimSuffix(pattern, "*"))
+	}
+	if strings.Contains(pattern, "*") {
+		return false
+	}
+	return routePath == pattern
+}
+
+// MatchELBv2HostHeader reports whether requestHost matches a lite host-header value.
+// Matching is case-insensitive. Exact `foo.example.com` requires equality after stripping
+// an optional `:port`. Prefix `*.example.com` is not supported; only a single trailing `*`
+// (e.g. `api.*`) uses HasPrefix on the host (without port).
+func MatchELBv2HostHeader(requestHost, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	requestHost = strings.TrimSpace(requestHost)
+	if pattern == "" {
+		return false
+	}
+	host := requestHost
+	if h, _, err := net.SplitHostPort(requestHost); err == nil {
+		host = h
+	}
+	host = strings.ToLower(host)
+	pattern = strings.ToLower(pattern)
+	if strings.Count(pattern, "*") > 1 {
+		return false
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(host, strings.TrimSuffix(pattern, "*"))
+	}
+	if strings.Contains(pattern, "*") {
+		return false
+	}
+	return host == pattern
+}
+
+func cleanELBv2StringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func validateELBv2PathPatterns(patterns []string) error {
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return fmt.Errorf("%w: path-pattern value must be non-empty", ErrELBv2BadRequest)
+		}
+		if strings.Count(p, "*") > 1 || (strings.Contains(p, "*") && !strings.HasSuffix(p, "*")) {
+			return fmt.Errorf("%w: path-pattern supports exact /foo or prefix /foo* (single trailing * only)", ErrELBv2BadRequest)
+		}
+	}
+	return nil
+}
+
+func validateELBv2HostHeaders(hosts []string) error {
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			return fmt.Errorf("%w: host-header value must be non-empty", ErrELBv2BadRequest)
+		}
+		if strings.Count(h, "*") > 1 || (strings.Contains(h, "*") && !strings.HasSuffix(h, "*")) {
+			return fmt.Errorf("%w: host-header supports exact hostname or prefix host* (single trailing * only)", ErrELBv2BadRequest)
+		}
+	}
+	return nil
+}
+
+// MatchELBv2Rule reports whether a rule matches routePath and requestHost.
+// Path-pattern Values are OR'd; host-header Values are OR'd; field types are AND'd.
+// Absent field types (empty lists) are ignored so path-only and host-only rules work.
+func MatchELBv2Rule(rule ELBv2Rule, routePath, requestHost string) bool {
+	if len(rule.PathPatterns) == 0 && len(rule.HostHeaders) == 0 {
+		return false
+	}
+	if len(rule.PathPatterns) > 0 {
+		pathOK := false
+		for _, pat := range rule.PathPatterns {
+			if MatchELBv2PathPattern(routePath, pat) {
+				pathOK = true
+				break
+			}
+		}
+		if !pathOK {
+			return false
+		}
+	}
+	if len(rule.HostHeaders) > 0 {
+		hostOK := false
+		for _, pat := range rule.HostHeaders {
+			if MatchELBv2HostHeader(requestHost, pat) {
+				hostOK = true
+				break
+			}
+		}
+		if !hostOK {
+			return false
+		}
+	}
+	return true
+}
+
+func getELBv2ListenerByARN(s *Store, accountID, listenerARN string) (ELBv2Listener, error) {
+	var l ELBv2Listener
+	err := s.db.QueryRow(
+		`SELECT listener_arn, load_balancer_arn, port, protocol, target_group_arn, created_at
+		 FROM elbv2_listeners WHERE account_id = ? AND listener_arn = ?`,
+		accountID, strings.TrimSpace(listenerARN),
+	).Scan(&l.ListenerARN, &l.LoadBalancerARN, &l.Port, &l.Protocol, &l.TargetGroupARN, &l.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ELBv2Listener{}, ErrELBv2ListenerNotFound
+	}
+	if err != nil {
+		return ELBv2Listener{}, fmt.Errorf("get listener by arn: %w", err)
+	}
+	return l, nil
+}
+
+// GetELBv2ListenerByARN returns a listener by ARN.
+func (s *Store) GetELBv2ListenerByARN(accountID, listenerARN string) (ELBv2Listener, error) {
+	return getELBv2ListenerByARN(s, accountID, listenerARN)
+}
+
+// CreateELBv2Rule creates a forward rule with path-pattern and/or host-header conditions.
+func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN string, priority int, pathPatterns, hostHeaders []string) (ELBv2Rule, error) {
+	listenerARN = strings.TrimSpace(listenerARN)
+	targetGroupARN = strings.TrimSpace(targetGroupARN)
+	if listenerARN == "" {
+		return ELBv2Rule{}, fmt.Errorf("%w: ListenerArn required", ErrELBv2BadRequest)
+	}
+	if targetGroupARN == "" {
+		return ELBv2Rule{}, fmt.Errorf("%w: Actions forward TargetGroupArn required", ErrELBv2BadRequest)
+	}
+	if priority < 1 || priority > 50000 {
+		return ELBv2Rule{}, fmt.Errorf("%w: Priority must be between 1 and 50000", ErrELBv2BadRequest)
+	}
+	cleanedPaths := cleanELBv2StringList(pathPatterns)
+	cleanedHosts := cleanELBv2StringList(hostHeaders)
+	if len(cleanedPaths) == 0 && len(cleanedHosts) == 0 {
+		return ELBv2Rule{}, fmt.Errorf("%w: Conditions require path-pattern and/or host-header Values", ErrELBv2BadRequest)
+	}
+	if err := validateELBv2PathPatterns(cleanedPaths); err != nil {
+		return ELBv2Rule{}, err
+	}
+	if err := validateELBv2HostHeaders(cleanedHosts); err != nil {
+		return ELBv2Rule{}, err
+	}
+	if _, err := getELBv2ListenerByARN(s, accountID, listenerARN); err != nil {
+		return ELBv2Rule{}, err
+	}
+	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
+	if err != nil {
+		return ELBv2Rule{}, err
+	}
+	if len(tgs) == 0 {
+		return ELBv2Rule{}, ErrELBv2TGNotFound
+	}
+	var existing int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM elbv2_rules WHERE account_id = ? AND listener_arn = ? AND priority = ?`,
+		accountID, listenerARN, priority,
+	).Scan(&existing); err != nil {
+		return ELBv2Rule{}, fmt.Errorf("create rule: check priority: %w", err)
+	}
+	if existing > 0 {
+		return ELBv2Rule{}, ErrELBv2PriorityInUse
+	}
+	if region == "" {
+		region = DefaultELBv2Region
+	}
+	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
+	ruleARN := strings.Replace(listenerARN, ":listener/", ":listener-rule/", 1) + "/" + id
+	if !strings.Contains(ruleARN, "listener-rule") {
+		ruleARN = fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener-rule/%s", region, accountID, id)
+	}
+	patternsJSON, err := json.Marshal(cleanedPaths)
+	if err != nil {
+		return ELBv2Rule{}, fmt.Errorf("create rule: encode patterns: %w", err)
+	}
+	hostsJSON, err := json.Marshal(cleanedHosts)
+	if err != nil {
+		return ELBv2Rule{}, fmt.Errorf("create rule: encode host headers: %w", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	_, err = s.db.Exec(
+		`INSERT INTO elbv2_rules (account_id, rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, ruleARN, listenerARN, priority, string(patternsJSON), string(hostsJSON), targetGroupARN, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			return ELBv2Rule{}, ErrELBv2PriorityInUse
+		}
+		return ELBv2Rule{}, fmt.Errorf("create rule: %w", err)
+	}
+	return ELBv2Rule{
+		RuleARN: ruleARN, ListenerARN: listenerARN, Priority: priority,
+		PathPatterns: cleanedPaths, HostHeaders: cleanedHosts, TargetGroupARN: targetGroupARN, CreatedAt: now,
+	}, nil
+}
+
+// DescribeELBv2Rules lists non-default rules for a listener, optionally filtered by RuleArns.
+func (s *Store) DescribeELBv2Rules(accountID, listenerARN string, ruleARNs []string) ([]ELBv2Rule, error) {
+	listenerARN = strings.TrimSpace(listenerARN)
+	want := map[string]struct{}{}
+	for _, a := range ruleARNs {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			want[a] = struct{}{}
+		}
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch {
+	case listenerARN != "":
+		if _, err := getELBv2ListenerByARN(s, accountID, listenerARN); err != nil {
+			return nil, err
+		}
+		rows, err = s.db.Query(
+			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at
+			 FROM elbv2_rules WHERE account_id = ? AND listener_arn = ? ORDER BY priority ASC`,
+			accountID, listenerARN,
+		)
+	case len(want) > 0:
+		rows, err = s.db.Query(
+			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at
+			 FROM elbv2_rules WHERE account_id = ? ORDER BY priority ASC`,
+			accountID,
+		)
+	default:
+		return nil, fmt.Errorf("%w: ListenerArn or RuleArns required", ErrELBv2BadRequest)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("describe rules: %w", err)
+	}
+	defer rows.Close()
+	var out []ELBv2Rule
+	for rows.Next() {
+		var (
+			r        ELBv2Rule
+			pathsJSON string
+			hostsJSON string
+		)
+		if err := rows.Scan(&r.RuleARN, &r.ListenerARN, &r.Priority, &pathsJSON, &hostsJSON, &r.TargetGroupARN, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("describe rules scan: %w", err)
+		}
+		_ = json.Unmarshal([]byte(pathsJSON), &r.PathPatterns)
+		if r.PathPatterns == nil {
+			r.PathPatterns = []string{}
+		}
+		_ = json.Unmarshal([]byte(hostsJSON), &r.HostHeaders)
+		if r.HostHeaders == nil {
+			r.HostHeaders = []string{}
+		}
+		if len(want) > 0 {
+			if _, ok := want[r.RuleARN]; !ok {
+				continue
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(want) > 0 && listenerARN == "" && len(out) == 0 {
+		return nil, ErrELBv2RuleNotFound
+	}
+	return out, nil
+}
+
+// DeleteELBv2Rule deletes a non-default rule by ARN.
+func (s *Store) DeleteELBv2Rule(accountID, ruleARN string) error {
+	res, err := s.db.Exec(`DELETE FROM elbv2_rules WHERE account_id = ? AND rule_arn = ?`,
+		accountID, strings.TrimSpace(ruleARN))
+	if err != nil {
+		return fmt.Errorf("delete rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrELBv2RuleNotFound
+	}
+	return nil
+}
+
+// ResolveELBv2ListenerTargetGroup picks a target group for routePath and requestHost:
+// first matching rule by ascending priority, else the listener default TargetGroupArn.
+func (s *Store) ResolveELBv2ListenerTargetGroup(accountID string, listener ELBv2Listener, routePath, requestHost string) (string, error) {
+	rules, err := s.DescribeELBv2Rules(accountID, listener.ListenerARN, nil)
+	if err != nil {
+		return "", err
+	}
+	for _, rule := range rules {
+		if MatchELBv2Rule(rule, routePath, requestHost) {
+			return rule.TargetGroupARN, nil
+		}
+	}
+	return listener.TargetGroupARN, nil
 }

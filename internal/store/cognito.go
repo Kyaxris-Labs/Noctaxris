@@ -518,6 +518,21 @@ func (s *Store) AdminCreateCognitoUser(accountID, poolID, username, password str
 	if err := s.storeUserSRPVerifier(accountID, strings.TrimSpace(poolID), username, password); err != nil {
 		return CognitoUser{}, err
 	}
+	// CustomMessage_AdminCreateUser: lab has no SES; Invoke, render/store body fields for tests.
+	cmPayload, err := s.FireCognitoTriggerEvent(accountID, strings.TrimSpace(poolID), CognitoTriggerCustomMessage, CognitoTriggerEventInput{
+		TriggerSource: "CustomMessage_AdminCreateUser",
+		UserPoolID:    strings.TrimSpace(poolID),
+		Username:      username,
+		UserSub:       sub,
+		UserStatus:    "CONFIRMED",
+		CodeParameter: "{####}",
+	})
+	if err != nil {
+		return CognitoUser{}, err
+	}
+	if err := s.applyCustomMessagePayload(accountID, strings.TrimSpace(poolID), username, "CustomMessage_AdminCreateUser", "{####}", cmPayload); err != nil {
+		return CognitoUser{}, err
+	}
 	return CognitoUser{Username: username, Sub: sub, UserStatus: "CONFIRMED", PoolID: poolID, CreatedAt: now}, nil
 }
 

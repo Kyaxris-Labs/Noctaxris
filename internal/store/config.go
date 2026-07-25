@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -168,7 +169,7 @@ func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) 
 	if err != nil {
 		return
 	}
-	// Honest lab signal: recorder started. No config history PutObject is performed.
+	// Honest lab signal: recorder started (not a full AWS Config history stream claim).
 	msg := fmt.Sprintf(
 		`{"messageType":"ConfigurationRecorderStarted","configurationRecorderName":"%s"}`,
 		recorderName,
@@ -186,10 +187,88 @@ func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) 
 	}
 }
 
-// StartConfigRecorder marks a recorder as recording when a delivery channel exists.
-// No configuration history objects are written to S3 (control-plane flag only).
+// ConfigSnapshotLite is a minimal JSON snapshot written on recorder start (not full AWS Config schema).
+type ConfigSnapshotLite struct {
+	AccountID                 string   `json:"accountId"`
+	ConfigurationRecorderName string   `json:"configurationRecorderName"`
+	SnapshotTimeMillis        int64    `json:"snapshotTimeMillis"`
+	S3BucketNames             []string `json:"s3BucketNames"`
+	SQSQueueNames             []string `json:"sqsQueueNames"`
+}
+
+func normalizeConfigS3KeyPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	prefix = strings.TrimPrefix(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return prefix
+}
+
+// ConfigHistoryObjectKey returns the lab-shaped S3 key for a configuration snapshot object.
+func ConfigHistoryObjectKey(accountID, keyPrefix, recorderName string, snapshotTimeMillis int64) string {
+	prefix := normalizeConfigS3KeyPrefix(keyPrefix)
+	safeRecorder := strings.ReplaceAll(strings.TrimSpace(recorderName), "/", "-")
+	return fmt.Sprintf("%sAWSLogs/%s/Config/noctaxris-config-snapshot-%s-%d.json",
+		prefix, accountID, safeRecorder, snapshotTimeMillis)
+}
+
+func (s *Store) buildConfigSnapshotLite(accountID, recorderName string, capturedAt int64) (ConfigSnapshotLite, error) {
+	buckets, err := s.ListBuckets(accountID)
+	if err != nil {
+		return ConfigSnapshotLite{}, fmt.Errorf("build config snapshot: list buckets: %w", err)
+	}
+	queues, err := s.ListQueues(accountID, "")
+	if err != nil {
+		return ConfigSnapshotLite{}, fmt.Errorf("build config snapshot: list queues: %w", err)
+	}
+	snap := ConfigSnapshotLite{
+		AccountID:                 accountID,
+		ConfigurationRecorderName: recorderName,
+		SnapshotTimeMillis:        capturedAt,
+		S3BucketNames:             make([]string, 0, len(buckets)),
+		SQSQueueNames:             make([]string, 0, len(queues)),
+	}
+	for _, b := range buckets {
+		snap.S3BucketNames = append(snap.S3BucketNames, b.Name)
+	}
+	for _, q := range queues {
+		snap.SQSQueueNames = append(snap.SQSQueueNames, q.QueueName)
+	}
+	return snap, nil
+}
+
+func (s *Store) putConfigHistorySnapshots(accountID, recorderName string, channels []ConfigDeliveryChannel, capturedAt int64) error {
+	snap, err := s.buildConfigSnapshotLite(accountID, recorderName, capturedAt)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(snap)
+	if err != nil {
+		return fmt.Errorf("put config history: marshal snapshot: %w", err)
+	}
+	for _, ch := range channels {
+		key := ConfigHistoryObjectKey(accountID, ch.S3KeyPrefix, recorderName, capturedAt)
+		if _, err := s.PutObject(accountID, ch.S3BucketName, key, PutObjectMeta{
+			Data:        body,
+			PlainSize:   int64(len(body)),
+			ContentType: "application/json",
+		}); err != nil {
+			return fmt.Errorf("put config history: %w", err)
+		}
+	}
+	return nil
+}
+
+// StartConfigRecorder writes a configuration snapshot to each delivery channel S3 bucket, then sets recording=1.
 func (s *Store) StartConfigRecorder(accountID, name string) error {
 	name = strings.TrimSpace(name)
+	if _, err := s.GetConfigRecorder(accountID, name); err != nil {
+		return err
+	}
 	channels, err := s.ListConfigDeliveryChannels(accountID)
 	if err != nil {
 		return fmt.Errorf("start configuration recorder: %w", err)
@@ -204,6 +283,10 @@ func (s *Store) StartConfigRecorder(accountID, name string) error {
 			}
 			return fmt.Errorf("start configuration recorder: get bucket: %w", err)
 		}
+	}
+	capturedAt := time.Now().UTC().UnixMilli()
+	if err := s.putConfigHistorySnapshots(accountID, name, channels, capturedAt); err != nil {
+		return fmt.Errorf("start configuration recorder: %w", err)
 	}
 	res, err := s.db.Exec(
 		`UPDATE config_recorders SET recording = 1 WHERE account_id = ? AND name = ?`,

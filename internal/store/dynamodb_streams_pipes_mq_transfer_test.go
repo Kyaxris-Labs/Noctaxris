@@ -134,29 +134,44 @@ func TestPipesDeliveryDeniedWithoutTargetPolicy(t *testing.T) {
 	}
 }
 
-func TestMQBrokerStubCRUD(t *testing.T) {
+func TestMQBrokerActiveMQNestedCreatePath(t *testing.T) {
 	st := openStreamCStore(t)
 	account := "000000000001"
 	b, err := st.CreateMQBroker(account, "us-east-1", "lab-broker", "ACTIVEMQ", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.BrokerID == "" || b.StubEndpoint == "" || !stringsHasPrefix(b.StubEndpoint, "stub://127.0.0.1/") {
+	if b.BrokerID == "" {
 		t.Fatalf("broker=%+v", b)
 	}
-	if b.BrokerState != store.MQBrokerStateCreationFailed {
-		t.Fatalf("ActiveMQ stub state=%q want CREATION_FAILED (no nested ActiveMQ)", b.BrokerState)
+	// Nested ActiveMQ path: CREATION_IN_PROGRESS until promote/fail (handler fail-closed without DinD).
+	if b.BrokerState != store.MQBrokerStateCreationInProgress {
+		t.Fatalf("ActiveMQ create state=%q want CREATION_IN_PROGRESS", b.BrokerState)
+	}
+	if stringsHasPrefix(b.StubEndpoint, "stub://") {
+		t.Fatalf("creating ActiveMQ must use nested amqp endpoint, got %q", b.StubEndpoint)
+	}
+	wantEP := store.MQNestedAMQPEndpoint(b.BrokerID)
+	if b.StubEndpoint != wantEP {
+		t.Fatalf("endpoint=%q want %q", b.StubEndpoint, wantEP)
 	}
 	got, err := st.DescribeMQBroker(account, b.BrokerID)
 	if err != nil || got.BrokerName != "lab-broker" {
 		t.Fatalf("describe=%+v err=%v", got, err)
 	}
-	if got.BrokerState != store.MQBrokerStateCreationFailed {
-		t.Fatalf("describe state=%q want CREATION_FAILED", got.BrokerState)
+	if got.BrokerState != store.MQBrokerStateCreationInProgress {
+		t.Fatalf("describe state=%q want CREATION_IN_PROGRESS", got.BrokerState)
 	}
 	list, err := st.ListMQBrokers(account)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list=%v err=%v", list, err)
+	}
+	if err := st.SetMQContainerID(account, b.BrokerID, "ctr-amq", store.MQBrokerStateRunning, "amqp://noctaxris-mq-x:5672"); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := st.DescribeMQBroker(account, b.BrokerID)
+	if err != nil || ready.BrokerState != store.MQBrokerStateRunning || ready.ContainerID != "ctr-amq" {
+		t.Fatalf("ready=%+v err=%v", ready, err)
 	}
 	if _, err := st.DeleteMQBroker(account, b.BrokerID); err != nil {
 		t.Fatal(err)
@@ -208,8 +223,8 @@ func TestTransferServerUserSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sv.EndpointType != "" || sv.State != "OFFLINE" {
-		t.Fatalf("want empty EndpointType/OFFLINE without listener, got EndpointType=%q State=%q", sv.EndpointType, sv.State)
+	if sv.EndpointType != "" || sv.State != "ONLINE" {
+		t.Fatalf("want empty EndpointType/ONLINE, got EndpointType=%q State=%q", sv.EndpointType, sv.State)
 	}
 	u, err := st.CreateTransferUser(account, sv.ServerID, "alice", "/alice", "")
 	if err != nil || u.UserName != "alice" {

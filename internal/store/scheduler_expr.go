@@ -11,7 +11,7 @@ import (
 var (
 	rateExprRe = regexp.MustCompile(`(?i)^rate\(\s*(\d+)\s+(minute|minutes|hour|hours|day|days)\s*\)$`)
 	// Lab cron subset: cron(minutes hours day-of-month month day-of-week year)
-	// Supports digits, *, ?, lists, ranges, steps, L, #, and month/DOW names.
+	// Supports digits, *, ?, lists, ranges, steps, L, nW, LW, #, and month/DOW names.
 	cronExprRe = regexp.MustCompile(`(?i)^cron\(\s*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*\)$`)
 	atExprRe   = regexp.MustCompile(`(?i)^at\(\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\)$`)
 )
@@ -135,8 +135,23 @@ func validateCronDOMField(field string) error {
 	if field == "" {
 		return fmt.Errorf("unsupported token %q", field)
 	}
-	for _, part := range strings.Split(field, ",") {
+	parts := strings.Split(field, ",")
+	for _, part := range parts {
 		seg := strings.TrimSpace(part)
+		if isCronNearestWeekdaySegment(seg) || isCronLastWeekdayOfMonthSegment(seg) {
+			// W / LW apply to a single DOM token only (not lists or ranges).
+			if len(parts) > 1 {
+				return fmt.Errorf("unsupported token %q", field)
+			}
+			if isCronLastWeekdayOfMonthSegment(seg) {
+				continue
+			}
+			day, ok := parseCronNearestWeekdayDay(seg)
+			if !ok || day < 1 || day > 31 {
+				return fmt.Errorf("unsupported token %q", seg)
+			}
+			continue
+		}
 		if strings.EqualFold(seg, "L") {
 			continue
 		}
@@ -145,6 +160,38 @@ func validateCronDOMField(field string) error {
 		}
 	}
 	return nil
+}
+
+func isCronLastWeekdayOfMonthSegment(seg string) bool {
+	return strings.EqualFold(strings.TrimSpace(seg), "LW")
+}
+
+func isCronNearestWeekdaySegment(seg string) bool {
+	seg = strings.TrimSpace(seg)
+	if len(seg) < 2 {
+		return false
+	}
+	if !strings.EqualFold(seg[len(seg)-1:], "W") {
+		return false
+	}
+	base := seg[:len(seg)-1]
+	if base == "" || strings.ContainsAny(base, "-*/,?#") {
+		return false
+	}
+	_, err := strconv.Atoi(base)
+	return err == nil
+}
+
+func parseCronNearestWeekdayDay(seg string) (int, bool) {
+	seg = strings.TrimSpace(seg)
+	if !isCronNearestWeekdaySegment(seg) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(seg[:len(seg)-1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func validateCronDOWField(field string) error {
@@ -406,6 +453,20 @@ func cronDOMMatches(dom string, t time.Time) bool {
 	}
 	for _, part := range strings.Split(dom, ",") {
 		seg := strings.TrimSpace(part)
+		if isCronLastWeekdayOfMonthSegment(seg) {
+			lw := lastWeekdayOfMonth(t)
+			if t.Year() == lw.Year() && t.Month() == lw.Month() && t.Day() == lw.Day() {
+				return true
+			}
+			continue
+		}
+		if day, ok := parseCronNearestWeekdayDay(seg); ok {
+			nw := nearestWeekdayOfMonth(t.Year(), int(t.Month()), day)
+			if t.Year() == nw.Year() && t.Month() == nw.Month() && t.Day() == nw.Day() {
+				return true
+			}
+			continue
+		}
 		if strings.EqualFold(seg, "L") {
 			if t.Day() == lastDayOfMonth(t) {
 				return true
@@ -417,6 +478,45 @@ func cronDOMMatches(dom string, t time.Time) bool {
 		}
 	}
 	return false
+}
+
+// nearestWeekdayOfMonth returns the weekday (Mon–Fri) closest to day in the
+// given month. Saturday maps to Friday and Sunday to Monday, without crossing
+// the month boundary (e.g. 1W when the 1st is Saturday → Monday the 3rd).
+func nearestWeekdayOfMonth(year, month, day int) time.Time {
+	last := lastDayOfMonth(time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC))
+	if day > last {
+		day = last
+	}
+	if day < 1 {
+		day = 1
+	}
+	d := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	switch d.Weekday() {
+	case time.Saturday:
+		prev := d.AddDate(0, 0, -1)
+		if prev.Month() != d.Month() {
+			return d.AddDate(0, 0, 2) // e.g. 1W on Saturday → Monday the 3rd
+		}
+		return prev
+	case time.Sunday:
+		next := d.AddDate(0, 0, 1)
+		if next.Month() != d.Month() {
+			return d.AddDate(0, 0, -2) // Friday stays in-month
+		}
+		return next
+	default:
+		return d
+	}
+}
+
+// lastWeekdayOfMonth returns the last Monday–Friday date in t's month.
+func lastWeekdayOfMonth(t time.Time) time.Time {
+	d := time.Date(t.Year(), t.Month(), lastDayOfMonth(t), 0, 0, 0, 0, time.UTC)
+	for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d
 }
 
 func cronDOWMatches(dow string, t time.Time) bool {

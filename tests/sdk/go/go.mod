@@ -30,13 +30,23 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.31 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.34 // indirect
+	github.com/aws/aws-sdk-go-v2/service/appconfig v1.48.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/appsync v1.56.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.58.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/configservice v1.68.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/firehose v1.46.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/glue v1.149.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.7.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.10.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.15 // indirect
+	github.com/aws/aws-sdk-go-v2/service/mq v1.39.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/opensearch v1.75.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sfn v1.45.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.25.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.30.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/transfer v1.75.0 // indirect
 	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 )

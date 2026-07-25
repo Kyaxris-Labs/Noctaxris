@@ -11,10 +11,20 @@ Standard state machines with a small ASL subset. Executions run synchronously in
 | State machines | `CreateStateMachine`, `DeleteStateMachine`, `DescribeStateMachine`, `ListStateMachines` |
 | Executions | `StartExecution`, `DescribeExecution`, `GetExecutionHistory` |
 | Resource policy | Lab `PutResourcePolicy` / `GetResourcePolicy` / `DeleteResourcePolicy` on the state machine (for EventBridge RoleArn-less delivery; empty policy denies) |
-| ASL subset | `Pass`, `Succeed`, `Fail`, `Task` |
+| ASL subset | `Pass`, `Succeed`, `Fail`, `Task`, `Choice`, `Wait`, `Parallel` |
 | Task resources | Lambda (sync Invoke), SQS SendMessage, SNS Publish, EventBridge bus ARN (PutEvents) |
 
 Lambda Task states call the same Invoke path as `lambda:InvokeFunction` after the state machine role (or `states.amazonaws.com` resource policy) Allows Invoke. Without nested compute (`DockerHost` empty), Lambda Task fails with `States.TaskFailed` / compute unavailable. SQS/SNS/EventBridge Tasks do not need Docker and resolve foreign SQS queue accounts from the Task ARN. EventBridge can target a state machine ARN with `RoleArn` or (lab) resource policy for StartExecution.
+
+### ASL notes
+
+| State | Lab behavior |
+|-------|----------------|
+| `Choice` | `Choices[]` with `Variable` + one of `StringEquals` / `NumericEquals` / `BooleanEquals` + `Next`; optional `Default`. `Variable` is top-level JSONPath only (`$.field`). Unknown operators rejected at create. |
+| `Wait` | `Seconds` (int) or `SecondsPath` (`$.field` top-level). Sleep is clamped to **0–5 seconds** inclusive for sync lab executions (AWS allows much larger waits). No `Timestamp` in this lite. |
+| `Parallel` | `Branches[]` each `{ StartAt, States }`. Branches run **sequentially in-process** (not true concurrency); outputs merge into a JSON array; any branch `FAILED` fails the Parallel state. |
+
+History uses lite names consistent with other states: `ChoiceStateEntered` / `ChoiceStateExited`, `WaitStateEntered` / `WaitStateExited`, `ParallelStateEntered` / `ParallelStateExited`.
 
 ### Authz notes
 
@@ -45,9 +55,25 @@ aws stepfunctions delete-state-machine --state-machine-arn "$SM" --endpoint-url 
 
 Task to Lambda needs Compose DinD for a successful Invoke. Without Docker, expect FAILED status with compute unavailable in the cause.
 
+Choice / Wait / Parallel example:
+
+```bash
+# Choice (Equals-only)
+DEF='{"StartAt":"Pick","States":{"Pick":{"Type":"Choice","Choices":[{"Variable":"$.color","StringEquals":"red","Next":"Red"}],"Default":"Other"},"Red":{"Type":"Pass","Result":{"branch":"red"},"End":true},"Other":{"Type":"Pass","Result":{"branch":"other"},"End":true}}}'
+
+# Wait Seconds clamped to 0–5 inclusive (larger values sleep 5s)
+# DEF='{"StartAt":"Pause","States":{"Pause":{"Type":"Wait","Seconds":2,"Next":"Done"},"Done":{"Type":"Succeed"}}}'
+
+# Parallel branches run sequentially in-process; output is a JSON array
+# DEF='{"StartAt":"Fan","States":{"Fan":{"Type":"Parallel","Branches":[{"StartAt":"A","States":{"A":{"Type":"Pass","Result":1,"End":true}}},{"StartAt":"B","States":{"B":{"Type":"Pass","Result":2,"End":true}}}],"End":true}}}'
+```
+
 ## Not yet / deferred
 
-- Choice, Wait, Parallel, Map, Callback / activity patterns
+- Map, Callback / activity patterns
 - Express workflows, Map distributed mode
+- `Timestamp` Wait; nested JSONPath beyond top-level `$.field`
+- True concurrent Parallel branches (lab runs branches sequentially)
+- Non-Equals Choice operators (`StringGreaterThan`, `IsPresent`, And/Or/Not, etc.)
 - InputPath / ResultPath / OutputPath depth beyond Pass Result
 - EventBridge→SFN Lambda Tasks without a wired sync invoker

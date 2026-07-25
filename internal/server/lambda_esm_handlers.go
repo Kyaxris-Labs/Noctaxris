@@ -142,9 +142,14 @@ func (s *Server) lambdaCreateEventSourceMapping(
 			"Function not found.", readOnly, eventID, verified)
 		return
 	}
+	if errors.Is(err, store.ErrESMMQBrokerNotReady) {
+		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrNoSuchQueue) || errors.Is(err, store.ErrInvalidEventSourceARN) ||
 		errors.Is(err, store.ErrInvalidESMBatchSize) || errors.Is(err, store.ErrESMSourceAuthz) ||
-		errors.Is(err, store.ErrInvalidESMFilterCriteria) {
+		errors.Is(err, store.ErrInvalidESMFilterCriteria) || errors.Is(err, store.ErrESMMQHostNotAllowed) {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
 			err.Error(), readOnly, eventID, verified)
 		return

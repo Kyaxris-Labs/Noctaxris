@@ -202,7 +202,12 @@ func (s *Server) r53ListRRSets(
 			"Unable to list resource record sets.", readOnly, eventID, verified)
 		return
 	}
-	payload, _ := r53svc.ListResourceRecordSetsJSON(sets)
+	payload, err := listRoute53ResourceRecordSetsJSON(sets)
+	if err != nil {
+		s.writeRoute53Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to encode resource record sets.", readOnly, eventID, verified)
+		return
+	}
 	s.writeRoute53OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, route53EventSource, "ListResourceRecordSets", readOnly)
 }
@@ -235,11 +240,49 @@ func parseRoute53Changes(params map[string]any) []store.Route53Change {
 				}
 			}
 		}
+		var alias *store.Route53AliasTarget
+		if at, ok := rrset["AliasTarget"].(map[string]any); ok {
+			dns, _ := at["DNSName"].(string)
+			hz, _ := at["HostedZoneId"].(string)
+			eth, _ := at["EvaluateTargetHealth"].(bool)
+			alias = &store.Route53AliasTarget{
+				DNSName:              dns,
+				HostedZoneId:         hz,
+				EvaluateTargetHealth: eth,
+			}
+		}
 		out = append(out, store.Route53Change{
-			Action: action, Name: name, Type: rtype, TTL: ttl, Records: records,
+			Action: action, Name: name, Type: rtype, TTL: ttl, Records: records, AliasTarget: alias,
 		})
 	}
 	return out
+}
+
+// listRoute53ResourceRecordSetsJSON encodes ListResourceRecordSets with AliasTarget when set.
+func listRoute53ResourceRecordSetsJSON(sets []store.Route53ResourceRecordSet) ([]byte, error) {
+	items := make([]map[string]any, 0, len(sets))
+	for _, rs := range sets {
+		item := map[string]any{
+			"Name": rs.Name,
+			"Type": rs.Type,
+		}
+		if rs.AliasTarget != nil {
+			item["AliasTarget"] = map[string]any{
+				"DNSName":              rs.AliasTarget.DNSName,
+				"HostedZoneId":         rs.AliasTarget.HostedZoneId,
+				"EvaluateTargetHealth": rs.AliasTarget.EvaluateTargetHealth,
+			}
+		} else {
+			recs := make([]map[string]any, 0, len(rs.Records))
+			for _, v := range rs.Records {
+				recs = append(recs, map[string]any{"Value": v})
+			}
+			item["TTL"] = rs.TTL
+			item["ResourceRecords"] = recs
+		}
+		items = append(items, item)
+	}
+	return json.Marshal(map[string]any{"ResourceRecordSets": items})
 }
 
 func (s *Server) writeRoute53OK(w http.ResponseWriter, payload []byte) {

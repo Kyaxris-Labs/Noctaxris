@@ -35,7 +35,7 @@ var (
 	// ErrNoSuchEventSourceMapping is returned when a mapping UUID is unknown.
 	ErrNoSuchEventSourceMapping = errors.New("ResourceNotFoundException")
 	// ErrInvalidEventSourceARN is returned for unsupported or malformed ARNs.
-	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN, DynamoDB stream ARN, or Kinesis stream ARN")
+	ErrInvalidEventSourceARN = errors.New("InvalidParameterValueException: EventSourceArn must be an SQS queue ARN, DynamoDB stream ARN, Kinesis stream ARN, or Amazon MQ broker ARN")
 	// ErrInvalidESMBatchSize is returned when BatchSize is out of lab range.
 	ErrInvalidESMBatchSize = errors.New("InvalidParameterValueException: BatchSize out of range")
 	// ErrESMSourceAuthz is returned when the function role (or source resource policy) cannot access the event source.
@@ -276,6 +276,9 @@ func (s *Store) validateEventSourceARN(accountID, arn string) error {
 		}
 		return nil
 	}
+	if isMQEventSourceARN(arn) {
+		return s.validateMQEventSourceARN(accountID, arn)
+	}
 	queueAccount, queueName, err := validateSQSEventSourceARN(arn)
 	if err != nil {
 		return err
@@ -289,7 +292,7 @@ func (s *Store) validateEventSourceARN(accountID, arn string) error {
 	return nil
 }
 
-// CreateEventSourceMapping inserts an SQS→Lambda, DynamoDB Streams→Lambda, or Kinesis→Lambda mapping.
+// CreateEventSourceMapping inserts an SQS→Lambda, DynamoDB Streams→Lambda, Kinesis→Lambda, or Amazon MQ→Lambda mapping.
 func (s *Store) CreateEventSourceMapping(in CreateEventSourceMappingInput) (LambdaEventSourceMapping, error) {
 	fnName, qualifier := ParseFunctionQualifier(strings.TrimSpace(in.FunctionName))
 	if err := ValidateFunctionName(fnName); err != nil {
@@ -555,6 +558,9 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionKinesisGetRecords, eventSourceARN, session, DefaultLambdaRegion, sourceARN) &&
 			s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionKinesisGetShardIterator, eventSourceARN, session, DefaultLambdaRegion, sourceARN)
 	}
+	if isMQEventSourceARN(eventSourceARN) {
+		return s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionMQDescribeBroker, eventSourceARN, session, DefaultLambdaRegion, sourceARN)
+	}
 	if s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSReceiveMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) &&
 		s.deliveryRoleSessionAllows(fn.AccountID, fn.RoleARN, actionSQSDeleteMessage, eventSourceARN, session, DefaultLambdaRegion, sourceARN) {
 		return true
@@ -563,11 +569,12 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 		s.deliveryTargetResourcePolicyAllows(fn.AccountID, eventSourceARN, actionSQSDeleteMessage, authz.ServicePrincipalLambda, sourceARN)
 }
 
-// PollEventSourceMappingOnce receives up to BatchSize records from SQS, DynamoDB Streams, or Kinesis,
+// PollEventSourceMappingOnce receives up to BatchSize records from SQS, DynamoDB Streams, Kinesis, or Amazon MQ,
 // invokes the callback synchronously with the Lambda event JSON, and advances the source on success.
 // On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB/Kinesis cursor is not advanced.
 // With FunctionResponseTypes ReportBatchItemFailures, only non-failed SQS messages are deleted;
 // DynamoDB/Kinesis cursor advances only when batchItemFailures is empty.
+// MQ lab lite: injectable MQReceiveFunc or allowlisted nested-host dial; ack is implicit on successful Invoke.
 func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeFunc) error {
 	row := s.db.QueryRow(
 		`SELECT `+lambdaESMSelectCols+`
@@ -597,6 +604,9 @@ func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeF
 	}
 	if isKinesisEventSourceARN(m.EventSourceARN) {
 		return s.pollKinesisEventSourceMappingOnce(m, invoke)
+	}
+	if isMQEventSourceARN(m.EventSourceARN) {
+		return s.pollMQEventSourceMappingOnce(m, invoke)
 	}
 	queueName, err := queueNameFromARN(m.EventSourceARN)
 	if err != nil {

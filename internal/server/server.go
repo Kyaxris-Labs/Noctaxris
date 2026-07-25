@@ -258,6 +258,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		verified.SourceIP = clientIP(r)
 	}
 
+	// Lab facades on :4566 after SigV4 (account-scoped; no anonymous edge/query/file paths).
+	if isCloudFrontEdgePath(r.URL.Path) {
+		s.handleCloudFrontEdgeAfterAuth(w, r, body, requestID, eventID, verified, readOnly)
+		return
+	}
+	if isOpenSearchLabQueryPath(r.URL.Path) {
+		s.handleOpenSearchLabQuery(w, r, body, requestID, eventID, verified, readOnly)
+		return
+	}
+	if IsTransferLabHomePath(r.URL.Path) {
+		s.handleTransferLabHome(w, r, body, requestID, eventID, verified, readOnly)
+		return
+	}
+
 	if action == "" && (strings.EqualFold(verified.Service, "lambda") || isLambdaRESTPath(r.URL.Path)) {
 		restAction, body2 := resolveLambdaREST(r, body)
 		if restAction != "" {
@@ -373,6 +387,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.EqualFold(verified.Service, "transfer") || strings.HasPrefix(action, "transfer:") {
 		s.handleTransfer(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "glue") || strings.HasPrefix(action, "glue:") {
+		s.handleGlue(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "appconfig") || strings.EqualFold(verified.Service, "appconfigdata") ||
+		strings.HasPrefix(action, "appconfig:") || strings.HasPrefix(action, "appconfigdata:") {
+		s.handleAppConfig(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -776,7 +801,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionECSDescribeServices, "DescribeServices",
 		catalog.ActionECSListServices, "ListServices":
 		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
-	case catalog.ActionCloudTrailLookupEvents, "LookupEvents":
+	case catalog.ActionCloudTrailLookupEvents, "LookupEvents",
+		catalog.ActionCloudTrailCreateTrail, "CreateTrail",
+		catalog.ActionCloudTrailDescribeTrails, "DescribeTrails",
+		catalog.ActionCloudTrailDeleteTrail, "DeleteTrail",
+		catalog.ActionCloudTrailStartLogging, "StartLogging",
+		catalog.ActionCloudTrailStopLogging, "StopLogging":
 		s.handleCloudTrail(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLogsCreateLogGroup, "CreateLogGroup",
 		catalog.ActionLogsCreateLogStream, "CreateLogStream",
@@ -1037,7 +1067,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionELBv2DescribeListeners,
 		catalog.ActionELBv2DeleteListener,
 		catalog.ActionELBv2RegisterTargets,
-		catalog.ActionELBv2DescribeTargetHealth:
+		catalog.ActionELBv2DescribeTargetHealth,
+		catalog.ActionELBv2CreateRule,
+		catalog.ActionELBv2DescribeRules,
+		catalog.ActionELBv2DeleteRule:
 		s.handleELBv2(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionS3VectorsCreateVectorBucket,
 		catalog.ActionS3VectorsListVectorBuckets,

@@ -18,6 +18,8 @@ var (
 	ErrTransferUserExists     = errors.New("ResourceExistsException")
 	ErrTransferUserNotFound   = errors.New("ResourceNotFoundException")
 	ErrTransferBadRequest     = errors.New("InvalidRequestException")
+	ErrTransferPathEscape     = errors.New("InvalidRequestException: path escapes home directory")
+	ErrTransferPathNotFound   = errors.New("ResourceNotFoundException")
 )
 
 const DefaultTransferRegion = "us-east-1"
@@ -65,6 +67,13 @@ type TransferUser struct {
 	CreatedAt     int64
 }
 
+// TransferDirEntry is one name in a lab home directory listing.
+type TransferDirEntry struct {
+	Name  string
+	IsDir bool
+	Size  int64
+}
+
 // EnsureTransferSchema creates Transfer Family tables if missing.
 func EnsureTransferSchema(db *sql.DB) error {
 	if db == nil {
@@ -109,7 +118,7 @@ func (s *Store) CreateTransferServer(accountID, region string, protocols []strin
 	_, err := s.db.Exec(
 		`INSERT INTO transfer_servers
 		 (account_id, server_id, server_arn, protocols, endpoint_type, state, identity_provider_type, created_at)
-		VALUES (?, ?, ?, 'SFTP', '', 'OFFLINE', 'SERVICE_MANAGED', ?)`,
+		VALUES (?, ?, ?, 'SFTP', '', 'ONLINE', 'SERVICE_MANAGED', ?)`,
 		accountID, id, arn, now,
 	)
 	if err != nil {
@@ -117,7 +126,7 @@ func (s *Store) CreateTransferServer(accountID, region string, protocols []strin
 	}
 	return TransferServer{
 		ServerID: id, ServerARN: arn, Protocols: "SFTP",
-		EndpointType: "", State: "OFFLINE", IdentityProviderType: "SERVICE_MANAGED", CreatedAt: now,
+		EndpointType: "", State: "ONLINE", IdentityProviderType: "SERVICE_MANAGED", CreatedAt: now,
 	}, nil
 }
 
@@ -255,4 +264,137 @@ func (s *Store) TransferUserHomePath(accountID, serverID, userName string) (stri
 		return "", fmt.Errorf("transfer user home: %w", err)
 	}
 	return s.transferHomeRoot(accountID, serverID, userName), nil
+}
+
+func (s *Store) transferRequireOnlineServer(accountID, serverID string) error {
+	sv, err := s.DescribeTransferServer(accountID, serverID)
+	if err != nil {
+		return err
+	}
+	if sv.State != "ONLINE" {
+		return fmt.Errorf("%w: server is not ONLINE", ErrTransferBadRequest)
+	}
+	return nil
+}
+
+// TransferResolveUserFile maps a relative path under the user sandbox home to an absolute path.
+func (s *Store) TransferResolveUserFile(accountID, serverID, userName, relativePath string) (string, error) {
+	if err := s.transferRequireOnlineServer(accountID, serverID); err != nil {
+		return "", err
+	}
+	home, err := s.TransferUserHomePath(accountID, serverID, userName)
+	if err != nil {
+		return "", err
+	}
+	return transferPathUnderHome(home, relativePath)
+}
+
+func transferPathUnderHome(homeRoot, relativePath string) (string, error) {
+	homeRoot = filepath.Clean(homeRoot)
+	rel := strings.TrimSpace(relativePath)
+	rel = strings.TrimPrefix(filepath.ToSlash(rel), "/")
+	rel = filepath.FromSlash(rel)
+	if rel == "" || rel == "." {
+		return homeRoot, nil
+	}
+	rel = filepath.Clean(rel)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", ErrTransferPathEscape
+	}
+	abs := filepath.Clean(filepath.Join(homeRoot, rel))
+	if err := ensurePathWithinTransferHome(homeRoot, abs); err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func ensurePathWithinTransferHome(homeRoot, absPath string) error {
+	homeRoot = filepath.Clean(homeRoot)
+	absPath = filepath.Clean(absPath)
+	rel, err := filepath.Rel(homeRoot, absPath)
+	if err != nil {
+		return ErrTransferPathEscape
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ErrTransferPathEscape
+	}
+	return nil
+}
+
+// TransferPutFile writes content at a path relative to the user home (lab API, not SFTP).
+func (s *Store) TransferPutFile(accountID, serverID, userName, relativePath string, content []byte) error {
+	abs, err := s.TransferResolveUserFile(accountID, serverID, userName, relativePath)
+	if err != nil {
+		return err
+	}
+	home, err := s.TransferUserHomePath(accountID, serverID, userName)
+	if err != nil {
+		return err
+	}
+	if abs == filepath.Clean(home) {
+		return fmt.Errorf("%w: path must name a file", ErrTransferBadRequest)
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+		return fmt.Errorf("transfer put file: mkdir: %w", err)
+	}
+	if err := os.WriteFile(abs, content, 0o640); err != nil {
+		return fmt.Errorf("transfer put file: %w", err)
+	}
+	return nil
+}
+
+// TransferGetFile reads a file relative to the user home.
+func (s *Store) TransferGetFile(accountID, serverID, userName, relativePath string) ([]byte, error) {
+	abs, err := s.TransferResolveUserFile(accountID, serverID, userName, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	home, err := s.TransferUserHomePath(accountID, serverID, userName)
+	if err != nil {
+		return nil, err
+	}
+	if abs == filepath.Clean(home) {
+		return nil, fmt.Errorf("%w: path is a directory", ErrTransferBadRequest)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrTransferPathNotFound
+		}
+		return nil, fmt.Errorf("transfer get file: %w", err)
+	}
+	return data, nil
+}
+
+// TransferListDirectory lists entries under a relative directory path (empty or "/" is home root).
+func (s *Store) TransferListDirectory(accountID, serverID, userName, relativePath string) ([]TransferDirEntry, error) {
+	abs, err := s.TransferResolveUserFile(accountID, serverID, userName, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrTransferPathNotFound
+		}
+		return nil, fmt.Errorf("transfer list directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%w: path is not a directory", ErrTransferBadRequest)
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return nil, fmt.Errorf("transfer list directory: %w", err)
+	}
+	out := make([]TransferDirEntry, 0, len(entries))
+	for _, e := range entries {
+		ent := TransferDirEntry{Name: e.Name(), IsDir: e.IsDir()}
+		if !e.IsDir() {
+			if fi, err := e.Info(); err == nil {
+				ent.Size = fi.Size()
+			}
+		}
+		out = append(out, ent)
+	}
+	return out, nil
 }

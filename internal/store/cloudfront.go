@@ -19,8 +19,11 @@ var (
 
 const DefaultCloudFrontRegion = "us-east-1"
 
-// CloudFrontStatusInProgress is the control-plane stub status until a fake-edge path exists.
+// CloudFrontStatusInProgress is retained for older rows; new creates use Deployed.
 const CloudFrontStatusInProgress = "InProgress"
+
+// CloudFrontStatusDeployed is the lab status once a fake-edge DomainName is assigned.
+const CloudFrontStatusDeployed = "Deployed"
 
 const cloudfrontSchema = `
 CREATE TABLE IF NOT EXISTS cloudfront_distributions (
@@ -123,8 +126,9 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}
 	id := "E" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:13])
 	arn := CloudFrontDistributionARN(accountID, id)
-	// No fake-edge listener yet: omit DomainName and keep Status InProgress (not Deployed).
-	domain := ""
+	// Lab fake-edge host string only (no DNS / WAN PoP). Path fetch is /cloudfront/{id}/...
+	domain := fmt.Sprintf("d%s.cloudfront.noctaxris.local", strings.ToLower(id))
+	status := CloudFrontStatusDeployed
 	now := time.Now().UTC().UnixMilli()
 	enabledInt := 0
 	if enabled {
@@ -134,7 +138,7 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 		`INSERT INTO cloudfront_distributions
 		 (account_id, id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), callerReference, CloudFrontStatusInProgress, now,
+		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), callerReference, status, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -144,7 +148,7 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}
 	return CloudFrontDistribution{
 		ID: id, ARN: arn, DomainName: domain, Comment: comment, Enabled: enabled,
-		OriginsJSON: string(originsJSON), CallerReference: callerReference, Status: CloudFrontStatusInProgress, CreatedAt: now,
+		OriginsJSON: string(originsJSON), CallerReference: callerReference, Status: status, CreatedAt: now,
 	}, nil
 }
 

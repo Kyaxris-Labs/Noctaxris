@@ -98,6 +98,7 @@ Failures on assertions happen only when the endpoint is up.
 
 - CloudFormation lab subset: JSON or YAML; ChangeSet lite; nested stacks (lab S3 TemplateURL); drift lite; resources toward lab-fullstack (S3, IAM Role, SQS(+QueuePolicy), DynamoDB, Lambda ZipFile, KMS, SNS, Events, SSM, Secrets, nested Stack); DependsOn + `Ref`/`Fn::GetAtt`/`Fn::Sub`/`Fn::Join`. Unknown types/props fail closed.
 - Default Lambda SDK tests cover Create/Get/List/Delete. Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
+- Edge / data / workflow / nested SDK rows (CloudFront edge, Transfer files, Glue crawler, AppConfig deploy, Config history, SFN Choice, CloudTrail delivery, Route53 Alias, ELBv2 rules, AppSync PassRole) run whenever the API is up. Nested OpenSearch / ActiveMQ / Firehose OpenSearch / Lambda MQ ESM rows skip when engines are not Active/RUNNING.
 - Terraform needs the Terraform binary on `PATH`. The runner skips when it is missing.
 - Prefer WSL or Linux for AWS CLI and Terraform against `127.0.0.1:4566` when Docker Desktop publishes that port on the Windows host.
 

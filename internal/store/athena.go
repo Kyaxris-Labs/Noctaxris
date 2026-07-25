@@ -75,7 +75,11 @@ type AthenaStartInput struct {
 	OutputLocation string
 }
 
-var athenaSelectRE = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+?)\s+FROM\s+([^\s;]+)\s*(?:LIMIT\s+(\d+))?\s*;?\s*$`)
+var (
+	athenaSelectRE = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+?)\s+FROM\s+([^\s;]+)\s*(.*?)\s*;?\s*$`)
+	athenaWhereRE  = regexp.MustCompile(`(?is)^WHERE\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
+	athenaLimitRE  = regexp.MustCompile(`(?is)^LIMIT\s+(\d+)\s*(.*)$`)
+)
 
 // EnsureAthenaSchema creates Athena tables if missing.
 func EnsureAthenaSchema(db *sql.DB) error {
@@ -199,23 +203,30 @@ func (s *Store) StartAthenaQueryExecution(accountID string, in AthenaStartInput)
 }
 
 type athenaParsedSelect struct {
-	Columns  []string // empty or ["*"] means all
-	Database string
-	Table    string
-	Limit    int // 0 = no limit
+	Columns     []string // empty or ["*"] means all
+	Database    string
+	Table       string
+	Limit       int // 0 = no limit
+	WhereColumn string
+	WhereValue  string
+	CountStar   bool
 }
 
 func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 	m := athenaSelectRE.FindStringSubmatch(q)
 	if m == nil {
-		return athenaParsedSelect{}, fmt.Errorf("%w: unsupported SQL (lab supports SELECT cols FROM db.table [LIMIT n])", ErrAthenaBadRequest)
+		return athenaParsedSelect{}, fmt.Errorf("%w: unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [WHERE col = 'literal'] [LIMIT n])", ErrAthenaBadRequest)
 	}
 	colPart := strings.TrimSpace(m[1])
 	fromPart := strings.TrimSpace(m[2])
-	limitPart := strings.TrimSpace(m[3])
+	suffix := strings.TrimSpace(m[3])
 
 	var cols []string
-	if colPart == "*" {
+	countStar := false
+	colNorm := strings.ReplaceAll(strings.ToLower(colPart), " ", "")
+	if colNorm == "count(*)" {
+		countStar = true
+	} else if colPart == "*" {
 		cols = []string{"*"}
 	} else {
 		for _, c := range strings.Split(colPart, ",") {
@@ -245,20 +256,60 @@ func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 		return athenaParsedSelect{}, fmt.Errorf("%w: table name required", ErrAthenaBadRequest)
 	}
 
-	out := athenaParsedSelect{Columns: cols, Database: dbName, Table: table}
-	if limitPart != "" {
-		n, err := strconv.Atoi(limitPart)
-		if err != nil || n < 0 {
-			return athenaParsedSelect{}, fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
-		}
-		out.Limit = n
+	whereCol, whereVal, limit, err := parseAthenaSelectSuffix(suffix)
+	if err != nil {
+		return athenaParsedSelect{}, err
+	}
+
+	out := athenaParsedSelect{
+		Columns:     cols,
+		Database:    dbName,
+		Table:       table,
+		Limit:       limit,
+		WhereColumn: whereCol,
+		WhereValue:  whereVal,
+		CountStar:   countStar,
 	}
 	return out, nil
 }
 
+func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, err error) {
+	s = strings.TrimSpace(s)
+	for s != "" {
+		upper := strings.ToUpper(s)
+		switch {
+		case strings.HasPrefix(upper, "WHERE "):
+			m := athenaWhereRE.FindStringSubmatch(s)
+			if m == nil {
+				return "", "", 0, fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal')", ErrAthenaBadRequest)
+			}
+			whereCol = strings.TrimSpace(m[1])
+			whereVal = m[2]
+			s = strings.TrimSpace(m[3])
+		case strings.HasPrefix(upper, "LIMIT "):
+			m := athenaLimitRE.FindStringSubmatch(s)
+			if m == nil {
+				return "", "", 0, fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+			}
+			n, convErr := strconv.Atoi(m[1])
+			if convErr != nil || n < 0 {
+				return "", "", 0, fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+			}
+			limit = n
+			s = strings.TrimSpace(m[2])
+		default:
+			return "", "", 0, fmt.Errorf("%w: unsupported SQL clause", ErrAthenaBadRequest)
+		}
+	}
+	return whereCol, whereVal, limit, nil
+}
+
 func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed athenaParsedSelect) ([]AthenaColumnInfo, [][]string, error) {
+	loadCols := table.Columns
 	selected := table.Columns
-	if len(parsed.Columns) > 0 && parsed.Columns[0] != "*" {
+	if parsed.CountStar {
+		selected = nil
+	} else if len(parsed.Columns) > 0 && parsed.Columns[0] != "*" {
 		byName := map[string]GlueColumn{}
 		for _, c := range table.Columns {
 			byName[strings.ToLower(c.Name)] = c
@@ -271,14 +322,6 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 			}
 			selected = append(selected, c)
 		}
-	}
-	colInfos := make([]AthenaColumnInfo, 0, len(selected))
-	for _, c := range selected {
-		typ := c.Type
-		if typ == "" {
-			typ = "varchar"
-		}
-		colInfos = append(colInfos, AthenaColumnInfo{Name: c.Name, Type: typ})
 	}
 
 	bucket, prefix, err := parseS3Location(table.StorageLocation)
@@ -295,30 +338,54 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 
 	jsonMode := isGlueJSON(table)
 	var dataRows [][]string
+	earlyLimit := parsed.Limit > 0 && parsed.WhereColumn == "" && !parsed.CountStar
 	for _, obj := range listed.Contents {
 		_, data, err := s.GetObject(accountID, bucket, obj.Key)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: GetObject failed for s3://%s/%s: %v", ErrAthenaBadRequest, bucket, obj.Key, err)
 		}
 		if jsonMode {
-			rows, err := parseJSONLines(data, selected)
+			rows, err := parseJSONLines(data, loadCols)
 			if err != nil {
 				return nil, nil, err
 			}
 			dataRows = append(dataRows, rows...)
 		} else {
-			rows, err := parseCSVRows(data, selected)
+			rows, err := parseCSVRows(data, loadCols)
 			if err != nil {
 				return nil, nil, err
 			}
 			dataRows = append(dataRows, rows...)
 		}
-		if parsed.Limit > 0 && len(dataRows) >= parsed.Limit {
+		if earlyLimit && len(dataRows) >= parsed.Limit {
 			break
 		}
 	}
-	if parsed.Limit > 0 && len(dataRows) > parsed.Limit {
+	if parsed.WhereColumn != "" {
+		dataRows, err = filterAthenaRows(dataRows, table.Columns, parsed.WhereColumn, parsed.WhereValue)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if parsed.CountStar {
+		colInfos := []AthenaColumnInfo{{Name: "_col0", Type: "bigint"}}
+		out := [][]string{{"_col0"}, {strconv.Itoa(len(dataRows))}}
+		return colInfos, out, nil
+	}
+	if earlyLimit && len(dataRows) > parsed.Limit {
 		dataRows = dataRows[:parsed.Limit]
+	} else if !earlyLimit && parsed.Limit > 0 && len(dataRows) > parsed.Limit {
+		dataRows = dataRows[:parsed.Limit]
+	}
+	dataRows = projectAthenaRows(dataRows, table.Columns, selected)
+
+	colInfos := make([]AthenaColumnInfo, 0, len(selected))
+	for _, c := range selected {
+		typ := c.Type
+		if typ == "" {
+			typ = "varchar"
+		}
+		colInfos = append(colInfos, AthenaColumnInfo{Name: c.Name, Type: typ})
 	}
 
 	// Athena includes a header row matching column names as the first ResultSet row.
@@ -330,6 +397,56 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 	out = append(out, header)
 	out = append(out, dataRows...)
 	return colInfos, out, nil
+}
+
+func filterAthenaRows(rows [][]string, columns []GlueColumn, whereCol, whereVal string) ([][]string, error) {
+	idx := -1
+	for i, c := range columns {
+		if strings.EqualFold(c.Name, whereCol) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("%w: column not found: %s", ErrAthenaBadRequest, whereCol)
+	}
+	var out [][]string
+	for _, row := range rows {
+		if idx < len(row) && row[idx] == whereVal {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func projectAthenaRows(rows [][]string, allCols, selected []GlueColumn) [][]string {
+	if len(selected) == len(allCols) {
+		same := true
+		for i := range selected {
+			if !strings.EqualFold(selected[i].Name, allCols[i].Name) {
+				same = false
+				break
+			}
+		}
+		if same {
+			return rows
+		}
+	}
+	idxByName := map[string]int{}
+	for i, c := range allCols {
+		idxByName[strings.ToLower(c.Name)] = i
+	}
+	out := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		proj := make([]string, len(selected))
+		for i, c := range selected {
+			if j, ok := idxByName[strings.ToLower(c.Name)]; ok && j < len(row) {
+				proj[i] = row[j]
+			}
+		}
+		out = append(out, proj)
+	}
+	return out
 }
 
 func isGlueJSON(table GlueTable) bool {

@@ -75,7 +75,7 @@ func (s *Server) handleELBv2LabListener(w http.ResponseWriter, r *http.Request, 
 	}
 
 	region := store.DefaultELBv2Region
-	if !s.enforceAssociatedWAF(w, accountID, elbWAFCandidateARNs(lb.ARN)) {
+	if !s.enforceAssociatedWAF(w, r, accountID, elbWAFCandidateARNs(lb.ARN)) {
 		return
 	}
 
@@ -89,7 +89,13 @@ func (s *Server) handleELBv2LabListener(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tgs, err := s.store.DescribeELBv2TargetGroups(accountID, []string{listener.TargetGroupARN})
+	tgARN, err := s.store.ResolveELBv2ListenerTargetGroup(accountID, listener, routePath, r.Host)
+	if err != nil || tgARN == "" {
+		http.Error(w, "target group not found", http.StatusBadGateway)
+		return
+	}
+
+	tgs, err := s.store.DescribeELBv2TargetGroups(accountID, []string{tgARN})
 	if err != nil || len(tgs) == 0 {
 		http.Error(w, "target group not found", http.StatusBadGateway)
 		return

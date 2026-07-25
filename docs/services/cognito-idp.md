@@ -38,7 +38,7 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 - `UpdateUserPool` replace semantics: omit `LambdaConfig` / `RoleArn` to clear those lab fields.
 - When a trigger ARN is configured, the lab Invokes it synchronously (RequestResponse) on the matching lifecycle event:
   - `PreSignUp` → `SignUp` (before the user row is created)
-  - `CustomMessage` → `SignUp` after the user row is created (`CustomMessage_SignUp`; lab stub `codeParameter` `{####}`; response `smsMessage` / `emailMessage` / `emailSubject` are validated to include the codeParameter, rendered with stub code `123456` and `{username}`, and stored for tests — no SES send)
+  - `CustomMessage` → `SignUp` after the user row is created (`CustomMessage_SignUp`) and `AdminCreateUser` after the user row is created (`CustomMessage_AdminCreateUser`); lab stub `codeParameter` `{####}`; response `smsMessage` / `emailMessage` / `emailSubject` are validated to include the codeParameter, rendered with stub code `123456` and `{username}`, and stored for tests — no SES send
   - `PostConfirmation` → `ConfirmSignUp` (after the user is marked `CONFIRMED`)
   - `PreAuthentication` → password / SRP auth start
   - `UserMigration` → `USER_PASSWORD_AUTH` when the username is missing (`UserMigration_Authentication`); if the Lambda response includes non-empty `response.userAttributes`, the lab creates a `CONFIRMED` user with the auth password and continues; otherwise `UserNotFoundException`. Fail closed on Invoke error
@@ -97,7 +97,7 @@ Document skip when Docker is unavailable (unit tests still cover issue/verify/re
 
 - PreTokenGeneration V2/V3 `claimsAndScopeOverrideDetails` (access-token claims/scopes) and `groupOverrideDetails`
 - UserMigration on `USER_SRP_AUTH` (AWS requires password auth so the migrate Lambda can verify credentials; SRP obscures the password)
-- Other CustomMessage trigger sources beyond SignUp
+- Other CustomMessage trigger sources beyond SignUp and AdminCreateUser
 - Custom-auth nesting of `SRP_A` / `PASSWORD_VERIFIER` inside `CUSTOM_AUTH`
 - `SECRET_HASH` for app clients with a client secret
 - `NEW_PASSWORD_REQUIRED` and device SRP challenges

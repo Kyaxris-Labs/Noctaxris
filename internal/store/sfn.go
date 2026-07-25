@@ -364,16 +364,34 @@ type sfnDef struct {
 }
 
 type sfnState struct {
-	Type       string          `json:"Type"`
-	Next       string          `json:"Next"`
-	End        bool            `json:"End"`
-	Resource   string          `json:"Resource"`
-	Result     json.RawMessage `json:"Result"`
-	ResultPath string          `json:"ResultPath"`
-	OutputPath string          `json:"OutputPath"`
-	InputPath  string          `json:"InputPath"`
-	Error      string          `json:"Error"`
-	Cause      string          `json:"Cause"`
+	Type        string            `json:"Type"`
+	Next        string            `json:"Next"`
+	End         bool              `json:"End"`
+	Resource    string            `json:"Resource"`
+	Result      json.RawMessage   `json:"Result"`
+	ResultPath  string            `json:"ResultPath"`
+	OutputPath  string            `json:"OutputPath"`
+	InputPath   string            `json:"InputPath"`
+	Error       string            `json:"Error"`
+	Cause       string            `json:"Cause"`
+	Choices     []sfnChoice       `json:"Choices"`
+	Default     string            `json:"Default"`
+	Seconds     *int              `json:"Seconds"`
+	SecondsPath string            `json:"SecondsPath"`
+	Branches    []json.RawMessage `json:"Branches"`
+}
+
+type sfnChoice struct {
+	Variable      string   `json:"Variable"`
+	StringEquals  *string  `json:"StringEquals"`
+	NumericEquals *float64 `json:"NumericEquals"`
+	BooleanEquals *bool    `json:"BooleanEquals"`
+	Next          string   `json:"Next"`
+}
+
+type sfnBranch struct {
+	StartAt string                     `json:"StartAt"`
+	States  map[string]json.RawMessage `json:"States"`
 }
 
 func validateSFNDefinition(definition string) error {
@@ -387,21 +405,117 @@ func validateSFNDefinition(definition string) error {
 	if _, ok := def.States[def.StartAt]; !ok {
 		return ErrSFNInvalidDefinition
 	}
-	for name, raw := range def.States {
+	return validateSFNStates(def.States)
+}
+
+func validateSFNStates(states map[string]json.RawMessage) error {
+	for name, raw := range states {
 		var st sfnState
 		if err := json.Unmarshal(raw, &st); err != nil {
 			return ErrSFNInvalidDefinition
 		}
 		switch st.Type {
 		case "Pass", "Succeed", "Fail", "Task":
+			if st.Type == "Task" && strings.TrimSpace(st.Resource) == "" {
+				return fmt.Errorf("%w: Task %s missing Resource", ErrSFNInvalidDefinition, name)
+			}
+		case "Choice":
+			if len(st.Choices) == 0 {
+				return fmt.Errorf("%w: Choice %s missing Choices", ErrSFNInvalidDefinition, name)
+			}
+			for i, rawChoice := range mustChoiceRaws(raw) {
+				if err := validateSFNChoiceRule(name, i, rawChoice); err != nil {
+					return err
+				}
+			}
+		case "Wait":
+			if st.Seconds == nil && strings.TrimSpace(st.SecondsPath) == "" {
+				return fmt.Errorf("%w: Wait %s requires Seconds or SecondsPath", ErrSFNInvalidDefinition, name)
+			}
+			if st.SecondsPath != "" {
+				if _, ok := sfnTopLevelField(st.SecondsPath); !ok {
+					return fmt.Errorf("%w: Wait %s SecondsPath must be $.field", ErrSFNInvalidDefinition, name)
+				}
+			}
+		case "Parallel":
+			if len(st.Branches) == 0 {
+				return fmt.Errorf("%w: Parallel %s missing Branches", ErrSFNInvalidDefinition, name)
+			}
+			for bi, brRaw := range st.Branches {
+				var br sfnBranch
+				if err := json.Unmarshal(brRaw, &br); err != nil {
+					return fmt.Errorf("%w: Parallel %s branch %d invalid", ErrSFNInvalidDefinition, name, bi)
+				}
+				if br.StartAt == "" || len(br.States) == 0 {
+					return fmt.Errorf("%w: Parallel %s branch %d missing StartAt/States", ErrSFNInvalidDefinition, name, bi)
+				}
+				if _, ok := br.States[br.StartAt]; !ok {
+					return fmt.Errorf("%w: Parallel %s branch %d StartAt unknown", ErrSFNInvalidDefinition, name, bi)
+				}
+				if err := validateSFNStates(br.States); err != nil {
+					return err
+				}
+			}
 		default:
 			return fmt.Errorf("%w: unsupported state type %q in %s", ErrSFNInvalidDefinition, st.Type, name)
 		}
-		if st.Type == "Task" && strings.TrimSpace(st.Resource) == "" {
-			return fmt.Errorf("%w: Task %s missing Resource", ErrSFNInvalidDefinition, name)
-		}
 	}
 	return nil
+}
+
+func mustChoiceRaws(stateRaw json.RawMessage) []json.RawMessage {
+	var wrapper struct {
+		Choices []json.RawMessage `json:"Choices"`
+	}
+	_ = json.Unmarshal(stateRaw, &wrapper)
+	return wrapper.Choices
+}
+
+func validateSFNChoiceRule(stateName string, index int, raw json.RawMessage) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return fmt.Errorf("%w: Choice %s rule %d invalid", ErrSFNInvalidDefinition, stateName, index)
+	}
+	allowed := map[string]bool{
+		"Variable": true, "Next": true,
+		"StringEquals": true, "NumericEquals": true, "BooleanEquals": true,
+	}
+	var opCount int
+	for k := range keys {
+		if !allowed[k] {
+			return fmt.Errorf("%w: Choice %s rule %d unknown operator %q", ErrSFNInvalidDefinition, stateName, index, k)
+		}
+		switch k {
+		case "StringEquals", "NumericEquals", "BooleanEquals":
+			opCount++
+		}
+	}
+	var c sfnChoice
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return fmt.Errorf("%w: Choice %s rule %d invalid", ErrSFNInvalidDefinition, stateName, index)
+	}
+	if c.Next == "" {
+		return fmt.Errorf("%w: Choice %s rule %d missing Next", ErrSFNInvalidDefinition, stateName, index)
+	}
+	if _, ok := sfnTopLevelField(c.Variable); !ok {
+		return fmt.Errorf("%w: Choice %s rule %d Variable must be $.field", ErrSFNInvalidDefinition, stateName, index)
+	}
+	if opCount != 1 {
+		return fmt.Errorf("%w: Choice %s rule %d requires exactly one equals operator", ErrSFNInvalidDefinition, stateName, index)
+	}
+	return nil
+}
+
+func sfnTopLevelField(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "$.") {
+		return "", false
+	}
+	field := path[2:]
+	if field == "" || strings.ContainsAny(field, ".[") {
+		return "", false
+	}
+	return field, true
 }
 
 func sfnDefinitionHasTask(definition string) bool {
@@ -409,13 +523,28 @@ func sfnDefinitionHasTask(definition string) bool {
 	if err := json.Unmarshal([]byte(definition), &def); err != nil {
 		return false
 	}
-	for _, raw := range def.States {
+	return sfnStatesHaveTask(def.States)
+}
+
+func sfnStatesHaveTask(states map[string]json.RawMessage) bool {
+	for _, raw := range states {
 		var st sfnState
 		if err := json.Unmarshal(raw, &st); err != nil {
 			continue
 		}
-		if st.Type == "Task" {
+		switch st.Type {
+		case "Task":
 			return true
+		case "Parallel":
+			for _, brRaw := range st.Branches {
+				var br sfnBranch
+				if err := json.Unmarshal(brRaw, &br); err != nil {
+					continue
+				}
+				if sfnStatesHaveTask(br.States) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -426,18 +555,20 @@ func runSFNDefinition(definition, input string, invoke SFNTaskInvoker) (output, 
 	if err := json.Unmarshal([]byte(definition), &def); err != nil {
 		return "", "FAILED", "InvalidDefinition", err.Error(), nil
 	}
+	return runSFNStates(def.States, def.StartAt, input, invoke)
+}
+
+func runSFNStates(states map[string]json.RawMessage, startAt, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist) {
 	current := input
-	stateName := def.StartAt
+	stateName := startAt
 	for i := 0; i < 100; i++ {
-		raw, ok := def.States[stateName]
+		raw, ok := states[stateName]
 		if !ok {
 			return current, "FAILED", "States.Runtime", "Unknown state "+stateName, hist
 		}
 		var st sfnState
 		_ = json.Unmarshal(raw, &st)
-		hist = append(hist, sfnHist{Type: "TaskStateEntered", DetailsMap: map[string]any{"name": stateName, "input": current}})
-		// Use PassStateEntered for Pass etc. Keep simple: StateEntered naming lite.
-		hist[len(hist)-1].Type = st.Type + "StateEntered"
+		hist = append(hist, sfnHist{Type: st.Type + "StateEntered", DetailsMap: map[string]any{"name": stateName, "input": current}})
 
 		switch st.Type {
 		case "Pass":
@@ -491,11 +622,154 @@ func runSFNDefinition(definition, input string, invoke SFNTaskInvoker) (output, 
 				return current, "SUCCEEDED", "", "", hist
 			}
 			stateName = st.Next
+		case "Choice":
+			next, ok := sfnEvalChoice(st, current)
+			if !ok {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.NoChoiceMatched", "cause": "no Choice matched and no Default"}})
+				return "", "FAILED", "States.NoChoiceMatched", "no Choice matched and no Default", hist
+			}
+			hist = append(hist, sfnHist{Type: "ChoiceStateExited", DetailsMap: map[string]any{"name": stateName, "output": current, "next": next}})
+			stateName = next
+		case "Wait":
+			secs, err := sfnWaitSeconds(st, current)
+			if err != nil {
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
+				return "", "FAILED", "States.Runtime", err.Error(), hist
+			}
+			if secs > 0 {
+				time.Sleep(time.Duration(secs) * time.Second)
+			}
+			hist = append(hist, sfnHist{Type: "WaitStateExited", DetailsMap: map[string]any{"name": stateName, "output": current}})
+			if st.End || st.Next == "" {
+				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
+				return current, "SUCCEEDED", "", "", hist
+			}
+			stateName = st.Next
+		case "Parallel":
+			branchOutputs := make([]json.RawMessage, 0, len(st.Branches))
+			for bi, brRaw := range st.Branches {
+				var br sfnBranch
+				if err := json.Unmarshal(brRaw, &br); err != nil {
+					cause = fmt.Sprintf("Parallel branch %d invalid: %v", bi, err)
+					hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": cause}})
+					return "", "FAILED", "States.Runtime", cause, hist
+				}
+				brDef, _ := json.Marshal(sfnDef{StartAt: br.StartAt, States: br.States})
+				bout, bstatus, berr, bcause, bhist := runSFNDefinition(string(brDef), current, invoke)
+				for _, h := range bhist {
+					if h.Type == "ExecutionSucceeded" || h.Type == "ExecutionFailed" {
+						continue
+					}
+					hist = append(hist, h)
+				}
+				if bstatus != "SUCCEEDED" {
+					if berr == "" {
+						berr = "States.BranchFailed"
+					}
+					if bcause == "" {
+						bcause = fmt.Sprintf("Parallel branch %d failed", bi)
+					}
+					hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": berr, "cause": bcause}})
+					return "", "FAILED", berr, bcause, hist
+				}
+				if bout == "" {
+					bout = "{}"
+				}
+				branchOutputs = append(branchOutputs, json.RawMessage(bout))
+			}
+			merged, _ := json.Marshal(branchOutputs)
+			out := string(merged)
+			hist = append(hist, sfnHist{Type: "ParallelStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
+			current = out
+			if st.End || st.Next == "" {
+				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
+				return current, "SUCCEEDED", "", "", hist
+			}
+			stateName = st.Next
 		default:
 			return current, "FAILED", "States.Runtime", "unsupported type", hist
 		}
 	}
 	return current, "FAILED", "States.Runtime", "too many transitions", hist
+}
+
+func sfnEvalChoice(st sfnState, inputJSON string) (next string, ok bool) {
+	var obj map[string]any
+	_ = json.Unmarshal([]byte(inputJSON), &obj)
+	for _, c := range st.Choices {
+		field, pathOK := sfnTopLevelField(c.Variable)
+		if !pathOK {
+			continue
+		}
+		val, present := obj[field]
+		if !present {
+			continue
+		}
+		matched := false
+		switch {
+		case c.StringEquals != nil:
+			s, isStr := val.(string)
+			matched = isStr && s == *c.StringEquals
+		case c.NumericEquals != nil:
+			n, isNum := sfnAsFloat(val)
+			matched = isNum && n == *c.NumericEquals
+		case c.BooleanEquals != nil:
+			b, isBool := val.(bool)
+			matched = isBool && b == *c.BooleanEquals
+		}
+		if matched {
+			return c.Next, true
+		}
+	}
+	if st.Default != "" {
+		return st.Default, true
+	}
+	return "", false
+}
+
+func sfnAsFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+const sfnWaitSecondsMax = 5
+
+func sfnWaitSeconds(st sfnState, inputJSON string) (int, error) {
+	var secs int
+	switch {
+	case st.Seconds != nil:
+		secs = *st.Seconds
+	case strings.TrimSpace(st.SecondsPath) != "":
+		field, ok := sfnTopLevelField(st.SecondsPath)
+		if !ok {
+			return 0, fmt.Errorf("SecondsPath must be $.field")
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(inputJSON), &obj); err != nil {
+			return 0, fmt.Errorf("SecondsPath input is not a JSON object")
+		}
+		n, ok := sfnAsFloat(obj[field])
+		if !ok {
+			return 0, fmt.Errorf("SecondsPath field %q is not numeric", field)
+		}
+		secs = int(n)
+	default:
+		return 0, fmt.Errorf("Wait requires Seconds or SecondsPath")
+	}
+	if secs < 0 {
+		secs = 0
+	}
+	if secs > sfnWaitSecondsMax {
+		secs = sfnWaitSecondsMax
+	}
+	return secs, nil
 }
 
 // ParseLambdaARNFromSFNResource extracts function name from a Lambda ARN or bare name.

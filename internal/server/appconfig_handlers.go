@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
@@ -15,6 +16,10 @@ import (
 const (
 	appconfigJSONContentType = "application/x-amz-json-1.1"
 	appconfigEventSource     = "appconfig.amazonaws.com"
+
+	actionAppConfigStartDeployment = "appconfig:StartDeployment"
+	actionAppConfigGetDeployment   = "appconfig:GetDeployment"
+	actionAppConfigListDeployments = "appconfig:ListDeployments"
 )
 
 func (s *Server) handleAppConfig(
@@ -43,6 +48,12 @@ func (s *Server) handleAppConfig(
 		s.appconfigStartSession(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAppConfigDataGetLatestConfiguration:
 		s.appconfigGetLatest(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionAppConfigStartDeployment:
+		s.appconfigStartDeployment(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionAppConfigGetDeployment:
+		s.appconfigGetDeployment(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionAppConfigListDeployments:
+		s.appconfigListDeployments(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeAppConfigError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This AppConfig action is not implemented.", readOnly, eventID, verified)
@@ -68,6 +79,12 @@ func appconfigAction(action string) string {
 		return catalog.ActionAppConfigDataStartConfigurationSession
 	case "GetLatestConfiguration":
 		return catalog.ActionAppConfigDataGetLatestConfiguration
+	case "StartDeployment":
+		return actionAppConfigStartDeployment
+	case "GetDeployment":
+		return actionAppConfigGetDeployment
+	case "ListDeployments":
+		return actionAppConfigListDeployments
 	default:
 		return action
 	}
@@ -321,6 +338,157 @@ func (s *Server) appconfigGetLatest(
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
 	s.writeSuccessAudit(r, requestID, eventID, verified, "appconfigdata.amazonaws.com", "GetLatestConfiguration", readOnly)
+}
+
+func (s *Server) appconfigStartDeployment(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	appID, _ := params["ApplicationId"].(string)
+	envID, _ := params["EnvironmentId"].(string)
+	profileID, _ := params["ConfigurationProfileId"].(string)
+	configVersion, err := parseAppConfigConfigurationVersion(params["ConfigurationVersion"])
+	if strings.TrimSpace(appID) == "" || strings.TrimSpace(envID) == "" || strings.TrimSpace(profileID) == "" || err != nil {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"ApplicationId, EnvironmentId, ConfigurationProfileId, and ConfigurationVersion are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, actionAppConfigStartDeployment, "*") {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appconfig:StartDeployment.", readOnly, eventID, verified)
+		return
+	}
+	dep, err := s.store.StartAppConfigDeployment(verified.AccountID, appID, envID, profileID, configVersion)
+	if errors.Is(err, store.ErrAppConfigNotFound) {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Resource not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAppConfigBadRequest) {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"ConfigurationVersion is invalid.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerException",
+			"Unable to start deployment.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"Id":                       dep.DeploymentID,
+		"ApplicationId":            dep.ApplicationID,
+		"EnvironmentId":          dep.EnvironmentID,
+		"ConfigurationProfileId": dep.ProfileID,
+		"DeploymentNumber":       dep.DeploymentNumber,
+		"DeploymentDurationInMinutes": 0,
+		"FinalBakeTimeInMinutes":      0,
+		"GrowthType":                  "LINEAR",
+		"GrowthFactor":                100,
+		"State":                       dep.State,
+		"VersionLabel":                strconv.Itoa(dep.ConfigurationVersion),
+	})
+	s.writeAppConfigOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appconfigEventSource, "StartDeployment", readOnly)
+}
+
+func (s *Server) appconfigGetDeployment(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	deploymentID, _ := params["DeploymentId"].(string)
+	if strings.TrimSpace(deploymentID) == "" {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"DeploymentId is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, actionAppConfigGetDeployment, "*") {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appconfig:GetDeployment.", readOnly, eventID, verified)
+		return
+	}
+	dep, err := s.store.GetAppConfigDeployment(verified.AccountID, deploymentID)
+	if errors.Is(err, store.ErrAppConfigNotFound) {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Deployment not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerException",
+			"Unable to get deployment.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"Id":                       dep.DeploymentID,
+		"ApplicationId":            dep.ApplicationID,
+		"EnvironmentId":          dep.EnvironmentID,
+		"ConfigurationProfileId": dep.ProfileID,
+		"DeploymentNumber":       dep.DeploymentNumber,
+		"State":                  dep.State,
+		"VersionLabel":           strconv.Itoa(dep.ConfigurationVersion),
+	})
+	s.writeAppConfigOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appconfigEventSource, "GetDeployment", readOnly)
+}
+
+func (s *Server) appconfigListDeployments(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	appID, _ := params["ApplicationId"].(string)
+	envID, _ := params["EnvironmentId"].(string)
+	profileID, _ := params["ConfigurationProfileId"].(string)
+	if strings.TrimSpace(appID) == "" {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			"ApplicationId is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, actionAppConfigListDeployments, "*") {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appconfig:ListDeployments.", readOnly, eventID, verified)
+		return
+	}
+	deps, err := s.store.ListAppConfigDeployments(verified.AccountID, appID, envID, profileID)
+	if errors.Is(err, store.ErrAppConfigNotFound) {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Application not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerException",
+			"Unable to list deployments.", readOnly, eventID, verified)
+		return
+	}
+	ids := make([]string, 0, len(deps))
+	for _, d := range deps {
+		ids = append(ids, d.DeploymentID)
+	}
+	payload, _ := json.Marshal(map[string]any{"Items": ids})
+	s.writeAppConfigOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appconfigEventSource, "ListDeployments", readOnly)
+}
+
+func parseAppConfigConfigurationVersion(raw any) (int, error) {
+	switch v := raw.(type) {
+	case float64:
+		if v < 1 || v != float64(int(v)) {
+			return 0, store.ErrAppConfigBadRequest
+		}
+		return int(v), nil
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || n < 1 {
+			return 0, store.ErrAppConfigBadRequest
+		}
+		return n, nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil || n < 1 {
+			return 0, store.ErrAppConfigBadRequest
+		}
+		return int(n), nil
+	default:
+		return 0, store.ErrAppConfigBadRequest
+	}
 }
 
 func (s *Server) writeAppConfigOK(w http.ResponseWriter, requestID string, payload []byte) {

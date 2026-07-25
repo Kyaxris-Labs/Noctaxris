@@ -131,7 +131,7 @@ func TestAppSyncAPIKeyAndResolver(t *testing.T) {
 		t.Fatal("lookup with wrong key should fail")
 	}
 	_, err = st.CreateAppSyncDataSource(account, api.APIID, "HelloFn", "AWS_LAMBDA",
-		"arn:aws:lambda:us-east-1:"+account+":function:hello")
+		"arn:aws:lambda:us-east-1:"+account+":function:hello", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +143,9 @@ func TestAppSyncAPIKeyAndResolver(t *testing.T) {
 	if err != nil || field != "hello" {
 		t.Fatalf("parse: %v %q", err, field)
 	}
-	_, arn, err := st.ResolveAppSyncQueryField(account, api.APIID, "hello")
-	if err != nil || !strings.Contains(arn, "function:hello") {
-		t.Fatalf("resolve: %v %s", err, arn)
+	_, ds, err := st.ResolveAppSyncQueryField(account, api.APIID, "hello")
+	if err != nil || !strings.Contains(ds.LambdaFunctionARN, "function:hello") {
+		t.Fatalf("resolve: %v %#v", err, ds)
 	}
 	iamAPI, err := st.CreateAppSyncGraphqlAPI(account, "us-east-1", "iam-api", store.AppSyncAuthIAM)
 	if err != nil {

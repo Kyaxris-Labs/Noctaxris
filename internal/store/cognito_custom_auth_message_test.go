@@ -89,6 +89,110 @@ func TestSignUpCustomMessageRejectsMissingCodeParameter(t *testing.T) {
 	}
 }
 
+func TestAdminCreateRendersAndStoresCustomMessage(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-admin-render-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fnARN := "arn:aws:lambda:us-east-1:" + account + ":function:cm-admin-render"
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: fnARN,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenEvent string
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		seenEvent = eventJSON
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(eventJSON), &ev); err != nil {
+			return nil, err
+		}
+		ev["response"] = map[string]any{
+			"smsMessage":   "Temp password {####}",
+			"emailMessage": "Hello {username}, code {####}",
+			"emailSubject": "Admin welcome",
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	})
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "nova", "Secret9!"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenEvent, "CustomMessage_AdminCreateUser") {
+		t.Fatalf("event=%s", seenEvent)
+	}
+	if !strings.Contains(seenEvent, `"codeParameter"`) {
+		t.Fatalf("want codeParameter in event: %s", seenEvent)
+	}
+	msg, err := st.GetLastCognitoCustomMessage(account, pool.PoolID, "nova")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.TriggerSource != "CustomMessage_AdminCreateUser" {
+		t.Fatalf("trigger=%q", msg.TriggerSource)
+	}
+	if !strings.Contains(msg.SMSMessage, "123456") {
+		t.Fatalf("sms=%q", msg.SMSMessage)
+	}
+	if !strings.Contains(msg.EmailMessage, "nova") || !strings.Contains(msg.EmailMessage, "123456") {
+		t.Fatalf("email=%q", msg.EmailMessage)
+	}
+	if msg.EmailSubject != "Admin welcome" {
+		t.Fatalf("subject=%q", msg.EmailSubject)
+	}
+}
+
+func TestAdminCreateCustomMessageRejectsMissingCodeParameter(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-admin-bad-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:cm-admin-bad",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(_, eventJSON string) ([]byte, error) {
+		var ev map[string]any
+		_ = json.Unmarshal([]byte(eventJSON), &ev)
+		ev["response"] = map[string]any{"emailMessage": "no code here"}
+		b, _ := json.Marshal(ev)
+		return b, nil
+	})
+	_, err = st.AdminCreateCognitoUser(account, pool.PoolID, "jade-admin", "Secret0!")
+	if !errors.Is(err, store.ErrCognitoInvalidLambdaResponse) {
+		t.Fatalf("err=%v want InvalidLambdaResponse", err)
+	}
+}
+
+func TestAdminCreateCustomMessageFailClosed(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "cm-admin-fail-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetCognitoUserPoolTriggers(account, pool.PoolID, "", store.CognitoLambdaConfig{
+		CustomMessage: "arn:aws:lambda:us-east-1:" + account + ":function:missing-cm-admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetCognitoTriggerInvoker(func(_, _ string) ([]byte, error) {
+		return nil, errors.New("invoke failed")
+	})
+	_, err = st.AdminCreateCognitoUser(account, pool.PoolID, "hank-admin", "Secret7!")
+	if !errors.Is(err, store.ErrCognitoTriggerFailed) {
+		t.Fatalf("err=%v want ErrCognitoTriggerFailed", err)
+	}
+}
+
 func TestCustomAuthChallengeRoundTrip(t *testing.T) {
 	st := openCognitoTriggerStore(t)
 	account := "000000000001"

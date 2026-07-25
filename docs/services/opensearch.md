@@ -38,10 +38,26 @@ See also [ops.md](../ops.md) for Compose overlays and nested smoke.
 | Failure hint | Lab `FailureReason` on CreateFailed when mmap / memory-lock / nested wait evidence is classified |
 | Network | Internal nested network only; no host publish of 9200/443 |
 | Engine | `EngineVersion` string stored (default `OpenSearch_2.11`) |
+| Query facade | SigV4 lab paths on `:4566` for index + allowlisted `_search` (see below) |
+
+### Query-plane facade (`:4566`)
+
+Labs index and search through the API port. The facade dials only nested hostnames matching `noctaxris-opensearch-*` (or `noctaxris-data-opensearch-*`) on port `9200`. It never publishes `9200` on the host and never dials operator-supplied hosts.
+
+| Method | Path | Nested target |
+|--------|------|---------------|
+| `PUT` | `/opensearch/{domain}/lab/{index}/_doc/{id}` | `PUT /{index}/_doc/{id}` |
+| `POST` | `/opensearch/{domain}/lab/{index}/_search` | `POST /{index}/_search` |
+
+Search body allowlist: top-level `query` and `size` only. Under `query`, only `match` and `match_all`. Unknown DSL keys return `400 ValidationException`.
+
+Fail closed with `409` when the domain is missing, not `Active`, or still on a `stub://` endpoint.
+
+Sign requests with SigV4 service `es` (same IAM prefix as control-plane OpenSearch).
 
 ### Authz notes
 
-Identity `EvaluateFull` on `es:*` (OpenSearch Service IAM prefix).
+Identity `EvaluateFull` on `es:*` (OpenSearch Service IAM prefix). Lab query paths authorize with `es:DescribeDomain` as the gate for the configured account after SigV4.
 
 ## How to verify / CLI smoke
 
@@ -59,9 +75,28 @@ aws opensearch describe-domain --domain-name noctaxris-os-example --endpoint-url
 
 With DinD healthy, adequate `vm.max_map_count`, and the nested process accepting connections, DescribeDomain shows `Active` and a nested host:port (reachable only from nested peers on `noctaxris-data`). Without DinD (or on start failure), status is `CreateFailed` with `stub://`; check `FailureReason` for mmap / memory-lock hints when present.
 
+Query facade smoke (skip when the domain is not `Active`):
+
+```bash
+# DOMAIN must be Active (nested engine up). Sign with SigV4 service es.
+DOMAIN=noctaxris-os-example
+
+aws opensearch describe-domain --domain-name "$DOMAIN" --endpoint-url "$EP"
+
+# Index a document (SigV4; use awscurl or an SDK-signed HTTP client)
+# PUT $EP/opensearch/$DOMAIN/lab/books/_doc/1
+# body: {"title":"hello"}
+
+# Search (allowlisted DSL only)
+# POST $EP/opensearch/$DOMAIN/lab/books/_search
+# body: {"query":{"match":{"title":"hello"}},"size":5}
+```
+
+Unit tests mock the nested HTTP transport and do not require DinD.
+
 ## Not yet / deferred
 
-- Query-plane index/search subset and full query DSL proxy
+- Full query DSL proxy (bool, aggregations, sort, highlighting, etc.)
 - Fine-grained access control
 - VPC options, custom endpoints, and Autotune parity
 - Automatic host sysctl tuning for Desktop/WSL (operator must set `vm.max_map_count` when nested Active is required; fail-closed by design)

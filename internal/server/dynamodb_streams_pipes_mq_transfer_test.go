@@ -269,6 +269,50 @@ func TestMQBrokerHandlers(t *testing.T) {
 	}
 }
 
+func TestCreateBrokerActiveMQWithoutComputeFailsClosed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+	create := mustMQJSON(t, handler, "CreateBroker", map[string]any{
+		"BrokerName": "amq-broker",
+		"EngineType": "ACTIVEMQ",
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateBroker status=%d body=%q", create.Code, create.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(create.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := out["BrokerId"].(string)
+	if id == "" {
+		t.Fatalf("missing BrokerId: %v", out)
+	}
+	desc := mustMQJSON(t, handler, "DescribeBroker", map[string]any{"BrokerId": id}, now)
+	if desc.Code != http.StatusOK {
+		t.Fatalf("DescribeBroker status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	// Unit test server has no DinD: ActiveMQ must fail closed after start attempt, not invent RUNNING.
+	body := desc.Body.String()
+	if !strings.Contains(body, `"BrokerState":"CREATION_FAILED"`) && !strings.Contains(body, `"BrokerState": "CREATION_FAILED"`) {
+		t.Fatalf("want CREATION_FAILED without DinD; body=%q", body)
+	}
+	if !strings.Contains(body, "stub://") {
+		t.Fatalf("want stub:// endpoint without DinD; body=%q", body)
+	}
+	if strings.Contains(body, `"BrokerState":"RUNNING"`) || strings.Contains(body, `"BrokerState": "RUNNING"`) {
+		t.Fatalf("must not claim RUNNING without nested ActiveMQ; body=%q", body)
+	}
+	pub := mustMQJSON(t, handler, "CreateBroker", map[string]any{
+		"BrokerName":         "amq-public",
+		"EngineType":         "ACTIVEMQ",
+		"PubliclyAccessible": true,
+	}, now)
+	if pub.Code != http.StatusBadRequest {
+		t.Fatalf("PubliclyAccessible=true status=%d want 400 body=%q", pub.Code, pub.Body.String())
+	}
+}
+
 func mustTransferJSON(t *testing.T, handler http.Handler, target string, payload map[string]any, now time.Time) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, err := json.Marshal(payload)

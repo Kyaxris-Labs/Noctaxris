@@ -25,7 +25,7 @@ func mustAppConfigJSON(t *testing.T, handler http.Handler, target, service strin
 }
 
 func TestAppConfigRoundTrip(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -70,6 +70,14 @@ func TestAppConfigRoundTrip(t *testing.T) {
 	}, now)
 	if hosted.Code != http.StatusOK {
 		t.Fatalf("CreateHostedConfigurationVersion status=%d body=%q", hosted.Code, hosted.Body.String())
+	}
+	var hostedOut map[string]any
+	_ = json.Unmarshal(hosted.Body.Bytes(), &hostedOut)
+	versionNum := int(hostedOut["VersionNumber"].(float64))
+
+	_, err := st.StartAppConfigDeployment(testAccountID, appID, envID, profileID, versionNum)
+	if err != nil {
+		t.Fatalf("StartAppConfigDeployment: %v", err)
 	}
 
 	get := mustAppConfigJSON(t, handler, "AmazonAppConfig.GetConfiguration", "appconfig", map[string]any{

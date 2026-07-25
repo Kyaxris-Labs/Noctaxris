@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Stub depth: cron weekdays, Cognito CustomMessage, ELBv2 host-header
+
+- Shared Scheduler/Secrets cron matcher accepts DOM `nW` (nearest weekday, month-bounded) and `LW` (last weekday of month)
+- Cognito `AdminCreateUser` sync-Invokes `CustomMessage_AdminCreateUser` and stores rendered SMS/email bodies (lab stub `{####}`; no SES)
+- ELBv2 `CreateRule` accepts `host-header` Conditions (exact or trailing `*` prefix), AND-combined with `path-pattern` when both set; lab `/alb/` match uses request Host
+- SDK suite files renamed to feature-oriented names (`edge_test.go`, `data_lab_test.go`, `workflow_governance_test.go`, `nested_lab_test.go`; Node `edge|data|workflow|nested.test.mjs`)
+
+### Gap closure / SDK coverage
+
+- Firehose `DescribeDeliveryStream` returns `AmazonopensearchserviceDestinationDescription` and lab `OpenSearchDestinationDescription` (`DomainARN`, `IndexName`, `RoleARN`) for OpenSearch destinations
+- Go / Node / Python SDK suites cover CloudFront edge, Transfer PutFile/GetFile, Glue crawlers, AppConfig StartDeployment, Config history GetObject, SFN Choice, CloudTrail trail delivery, Route53 Alias, ELBv2 CreateRule, and AppSync serviceRoleArn + multi-field resolvers (CloudFront/Route53/ELBv2/Transfer via SigV4 JSON lab protocol)
+- Nested OpenSearch query facade, ActiveMQ, Firehose OpenSearch Describe, and Lambda MQ ESM SDK rows skip when engines are not Active/RUNNING (not a default CI gate)
+
+### Edge, broker, search, analytics, and governance depth
+
+- CloudFront: Create returns `Deployed` with lab `DomainName`; SigV4 edge GET `/cloudfront/{id}/{key...}` fetches first origin (S3 or internal HTTP API)
+- Amazon MQ: nested ActiveMQ when DinD is up (same Internal AMQP posture as RabbitMQ); no DinD still fail-closed `CREATION_FAILED` + `stub://`
+- OpenSearch: SigV4 lab query facade for `_doc` index and allowlisted `_search` to nested domain hosts only
+- Athena: in-process `WHERE col = 'literal'` and `COUNT(*)`
+- WAFv2: ByteMatch on `UriPath` / `SingleHeader` (`CONTAINS` / `EXACTLY`) on invoke paths
+- Glue: crawler lite (`CreateCrawler` / `StartCrawler` / `GetCrawler` / `DeleteCrawler` / `ListCrawlers`) sync-infers CSV/JSON tables from S3
+- Config: `StartConfigurationRecorder` writes a lab-shaped JSON snapshot to each delivery channel bucket before setting recording
+- Transfer Family: servers report `ONLINE`; lab Put/Get/List file API on `:4566` under sandbox homes (not real SFTP)
+- AppConfig: `StartDeployment` / `GetDeployment` / `ListDeployments`; GetConfiguration and AppConfigData serve the deployed version pointer
+
+### Workflow, governance, and edge depth
+
+- Step Functions: ASL `Choice` / `Wait` (Seconds 0–5) / `Parallel` (sequential branches, array merge)
+- CloudTrail: `CreateTrail` / `DescribeTrails` / `DeleteTrail` / `StartLogging` / `StopLogging` with lab JSONL snapshot delivery to S3 and optional Logs
+- Firehose: OpenSearch destination (`AmazonopensearchserviceDestinationConfiguration`) indexes to nested Active domains via allowlisted hosts
+- Route 53: Type A `AliasTarget` to in-account CloudFront `DomainName` or ELB `DNSName`
+- ELB v2: path-pattern and host-header `CreateRule` / `DescribeRules` / `DeleteRule`; lab `/alb/` listener matches rules (AND when both fields present) before default forward
+- Lambda: Amazon MQ event source mapping (RUNNING nested broker; allowlisted hosts; injectable receive in unit tests)
+- AppSync: optional data-source `serviceRoleArn` PassRole; flat multi-field Query GraphQL invoke
+
 ## 1.1.1
 
 Patch after 1.1.0: residual lab-core depth, Node/Python SDK parity, and remaining Unreleased items. Docker Hub: `kyaxris/noctaxris` (`1.1.1`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
@@ -30,7 +65,7 @@ Patch after 1.1.0: residual lab-core depth, Node/Python SDK parity, and remainin
 
 - Opt-in `docker/compose.lab-ecs-host-gateway.yaml` sets `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`; default Compose passes the env defaulting to `0`
 
-### Node/Python SDK parity (Track D)
+### Node/Python SDK parity
 
 - Node.js (`tests/sdk/nodejs`) and Python (`tests/sdk/python`) match Go lab coverage for APIGW HTTP CORS, S3→SQS notifications, Cognito `USER_SRP_AUTH` + LambdaConfig fail-closed, and EventBridge RoleArn-less SQS delivery
 - Node engines `>=24`; clients include `apigatewayv2` and `cognito-idp`

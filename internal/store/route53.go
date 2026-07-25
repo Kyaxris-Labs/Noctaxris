@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS route53_rrsets (
   type TEXT NOT NULL,
   ttl INTEGER NOT NULL DEFAULT 300,
   records_json TEXT NOT NULL,
+  alias_dns_name TEXT NOT NULL DEFAULT '',
+  alias_hosted_zone_id TEXT NOT NULL DEFAULT '',
+  alias_evaluate_target_health INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, zone_id, name, type)
 );
 `
@@ -48,12 +51,20 @@ type Route53HostedZone struct {
 	CreatedAt   int64
 }
 
-// Route53ResourceRecordSet is an A or CNAME record set.
+// Route53AliasTarget is an alias to an in-account CloudFront or ELB DNS name.
+type Route53AliasTarget struct {
+	DNSName              string
+	HostedZoneId         string
+	EvaluateTargetHealth bool
+}
+
+// Route53ResourceRecordSet is an A/CNAME record set, optionally an Alias.
 type Route53ResourceRecordSet struct {
-	Name    string
-	Type    string
-	TTL     int
-	Records []string
+	Name        string
+	Type        string
+	TTL         int
+	Records     []string
+	AliasTarget *Route53AliasTarget
 }
 
 // EnsureRoute53Schema creates Route 53 tables if missing.
@@ -63,6 +74,13 @@ func EnsureRoute53Schema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(route53Schema); err != nil {
 		return fmt.Errorf("ensure route53 schema: %w", err)
+	}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE route53_rrsets ADD COLUMN alias_dns_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE route53_rrsets ADD COLUMN alias_hosted_zone_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE route53_rrsets ADD COLUMN alias_evaluate_target_health INTEGER NOT NULL DEFAULT 0`,
+	}); err != nil {
+		return fmt.Errorf("ensure route53 schema alter: %w", err)
 	}
 	return nil
 }
@@ -165,6 +183,7 @@ func (s *Store) GetRoute53HostedZone(accountID, zoneID string) (Route53HostedZon
 }
 
 // ChangeRoute53ResourceRecordSets applies CREATE/UPSERT/DELETE for A and CNAME only.
+// AliasTarget is allowed on Type A when DNSName matches an in-account CloudFront DomainName or ELB DNSName.
 func (s *Store) ChangeRoute53ResourceRecordSets(accountID, zoneID string, changes []Route53Change) error {
 	zoneID = normalizeZoneID(zoneID)
 	if _, err := s.GetRoute53HostedZone(accountID, zoneID); err != nil {
@@ -194,15 +213,50 @@ func (s *Store) ChangeRoute53ResourceRecordSets(accountID, zoneID string, change
 			}
 			continue
 		}
+
+		aliasDNS := ""
+		aliasHZ := ""
+		aliasETH := 0
+		recordsJSON := ""
 		ttl := ch.TTL
 		if ttl <= 0 {
 			ttl = 300
 		}
-		records := ch.Records
-		if records == nil {
-			records = []string{}
+
+		if ch.AliasTarget != nil {
+			if rtype != "A" {
+				return fmt.Errorf("%w: AliasTarget only supported for Type A", ErrRoute53BadRequest)
+			}
+			if len(ch.Records) > 0 {
+				return fmt.Errorf("%w: AliasTarget cannot include ResourceRecords", ErrRoute53BadRequest)
+			}
+			dns := strings.TrimSpace(ch.AliasTarget.DNSName)
+			hz := strings.TrimSpace(ch.AliasTarget.HostedZoneId)
+			if dns == "" || hz == "" {
+				return fmt.Errorf("%w: AliasTarget DNSName and HostedZoneId required", ErrRoute53BadRequest)
+			}
+			ok, err := s.route53AliasDNSNameKnown(accountID, dns)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("%w: AliasTarget DNSName is not an in-account CloudFront or ELB DNS name", ErrRoute53BadRequest)
+			}
+			aliasDNS = normalizeAliasDNSName(dns)
+			aliasHZ = hz
+			if ch.AliasTarget.EvaluateTargetHealth {
+				aliasETH = 1
+			}
+			ttl = 0
+			recordsJSON = ""
+		} else {
+			records := ch.Records
+			if records == nil {
+				records = []string{}
+			}
+			recordsJSON = joinRecords(records)
 		}
-		recordsJSON := joinRecords(records)
+
 		if action == "CREATE" {
 			var exists int
 			err := tx.QueryRow(
@@ -217,11 +271,16 @@ func (s *Store) ChangeRoute53ResourceRecordSets(accountID, zoneID string, change
 			}
 		}
 		_, err := tx.Exec(
-			`INSERT INTO route53_rrsets (account_id, zone_id, name, type, ttl, records_json)
-			 VALUES (?, ?, ?, ?, ?, ?)
+			`INSERT INTO route53_rrsets
+			 (account_id, zone_id, name, type, ttl, records_json, alias_dns_name, alias_hosted_zone_id, alias_evaluate_target_health)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id, zone_id, name, type) DO UPDATE SET
-			   ttl = excluded.ttl, records_json = excluded.records_json`,
-			accountID, zoneID, name, rtype, ttl, recordsJSON,
+			   ttl = excluded.ttl,
+			   records_json = excluded.records_json,
+			   alias_dns_name = excluded.alias_dns_name,
+			   alias_hosted_zone_id = excluded.alias_hosted_zone_id,
+			   alias_evaluate_target_health = excluded.alias_evaluate_target_health`,
+			accountID, zoneID, name, rtype, ttl, recordsJSON, aliasDNS, aliasHZ, aliasETH,
 		)
 		if err != nil {
 			return fmt.Errorf("upsert rrset: %w", err)
@@ -237,7 +296,8 @@ func (s *Store) ListRoute53ResourceRecordSets(accountID, zoneID string) ([]Route
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT name, type, ttl, records_json FROM route53_rrsets
+		`SELECT name, type, ttl, records_json, alias_dns_name, alias_hosted_zone_id, alias_evaluate_target_health
+		 FROM route53_rrsets
 		 WHERE account_id = ? AND zone_id = ? ORDER BY name, type`,
 		accountID, zoneID,
 	)
@@ -248,11 +308,20 @@ func (s *Store) ListRoute53ResourceRecordSets(accountID, zoneID string) ([]Route
 	var out []Route53ResourceRecordSet
 	for rows.Next() {
 		var rs Route53ResourceRecordSet
-		var recordsJSON string
-		if err := rows.Scan(&rs.Name, &rs.Type, &rs.TTL, &recordsJSON); err != nil {
+		var recordsJSON, aliasDNS, aliasHZ string
+		var aliasETH int
+		if err := rows.Scan(&rs.Name, &rs.Type, &rs.TTL, &recordsJSON, &aliasDNS, &aliasHZ, &aliasETH); err != nil {
 			return nil, fmt.Errorf("list rrsets scan: %w", err)
 		}
-		rs.Records = splitRecords(recordsJSON)
+		if aliasDNS != "" {
+			rs.AliasTarget = &Route53AliasTarget{
+				DNSName:              aliasDNS,
+				HostedZoneId:         aliasHZ,
+				EvaluateTargetHealth: aliasETH == 1,
+			}
+		} else {
+			rs.Records = splitRecords(recordsJSON)
+		}
 		out = append(out, rs)
 	}
 	return out, rows.Err()
@@ -260,11 +329,43 @@ func (s *Store) ListRoute53ResourceRecordSets(accountID, zoneID string) ([]Route
 
 // Route53Change is one ChangeResourceRecordSets change.
 type Route53Change struct {
-	Action  string
-	Name    string
-	Type    string
-	TTL     int
-	Records []string
+	Action      string
+	Name        string
+	Type        string
+	TTL         int
+	Records     []string
+	AliasTarget *Route53AliasTarget
+}
+
+func (s *Store) route53AliasDNSNameKnown(accountID, dnsName string) (bool, error) {
+	want := normalizeAliasDNSName(dnsName)
+	if want == "" {
+		return false, nil
+	}
+	dists, err := s.ListCloudFrontDistributions(accountID)
+	if err != nil {
+		return false, fmt.Errorf("list cloudfront for alias: %w", err)
+	}
+	for _, d := range dists {
+		if normalizeAliasDNSName(d.DomainName) == want {
+			return true, nil
+		}
+	}
+	lbs, err := s.DescribeELBv2LoadBalancers(accountID, nil)
+	if err != nil {
+		return false, fmt.Errorf("list elbv2 for alias: %w", err)
+	}
+	for _, lb := range lbs {
+		if normalizeAliasDNSName(lb.DNSName) == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func normalizeAliasDNSName(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	return strings.TrimSuffix(name, ".")
 }
 
 func normalizeDNSName(name string) string {

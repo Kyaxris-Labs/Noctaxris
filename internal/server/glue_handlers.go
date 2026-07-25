@@ -8,6 +8,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	gluesvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/glue"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -15,6 +17,12 @@ import (
 const (
 	glueJSONContentType = "application/x-amz-json-1.1"
 	glueEventSource     = "glue.amazonaws.com"
+
+	actionGlueCreateCrawler  = "glue:CreateCrawler"
+	actionGlueStartCrawler   = "glue:StartCrawler"
+	actionGlueGetCrawler     = "glue:GetCrawler"
+	actionGlueDeleteCrawler  = "glue:DeleteCrawler"
+	actionGlueListCrawlers   = "glue:ListCrawlers"
 )
 
 func (s *Server) handleGlue(
@@ -45,6 +53,16 @@ func (s *Server) handleGlue(
 		s.glueGetTables(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionGlueDeleteTable:
 		s.glueDeleteTable(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionGlueCreateCrawler:
+		s.glueCreateCrawler(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionGlueStartCrawler:
+		s.glueStartCrawler(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionGlueGetCrawler:
+		s.glueGetCrawler(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionGlueDeleteCrawler:
+		s.glueDeleteCrawler(w, r, body, requestID, eventID, verified, readOnly, params)
+	case actionGlueListCrawlers:
+		s.glueListCrawlers(w, r, body, requestID, eventID, verified, readOnly)
 	default:
 		s.writeGlueError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Glue action is not implemented.", readOnly, eventID, verified)
@@ -72,6 +90,16 @@ func glueAction(action string) string {
 		return catalog.ActionGlueGetTables
 	case "DeleteTable":
 		return catalog.ActionGlueDeleteTable
+	case "CreateCrawler":
+		return actionGlueCreateCrawler
+	case "StartCrawler":
+		return actionGlueStartCrawler
+	case "GetCrawler":
+		return actionGlueGetCrawler
+	case "DeleteCrawler":
+		return actionGlueDeleteCrawler
+	case "ListCrawlers":
+		return actionGlueListCrawlers
 	default:
 		return action
 	}
@@ -334,6 +362,247 @@ func (s *Server) glueDeleteTable(
 	payload, _ := gluesvc.DeleteTableJSON()
 	s.writeGlueOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "DeleteTable", readOnly)
+}
+
+func (s *Server) glueCrawlerARN(verified *authn.Verified, name string) string {
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultGlueRegion
+	}
+	return "arn:aws:glue:" + region + ":" + verified.AccountID + ":crawler/" + name
+}
+
+func (s *Server) checkGluePassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok {
+		return errors.New("Role must be a valid IAM role ARN")
+	}
+	if accountID != verified.AccountID {
+		return errors.New("Role must be in the same account")
+	}
+	storedARN, trust, err := s.store.GetRole(accountID, roleName)
+	if err != nil {
+		return errors.New("Role not found")
+	}
+	if storedARN != "" {
+		roleARN = storedARN
+	}
+	in, ok := s.evalInputs(verified)
+	if !ok {
+		return errors.New("not authorized to pass role to Glue")
+	}
+	decision := authz.CheckPassRole(authz.PassRoleRequest{
+		Caller: authz.RequestContext{
+			Principal:     verified.Principal,
+			Resource:      roleARN,
+			Region:        verified.Region,
+			ConditionKeys: s.conditionKeys(verified),
+		},
+		EvalInputs:       in,
+		RoleARN:          roleARN,
+		TrustPolicyDoc:   trust,
+		ServicePrincipal: "glue.amazonaws.com",
+		SourceArn:        sourceARN,
+	})
+	if decision != authz.Allow {
+		return errors.New("not authorized to pass role to Glue")
+	}
+	return nil
+}
+
+func parseGlueS3Targets(params map[string]any) []store.GlueS3Target {
+	targetsIn, _ := params["Targets"].(map[string]any)
+	raw, _ := targetsIn["S3Targets"].([]any)
+	var out []store.GlueS3Target
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		path, _ := m["Path"].(string)
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		out = append(out, store.GlueS3Target{Path: path})
+	}
+	return out
+}
+
+func glueCrawlerJSON(cr store.GlueCrawler) map[string]any {
+	s3Targets := make([]map[string]any, 0, len(cr.Targets))
+	for _, t := range cr.Targets {
+		s3Targets = append(s3Targets, map[string]any{"Path": t.Path})
+	}
+	return map[string]any{
+		"Name":         cr.Name,
+		"Role":         cr.Role,
+		"DatabaseName": cr.DatabaseName,
+		"State":        cr.State,
+		"Targets": map[string]any{
+			"S3Targets": s3Targets,
+		},
+		"CreationTime": float64(cr.CreatedAt) / 1000.0,
+		"LastUpdated":  float64(cr.UpdatedAt) / 1000.0,
+	}
+}
+
+func (s *Server) glueCreateCrawler(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	role, _ := params["Role"].(string)
+	dbName, _ := params["DatabaseName"].(string)
+	targets := parseGlueS3Targets(params)
+	if strings.TrimSpace(name) == "" {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"Name is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, actionGlueCreateCrawler, "*") {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform glue:CreateCrawler.", readOnly, eventID, verified)
+		return
+	}
+	if strings.TrimSpace(role) != "" {
+		if err := s.checkGluePassRole(verified, role, s.glueCrawlerARN(verified, name)); err != nil {
+			s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	_, err := s.store.CreateGlueCrawler(verified.AccountID, store.GlueCrawlerCreate{
+		Name: name, Role: role, DatabaseName: dbName, Targets: targets,
+	})
+	if errors.Is(err, store.ErrGlueAlreadyExists) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "AlreadyExistsException",
+			"Crawler already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrGlueNotFound) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
+			"Database not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrGlueBadRequest) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to create crawler.", readOnly, eventID, verified)
+		return
+	}
+	s.writeGlueOK(w, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "CreateCrawler", readOnly)
+}
+
+func (s *Server) glueStartCrawler(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"Name is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, actionGlueStartCrawler, "*") {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform glue:StartCrawler.", readOnly, eventID, verified)
+		return
+	}
+	_, err := s.store.StartGlueCrawler(verified.AccountID, name)
+	if errors.Is(err, store.ErrGlueNotFound) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
+			"Crawler not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrGlueBadRequest) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to start crawler.", readOnly, eventID, verified)
+		return
+	}
+	s.writeGlueOK(w, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "StartCrawler", readOnly)
+}
+
+func (s *Server) glueGetCrawler(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	if !s.authorize(verified, actionGlueGetCrawler, "*") {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform glue:GetCrawler.", readOnly, eventID, verified)
+		return
+	}
+	cr, err := s.store.GetGlueCrawler(verified.AccountID, name)
+	if errors.Is(err, store.ErrGlueNotFound) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
+			"Crawler not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to get crawler.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"Crawler": glueCrawlerJSON(cr)})
+	s.writeGlueOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "GetCrawler", readOnly)
+}
+
+func (s *Server) glueDeleteCrawler(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	if !s.authorize(verified, actionGlueDeleteCrawler, "*") {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform glue:DeleteCrawler.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteGlueCrawler(verified.AccountID, name)
+	if errors.Is(err, store.ErrGlueNotFound) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
+			"Crawler not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to delete crawler.", readOnly, eventID, verified)
+		return
+	}
+	s.writeGlueOK(w, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "DeleteCrawler", readOnly)
+}
+
+func (s *Server) glueListCrawlers(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	if !s.authorize(verified, actionGlueListCrawlers, "*") {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform glue:ListCrawlers.", readOnly, eventID, verified)
+		return
+	}
+	crawlers, err := s.store.ListGlueCrawlers(verified.AccountID)
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to list crawlers.", readOnly, eventID, verified)
+		return
+	}
+	items := make([]map[string]any, 0, len(crawlers))
+	for _, cr := range crawlers {
+		items = append(items, glueCrawlerJSON(cr))
+	}
+	payload, _ := json.Marshal(map[string]any{"Crawlers": items})
+	s.writeGlueOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, glueEventSource, "ListCrawlers", readOnly)
 }
 
 func (s *Server) writeGlueOK(w http.ResponseWriter, payload []byte) {

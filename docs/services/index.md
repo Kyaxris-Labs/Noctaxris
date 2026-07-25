@@ -14,41 +14,41 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, BatchGet/BatchWrite, TransactWrite/TransactGet (same-account Put/Delete/Update/ConditionCheck + ConditionExpression, ClientRequestToken, stream append), TTL, DescribeContinuousBackups stub, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE / OLD_IMAGE / NEW_AND_OLD_IMAGES / KEYS_ONLY; Lambda ESM + FilterCriteria (including OldImage) in [lambda.md](lambda.md) |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
-| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS / DynamoDB Streams / multi-shard Kinesis ESM (sequential GetRecords) with FilterCriteria (EventBridge operators), Function URLs, sync+async Invoke, service-principal XA AddPermission (SourceAccount/SourceArn), lab ECR Image pull, TLS DinD |
+| [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS / DynamoDB Streams / multi-shard Kinesis / Amazon MQ ESM (RUNNING broker; empty default receive / no in-tree AMQP) with FilterCriteria (EventBridge operators), Function URLs, sync+async Invoke, service-principal XA AddPermission (SourceAccount/SourceArn), lab ECR Image pull, TLS DinD |
 | [SSM Parameter Store](ssm.md) | Shipped | String, StringList, and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
-| [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS), RotateSecret (random default or optional four-step Lambda rotator with PassRole for secretsmanager.amazonaws.com), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression + optional Duration) with RotateImmediately=false and in-process due ticker, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
+| [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS), RotateSecret (random default or optional four-step Lambda rotator with PassRole for secretsmanager.amazonaws.com), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression including DOM `nW`/`LW` + optional Duration) with RotateImmediately=false and in-process due ticker, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
 | [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, lab FilterPolicy + RawMessageDelivery, topic policies, XA Subscribe + foreign SQS delivery |
 | [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; content filters (prefix/suffix/exists/anything-but/numeric/equals-ignore-case); RoleArn or resource-policy delivery for SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
-| [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset, Lambda/SQS/SNS/SFN targets, in-process ticker, PassRole with schedule `aws:SourceArn` |
+| [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset (DOM `nW`/`LW`), Lambda/SQS/SNS/SFN targets, in-process ticker, PassRole with schedule `aws:SourceArn` |
 | [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy; PassRole with pipe `aws:SourceArn` |
-| [Amazon MQ](mq.md) | Shipped | Broker CRUD; nested RabbitMQ when DinD up (`RUNNING`); ActiveMQ / no-DinD → `CREATION_FAILED` stub |
-| [Transfer Family](transfer.md) | Shipped | Server/user CRUD; SFTP-shaped sandbox; OFFLINE without EndpointType/VPC; PassRole on Role |
+| [Amazon MQ](mq.md) | Shipped | Broker CRUD; nested RabbitMQ or ActiveMQ when DinD up (`RUNNING`); no-DinD → `CREATION_FAILED` stub; Lambda ESM when RUNNING (empty default receive) |
+| [Transfer Family](transfer.md) | Shipped | Server/user CRUD; ONLINE; lab Put/Get/List file API on `:4566` (not real SFTP); PassRole on Role |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2 (monolithic PUT + chunked PATCH), DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
-| [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL audit |
+| [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL; CreateTrail + StartLogging lab snapshot delivery to S3/Logs |
 | [CloudWatch Logs](logs.md) | Shipped | Groups/streams, Put/DeleteRetentionPolicy, Put/GetLogEvents, FilterLogEvents (lab filterPattern subset), account resource policies, XA subscription filters (awslogs envelope), metric filters lite |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
 | [Kinesis Data Streams](kinesis.md) | Shipped | Stream CRUD with ShardCount 1..4, Put/Get records per shard, stream resource policy; Lambda ESM in [lambda.md](lambda.md) |
-| [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3 or Lambda; RoleARN session or destination policy on Put |
+| [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3, Lambda, or nested OpenSearch (Active domain + RoleARN; skip-without-engine); RoleARN session or destination policy on Put |
 | [SES](ses.md) | Shipped | Local catcher: verify, SendEmail/SendRawEmail, ListIdentities, SetIdentityNotificationTopic Bounce, GetSendStatistics |
-| [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, GetConfiguration, AppConfigData session |
-| [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Task to Lambda/SQS/SNS/EventBridge; lab resource policy for EventBridge RoleArn-less StartExecution |
+| [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, StartDeployment (immediate DEPLOYED), GetConfiguration / AppConfigData from deployed pointer |
+| [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Choice (Equals-only)/Wait (0–5s)/Parallel (sequential)/Task to Lambda/SQS/SNS/EventBridge; lab resource policy for EventBridge RoleArn-less StartExecution |
 | [CloudFormation](cloudformation.md) | Shipped | Stack CRUD; ChangeSet Add/Remove/allowlisted Modify; S3/IAM/SQS/DynamoDB/Lambda/KMS/SNS/Logs/Events/SSM/Secrets (+ BucketPolicy, ManagedPolicy, Permission+FunctionUrlAuthType, NotificationConfiguration, TopicPolicy, Subscription+FilterPolicy, LogGroup RetentionInDays, Alias, User/Group); JSON/YAML; lab intrinsics |
 | [CodeBuild](codebuild.md) | Shipped | Project CRUD lite, StartBuild on nested DinD, BatchGetBuilds/ListBuilds |
 | [CodePipeline](codepipeline.md) | Shipped | Pipeline CRUD, StartPipelineExecution with nested CodeBuild StartBuild, GetPipelineState |
 | [Batch](batch.md) | Shipped | Compute environment / queue / definition lite, SubmitJob on nested DinD |
-| [Glue](glue.md) | Shipped | Data Catalog database and table CRUD (PartitionKeys + SerDe fields for Athena) |
-| [WAF v2](wafv2.md) | Shipped | WebACL / rule group lite; AssociateWebACL; invoke DefaultAction gate; Evaluate helper |
-| [Config](config.md) | Shipped | Recorder / delivery channel lite, StartRecorder SNS notify when snsTopicARN set, compliance stub over tagged resources |
+| [Glue](glue.md) | Shipped | Data Catalog database and table CRUD (PartitionKeys + SerDe fields for Athena); crawler lite Create/Start/Get/Delete/List |
+| [WAF v2](wafv2.md) | Shipped | WebACL / rule group lite; AssociateWebACL (HTTP API / AppSync / Lambda / ALB); ByteMatch UriPath/SingleHeader; invoke DefaultAction gate; Evaluate helper |
+| [Config](config.md) | Shipped | Recorder / delivery channel lite; Start writes lab snapshot JSON to delivery S3 then recording flag; SNS notify when snsTopicARN set; compliance stub |
 | [ACM](acm.md) | Shipped | Request/Describe/List/DeleteCertificate, lab self-signed PEM |
-| [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets |
+| [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets, AliasTarget to CloudFront/ELB |
 | [Cloud Map](servicediscovery.md) | Shipped | Private DNS (requires Vpc) / HTTP namespace, service/instance, Vpc-scoped DiscoverInstances |
 | [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
-| [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source, API_KEY, IAM, or Cognito User Pools auth |
+| [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source (optional PassRole), flat multi-field Query, API_KEY/IAM/Cognito auth |
 | [API Gateway HTTP API](apigatewayv2.md) | Shipped | HTTP API Lambda proxy, GetIntegrations/GetRoutes/GetAuthorizers, REST `/v2/apis` before ECR Registry `/v2/`, CorsConfiguration + OPTIONS preflight, NONE/JWT/IAM/CUSTOM authorizers, optional CredentialsArn PassRole |
-| [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD (UpdateUserPool), USER_PASSWORD_AUTH / USER_SRP_AUTH / CUSTOM_AUTH / refresh / RevokeToken, TOTP SOFTWARE_TOKEN_MFA, lab RoleArn + LambdaConfig PassRole and sync trigger Invoke (PostConfirmation / PreTokenGeneration / PreSignUp / Pre+PostAuthentication / CustomMessage render / UserMigration password / custom-auth Define/Create/Verify), RS256 tokens, JWKS on loopback |
-| [CloudFront](cloudfront.md) | Shipped | Distribution CRUD **control-plane stub** (origins must exist; `InProgress`, no DomainName/PoP) |
-| [ELB v2](elbv2.md) | Shipped | ALB / target group / listener lite; Lambda lab listener on `/alb/...`; health healthy when listener + permission; IP unused; NLB rejected |
+| [Cognito User Pools](cognito-idp.md) | Shipped | Pool/client CRUD (UpdateUserPool), USER_PASSWORD_AUTH / USER_SRP_AUTH / CUSTOM_AUTH / refresh / RevokeToken, TOTP SOFTWARE_TOKEN_MFA, lab RoleArn + LambdaConfig PassRole and sync trigger Invoke (PostConfirmation / PreTokenGeneration / PreSignUp / Pre+PostAuthentication / CustomMessage_SignUp + CustomMessage_AdminCreateUser render / UserMigration password / custom-auth Define/Create/Verify), RS256 tokens, JWKS on loopback |
+| [CloudFront](cloudfront.md) | Shipped | Distribution CRUD; Deployed + lab DomainName; SigV4 edge GET `/cloudfront/{id}/...` to S3 or HTTP API origin (no real PoP) |
+| [ELB v2](elbv2.md) | Shipped | ALB / target group / listener / path + host-header rules lite; Lambda lab listener on `/alb/...`; health healthy when listener or rule + permission; IP unused; NLB rejected |
 | [S3 Vectors](s3vectors.md) | Shipped | Vector bucket/index CRUD, PutVectors/QueryVectors cosine or euclidean |
 | [Cloud Control](cloudcontrol.md) | Shipped | Create/Get/List/Update/DeleteResource + GetResourceRequestStatus; allowlist aligned with CFN lab types; UpdateResource mutable subsets (incl. IAM User/Group/ManagedPolicy, EventBus Policy, LogGroup RetentionInDays) |
 | [BCM Data Exports](bcm-data-exports.md) | Shipped | Export definition CRUD plus sample file under data root |
@@ -59,8 +59,8 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [RDS Data API](rds-data.md) | Shipped | ExecuteStatement / BatchExecuteStatement; Begin/Commit/Rollback via held `pgx`; prefer `pgx` else nested `psql`; typed OID fields on pgx; named `parameters`; `formatRecordsAs=JSON`; Batch `generatedFields` from `RETURNING`; secretArn fail-closed |
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
 | [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete; `creating` until nested Mongo-compatible starts |
-| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON subset; GetObject/OutputLocation fail closed |
-| [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://` + lab `FailureReason` on mmap/lock |
+| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON; WHERE equality + COUNT(*); GetObject/OutputLocation fail closed |
+| [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://`; SigV4 lab query facade `_doc` / allowlisted `_search` |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |
 | [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument **canned** Blocks |
@@ -80,7 +80,7 @@ Compose-backed SDK / Terraform / CloudFormation suites (API must be ready on `12
 bash tests/run-all.sh
 ```
 
-See [tests/README.md](../../tests/README.md).
+See [tests/README.md](../../tests/README.md). Go/Node/Python SDK suites include CloudFront edge, Transfer files, Glue crawlers, AppConfig deploy, Config history, SFN Choice, CloudTrail delivery, Route53 Alias, ELBv2 rules, and AppSync PassRole rows when the API is up. Nested OpenSearch / ActiveMQ / Firehose OpenSearch / Lambda MQ ESM rows skip when engines are not Active/RUNNING.
 
 Condition-key catalogs and ADR-0005 §7 evaluation:
 
@@ -124,8 +124,8 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / DocumentDB / MQ / OpenSearch). Live Invoke/RunTask need a healthy engine. Default engine is restricted DinD (`privileged: false` with explicit caps and host cgroup); use `docker/compose.engine-privileged.yaml` only when nested smoke fails on the host. Athena runs in-process (no nested query engine).
 
-**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines are RDS (Postgres), ElastiCache (Valkey/Redis), DocumentDB (Mongo-compatible), MQ (RabbitMQ), and OpenSearch; those ports are never published on the host. Prefer RDS Data API on `:4566` for SQL labs.
+**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines are RDS (Postgres), ElastiCache (Valkey/Redis), DocumentDB (Mongo-compatible), MQ (RabbitMQ or ActiveMQ), and OpenSearch; those ports are never published on the host. Prefer RDS Data API on `:4566` for SQL labs.
 
-**In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS, DynamoDB Streams, and Kinesis event source mappings (all shards polled sequentially) use a continuous in-process poller. EventBridge Pipes use a continuous in-process ticker that calls `PollPipeOnce`. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
+**In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS, DynamoDB Streams, Kinesis (all shards polled sequentially), and Amazon MQ event source mappings use a continuous in-process poller. EventBridge Pipes use a continuous in-process ticker that calls `PollPipeOnce`. SNS HTTP delivery is allowlisted loopback only (no open SSRF).
 
 **Edge identity:** Cognito JWKS and API Gateway / AppSync Cognito JWT verify share the go-jose v4 helper. Gateway invoke stays on the single published listener. No second host port for Cognito Hosted UI.

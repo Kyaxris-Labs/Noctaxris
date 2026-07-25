@@ -15,7 +15,8 @@ import (
 // ElastiCache/DocDB: without DockerHost this is a no-op (control-plane may stay creating).
 // MQ/OpenSearch: without DockerHost or on start/wait failure, status is fail-closed (CREATION_FAILED / CreateFailed).
 // env is optional engine bootstrap. Never log env values.
-func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[string]string) error {
+// imageOverride, when non-empty, selects the container image (used for MQ EngineType RabbitMQ vs ActiveMQ).
+func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[string]string, imageOverride ...string) error {
 	if s == nil || strings.TrimSpace(accountID) == "" {
 		return nil
 	}
@@ -35,9 +36,13 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	image := compute.DefaultDataPlaneImage(dk)
+	if len(imageOverride) > 0 && strings.TrimSpace(imageOverride[0]) != "" {
+		image = strings.TrimSpace(imageOverride[0])
+	}
 	inst, err := cli.StartDataPlane(ctx, compute.DataPlaneOpts{
 		Kind:  dk,
-		Image: compute.DefaultDataPlaneImage(dk),
+		Image: image,
 		Name:  "noctaxris-" + string(dk) + "-" + strings.ToLower(name),
 		Env:   env,
 	})
@@ -61,6 +66,15 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 		return waitErr
 	}
 	return promoteNestedDataAfterWait(s, accountID, dk, name, inst.ContainerID, host, waitErr)
+}
+
+// tryStartNestedMQ starts nested RabbitMQ or ActiveMQ with the engine-specific image and env.
+func tryStartNestedMQ(s *Server, accountID, brokerID, engineType string) error {
+	return tryStartNestedDataEngine(
+		s, accountID, "mq", brokerID,
+		mqNestedBootstrapEnv(engineType),
+		compute.DefaultDataPlaneImageForMQ(engineType),
+	)
 }
 
 // promoteNestedDataAfterWait promotes nested data to ready only when wait succeeded.

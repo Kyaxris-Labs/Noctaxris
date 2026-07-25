@@ -287,4 +287,21 @@ func TestConfigRecorder(t *testing.T) {
 	if startRec.Code != http.StatusOK {
 		t.Fatalf("StartConfigurationRecorder status=%d body=%q", startRec.Code, startRec.Body.String())
 	}
+	listed, err := st.ListObjectsV2(testAccountID, "config-lab", "AWSLogs/", "")
+	if err != nil || len(listed.Contents) == 0 {
+		t.Fatalf("list config history: %v %#v", err, listed)
+	}
+	var snapKey string
+	for _, obj := range listed.Contents {
+		if strings.Contains(obj.Key, "noctaxris-config-snapshot-default-") {
+			snapKey = obj.Key
+			break
+		}
+	}
+	if snapKey == "" {
+		t.Fatalf("missing snapshot object: %#v", listed.Contents)
+	}
+	if _, data, err := st.GetObject(testAccountID, "config-lab", snapKey); err != nil || len(data) == 0 {
+		t.Fatalf("get snapshot: %v len=%d", err, len(data))
+	}
 }

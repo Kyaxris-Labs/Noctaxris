@@ -2,6 +2,7 @@ package firehose
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -27,6 +28,16 @@ func DescribeDeliveryStreamJSON(st store.FirehoseStream) ([]byte, error) {
 			"LambdaArn": st.DestLambdaARN,
 			"RoleARN":   st.RoleARN,
 		}
+	case "OpenSearch":
+		domainARN := store.OpenSearchDomainARN(store.DefaultFirehoseRegion, accountIDFromFirehoseARN(st.StreamARN), st.DestOpenSearchDomain)
+		osDesc := map[string]any{
+			"DomainARN": domainARN,
+			"IndexName": st.DestOpenSearchIndex,
+			"RoleARN":   st.RoleARN,
+		}
+		// AWS shape (primary) plus lab alias for Create symmetry.
+		dest["AmazonopensearchserviceDestinationDescription"] = osDesc
+		dest["OpenSearchDestinationDescription"] = osDesc
 	}
 	return json.Marshal(map[string]any{
 		"DeliveryStreamDescription": map[string]any{
@@ -38,6 +49,16 @@ func DescribeDeliveryStreamJSON(st store.FirehoseStream) ([]byte, error) {
 			"Destinations":         []any{dest},
 		},
 	})
+}
+
+// accountIDFromFirehoseARN extracts the 12-digit account from a delivery stream ARN.
+func accountIDFromFirehoseARN(arn string) string {
+	// arn:aws:firehose:REGION:ACCOUNT:deliverystream/NAME
+	parts := strings.Split(arn, ":")
+	if len(parts) >= 5 {
+		return parts[4]
+	}
+	return ""
 }
 
 // ListDeliveryStreamsJSON builds a ListDeliveryStreams response.

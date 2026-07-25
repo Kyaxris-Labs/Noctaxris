@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -232,6 +233,9 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "config-q", nil); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +248,37 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 	rec, err := st.GetConfigRecorder(account, "default")
 	if err != nil || !rec.Recording {
 		t.Fatalf("recorder: %v %#v", err, rec)
+	}
+	listed, err := st.ListObjectsV2(account, "config-bucket", "AWSLogs/", "")
+	if err != nil || len(listed.Contents) == 0 {
+		t.Fatalf("list config history objects: %v %#v", err, listed)
+	}
+	var foundKey string
+	for _, obj := range listed.Contents {
+		if strings.Contains(obj.Key, "noctaxris-config-snapshot-default-") {
+			foundKey = obj.Key
+			break
+		}
+	}
+	if foundKey == "" {
+		t.Fatalf("no snapshot key under AWSLogs/: %#v", listed.Contents)
+	}
+	_, data, err := st.GetObject(account, "config-bucket", foundKey)
+	if err != nil {
+		t.Fatalf("get snapshot: %v", err)
+	}
+	var snap store.ConfigSnapshotLite
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snap.ConfigurationRecorderName != "default" || snap.AccountID != account {
+		t.Fatalf("snapshot meta: %#v", snap)
+	}
+	if len(snap.S3BucketNames) == 0 || !containsString(snap.S3BucketNames, "config-bucket") {
+		t.Fatalf("snapshot buckets: %#v", snap.S3BucketNames)
+	}
+	if len(snap.SQSQueueNames) == 0 || !containsString(snap.SQSQueueNames, "config-q") {
+		t.Fatalf("snapshot queues: %#v", snap.SQSQueueNames)
 	}
 	results, err := st.DescribeConfigComplianceByRule(account, "lab")
 	if err != nil || len(results) != 0 {
@@ -259,4 +294,35 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 	if _, err := st.PutConfigDeliveryChannel(account, "missing", "no-such-bucket", "", ""); err == nil {
 		t.Fatal("expected missing bucket rejection")
 	}
+}
+
+func TestConfigStartFailsWhenHistoryPutFails(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+		t.Fatal(err)
+	}
+	longPrefix := strings.Repeat("p/", 480)
+	if _, err := st.PutConfigDeliveryChannel(account, "default", "config-bucket", longPrefix, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartConfigRecorder(account, "default"); err == nil {
+		t.Fatal("expected start failure when snapshot key is invalid")
+	}
+	rec, err := st.GetConfigRecorder(account, "default")
+	if err != nil || rec.Recording {
+		t.Fatalf("recording must stay false after failed start: %v %#v", err, rec)
+	}
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

@@ -9,7 +9,7 @@ In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON ob
 | Area | Actions |
 |------|---------|
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
-| SQL subset | `SELECT cols FROM db.table [LIMIT n]` (or `table` with `QueryExecutionContext.Database`) |
+| SQL subset | `SELECT cols FROM db.table [WHERE col = 'literal'] [LIMIT n]`; `SELECT COUNT(*) FROM db.table [WHERE col = 'literal']` (or `table` with `QueryExecutionContext.Database`) |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON) |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
 | WorkGroup | Optional. Defaults to `primary` |
@@ -46,13 +46,27 @@ QID=$(aws athena start-query-execution \
 
 aws athena get-query-execution --query-execution-id "$QID" --endpoint-url "$EP"
 aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
+# WHERE equality
+QID=$(aws athena start-query-execution \
+  --query-string "SELECT id, name FROM labdb.people WHERE name = 'alice'" \
+  --query-execution-context Database=labdb \
+  --endpoint-url "$EP" --query QueryExecutionId --output text)
+aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
+# COUNT(*)
+QID=$(aws athena start-query-execution \
+  --query-string "SELECT COUNT(*) FROM labdb.people WHERE name = 'bob'" \
+  --query-execution-context Database=labdb \
+  --endpoint-url "$EP" --query QueryExecutionId --output text)
+aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
 ```
 
 Skip live Compose smoke when Docker is unavailable. Store and server unit tests cover the lab path without DinD.
 
 ## Not yet / deferred
 
-- Full SQL, CTAS, UNLOAD, INSERT, federated catalogs
+- Full SQL (joins, `GROUP BY`, inequalities, `LIKE`, `IN`, subqueries), CTAS, UNLOAD, INSERT, federated catalogs
 - WorkGroup configuration matrix and result reuse
 - Nested Trino / Presto / Spark engines
 - Managed query results encryption options

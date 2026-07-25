@@ -80,22 +80,66 @@ func parseWAFRules(params map[string]any) []store.WAFRule {
 		m, _ := r.(map[string]any)
 		name, _ := m["Name"].(string)
 		label, _ := m["Label"].(string)
-		action := "Allow"
-		if a, ok := m["Action"].(map[string]any); ok {
-			if _, ok := a["Block"]; ok {
-				action = "Block"
-			}
-		} else if as, ok := m["Action"].(string); ok {
-			action = as
-		}
+		action := wafRuleActionFromMap(m)
 		prio := 0
 		switch p := m["Priority"].(type) {
 		case float64:
 			prio = int(p)
 		}
+		if bm := parseWAFByteMatchStatement(m); bm != nil {
+			rules = append(rules, store.WAFRule{
+				Name: name, Priority: prio, Action: action, ByteMatchStatement: bm,
+			})
+			continue
+		}
 		rules = append(rules, store.WAFRule{Name: name, Priority: prio, Action: action, Label: label})
 	}
 	return rules
+}
+
+func wafRuleActionFromMap(m map[string]any) string {
+	action := "Allow"
+	if a, ok := m["Action"].(map[string]any); ok {
+		if _, ok := a["Block"]; ok {
+			action = "Block"
+		}
+	} else if as, ok := m["Action"].(string); ok {
+		action = as
+	}
+	return action
+}
+
+func parseWAFByteMatchStatement(rule map[string]any) *store.WAFByteMatchStatement {
+	var bm map[string]any
+	if stmt, ok := rule["Statement"].(map[string]any); ok {
+		bm, _ = stmt["ByteMatchStatement"].(map[string]any)
+	}
+	if bm == nil {
+		bm, _ = rule["ByteMatchStatement"].(map[string]any)
+	}
+	if bm == nil {
+		return nil
+	}
+	search, _ := bm["SearchString"].(string)
+	constraint, _ := bm["PositionalConstraint"].(string)
+	ftm, _ := bm["FieldToMatch"].(map[string]any)
+	if ftm == nil {
+		return nil
+	}
+	out := &store.WAFByteMatchStatement{
+		SearchString:         search,
+		PositionalConstraint: constraint,
+	}
+	if _, ok := ftm["UriPath"]; ok {
+		out.FieldToMatchType = "UriPath"
+		return out
+	}
+	if sh, ok := ftm["SingleHeader"].(map[string]any); ok {
+		out.FieldToMatchType = "SingleHeader"
+		out.HeaderName, _ = sh["Name"].(string)
+		return out
+	}
+	return nil
 }
 
 func parseWAFDefaultAction(params map[string]any) string {
@@ -293,12 +337,13 @@ func (s *Server) wafEvaluate(
 ) {
 	webARN, _ := params["WebACLArn"].(string)
 	label, _ := params["Label"].(string)
+	view := wafRequestViewFromEvaluateParams(params)
 	if !s.authorize(verified, catalog.ActionWAFEvaluate, "*") {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:Evaluate.", readOnly, eventID, verified)
 		return
 	}
-	action, err := s.store.EvaluateWAFRequest(verified.AccountID, webARN, label)
+	action, err := s.store.EvaluateWAFRequestWithView(verified.AccountID, webARN, label, view)
 	if errors.Is(err, store.ErrWAFNotFound) {
 		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFNonexistentItemException",
 			"WebACL not found.", readOnly, eventID, verified)

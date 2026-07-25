@@ -1,7 +1,9 @@
 package store_test
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -120,5 +122,175 @@ func TestSFNTaskWithoutInvokerFails(t *testing.T) {
 	}
 	if exec.Status != "FAILED" {
 		t.Fatalf("want FAILED got %+v", exec)
+	}
+}
+
+func TestSFNChoiceStringEquals(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Pick",
+  "States": {
+    "Pick": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.color",
+          "StringEquals": "red",
+          "Next": "Red"
+        }
+      ],
+      "Default": "Other"
+    },
+    "Red": {
+      "Type": "Pass",
+      "Result": {"branch": "red"},
+      "End": true
+    },
+    "Other": {
+      "Type": "Pass",
+      "Result": {"branch": "other"},
+      "End": true
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "choice-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-choice", `{"color":"red"}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" {
+		t.Fatalf("status=%s error=%s cause=%s", exec.Status, exec.Error, exec.Cause)
+	}
+	if !strings.Contains(exec.Output, `"branch"`) || !strings.Contains(exec.Output, `"red"`) {
+		t.Fatalf("want Red branch output, got %s", exec.Output)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawChoice bool
+	for _, ev := range hist {
+		if strings.Contains(ev.Type, "Choice") {
+			sawChoice = true
+			break
+		}
+	}
+	if !sawChoice {
+		t.Fatalf("expected Choice history events, got %+v", hist)
+	}
+}
+
+func TestSFNWaitSeconds(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Pause",
+  "States": {
+    "Pause": {
+      "Type": "Wait",
+      "Seconds": 0,
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "wait-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-wait", `{}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" {
+		t.Fatalf("status=%s error=%s cause=%s", exec.Status, exec.Error, exec.Cause)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawWait bool
+	for _, ev := range hist {
+		if strings.HasPrefix(ev.Type, "Wait") {
+			sawWait = true
+			break
+		}
+	}
+	if !sawWait {
+		t.Fatalf("expected Wait history events, got %+v", hist)
+	}
+}
+
+func TestSFNParallelMergesBranchOutputs(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	def := `{
+  "StartAt": "Fan",
+  "States": {
+    "Fan": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "A",
+          "States": {
+            "A": {
+              "Type": "Pass",
+              "Result": {"a": 1},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "B",
+          "States": {
+            "B": {
+              "Type": "Pass",
+              "Result": {"b": 2},
+              "End": true
+            }
+          }
+        }
+      ],
+      "End": true
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "parallel-sm", def, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-parallel", `{}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "SUCCEEDED" {
+		t.Fatalf("status=%s error=%s cause=%s", exec.Status, exec.Error, exec.Cause)
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal([]byte(exec.Output), &arr); err != nil {
+		t.Fatalf("output not JSON array: %s err=%v", exec.Output, err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("want array length 2, got %d (%s)", len(arr), exec.Output)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawParallel bool
+	for _, ev := range hist {
+		if strings.HasPrefix(ev.Type, "Parallel") {
+			sawParallel = true
+			break
+		}
+	}
+	if !sawParallel {
+		t.Fatalf("expected Parallel history events, got %+v", hist)
 	}
 }

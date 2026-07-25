@@ -294,6 +294,10 @@ func (s *Server) appsyncCreateAPIKey(
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateApiKey", readOnly)
 }
 
+func (s *Server) checkAppSyncPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	return s.checkEdgePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalAppSync, "AppSync")
+}
+
 func (s *Server) appsyncCreateDataSource(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -308,12 +312,34 @@ func (s *Server) appsyncCreateDataSource(
 	if lambdaARN == "" {
 		lambdaARN, _ = params["lambdaFunctionArn"].(string)
 	}
+	serviceRoleArn, _ := params["serviceRoleArn"].(string)
+	if serviceRoleArn == "" {
+		serviceRoleArn, _ = params["ServiceRoleArn"].(string)
+	}
 	if !s.authorize(verified, catalog.ActionAppSyncCreateDataSource, "*") {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appsync:CreateDataSource.", readOnly, eventID, verified)
 		return
 	}
-	ds, err := s.store.CreateAppSyncDataSource(verified.AccountID, apiID, name, dsType, lambdaARN)
+	api, err := s.store.GetAppSyncGraphqlAPI(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get GraphQL API.", readOnly, eventID, verified)
+		return
+	}
+	if strings.TrimSpace(serviceRoleArn) != "" {
+		if err := s.checkAppSyncPassRole(verified, serviceRoleArn, api.ARN); err != nil {
+			s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	ds, err := s.store.CreateAppSyncDataSource(verified.AccountID, apiID, name, dsType, lambdaARN, serviceRoleArn)
 	if errors.Is(err, store.ErrAppSyncNotFound) {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
 			"GraphQL API not found.", readOnly, eventID, verified)
@@ -324,9 +350,22 @@ func (s *Server) appsyncCreateDataSource(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	payload, _ := appsyncsvc.CreateDataSourceJSON(ds)
+	payload, _ := appsyncCreateDataSourceJSON(ds)
 	s.writeAppSyncOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateDataSource", readOnly)
+}
+
+func appsyncCreateDataSourceJSON(ds store.AppSyncDataSource) ([]byte, error) {
+	src := map[string]any{
+		"name":          ds.Name,
+		"type":          ds.Type,
+		"lambdaConfig":  map[string]any{"lambdaFunctionArn": ds.LambdaFunctionARN},
+		"dataSourceArn": "arn:aws:appsync:us-east-1:000000000001:apis/" + ds.APIID + "/datasources/" + ds.Name,
+	}
+	if ds.ServiceRoleArn != "" {
+		src["serviceRoleArn"] = ds.ServiceRoleArn
+	}
+	return json.Marshal(map[string]any{"dataSource": src})
 }
 
 func (s *Server) appsyncCreateResolver(
@@ -459,13 +498,13 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 		return
 	}
 
-	if !s.enforceAssociatedWAF(w, accountID, appSyncWAFCandidateARNs(store.DefaultAppSyncRegion, accountID, apiID)) {
+	if !s.enforceAssociatedWAF(w, r, accountID, appSyncWAFCandidateARNs(store.DefaultAppSyncRegion, accountID, apiID)) {
 		return
 	}
 
 	params := jsonBodyMap(body)
 	query, _ := params["query"].(string)
-	field, err := store.ParseAppSyncQueryField(query)
+	fields, err := store.ParseAppSyncQueryFields(query)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -473,42 +512,67 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 		_, _ = w.Write(payload)
 		return
 	}
-	_, lambdaARN, err := s.store.ResolveAppSyncQueryField(accountID, apiID, field)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		payload, _ := appsyncsvc.GraphQLErrorsJSON("resolver not found for field " + field)
-		_, _ = w.Write(payload)
-		return
-	}
 
-	fnAccount, fnName, ok := store.ParseLambdaARNFromSFNResource(lambdaARN)
+	region := store.DefaultAppSyncRegion
+	if verified != nil && verified.Region != "" {
+		region = verified.Region
+	}
+	data := make(map[string]any, len(fields))
+	var gqlErrs []map[string]any
+	for _, field := range fields {
+		value, fieldErr := s.appsyncResolveInvokeField(r, accountID, apiID, api.ARN, region, field)
+		if fieldErr != "" {
+			data[field] = nil
+			gqlErrs = append(gqlErrs, map[string]any{
+				"message": fieldErr,
+				"path":    []any{field},
+			})
+			continue
+		}
+		data[field] = value
+	}
+	envelope := map[string]any{"data": data}
+	if len(gqlErrs) > 0 {
+		envelope["errors"] = gqlErrs
+	}
+	payload, _ := json.Marshal(envelope)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GraphQL", readOnly)
+}
+
+// appsyncResolveInvokeField resolves one Query field and Invokes its Lambda data source.
+// When the data source has serviceRoleArn, requires role-session Allow on lambda:InvokeFunction;
+// otherwise requires a Lambda resource policy Allow for appsync.amazonaws.com.
+func (s *Server) appsyncResolveInvokeField(
+	r *http.Request, accountID, apiID, apiARN, region, field string,
+) (value any, errMsg string) {
+	_, ds, err := s.store.ResolveAppSyncQueryField(accountID, apiID, field)
+	if err != nil {
+		return nil, "resolver not found for field " + field
+	}
+	fnAccount, fnName, ok := store.ParseLambdaARNFromSFNResource(ds.LambdaFunctionARN)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		payload, _ := appsyncsvc.GraphQLErrorsJSON("invalid lambda data source ARN")
-		_, _ = w.Write(payload)
-		return
+		return nil, "invalid lambda data source ARN"
 	}
 	if fnAccount == "" {
 		fnAccount = accountID
 	}
 	fn, executedVersion, err := s.store.ResolveFunction(fnAccount, fnName, "$LATEST")
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		payload, _ := appsyncsvc.GraphQLErrorsJSON("lambda function not found")
-		_, _ = w.Write(payload)
-		return
+		return nil, "lambda function not found"
 	}
-	if !s.store.DeliveryTargetResourcePolicyAllows(
-		fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAppSync, api.ARN,
+	if roleARN := strings.TrimSpace(ds.ServiceRoleArn); roleARN != "" {
+		if !s.store.RoleSessionAllows(
+			accountID, roleARN, catalog.ActionLambdaInvoke, fn.FunctionARN, "appsync-datasource", region,
+		) {
+			return nil, "UnauthorizedException"
+		}
+	} else if !s.store.DeliveryTargetResourcePolicyAllows(
+		fnAccount, fn.FunctionARN, catalog.ActionLambdaInvoke, authz.ServicePrincipalAppSync, apiARN,
 	) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		payload, _ := appsyncsvc.GraphQLErrorsJSON("UnauthorizedException")
-		_, _ = w.Write(payload)
-		return
+		return nil, "UnauthorizedException"
 	}
 	eventJSON, _ := json.Marshal(map[string]any{
 		"field":     field,
@@ -517,22 +581,12 @@ func (s *Server) handleAppSyncGraphQLRuntime(
 	})
 	result, err := s.executeLambdaInvoke(r.Context(), fnAccount, fnName, fn, executedVersion, string(eventJSON))
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK) // GraphQL errors often 200
-		payload, _ := appsyncsvc.GraphQLErrorsJSON(err.Error())
-		_, _ = w.Write(payload)
-		s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GraphQL", readOnly)
-		return
+		return nil, err.Error()
 	}
-	var value any
 	if err := json.Unmarshal(result, &value); err != nil {
 		value = string(result)
 	}
-	payload, _ := appsyncsvc.GraphQLDataJSON(field, value)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GraphQL", readOnly)
+	return value, ""
 }
 
 func (s *Server) writeAppSyncOK(w http.ResponseWriter, payload []byte) {

@@ -42,6 +42,16 @@ func (s *Server) handleTransfer(
 		s.transferCreateUser(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionTransferDeleteUser:
 		s.transferDeleteUser(w, r, body, requestID, eventID, verified, readOnly, params)
+	case labActionTransferPutFile:
+		serverID, _ := params["ServerId"].(string)
+		arn := store.TransferServerARN(s.transferRegion(verified), verified.AccountID, serverID)
+		s.transferPutFile(w, r, body, requestID, eventID, verified, readOnly, params, arn)
+	case labActionTransferGetFile:
+		serverID, _ := params["ServerId"].(string)
+		arn := store.TransferServerARN(s.transferRegion(verified), verified.AccountID, serverID)
+		s.transferGetFile(w, r, body, requestID, eventID, verified, readOnly, params, arn)
+	case labActionTransferListDirectory:
+		s.transferListDirectory(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeTransferError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Transfer action is not implemented.", readOnly, eventID, verified)
@@ -65,6 +75,12 @@ func transferAction(action string) string {
 		return catalog.ActionTransferCreateUser
 	case "DeleteUser":
 		return catalog.ActionTransferDeleteUser
+	case "PutFile":
+		return labActionTransferPutFile
+	case "GetFile":
+		return labActionTransferGetFile
+	case "ListDirectory":
+		return labActionTransferListDirectory
 	default:
 		return action
 	}
@@ -132,7 +148,7 @@ func (s *Server) transferCreateServer(
 	}
 	if et, ok := params["EndpointType"].(string); ok && strings.TrimSpace(et) != "" {
 		s.writeTransferError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
-			"EndpointType is not supported; lab Transfer servers stay OFFLINE with no listener.", readOnly, eventID, verified)
+			"EndpointType is not supported; lab Transfer omits EndpointType (no VPC listener).", readOnly, eventID, verified)
 		return
 	}
 	var protocols []string

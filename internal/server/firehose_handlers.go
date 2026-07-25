@@ -123,7 +123,7 @@ func (s *Server) fhCreate(
 			"User is not authorized to perform firehose:CreateDeliveryStream.", readOnly, eventID, verified)
 		return
 	}
-	destType, bucket, prefix, lambdaARN, roleARN := parseFirehoseDestination(params)
+	destType, bucket, prefix, lambdaARN, roleARN, osDomain, osIndex := parseFirehoseDestination(params)
 	if roleARN != "" {
 		if err := s.checkFirehosePassRole(verified, roleARN); err != nil {
 			s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
@@ -135,7 +135,13 @@ func (s *Server) fhCreate(
 	if region == "" {
 		region = store.DefaultFirehoseRegion
 	}
-	st, err := s.store.CreateFirehoseStream(verified.AccountID, region, name, roleARN, destType, bucket, prefix, lambdaARN)
+	var st store.FirehoseStream
+	var err error
+	if strings.EqualFold(destType, "OpenSearch") {
+		st, err = s.store.CreateFirehoseOpenSearchStream(verified.AccountID, region, name, roleARN, osDomain, osIndex)
+	} else {
+		st, err = s.store.CreateFirehoseStream(verified.AccountID, region, name, roleARN, destType, bucket, prefix, lambdaARN)
+	}
 	if errors.Is(err, store.ErrFirehoseExists) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
 			"Delivery stream already exists.", readOnly, eventID, verified)
@@ -156,7 +162,7 @@ func (s *Server) fhCreate(
 	s.writeSuccessAudit(r, requestID, eventID, verified, firehoseEventSource, "CreateDeliveryStream", readOnly)
 }
 
-func parseFirehoseDestination(params map[string]any) (destType, bucket, prefix, lambdaARN, roleARN string) {
+func parseFirehoseDestination(params map[string]any) (destType, bucket, prefix, lambdaARN, roleARN, osDomain, osIndex string) {
 	if s3, ok := params["S3DestinationConfiguration"].(map[string]any); ok {
 		destType = "S3"
 		bucket, _ = s3["BucketARN"].(string)
@@ -183,7 +189,26 @@ func parseFirehoseDestination(params map[string]any) (destType, bucket, prefix, 
 		roleARN, _ = lam["RoleARN"].(string)
 		return
 	}
+	if osCfg, ok := params["AmazonopensearchserviceDestinationConfiguration"].(map[string]any); ok {
+		return parseFirehoseOpenSearchDest(osCfg)
+	}
+	if osCfg, ok := params["AmazonOpenSearchServiceDestinationConfiguration"].(map[string]any); ok {
+		return parseFirehoseOpenSearchDest(osCfg)
+	}
+	if osCfg, ok := params["OpenSearchDestinationConfiguration"].(map[string]any); ok {
+		return parseFirehoseOpenSearchDest(osCfg)
+	}
 	destType = "S3"
+	return
+}
+
+func parseFirehoseOpenSearchDest(cfg map[string]any) (destType, bucket, prefix, lambdaARN, roleARN, osDomain, osIndex string) {
+	destType = "OpenSearch"
+	domainARN, _ := cfg["DomainARN"].(string)
+	domainName, _ := cfg["DomainName"].(string)
+	osDomain = store.ParseFirehoseOpenSearchDomainRef(domainARN, domainName)
+	osIndex, _ = cfg["IndexName"].(string)
+	roleARN, _ = cfg["RoleARN"].(string)
 	return
 }
 

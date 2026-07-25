@@ -65,7 +65,7 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 	}
 
 	region := store.DefaultAPIGatewayRegion
-	if !s.enforceAssociatedWAF(w, accountID, httpAPIWAFCandidateARNs(region, accountID, apiID, stage)) {
+	if !s.enforceAssociatedWAF(w, r, accountID, httpAPIWAFCandidateARNs(region, accountID, apiID, stage)) {
 		return
 	}
 

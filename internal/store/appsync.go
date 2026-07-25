@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS appsync_data_sources (
   name TEXT NOT NULL,
   type TEXT NOT NULL,
   lambda_function_arn TEXT NOT NULL DEFAULT '',
+  service_role_arn TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (account_id, api_id, name)
 );
 CREATE TABLE IF NOT EXISTS appsync_resolvers (
@@ -109,6 +110,7 @@ type AppSyncDataSource struct {
 	APIID             string
 	Type              string // AWS_LAMBDA
 	LambdaFunctionARN string
+	ServiceRoleArn    string // optional; when set, GraphQL invoke uses role session
 }
 
 // AppSyncResolver maps a type/field to a data source.
@@ -132,6 +134,7 @@ func EnsureAppSyncSchema(db *sql.DB) error {
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_region TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_client_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_issuer TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE appsync_data_sources ADD COLUMN service_role_arn TEXT NOT NULL DEFAULT ''`,
 	}); err != nil {
 		return fmt.Errorf("ensure appsync schema alter: %w", err)
 	}
@@ -375,10 +378,12 @@ func (s *Store) hashAppSyncAPIKey(apiKey string) string {
 }
 
 // CreateAppSyncDataSource creates a Lambda data source.
-func (s *Store) CreateAppSyncDataSource(accountID, apiID, name, dsType, lambdaARN string) (AppSyncDataSource, error) {
+// serviceRoleARN is optional; when empty, GraphQL invoke uses Lambda resource policy only.
+func (s *Store) CreateAppSyncDataSource(accountID, apiID, name, dsType, lambdaARN, serviceRoleARN string) (AppSyncDataSource, error) {
 	name = strings.TrimSpace(name)
 	dsType = strings.ToUpper(strings.TrimSpace(dsType))
 	lambdaARN = strings.TrimSpace(lambdaARN)
+	serviceRoleARN = strings.TrimSpace(serviceRoleARN)
 	if name == "" {
 		return AppSyncDataSource{}, fmt.Errorf("%w: name required", ErrAppSyncBadRequest)
 	}
@@ -395,9 +400,9 @@ func (s *Store) CreateAppSyncDataSource(accountID, apiID, name, dsType, lambdaAR
 		return AppSyncDataSource{}, err
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO appsync_data_sources (account_id, api_id, name, type, lambda_function_arn)
-		 VALUES (?, ?, ?, ?, ?)`,
-		accountID, apiID, name, dsType, lambdaARN,
+		`INSERT INTO appsync_data_sources (account_id, api_id, name, type, lambda_function_arn, service_role_arn)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		accountID, apiID, name, dsType, lambdaARN, serviceRoleARN,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -405,17 +410,21 @@ func (s *Store) CreateAppSyncDataSource(accountID, apiID, name, dsType, lambdaAR
 		}
 		return AppSyncDataSource{}, fmt.Errorf("create data source: %w", err)
 	}
-	return AppSyncDataSource{Name: name, APIID: apiID, Type: dsType, LambdaFunctionARN: lambdaARN}, nil
+	return AppSyncDataSource{
+		Name: name, APIID: apiID, Type: dsType,
+		LambdaFunctionARN: lambdaARN, ServiceRoleArn: serviceRoleARN,
+	}, nil
 }
 
 // GetAppSyncDataSource returns a data source.
 func (s *Store) GetAppSyncDataSource(accountID, apiID, name string) (AppSyncDataSource, error) {
 	var ds AppSyncDataSource
 	err := s.db.QueryRow(
-		`SELECT name, api_id, type, lambda_function_arn FROM appsync_data_sources
+		`SELECT name, api_id, type, lambda_function_arn, COALESCE(service_role_arn,'')
+		 FROM appsync_data_sources
 		 WHERE account_id = ? AND api_id = ? AND name = ?`,
 		accountID, apiID, name,
-	).Scan(&ds.Name, &ds.APIID, &ds.Type, &ds.LambdaFunctionARN)
+	).Scan(&ds.Name, &ds.APIID, &ds.Type, &ds.LambdaFunctionARN, &ds.ServiceRoleArn)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AppSyncDataSource{}, ErrAppSyncNotFound
 	}
@@ -469,33 +478,88 @@ func (s *Store) GetAppSyncResolver(accountID, apiID, typeName, fieldName string)
 
 var (
 	gqlOpPrefixRe = regexp.MustCompile(`(?is)^\s*(?:query|mutation|subscription)\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*`)
-	gqlFieldRe    = regexp.MustCompile(`(?is)\{\s*([A-Za-z_][A-Za-z0-9_]*)`)
+	gqlIdentRe    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// ParseAppSyncQueryField extracts the first selection field name from a minimal GraphQL query.
-// Lab: supports `{ field }` and `query { field }` only. No fragments, aliases, or nested selections.
-func ParseAppSyncQueryField(query string) (fieldName string, err error) {
+// ParseAppSyncQueryFields extracts top-level flat Query selection field names.
+// Supports `{ hello world }` and `query { hello world }`. Rejects nested selections.
+func ParseAppSyncQueryFields(query string) ([]string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "", fmt.Errorf("%w: query required", ErrAppSyncBadRequest)
+		return nil, fmt.Errorf("%w: query required", ErrAppSyncBadRequest)
 	}
 	query = gqlOpPrefixRe.ReplaceAllString(query, "")
-	m := gqlFieldRe.FindStringSubmatch(query)
-	if len(m) < 2 {
-		return "", fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	query = strings.TrimSpace(query)
+	if !strings.HasPrefix(query, "{") {
+		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
 	}
-	return m[1], nil
+	depth := 0
+	end := -1
+	for i, r := range query {
+		switch r {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
+	inner := strings.TrimSpace(query[1:end])
+	if inner == "" {
+		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
+	if strings.ContainsAny(inner, "{}") {
+		return nil, fmt.Errorf("%w: nested selections are not supported", ErrAppSyncBadRequest)
+	}
+	parts := strings.FieldsFunc(inner, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	fields := make([]string, 0, len(parts))
+	for _, tok := range parts {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if strings.ContainsAny(tok, "()") {
+			return nil, fmt.Errorf("%w: field arguments are not supported", ErrAppSyncBadRequest)
+		}
+		if !gqlIdentRe.MatchString(tok) {
+			return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+		}
+		fields = append(fields, tok)
+	}
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("%w: unable to parse query field", ErrAppSyncBadRequest)
+	}
+	return fields, nil
 }
 
-// ResolveAppSyncQueryField looks up resolver + Lambda ARN for a Query field.
-func (s *Store) ResolveAppSyncQueryField(accountID, apiID, fieldName string) (resolver AppSyncResolver, lambdaARN string, err error) {
+// ParseAppSyncQueryField extracts the first selection field name from a minimal GraphQL query.
+func ParseAppSyncQueryField(query string) (fieldName string, err error) {
+	fields, err := ParseAppSyncQueryFields(query)
+	if err != nil {
+		return "", err
+	}
+	return fields[0], nil
+}
+
+// ResolveAppSyncQueryField looks up resolver + data source for a Query field.
+func (s *Store) ResolveAppSyncQueryField(accountID, apiID, fieldName string) (resolver AppSyncResolver, ds AppSyncDataSource, err error) {
 	resolver, err = s.GetAppSyncResolver(accountID, apiID, "Query", fieldName)
 	if err != nil {
-		return AppSyncResolver{}, "", err
+		return AppSyncResolver{}, AppSyncDataSource{}, err
 	}
-	ds, err := s.GetAppSyncDataSource(accountID, apiID, resolver.DataSourceName)
+	ds, err = s.GetAppSyncDataSource(accountID, apiID, resolver.DataSourceName)
 	if err != nil {
-		return AppSyncResolver{}, "", err
+		return AppSyncResolver{}, AppSyncDataSource{}, err
 	}
-	return resolver, ds.LambdaFunctionARN, nil
+	return resolver, ds, nil
 }
