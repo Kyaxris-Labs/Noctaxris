@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS config_rules (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, rule_name)
 );
+CREATE TABLE IF NOT EXISTS config_resource_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  capture_time_ms INTEGER NOT NULL,
+  configuration_item_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_config_resource_history_lookup
+  ON config_resource_history (account_id, resource_type, resource_id, capture_time_ms);
 `
 
 // ConfigRecorder is a configuration recorder row.
@@ -387,6 +397,145 @@ func (s *Store) DescribeConfigComplianceByRule(accountID, ruleName string) ([]Co
 		ResourceID:     ruleName,
 		Annotation:     "rule evaluation not implemented",
 	}}, nil
+}
+
+const (
+	configConfigurationItemVersion = "1.3"
+	ConfigItemStatusOK              = "OK"
+	ConfigItemStatusResourceDeleted = "ResourceDeleted"
+)
+
+// ConfigConfigurationItem is a lab-shaped AWS Config configuration item.
+type ConfigConfigurationItem struct {
+	ConfigurationItemVersion     string `json:"configurationItemVersion"`
+	ConfigurationItemCaptureTime string `json:"configurationItemCaptureTime"`
+	ConfigurationItemStatus      string `json:"configurationItemStatus"`
+	ResourceType                 string `json:"resourceType"`
+	ResourceID                   string `json:"resourceId"`
+	ResourceName                 string `json:"resourceName"`
+	AWSAccountID                 string `json:"awsAccountId"`
+	Configuration                string `json:"configuration,omitempty"`
+}
+
+// AccountConfigRecording is true when any configuration recorder for the account has recording enabled.
+func (s *Store) AccountConfigRecording(accountID string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM config_recorders WHERE account_id = ? AND recording = 1`,
+		accountID,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("account config recording: %w", err)
+	}
+	return n > 0, nil
+}
+
+// AppendConfigHistoryItem stores a configuration item when a recorder is actively recording.
+// No-op (nil) when recording is off.
+func (s *Store) AppendConfigHistoryItem(accountID string, item ConfigConfigurationItem) error {
+	recording, err := s.AccountConfigRecording(accountID)
+	if err != nil {
+		return err
+	}
+	if !recording {
+		return nil
+	}
+	if strings.TrimSpace(item.ResourceType) == "" || strings.TrimSpace(item.ResourceID) == "" {
+		return fmt.Errorf("%w: resourceType and resourceId required", ErrConfigBadRequest)
+	}
+	if item.ConfigurationItemVersion == "" {
+		item.ConfigurationItemVersion = configConfigurationItemVersion
+	}
+	if item.ConfigurationItemCaptureTime == "" {
+		item.ConfigurationItemCaptureTime = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if item.AWSAccountID == "" {
+		item.AWSAccountID = accountID
+	}
+	if item.ResourceName == "" {
+		item.ResourceName = item.ResourceID
+	}
+	body, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("append config history: marshal: %w", err)
+	}
+	captureMs := time.Now().UTC().UnixMilli()
+	if t, err := time.Parse(time.RFC3339Nano, item.ConfigurationItemCaptureTime); err == nil {
+		captureMs = t.UnixMilli()
+	} else if t, err := time.Parse(time.RFC3339, item.ConfigurationItemCaptureTime); err == nil {
+		captureMs = t.UnixMilli()
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO config_resource_history (account_id, resource_type, resource_id, capture_time_ms, configuration_item_json)
+		 VALUES (?, ?, ?, ?, ?)`,
+		accountID, item.ResourceType, item.ResourceID, captureMs, string(body),
+	)
+	if err != nil {
+		return fmt.Errorf("append config history: %w", err)
+	}
+	return nil
+}
+
+// AppendS3BucketConfigHistory records bucket create (deleted=false) or delete (deleted=true) when recording.
+func (s *Store) AppendS3BucketConfigHistory(accountID, bucketName string, deleted bool) error {
+	bucketName = strings.TrimSpace(bucketName)
+	if bucketName == "" {
+		return nil
+	}
+	status := ConfigItemStatusOK
+	cfg := map[string]any{"name": bucketName}
+	if deleted {
+		status = ConfigItemStatusResourceDeleted
+	} else if b, err := s.GetBucket(accountID, bucketName); err == nil {
+		cfg["creationDate"] = b.CreationDate
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("append s3 bucket config history: %w", err)
+	}
+	return s.AppendConfigHistoryItem(accountID, ConfigConfigurationItem{
+		ConfigurationItemStatus: status,
+		ResourceType:            "AWS::S3::Bucket",
+		ResourceID:              bucketName,
+		ResourceName:            bucketName,
+		Configuration:           string(cfgJSON),
+	})
+}
+
+// GetResourceConfigHistory returns configuration items in chronological order (oldest first).
+func (s *Store) GetResourceConfigHistory(accountID, resourceType, resourceID string, limit int) ([]ConfigConfigurationItem, error) {
+	resourceType = strings.TrimSpace(resourceType)
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceType == "" || resourceID == "" {
+		return nil, fmt.Errorf("%w: resourceType and resourceId required", ErrConfigBadRequest)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(
+		`SELECT configuration_item_json FROM config_resource_history
+		 WHERE account_id = ? AND resource_type = ? AND resource_id = ?
+		 ORDER BY capture_time_ms ASC, id ASC
+		 LIMIT ?`,
+		accountID, resourceType, resourceID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get resource config history: %w", err)
+	}
+	defer rows.Close()
+	var out []ConfigConfigurationItem
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("get resource config history scan: %w", err)
+		}
+		var item ConfigConfigurationItem
+		if err := json.Unmarshal([]byte(raw), &item); err != nil {
+			return nil, fmt.Errorf("get resource config history unmarshal: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func splitResourceARN(arn string) (resourceType, resourceID string) {

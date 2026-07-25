@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strconv"
@@ -344,6 +345,55 @@ func TestRedrivePolicyMovesMessageToDLQ(t *testing.T) {
 	}
 	if len(dlqMsgs) != 1 || !bytes.Equal(dlqMsgs[0].Body, []byte("fail-me")) {
 		t.Fatalf("dlq message=%+v", dlqMsgs)
+	}
+}
+
+func TestRedrivePolicySetsDlqSourceArnAttribute(t *testing.T) {
+	st := openSQSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "dlq-src", nil); err != nil {
+		t.Fatal(err)
+	}
+	dlqARN := store.QueueARN("us-east-1", account, "dlq-src")
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "src-q", map[string]string{
+		"VisibilityTimeout": "0",
+		"RedrivePolicy":     `{"deadLetterTargetArn":"` + dlqARN + `","maxReceiveCount":"1"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SendMessage(account, "src-q", []byte("poison"), false, nil, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ReceiveMessages(account, "src-q", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("receive=%+v", got)
+	}
+	if err := st.ChangeMessageVisibility(account, "src-q", got[0].ReceiptHandle, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReceiveMessages(account, "src-q", 1); err != nil {
+		t.Fatal(err)
+	}
+	dlqMsgs, err := st.ReceiveMessages(account, "dlq-src", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dlqMsgs) != 1 {
+		t.Fatalf("dlq=%+v", dlqMsgs)
+	}
+	var attrs map[string]any
+	if err := json.Unmarshal([]byte(dlqMsgs[0].AttributesJSON), &attrs); err != nil {
+		t.Fatal(err)
+	}
+	provenance, ok := attrs["NoctaxrisDlqSourceArn"].(map[string]any)
+	if !ok {
+		t.Fatalf("attrs=%v", attrs)
+	}
+	if provenance["StringValue"] != store.QueueARN("us-east-1", account, "src-q") {
+		t.Fatalf("provenance=%v", provenance)
 	}
 }
 

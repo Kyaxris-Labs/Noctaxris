@@ -185,6 +185,18 @@ func (s *Store) createFirehoseStream(
 		if err := s.validateFirehoseOpenSearchDest(accountID, osDomain); err != nil {
 			return FirehoseStream{}, err
 		}
+	case "VPCFLOW", "VPC_FLOW_LOGS":
+		destType = "VPCFlow"
+		bucket = strings.TrimSpace(bucket)
+		if bucket == "" {
+			return FirehoseStream{}, fmt.Errorf("%w: VPC flow S3 BucketARN/Bucket required", ErrFirehoseBadReq)
+		}
+		if strings.HasPrefix(bucket, "arn:") {
+			parts := strings.Split(bucket, ":::")
+			if len(parts) == 2 {
+				bucket = parts[1]
+			}
+		}
 	default:
 		return FirehoseStream{}, fmt.Errorf("%w: unsupported destination type %q", ErrFirehoseBadReq, destType)
 	}
@@ -333,6 +345,19 @@ func (s *Store) PutFirehoseRecord(accountID, streamName string, data []byte) (re
 			return "", fmt.Errorf("put record s3: %w", err)
 		}
 	}
+	if st.DestType == "VPCFlow" && st.DestBucket != "" {
+		line, lineErr := LineFromFirehoseRecordData(accountID, data)
+		if lineErr != nil {
+			return "", fmt.Errorf("%w: %v", ErrFirehoseBadReq, lineErr)
+		}
+		body := []byte(line + "\n")
+		key := VPCFlowDeliveryObjectKey(accountID, DefaultFirehoseRegion, st.DestPrefix, time.Now().UTC())
+		if _, err = s.PutObject(accountID, st.DestBucket, key, PutObjectMeta{
+			Data: body, PlainSize: int64(len(body)), ContentType: "text/plain",
+		}); err != nil {
+			return "", fmt.Errorf("put record vpc flow s3: %w", err)
+		}
+	}
 	if st.DestType == "Lambda" && strings.TrimSpace(st.DestLambdaARN) != "" {
 		if err := s.deliverFirehoseToLambda(accountID, st, recordID, data, now); err != nil {
 			return "", err
@@ -371,7 +396,7 @@ func (s *Store) firehoseDeliveryAuthorized(accountID string, st FirehoseStream) 
 
 func firehoseDestinationTarget(accountID string, st FirehoseStream) (targetARN, action string, ok bool) {
 	switch st.DestType {
-	case "S3":
+	case "S3", "VPCFlow":
 		bucket := strings.TrimSpace(st.DestBucket)
 		if bucket == "" {
 			return "", "", false

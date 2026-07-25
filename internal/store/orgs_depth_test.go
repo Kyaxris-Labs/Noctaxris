@@ -40,6 +40,51 @@ func TestListAccountsAndManagement(t *testing.T) {
 	}
 }
 
+func TestListOrgPoliciesParentsAndAccountsForParent(t *testing.T) {
+	st := openTestStore(t)
+	const mgmt = "000000000001"
+	if err := st.EnsureRoot(mgmt, "AKIAROOTEXAMPLE01", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	_, memberID, err := st.CreateMemberAccount(mgmt, "list@example.com", "List")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ouID, err := st.CreateOrganizationalUnit(store.OrgRootID, "Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MoveAccount(memberID, store.OrgRootID, ouID); err != nil {
+		t.Fatal(err)
+	}
+	scpID, err := st.CreateOrgPolicy("SCP", "DenyS3", `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:*","Resource":"*"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachOrgPolicy(scpID, "ou", ouID); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := st.ListOrgPolicies("")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListOrgPolicies all=%#v err=%v", all, err)
+	}
+	byType, err := st.ListOrgPolicies("SCP")
+	if err != nil || len(byType) != 1 || byType[0].ID != scpID {
+		t.Fatalf("ListOrgPolicies SCP=%#v err=%v", byType, err)
+	}
+
+	underOU, err := st.ListAccountsForParent(ouID)
+	if err != nil || len(underOU) != 1 || underOU[0].AccountID != memberID {
+		t.Fatalf("ListAccountsForParent ou=%#v err=%v", underOU, err)
+	}
+
+	parents, err := st.ListParents(memberID)
+	if err != nil || len(parents) != 2 || parents[0].Type != "ORGANIZATIONAL_UNIT" || parents[1].Type != "ROOT" {
+		t.Fatalf("ListParents=%#v err=%v", parents, err)
+	}
+}
+
 func TestOrgOUsPoliciesAndSCPRCPDocs(t *testing.T) {
 	st := openTestStore(t)
 	const mgmt = "000000000001"

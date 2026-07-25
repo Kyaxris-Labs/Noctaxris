@@ -355,6 +355,13 @@ func (s *Server) secretsGetSecretValue(
 	}
 	s.writeSecretsOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "GetSecretValue", readOnly)
+	if keyID := strings.TrimSpace(meta.KmsKeyID); keyID != "" {
+		if resolved, rerr := s.store.ResolveKeyID(secretAccountID, keyID); rerr == nil {
+			if kmsKey, gerr := s.store.GetKey(resolved); gerr == nil {
+				s.writeSiblingKMSDecryptAudit(r, requestID, eventID, verified, kmsKey.ARN, encCtx)
+			}
+		}
+	}
 }
 
 func (s *Server) secretsPutSecretValue(

@@ -62,3 +62,25 @@ func TestCloudTrailLookupEvents(t *testing.T) {
 		t.Fatalf("CloudTrailEvent=%q", cte)
 	}
 }
+
+func TestCloudTrailLookupEventsAccountScoped(t *testing.T) {
+	srv, auditDir := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	lines := `{"eventVersion":"1.08","eventTime":"2026-07-20T15:00:00Z","eventSource":"sts.amazonaws.com","eventName":"GetCallerIdentity","eventID":"ev-mine","eventType":"AwsApiCall","recipientAccountId":"000000000001","readOnly":true}
+{"eventVersion":"1.08","eventTime":"2026-07-20T15:01:00Z","eventSource":"sts.amazonaws.com","eventName":"GetCallerIdentity","eventID":"ev-other","eventType":"AwsApiCall","recipientAccountId":"000000000099","readOnly":true}
+`
+	if err := os.WriteFile(filepath.Join(auditDir, "events.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := mustCloudTrailJSON(t, handler, map[string]any{"MaxResults": 10}, now)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "ev-mine") || strings.Contains(body, "ev-other") {
+		t.Fatalf("expected account-scoped lookup body=%q", body)
+	}
+}

@@ -43,6 +43,31 @@ type Config struct {
 	// (NOCTAXRIS_ALLOW_ANONYMOUS_S3=1). Still requires public bucket policy or
 	// object canned ACL public-read per object. Default false.
 	AllowAnonymousS3 bool
+	// CloudTrailInject enables the lab-only cloudtrail:InjectEvents action
+	// (NOCTAXRIS_CLOUDTRAIL_INJECT=1). Default false (AccessDenied when off).
+	CloudTrailInject bool
+	// CloudTrailTrustXFF uses the first X-Forwarded-For hop for audit
+	// sourceIPAddress only (NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1). Default false
+	// uses TCP RemoteAddr. Authz aws:SourceIp always stays the peer address.
+	CloudTrailTrustXFF bool
+	// CloudTrailGzip gzip-compresses trail S3 delivery objects when
+	// NOCTAXRIS_CLOUDTRAIL_GZIP=1. Default false.
+	CloudTrailGzip bool
+	// GuardDutyInject enables the lab-only guardduty:InjectFindings action
+	// (NOCTAXRIS_GUARDDUTY_INJECT=1). Default false (AccessDenied when off).
+	GuardDutyInject bool
+	// MacieInject enables the lab-only macie2:InjectFindings action
+	// (NOCTAXRIS_MACIE_INJECT=1). Default false (AccessDenied when off).
+	MacieInject bool
+	// VPCFlowInject enables the lab-only ec2:InjectFlowLogs action
+	// (NOCTAXRIS_VPCFLOW_INJECT=1). Default false (AccessDenied when off).
+	VPCFlowInject bool
+	// Route53QueryLogInject enables the lab-only route53:InjectQueryLogs action
+	// (NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT=1). Default false (AccessDenied when off).
+	Route53QueryLogInject bool
+	// LabForensics enables NoctaxrisLab clock and bulk-seed APIs
+	// (NOCTAXRIS_LAB_FORENSICS=1). Default false (AccessDenied when off).
+	LabForensics bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -68,6 +93,14 @@ func LoadFromEnv() (Config, error) {
 		FunctionURLCORSOrigins: splitCSVEnv("NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS"),
 		AllowAnonymousS3: strings.EqualFold(os.Getenv(EnvAllowAnonymousS3), "1") ||
 			strings.EqualFold(os.Getenv(EnvAllowAnonymousS3), "true"),
+		CloudTrailInject:      envTruthy("NOCTAXRIS_CLOUDTRAIL_INJECT"),
+		CloudTrailTrustXFF:    envTruthy("NOCTAXRIS_CLOUDTRAIL_TRUST_XFF"),
+		CloudTrailGzip:        envTruthy("NOCTAXRIS_CLOUDTRAIL_GZIP"),
+		GuardDutyInject:       envTruthy("NOCTAXRIS_GUARDDUTY_INJECT"),
+		MacieInject:           envTruthy("NOCTAXRIS_MACIE_INJECT"),
+		VPCFlowInject:         envTruthy("NOCTAXRIS_VPCFLOW_INJECT"),
+		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
+		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
 	}
 
 	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)
@@ -112,6 +145,11 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envTruthy(key string) bool {
+	return strings.EqualFold(os.Getenv(key), "1") ||
+		strings.EqualFold(os.Getenv(key), "true")
 }
 
 func splitCSVEnv(key string) []string {

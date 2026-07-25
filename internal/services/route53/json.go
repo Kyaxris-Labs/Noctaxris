@@ -53,6 +53,15 @@ func ChangeResourceRecordSetsJSON(changeID string) ([]byte, error) {
 	})
 }
 
+// InjectQueryLogsJSON builds lab InjectQueryLogs response.
+func InjectQueryLogsJSON(delivered int, logGroup, logStream string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"Delivered":     delivered,
+		"LogGroupName":  logGroup,
+		"LogStreamName": logStream,
+	})
+}
+
 // ListResourceRecordSetsJSON builds ListResourceRecordSets response.
 func ListResourceRecordSetsJSON(sets []store.Route53ResourceRecordSet) ([]byte, error) {
 	items := make([]map[string]any, 0, len(sets))

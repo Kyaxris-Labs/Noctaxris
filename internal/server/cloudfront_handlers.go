@@ -91,6 +91,24 @@ func parseCloudFrontOrigins(params map[string]any) []store.CloudFrontOrigin {
 	return out
 }
 
+func parseCloudFrontLogging(cfg map[string]any) store.CloudFrontLoggingConfig {
+	if cfg == nil {
+		return store.CloudFrontLoggingConfig{}
+	}
+	block, _ := cfg["Logging"].(map[string]any)
+	if block == nil {
+		return store.CloudFrontLoggingConfig{}
+	}
+	enabled, _ := block["Enabled"].(bool)
+	bucket, _ := block["Bucket"].(string)
+	prefix, _ := block["Prefix"].(string)
+	return store.CloudFrontLoggingConfig{
+		Enabled: enabled,
+		Bucket:  bucket,
+		Prefix:  prefix,
+	}
+}
+
 func (s *Server) cfCreateDistribution(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -125,6 +143,24 @@ func (s *Server) cfCreateDistribution(
 		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to create distribution.", readOnly, eventID, verified)
 		return
+	}
+	if logging := parseCloudFrontLogging(cfg); logging.Enabled || logging.Bucket != "" {
+		if err := s.store.SetCloudFrontDistributionLogging(verified.AccountID, d.ID, logging); err != nil {
+			if errors.Is(err, store.ErrCloudFrontBadRequest) {
+				s.writeCloudFrontError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgument",
+					err.Error(), readOnly, eventID, verified)
+				return
+			}
+			s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to configure distribution logging.", readOnly, eventID, verified)
+			return
+		}
+		d, err = s.store.GetCloudFrontDistribution(verified.AccountID, d.ID)
+		if err != nil {
+			s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load distribution.", readOnly, eventID, verified)
+			return
+		}
 	}
 	payload, _ := cfsvc.CreateDistributionJSON(d)
 	s.writeCloudFrontOK(w, payload)

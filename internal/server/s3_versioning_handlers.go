@@ -18,12 +18,20 @@ type s3VersioningConfigurationXML struct {
 }
 
 type s3ListVersionsResultXML struct {
-	XMLName     xml.Name                 `xml:"ListVersionsResult"`
-	XMLNS       string                   `xml:"xmlns,attr"`
-	Name        string                   `xml:"Name"`
-	Prefix      string                   `xml:"Prefix"`
-	IsTruncated bool                     `xml:"IsTruncated"`
-	Versions    []s3ObjectVersionEntryXML `xml:"Version"`
+	XMLName       xml.Name                   `xml:"ListVersionsResult"`
+	XMLNS         string                     `xml:"xmlns,attr"`
+	Name          string                     `xml:"Name"`
+	Prefix        string                     `xml:"Prefix"`
+	IsTruncated   bool                       `xml:"IsTruncated"`
+	Versions      []s3ObjectVersionEntryXML  `xml:"Version"`
+	DeleteMarkers []s3DeleteMarkerEntryXML   `xml:"DeleteMarker"`
+}
+
+type s3DeleteMarkerEntryXML struct {
+	Key          string `xml:"Key"`
+	VersionId    string `xml:"VersionId"`
+	IsLatest     bool   `xml:"IsLatest"`
+	LastModified string `xml:"LastModified"`
 }
 
 type s3ObjectVersionEntryXML struct {
@@ -126,6 +134,12 @@ func (s *Server) s3ListObjectVersions(w http.ResponseWriter, r *http.Request, re
 		Prefix: prefix,
 	}
 	for _, v := range versions {
+		if v.IsDeleteMarker {
+			out.DeleteMarkers = append(out.DeleteMarkers, s3DeleteMarkerEntryXML{
+				Key: v.Key, VersionId: v.VersionID, IsLatest: v.IsLatest, LastModified: v.LastModified,
+			})
+			continue
+		}
 		out.Versions = append(out.Versions, s3ObjectVersionEntryXML{
 			Key: v.Key, VersionId: v.VersionID, IsLatest: v.IsLatest,
 			LastModified: v.LastModified, ETag: `"` + v.ETag + `"`, Size: v.Size, StorageClass: "STANDARD",

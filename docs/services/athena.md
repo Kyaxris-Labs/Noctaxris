@@ -9,8 +9,9 @@ In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON ob
 | Area | Actions |
 |------|---------|
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
-| SQL subset | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
+| SQL subset | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON) |
+| Trail-shaped JSON | Top-level `{"Records":[...]}` objects expand one row per record; `.gz` objects decompress before parse |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
 | WorkGroup | Optional. Defaults to `primary` |
 

@@ -86,3 +86,37 @@ func DescribeComplianceByConfigRuleXML(results []store.ConfigComplianceResult, r
 	}
 	return marshal("DescribeComplianceByConfigRuleResponse", r, requestID)
 }
+
+// GetResourceConfigHistoryXML builds a GetResourceConfigHistory response.
+func GetResourceConfigHistoryXML(items []store.ConfigConfigurationItem, requestID string) ([]byte, error) {
+	type configItem struct {
+		ConfigurationItemVersion     string `xml:"configurationItemVersion"`
+		ConfigurationItemCaptureTime string `xml:"configurationItemCaptureTime"`
+		ConfigurationItemStatus      string `xml:"configurationItemStatus"`
+		ResourceType                 string `xml:"resourceType"`
+		ResourceId                   string `xml:"resourceId"`
+		ResourceName                 string `xml:"resourceName"`
+		AwsAccountId                 string `xml:"awsAccountId"`
+		Configuration                string `xml:"configuration,omitempty"`
+	}
+	type result struct {
+		XMLName            xml.Name `xml:"GetResourceConfigHistoryResult"`
+		ConfigurationItems struct {
+			Member []configItem `xml:"member"`
+		} `xml:"configurationItems"`
+	}
+	var r result
+	for _, it := range items {
+		r.ConfigurationItems.Member = append(r.ConfigurationItems.Member, configItem{
+			ConfigurationItemVersion:     it.ConfigurationItemVersion,
+			ConfigurationItemCaptureTime: it.ConfigurationItemCaptureTime,
+			ConfigurationItemStatus:      it.ConfigurationItemStatus,
+			ResourceType:                 it.ResourceType,
+			ResourceId:                   it.ResourceID,
+			ResourceName:                 it.ResourceName,
+			AwsAccountId:                 it.AWSAccountID,
+			Configuration:                it.Configuration,
+		})
+	}
+	return marshal("GetResourceConfigHistoryResponse", r, requestID)
+}

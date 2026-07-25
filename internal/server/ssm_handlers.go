@@ -249,6 +249,13 @@ func (s *Server) ssmGetParameter(
 	}
 	s.writeSSMOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "GetParameter", readOnly)
+	if withDecryption && p.Type == store.ParamTypeSecureString && strings.TrimSpace(p.KeyID) != "" {
+		if resolved, rerr := s.store.ResolveKeyID(verified.AccountID, p.KeyID); rerr == nil {
+			if kmsKey, gerr := s.store.GetKey(resolved); gerr == nil {
+				s.writeSiblingKMSDecryptAudit(r, requestID, eventID, verified, kmsKey.ARN, store.SSMEncryptionContext(p.ARN))
+			}
+		}
+	}
 }
 
 func (s *Server) ssmGetParameters(

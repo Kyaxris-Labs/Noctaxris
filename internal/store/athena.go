@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -78,7 +80,9 @@ type AthenaStartInput struct {
 
 var (
 	athenaSelectRE = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+)\s+FROM\s+(.+)$`)
-	athenaWhereRE  = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
+	athenaWhereRE      = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
+	athenaWhereLikeRE  = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+LIKE\s+'([^']*)'\s*(.*)$`)
+	athenaWhereJSONRE  = regexp.MustCompile(`(?is)^WHERE\s+(?:json_extract|JSON_EXTRACT)\s*\(\s*((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*'([^']*)'\s*\)\s*(=|LIKE)\s+'([^']*)'\s*(.*)$`)
 	athenaLimitRE  = regexp.MustCompile(`(?is)^LIMIT\s+(\d+)\s*(.*)$`)
 	athenaGroupRE  = regexp.MustCompile(`(?is)^GROUP\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(.*)$`)
 	athenaOrderRE  = regexp.MustCompile(`(?is)^ORDER\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(ASC|DESC))?\s*(.*)$`)
@@ -237,8 +241,10 @@ type athenaParsedSelect struct {
 	Database    string
 	Table       string
 	Limit       int // 0 = no limit
-	WhereColumn string
-	WhereValue  string
+	WhereColumn   string
+	WhereValue    string
+	WhereLike     bool
+	WhereJSONPath string
 	CountStar   bool
 	OrderColumn string
 	OrderDesc   bool
@@ -254,7 +260,7 @@ type athenaParsedSelect struct {
 	JoinRightAlias string
 }
 
-const athenaSQLHelp = "unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [alias] [JOIN|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'] [GROUP BY col] [ORDER BY col [ASC|DESC]] [LIMIT n])"
+const athenaSQLHelp = "unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [alias] [JOIN|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'|col LIKE 'pat'|json_extract(col,'$.path') = 'literal'] [GROUP BY col] [ORDER BY col [ASC|DESC]] [LIMIT n])"
 
 func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 	q = strings.TrimSpace(q)
@@ -342,11 +348,11 @@ func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 		}
 	}
 
-	whereCol, whereVal, limit, orderCol, orderDesc, groupCol, err := parseAthenaSelectSuffix(suffix)
+	whereCol, whereVal, whereLike, whereJSONPath, limit, orderCol, orderDesc, groupCol, err := parseAthenaSelectSuffix(suffix)
 	if err != nil {
 		return athenaParsedSelect{}, err
 	}
-	out.WhereColumn, out.WhereValue, out.Limit = whereCol, whereVal, limit
+	out.WhereColumn, out.WhereValue, out.WhereLike, out.WhereJSONPath, out.Limit = whereCol, whereVal, whereLike, whereJSONPath, limit
 	out.OrderColumn, out.OrderDesc, out.GroupColumn = orderCol, orderDesc, groupCol
 	if out.GroupColumn != "" && !out.CountStar {
 		hasCount := false
@@ -393,30 +399,41 @@ func splitAthenaFromAndSuffix(s string) (fromPart, suffix string) {
 	return strings.TrimSpace(s[:cut]), strings.TrimSpace(s[cut:])
 }
 
-func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, orderCol string, orderDesc bool, groupCol string, err error) {
+func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, whereLike bool, whereJSONPath string, limit int, orderCol string, orderDesc bool, groupCol string, err error) {
 	s = strings.TrimSpace(s)
 	for s != "" {
 		upper := strings.ToUpper(s)
 		switch {
 		case strings.HasPrefix(upper, "WHERE "):
-			m := athenaWhereRE.FindStringSubmatch(s)
-			if m == nil {
-				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal')", ErrAthenaBadRequest)
+			if m := athenaWhereJSONRE.FindStringSubmatch(s); m != nil {
+				whereCol = strings.TrimSpace(m[1])
+				whereJSONPath = strings.TrimSpace(m[2])
+				whereLike = strings.EqualFold(strings.TrimSpace(m[3]), "LIKE")
+				whereVal = m[4]
+				s = strings.TrimSpace(m[5])
+			} else if m := athenaWhereLikeRE.FindStringSubmatch(s); m != nil {
+				whereCol = strings.TrimSpace(m[1])
+				whereLike = true
+				whereVal = m[2]
+				s = strings.TrimSpace(m[3])
+			} else if m := athenaWhereRE.FindStringSubmatch(s); m != nil {
+				whereCol = strings.TrimSpace(m[1])
+				whereVal = m[2]
+				s = strings.TrimSpace(m[3])
+			} else {
+				return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal', LIKE, json_extract)", ErrAthenaBadRequest)
 			}
-			whereCol = strings.TrimSpace(m[1])
-			whereVal = m[2]
-			s = strings.TrimSpace(m[3])
 		case strings.HasPrefix(upper, "GROUP "):
 			m := athenaGroupRE.FindStringSubmatch(s)
 			if m == nil {
-				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid GROUP BY", ErrAthenaBadRequest)
+				return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: invalid GROUP BY", ErrAthenaBadRequest)
 			}
 			groupCol = strings.TrimSpace(m[1])
 			s = strings.TrimSpace(m[2])
 		case strings.HasPrefix(upper, "ORDER "):
 			m := athenaOrderRE.FindStringSubmatch(s)
 			if m == nil {
-				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid ORDER BY", ErrAthenaBadRequest)
+				return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: invalid ORDER BY", ErrAthenaBadRequest)
 			}
 			orderCol = strings.TrimSpace(m[1])
 			orderDesc = strings.EqualFold(strings.TrimSpace(m[2]), "DESC")
@@ -424,19 +441,19 @@ func parseAthenaSelectSuffix(s string) (whereCol, whereVal string, limit int, or
 		case strings.HasPrefix(upper, "LIMIT "):
 			m := athenaLimitRE.FindStringSubmatch(s)
 			if m == nil {
-				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+				return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
 			}
 			n, convErr := strconv.Atoi(m[1])
 			if convErr != nil || n < 0 {
-				return "", "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
+				return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: invalid LIMIT", ErrAthenaBadRequest)
 			}
 			limit = n
 			s = strings.TrimSpace(m[2])
 		default:
-			return "", "", 0, "", false, "", fmt.Errorf("%w: unsupported SQL clause", ErrAthenaBadRequest)
+			return "", "", false, "", 0, "", false, "", fmt.Errorf("%w: unsupported SQL clause", ErrAthenaBadRequest)
 		}
 	}
-	return whereCol, whereVal, limit, orderCol, orderDesc, groupCol, nil
+	return whereCol, whereVal, whereLike, whereJSONPath, limit, orderCol, orderDesc, groupCol, nil
 }
 
 func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed athenaParsedSelect) ([]AthenaColumnInfo, [][]string, error) {
@@ -481,6 +498,10 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: GetObject failed for s3://%s/%s: %v", ErrAthenaBadRequest, bucket, obj.Key, err)
 		}
+		data, err = athenaDecompressObject(obj.Key, data)
+		if err != nil {
+			return nil, nil, err
+		}
 		if jsonMode {
 			rows, err := parseJSONLines(data, loadCols)
 			if err != nil {
@@ -499,7 +520,7 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 		}
 	}
 	if parsed.WhereColumn != "" {
-		dataRows, err = filterAthenaRows(dataRows, table.Columns, athenaBareCol(parsed.WhereColumn), parsed.WhereValue)
+		dataRows, err = filterAthenaRows(dataRows, table.Columns, parsed)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -688,6 +709,10 @@ func (s *Store) loadAthenaRawRows(accountID string, table GlueTable) ([][]string
 		if err != nil {
 			return nil, fmt.Errorf("%w: GetObject failed for s3://%s/%s: %v", ErrAthenaBadRequest, bucket, obj.Key, err)
 		}
+		data, err = athenaDecompressObject(obj.Key, data)
+		if err != nil {
+			return nil, err
+		}
 		if jsonMode {
 			rows, err := parseJSONLines(data, table.Columns)
 			if err != nil {
@@ -845,7 +870,11 @@ func filterAthenaJoinRows(rows [][]string, left, right GlueTable, parsed athenaP
 	}
 	var out [][]string
 	for _, row := range rows {
-		if idx < len(row) && row[idx] == parsed.WhereValue {
+		ok, err := athenaRowMatchesWhere(row, idx, parsed)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			out = append(out, row)
 		}
 	}
@@ -913,7 +942,8 @@ func resolveAthenaJoinProjection(left, right GlueTable, parsed athenaParsedSelec
 	return indices, infos, nil
 }
 
-func filterAthenaRows(rows [][]string, columns []GlueColumn, whereCol, whereVal string) ([][]string, error) {
+func filterAthenaRows(rows [][]string, columns []GlueColumn, parsed athenaParsedSelect) ([][]string, error) {
+	whereCol := athenaBareCol(parsed.WhereColumn)
 	idx := -1
 	for i, c := range columns {
 		if strings.EqualFold(c.Name, whereCol) {
@@ -922,13 +952,133 @@ func filterAthenaRows(rows [][]string, columns []GlueColumn, whereCol, whereVal 
 		}
 	}
 	if idx < 0 {
-		return nil, fmt.Errorf("%w: column not found: %s", ErrAthenaBadRequest, whereCol)
+		return nil, fmt.Errorf("%w: column not found: %s", ErrAthenaBadRequest, parsed.WhereColumn)
 	}
 	var out [][]string
 	for _, row := range rows {
-		if idx < len(row) && row[idx] == whereVal {
+		ok, err := athenaRowMatchesWhere(row, idx, parsed)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			out = append(out, row)
 		}
+	}
+	return out, nil
+}
+
+func athenaRowMatchesWhere(row []string, idx int, parsed athenaParsedSelect) (bool, error) {
+	cell := ""
+	if idx < len(row) {
+		cell = row[idx]
+	}
+	if parsed.WhereJSONPath != "" {
+		extracted, err := athenaJSONExtractString(cell, parsed.WhereJSONPath)
+		if err != nil {
+			return false, err
+		}
+		cell = extracted
+	}
+	if parsed.WhereLike {
+		return sqlLikeMatch(cell, parsed.WhereValue), nil
+	}
+	return cell == parsed.WhereValue, nil
+}
+
+func athenaJSONExtractString(cell, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	path = strings.TrimPrefix(path, "$.")
+	path = strings.TrimPrefix(path, "$")
+	path = strings.Trim(path, ".")
+	if path == "" {
+		return "", nil
+	}
+	var v any
+	if err := json.Unmarshal([]byte(cell), &v); err != nil {
+		return "", nil
+	}
+	for _, part := range strings.Split(path, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			return "", nil
+		}
+		v, ok = m[part]
+		if !ok {
+			for k, vv := range m {
+				if strings.EqualFold(k, part) {
+					v, ok = vv, true
+					break
+				}
+			}
+			if !ok {
+				return "", nil
+			}
+		}
+	}
+	return athenaScalarString(v), nil
+}
+
+func athenaScalarString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		b, _ := json.Marshal(t)
+		return string(b)
+	}
+}
+
+func sqlLikeMatch(s, pattern string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	for _, r := range pattern {
+		switch r {
+		case '%':
+			b.WriteString(".*")
+		case '_':
+			b.WriteString(".")
+		default:
+			if strings.ContainsRune(`.+*?()|[]{}^$\`, r) {
+				b.WriteRune('\\')
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	if err != nil {
+		return false
+	}
+	return re.MatchString(s)
+}
+
+func athenaDecompressObject(key string, data []byte) ([]byte, error) {
+	need := strings.HasSuffix(strings.ToLower(key), ".gz")
+	if !need && len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		need = true
+	}
+	if !need {
+		return data, nil
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("%w: gzip decompress: %v", ErrAthenaBadRequest, err)
+	}
+	defer gr.Close()
+	out, err := io.ReadAll(gr)
+	if err != nil {
+		return nil, fmt.Errorf("%w: gzip read: %v", ErrAthenaBadRequest, err)
 	}
 	return out, nil
 }
@@ -1047,7 +1197,11 @@ func parseJSONLines(data []byte, columns []GlueColumn) ([][]string, error) {
 		}
 		out := make([][]string, 0, len(arr))
 		for _, obj := range arr {
-			out = append(out, jsonObjectRow(obj, columns))
+			if expanded := expandCloudTrailRecordsObject(obj, columns); expanded != nil {
+				out = append(out, expanded...)
+			} else {
+				out = append(out, jsonObjectRow(obj, columns))
+			}
 		}
 		return out, nil
 	}
@@ -1071,13 +1225,37 @@ func parseJSONLines(data []byte, columns []GlueColumn) ([][]string, error) {
 				if err := json.Unmarshal([]byte(line), &m); err != nil {
 					return nil, fmt.Errorf("%w: json line parse: %v", ErrAthenaBadRequest, err)
 				}
-				out = append(out, jsonObjectRow(m, columns))
+				if expanded := expandCloudTrailRecordsObject(m, columns); expanded != nil {
+					out = append(out, expanded...)
+				} else {
+					out = append(out, jsonObjectRow(m, columns))
+				}
 			}
 			return out, nil
 		}
-		out = append(out, jsonObjectRow(obj, columns))
+		if expanded := expandCloudTrailRecordsObject(obj, columns); expanded != nil {
+			out = append(out, expanded...)
+		} else {
+			out = append(out, jsonObjectRow(obj, columns))
+		}
 	}
 	return out, nil
+}
+
+func expandCloudTrailRecordsObject(obj map[string]any, columns []GlueColumn) [][]string {
+	recs, ok := obj["Records"].([]any)
+	if !ok || len(recs) == 0 {
+		return nil
+	}
+	out := make([][]string, 0, len(recs))
+	for _, r := range recs {
+		m, ok := r.(map[string]any)
+		if !ok {
+			return nil
+		}
+		out = append(out, jsonObjectRow(m, columns))
+	}
+	return out
 }
 
 func jsonObjectRow(obj map[string]any, columns []GlueColumn) []string {

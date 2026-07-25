@@ -73,11 +73,12 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine` (`dock
 | Area | Services |
 |------|----------|
 | Identity | IAM, STS, Organizations, Cognito User Pools |
+| Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab), CloudWatch Logs, Resource Groups Tagging API |
 | Crypto | KMS |
 | Data | S3, DynamoDB, DynamoDB Streams, SQS, SSM, Secrets Manager, SNS, EventBridge, Scheduler, Pipes, S3 Vectors, RDS, RDS Data API, ElastiCache, DocumentDB |
 | Audit and tags | CloudTrail, CloudWatch Logs, Resource Groups Tagging API |
 | Streams and delivery | Kinesis, Firehose, Amazon MQ, Transfer Family, SES, AppConfig, Step Functions |
-| IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2 |
+| IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2, Control Tower (stub) |
 | Compute | Lambda, ECR, ECS, CodeBuild, CodePipeline, CodeDeploy, Batch, AppSync |
 | API edge | API Gateway HTTP API |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
@@ -101,7 +102,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
-      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA.</td>
+      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA, GetAccessKeyLastUsed, GenerateCredentialReport / GetCredentialReport (lab CSV).</td>
       <td>Out of lab scope: service-linked roles, full pagination and tagging parity. PassRole trust <code>aws:SourceArn</code> on Lambda, EventBridge PutTargets, ECS, Scheduler, Pipes, Secrets rotate, API Gateway CredentialsArn, and Cognito trigger RoleArn.</td>
     </tr>
     <tr>
@@ -111,7 +112,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Organizations</td>
-      <td>CreateAccount, ListAccounts, OUs, MoveAccount, EnablePolicyType, SCP and RCP create/attach/detach/describe. SCP/RCP collection walks account, OU path to root, and root. Identity, boundary, SCP, and RCP apply on shared authorize and dataplane paths.</td>
+      <td>CreateAccount, ListAccounts, OUs, MoveAccount, EnablePolicyType, SCP and RCP create/attach/detach/describe, ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent. SCP/RCP collection walks account, OU path to root, and root. Identity, boundary, SCP, and RCP apply on shared authorize and dataplane paths.</td>
       <td>Out of lab scope: account invites and handshake control-plane beyond MoveAccount.</td>
     </tr>
     <tr>
@@ -128,8 +129,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="15" align="center" valign="middle">Data</td>
       <td>S3</td>
-      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put, ListObjectVersions lite), Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked).</td>
-      <td>Out of lab scope: lifecycle, CORS/website, Object Lock, replication, access points, virtual-hosted style, ACL cross-account, delete markers depth, multipart presign, exact AWS notification retry timing.</td>
+      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put/Delete with delete markers, ListObjectVersions including DeleteMarker), Object Lock lite (CreateBucket ObjectLockEnabled + retain-until; GOVERNANCE bypass header), Put/GetBucketLogging server access logs, Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked). Get/Delete CloudTrail resources + versionId.</td>
+      <td>Out of lab scope: lifecycle, CORS/website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
@@ -143,7 +144,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>SQS</td>
-      <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies (same-account or, cross-account and), SSE-SQS and SSE-KMS, RedrivePolicy to DLQ with RedriveAllowPolicy enforcement, DelaySeconds (queue and per-message).</td>
+      <td>Standard and FIFO queues, send/receive/delete (batch and visibility), deduplication, queue policies (same-account or, cross-account and), SSE-SQS and SSE-KMS, RedrivePolicy to DLQ with RedriveAllowPolicy enforcement and lab <code>NoctaxrisDlqSourceArn</code> provenance attribute, DelaySeconds (queue and per-message).</td>
       <td>Out of lab scope: high-throughput FIFO quotas, StartMessageMoveTask parity, tags beyond basics.</td>
     </tr>
     <tr>
@@ -158,12 +159,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>SNS</td>
-      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe (including XA Subscribe to foreign topic ARNs), List*, Get/SetTopicAttributes, Get/SetSubscriptionAttributes (lab FilterPolicy + RawMessageDelivery), Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com; foreign SQS and Lambda ARNs supported) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
-      <td>Out of lab scope: SMS, email, nested filter-policy operators, RedrivePolicy DLQ delivery, HT FIFO quotas, exact AWS retry timing. Will not ship: open-internet HTTP(S) webhooks (loopback catcher only).</td>
+      <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe (including XA Subscribe to foreign topic ARNs), List*, Get/SetTopicAttributes, Get/SetSubscriptionAttributes (lab FilterPolicy + RawMessageDelivery + RedrivePolicy DLQ after retry exhaustion), Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com; foreign SQS and Lambda ARNs supported) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
+      <td>Out of lab scope: SMS, email, nested filter-policy operators, HT FIFO quotas, exact AWS retry timing. Will not ship: open-internet HTTP(S) webhooks (loopback catcher only).</td>
     </tr>
     <tr>
       <td>EventBridge</td>
-      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets, PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
+      <td>Default and custom buses, Put/Describe/List/Delete/Enable/Disable Rule, Put/Remove/List Targets (optional DeadLetterConfig), PutPermission/RemovePermission (optional Condition), PutEvents with lab pattern match (source, detail-type, nested detail operators) and bus-policy dual-eval (bus ARN for XA). Targets SQS, Lambda, SNS, Logs, Kinesis, and Step Functions via RoleArn or destination resource policy (events.amazonaws.com + SourceArn; empty policy skips delivery); foreign targets RoleArn AND dest policy. Failed deliveries can send to DLQ with lab delivery history. PassRole plus events.amazonaws.com trust on PutTargets RoleArn. Lab InputPath and InputTransformer on delivery.</td>
       <td>Out of lab scope: partner buses, archive/replay, API Destinations, legacy scheduled rules, remaining pattern ops (wildcard/$or/cidr), InputPath bracket/wildcard notation, exact retry timing.</td>
     </tr>
     <tr>
@@ -173,7 +174,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>EventBridge Pipes</td>
-      <td>Create/Describe/Delete/ListPipes. Source SQS, DynamoDB Streams, or EventBridge bus to target Lambda or SQS. Optional Lambda Enrichment. PassRole for pipes.amazonaws.com when RoleArn set. Continuous in-process ticker plus PollPipeOnce. Bus sources require RoleArn session Allow on events:PutEvents. RoleArn session or target resource policy on deliver (foreign AND).</td>
+      <td>Create/Describe/Delete/ListPipes. Source SQS, DynamoDB Streams, or EventBridge bus to target Lambda or SQS. Optional Lambda Enrichment; optional DeadLetterArn on create for enrichment/target failures. PassRole for pipes.amazonaws.com when RoleArn set. Continuous in-process ticker plus PollPipeOnce. Bus sources require RoleArn session Allow on events:PutEvents. RoleArn session or target resource policy on deliver (foreign AND).</td>
       <td>Out of lab scope: filter partner matrix, enrichment HTTP/API destinations, cross-account bus source depth beyond RoleArn.</td>
     </tr>
     <tr>
@@ -202,14 +203,39 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Neptune, change streams, full TLS client auth matrix, host-published document ports.</td>
     </tr>
     <tr>
-      <td rowspan="3" align="center" valign="middle">Audit and tags</td>
+      <td rowspan="8" align="center" valign="middle">Audit and tags</td>
       <td>CloudTrail</td>
-      <td>LookupEvents over local <code>cloudtrail/events.jsonl</code> with time and attribute filters. CreateTrail/DescribeTrails/DeleteTrail/StartLogging/StopLogging: StartLogging delivers one lab JSONL snapshot to in-account S3 and optional CloudWatch Logs then sets IsLogging; while logging, new JSONL lines ship continuously to the same destinations (PassRole for Logs role; fail closed if Put fails).</td>
-      <td>Selectors, Insights, Lake, organization trails, cross-account lookup.</td>
+      <td>LookupEvents over local <code>cloudtrail/events.jsonl</code> with time and attribute filters (lab <code>SourceIPAddress</code>; account-scoped <code>recipientAccountId</code>; <code>EventCategory=insight</code> for insight-shaped records). CreateTrail/DescribeTrails/DeleteTrail/StartLogging/StopLogging: StartLogging delivers one lab JSONL snapshot to in-account S3 and optional CloudWatch Logs then sets IsLogging; while logging, new JSONL lines ship continuously (AWSLogs hive keys; optional gzip via <code>NOCTAXRIS_CLOUDTRAIL_GZIP</code>; Logs timestamps from <code>eventTime</code>; digest sidecar + lab <code>ValidateLogs</code>). <code>PutEventSelectors</code>/<code>GetEventSelectors</code> lite (management + optional S3 data). Org trail flag (<code>IsOrganizationTrail</code>) on management account. Lab <code>InjectEvents</code> / <code>InjectInsightsEvents</code> when <code>NOCTAXRIS_CLOUDTRAIL_INJECT=1</code> (no Insights ML engine). Live audit: userName, sessionContext lite, eventCategory/managementEvent, safer requestParameters, resources on key paths, sibling KMS Decrypt audits, service-derived error eventSource; audit XFF via <code>NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1</code> only.</td>
+      <td>Insights ML/anomaly engine and PutInsightSelectors, Lake, full multi-account org-trail delivery matrix, cross-account lookup.</td>
+    </tr>
+    <tr>
+      <td>GuardDuty</td>
+      <td>CreateDetector/ListDetectors, ListFindings/GetFindings, lab InjectFindings when <code>NOCTAXRIS_GUARDDUTY_INJECT=1</code> (AWS Finding lite fields).</td>
+      <td>Detector features matrix, malware protection, attack sequences, finding publishing to Security Hub.</td>
+    </tr>
+    <tr>
+      <td>Security Hub</td>
+      <td>BatchImportFindings and GetFindings lite (ASFF-lite required fields; filters ProductArn/GeneratorId/SeverityLabel/ResourceType).</td>
+      <td>Standards, insights, custom actions, full ASFF update rules, Aggregator.</td>
+    </tr>
+    <tr>
+      <td>Detective</td>
+      <td>CreateGraph/ListGraphs/AcceptInvitation lite; lab SearchGraph joins CloudTrail JSONL and GuardDuty findings by resource ARN or source IP.</td>
+      <td>Member invitations depth, full entity timeline APIs, attack sequence UI.</td>
+    </tr>
+    <tr>
+      <td>Macie</td>
+      <td>EnableMacie/GetMacieSession; Create/Describe/ListClassificationJobs (sync COMPLETE); ListFindings/GetFindings; lab InjectFindings when <code>NOCTAXRIS_MACIE_INJECT=1</code> (Finding lite or canned S3 object pattern matches).</td>
+      <td>Managed/custom data identifiers, automated discovery, policy findings, ML classification engine.</td>
+    </tr>
+    <tr>
+      <td>VPC Flow Logs (lab)</td>
+      <td>CreateFlowLogs lite with opaque fl-/vpc-/eni- IDs (no real VPC plane). InjectFlowLogs when <code>NOCTAXRIS_VPCFLOW_INJECT=1</code> delivers v2 ACCEPT/REJECT lines to S3 or Logs.</td>
+      <td>Real ENI attachment, traffic mirroring, Transit Gateway flow logs.</td>
     </tr>
     <tr>
       <td>CloudWatch Logs</td>
-      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutRetentionPolicy/DeleteRetentionPolicy (AWS-allowed day values; expired events purged), PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn.</td>
+      <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutRetentionPolicy/DeleteRetentionPolicy (AWS-allowed day values; expired events purged), PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude, JSON <code>{ $.path = \"value\" }</code> equality for CT-shaped messages; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn. Lambda Invoke auto-ships <code>/aws/lambda/*</code> START/END/REPORT.</td>
       <td>Out of lab scope: Insights query engine, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose/OpenSearch subscription destinations, full pagination parity.</td>
     </tr>
     <tr>
@@ -225,7 +251,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Firehose</td>
-      <td>Delivery stream CRUD, PutRecord/PutRecordBatch. S3 destination writes objects. Lambda ARN destination persists records and enqueues async Invoke. OpenSearch destination Create/Put only when the domain is Active with a non-stub nested endpoint (allowlisted hosts; RoleARN + <code>es:ESHttpPut</code> required; skip without engine). Describe returns <code>AmazonopensearchserviceDestinationDescription</code> plus lab <code>OpenSearchDestinationDescription</code>. PassRole for firehose.amazonaws.com; Put evaluates RoleARN session or destination resource policy (S3/Lambda).</td>
+      <td>Delivery stream CRUD, PutRecord/PutRecordBatch. S3 destination writes objects. Lambda ARN destination persists records and enqueues async Invoke. OpenSearch destination Create/Put only when the domain is Active with a non-stub nested endpoint (allowlisted hosts; RoleARN + <code>es:ESHttpPut</code> required; skip without engine). Lab VPC Flow Logs destination formats PutRecord payloads as v2 flow lines to S3. Describe returns <code>AmazonopensearchserviceDestinationDescription</code> plus lab <code>OpenSearchDestinationDescription</code>. PassRole for firehose.amazonaws.com; Put evaluates RoleARN session or destination resource policy (S3/Lambda).</td>
       <td>HTTP endpoint destinations, dynamic partitioning, OpenSearch domain resource policy, live sync Lambda Invoke from delivery.</td>
     </tr>
     <tr>
@@ -254,7 +280,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Express workflows, Callback/Activity, Choice And/Or/Not, concurrent Parallel/Map, Timestamp Wait, OutputPath, Map ItemProcessor/distributed mode.</td>
     </tr>
     <tr>
-      <td rowspan="10" align="center" valign="middle">IaC, edge, and governance</td>
+      <td rowspan="11" align="center" valign="middle">IaC, edge, and governance</td>
       <td>CloudFormation</td>
       <td>CreateStack/Describe/List/Delete/UpdateStack. ChangeSet Add/Remove plus allowlisted in-place Modify (unknown Modify types or immutable props fail closed). Nested stacks (lab S3 TemplateURL). Drift lite. Types: S3 Bucket(+BucketPolicy, NotificationConfiguration), IAM Role/User/Group/ManagedPolicy/Policy, SQS(+QueuePolicy, create attrs), DynamoDB, Lambda(+Permission with FunctionUrlAuthType), KMS Key/Alias, SNS(+TopicPolicy/Subscription FilterPolicy), Logs LogGroup(+RetentionInDays), Events bus/rule (ScheduleExpression fail-closed), SSM, Secrets, nested Stack. JSON/YAML + DependsOn + Ref/GetAtt/Sub/Join. Unknown types/props fail closed. Optional PassRole.</td>
       <td>Out of lab scope: Modify beyond allowlist (including nested Stack), nested drift depth, full intrinsic matrix, broader catalog, custom IAM Path ≠ <code>/</code>, Events Rule ScheduleExpression, Lambda Permission PrincipalOrgID/EventSourceToken, SNS RedrivePolicy DLQ delivery.</td>
@@ -276,8 +302,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Config</td>
-      <td>PutConfigurationRecorder, PutDeliveryChannel (existing S3 bucket), StartConfigurationRecorder writes one lab-shaped JSON snapshot per delivery channel then sets recording (fail closed if PutObject fails) + ConfigurationRecorderStarted SNS, DescribeComplianceByConfigRule returns NOT_APPLICABLE. Optional PassRole for config.amazonaws.com.</td>
-      <td>Full AWS Config item schema, continuous history stream, managed rule catalog, remediations, aggregator, organization rules.</td>
+      <td>PutConfigurationRecorder, PutDeliveryChannel (existing S3 bucket), StartConfigurationRecorder writes one lab-shaped JSON snapshot per delivery channel then sets recording (fail closed if PutObject fails) + ConfigurationRecorderStarted SNS, continuous history while recording (S3 bucket create/delete), GetResourceConfigHistory, DescribeComplianceByConfigRule returns NOT_APPLICABLE. Optional PassRole for config.amazonaws.com.</td>
+      <td>Full AWS Config item schema, managed rule catalog, remediations, aggregator, organization rules.</td>
     </tr>
     <tr>
       <td>ACM</td>
@@ -286,8 +312,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Route 53</td>
-      <td>CreateHostedZone/DeleteHostedZone/ListHostedZones, ChangeResourceRecordSets/ListResourceRecordSets for A and CNAME, plus Type A AliasTarget to in-account CloudFront DomainName or ELB DNSName (no recursive DNS). Identity authz.</td>
-      <td>AAAA alias, traffic policies, health checks, Resolver endpoints.</td>
+      <td>CreateHostedZone/DeleteHostedZone/ListHostedZones, ChangeResourceRecordSets/ListResourceRecordSets for A and CNAME, plus Type A AliasTarget to in-account CloudFront DomainName or ELB DNSName (no recursive DNS). Lab InjectQueryLogs to CloudWatch Logs when <code>NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT=1</code>. Identity authz.</td>
+      <td>AAAA alias, traffic policies, health checks, Resolver endpoints, live recursive DNS.</td>
     </tr>
     <tr>
       <td>Cloud Map</td>
@@ -296,13 +322,18 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>CloudFront</td>
-      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> fetches first origin (S3 or internal HTTP API). No real PoP.</td>
+      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. Optional Logging bucket/prefix writes tab-separated access-log lite lines on edge GET. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> fetches first origin (S3 or internal HTTP API). No real PoP.</td>
       <td>Real CDN, signed cookies depth, multi-behavior / multi-origin matrices.</td>
     </tr>
     <tr>
       <td>ELB v2</td>
-      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type application only (network rejected). Target types lambda or ip. Path-pattern and host-header listener rules (exact or trailing <code>*</code> prefix; AND when both present) select target group on lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission. DescribeTargetHealth healthy when a listener or rule forwards and permission Allows; IP stays unused. No EC2.</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type application only (network rejected). Target types lambda or ip. Path-pattern and host-header listener rules (exact or trailing <code>*</code> prefix; AND when both present) select target group on lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission. DescribeTargetHealth healthy when a listener or rule forwards and permission Allows; IP stays unused. No EC2.</td>
       <td>ALB Cognito auth action, HTTP-header / query-string conditions, IP target dataplane, NLB.</td>
+    </tr>
+    <tr>
+      <td>Control Tower</td>
+      <td>Honest stub: ListLandingZones returns empty; GetLandingZone returns ResourceNotFoundException (Organizations list APIs cover OU/policy evidence).</td>
+      <td>Landing zone create/enable, controls catalog, Account Factory.</td>
     </tr>
     <tr>
       <td rowspan="8" align="center" valign="middle">Compute</td>
@@ -354,7 +385,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
       <td>Full SQL (outer joins, LIKE/IN, multi-aggregate GROUP BY), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
     </tr>
     <tr>

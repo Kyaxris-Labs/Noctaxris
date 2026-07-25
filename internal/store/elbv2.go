@@ -144,6 +144,9 @@ func EnsureELBv2Schema(db *sql.DB) error {
 	}
 	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE elbv2_rules ADD COLUMN host_headers TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_s3_bucket TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_s3_prefix TEXT NOT NULL DEFAULT ''`,
 	}); err != nil {
 		return fmt.Errorf("ensure elbv2 schema: migrate: %w", err)
 	}

@@ -42,6 +42,9 @@ const (
 	attrRedriveAllowPolicy         = "RedriveAllowPolicy"
 	attrDelaySeconds               = "DelaySeconds"
 
+	// sqsAttrNoctaxrisDlqSourceArn is set on messages redriven to a DLQ (lab provenance).
+	sqsAttrNoctaxrisDlqSourceArn = "NoctaxrisDlqSourceArn"
+
 	maxDelaySeconds = 900
 )
 
@@ -813,13 +816,18 @@ func (s *Store) redriveMessageTx(tx *sql.Tx, q Queue, policy redrivePolicy, msg 
 		}
 	}
 
+	dlqAttrsJSON, err := mergeDlqSourceProvenance(msg.AttributesJSON, q.QueueARN)
+	if err != nil {
+		return fmt.Errorf("redrive dlq provenance: %w", err)
+	}
+
 	if _, err := tx.Exec(
 		`INSERT INTO sqs_messages
 		 (message_id, account_id, queue_name, body, sealed, sealed_dek,
 		  receipt_handle, visible_after, receive_count, created_at, attributes_json,
 		  message_group_id, message_deduplication_id, sequence_number)
 		 VALUES (?, ?, ?, ?, ?, ?, NULL, '', 0, ?, ?, ?, ?, ?)`,
-		newID, q.AccountID, dlqName, msg.Body, sealedFlag, msg.SealedDEK, created, msg.AttributesJSON,
+		newID, q.AccountID, dlqName, msg.Body, sealedFlag, msg.SealedDEK, created, dlqAttrsJSON,
 		dlqGroupID, dlqDedupID, dlqSeq,
 	); err != nil {
 		return fmt.Errorf("redrive insert: %w", err)
@@ -1007,6 +1015,25 @@ func (s *Store) ChangeMessageVisibility(accountID, queueName, receiptHandle stri
 		return ErrNoSuchMessage
 	}
 	return nil
+}
+
+// mergeDlqSourceProvenance adds NoctaxrisDlqSourceArn to redriven message attributes.
+func mergeDlqSourceProvenance(attrsJSON, sourceQueueARN string) (string, error) {
+	attrs := map[string]any{}
+	if trimmed := strings.TrimSpace(attrsJSON); trimmed != "" && trimmed != "{}" {
+		if err := json.Unmarshal([]byte(trimmed), &attrs); err != nil {
+			return "", fmt.Errorf("parse message attributes: %w", err)
+		}
+	}
+	attrs[sqsAttrNoctaxrisDlqSourceArn] = map[string]any{
+		"DataType":    "String",
+		"StringValue": sourceQueueARN,
+	}
+	raw, err := json.Marshal(attrs)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // PurgeQueue deletes all messages from a queue.

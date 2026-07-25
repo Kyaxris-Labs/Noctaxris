@@ -6,30 +6,36 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 
 | Service | Status | Doc |
 |---------|--------|-----|
-| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, instance profiles including ListInstanceProfilesForRole, IdPs, MFA |
+| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, instance profiles including ListInstanceProfilesForRole, IdPs, MFA, GetAccessKeyLastUsed, credential report |
 | [STS](sts.md) | Shipped | All 11 actions (lab MFA on GetSessionToken) |
-| [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance |
+| [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance, ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent |
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, tags, deletion sweeper, key-material rotation |
-| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite, bucket notifications (Lambda/SQS/EventBridge/SNS emit; empty=off), cross-account dual eval |
+| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite with delete markers, Object Lock lite, server access logging, bucket notifications (Lambda/SQS/EventBridge/SNS emit; empty=off), cross-account dual eval |
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, BatchGet/BatchWrite, TransactWrite/TransactGet (same-account Put/Delete/Update/ConditionCheck + ConditionExpression, ClientRequestToken, stream append), TTL, DescribeContinuousBackups stub, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE / OLD_IMAGE / NEW_AND_OLD_IMAGES / KEYS_ONLY; Lambda ESM + FilterCriteria (including OldImage) in [lambda.md](lambda.md) |
-| [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy, policies, cross-account dual eval |
+| [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy (DLQ provenance attribute), policies, cross-account dual eval |
 | [Lambda](lambda.md) | Shipped | Zip/Image, versions/aliases, layers on zip and Image, SQS / DynamoDB Streams / multi-shard Kinesis / Amazon MQ ESM (RUNNING broker; allowlisted hosts; RabbitMQ `basic.get` bodies; ActiveMQ dial-empty) with FilterCriteria (EventBridge operators), Function URLs, sync+async Invoke, service-principal XA AddPermission (SourceAccount/SourceArn), lab ECR Image pull, TLS DinD |
 | [SSM Parameter Store](ssm.md) | Shipped | String, StringList, and SecureString, GetParametersByPath hierarchy, KMS via alias/aws/ssm, identity authz |
 | [Secrets Manager](secretsmanager.md) | Shipped | CRUD, list, version stages (AWSCURRENT/AWSPENDING/AWSPREVIOUS), RotateSecret (random default or optional four-step Lambda rotator with PassRole for secretsmanager.amazonaws.com), RotationRules (AutomaticallyAfterDays or rate/cron ScheduleExpression including DOM `nW`/`LW` + optional Duration) with RotateImmediately=false and in-process due ticker, recovery window, resource policies, cross-account dual eval, KMS via alias/aws/secretsmanager |
-| [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, lab FilterPolicy + RawMessageDelivery, topic policies, XA Subscribe + foreign SQS delivery |
-| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets, PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; content filters (prefix/suffix/exists/anything-but/numeric/equals-ignore-case); RoleArn or resource-policy delivery for SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
+| [SNS](sns.md) | Shipped | Topic CRUD including FIFO, publish, SQS/Lambda/HTTP loopback subscribe, lab FilterPolicy + RawMessageDelivery + RedrivePolicy DLQ, topic policies, XA Subscribe + foreign SQS delivery |
+| [EventBridge](eventbridge.md) | Shipped | Buses, rules, targets (optional DLQ + delivery history), PutEvents to SQS/Lambda/SNS/Logs/Kinesis/SFN; content filters (prefix/suffix/exists/anything-but/numeric/equals-ignore-case); RoleArn or resource-policy delivery for SQS/Lambda/SNS/Logs/Kinesis/SFN; InputPath + InputTransformer; bus-policy dual-eval |
 | [EventBridge Scheduler](scheduler.md) | Shipped | Schedule CRUD, rate/cron/at subset (DOM `nW`/`LW`), Lambda/SQS/SNS/SFN targets, in-process ticker, PassRole with schedule `aws:SourceArn` |
-| [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; ticker + RoleArn/target policy; PassRole with pipe `aws:SourceArn` |
+| [EventBridge Pipes](pipes.md) | Shipped | Pipe CRUD; SQS / DynamoDB Streams / EventBridge bus source; optional Lambda enrichment; optional DeadLetterArn; ticker + RoleArn/target policy; PassRole with pipe `aws:SourceArn` |
 | [Amazon MQ](mq.md) | Shipped | Broker CRUD; nested RabbitMQ or ActiveMQ when DinD up (`RUNNING`); no-DinD → `CREATION_FAILED` stub; Lambda ESM when RUNNING (Rabbit bodies; ActiveMQ dial-empty) |
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD; ONLINE; lab Put/Get/List file API on `:4566` (not real SFTP); PassRole on Role |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2 (monolithic PUT + chunked PATCH), DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
-| [CloudTrail](cloudtrail.md) | Shipped | LookupEvents over local JSONL; CreateTrail + StartLogging snapshot then continuous delivery to S3/Logs |
-| [CloudWatch Logs](logs.md) | Shipped | Groups/streams, Put/DeleteRetentionPolicy, Put/GetLogEvents, FilterLogEvents (lab filterPattern subset), account resource policies, XA subscription filters (awslogs envelope), metric filters lite |
+| [CloudTrail](cloudtrail.md) | Shipped | LookupEvents (incl. EventCategory=insight); CreateTrail + StartLogging continuous AWSLogs hive delivery (+ optional gzip); selectors lite; digests + ValidateLogs; org trail flag; lab InjectEvents / InjectInsightsEvents; richer audit + sibling KMS Decrypt |
+| [GuardDuty](guardduty.md) | Shipped | Create/ListDetectors; List/GetFindings; lab InjectFindings (opt-in) |
+| [Security Hub](securityhub.md) | Shipped | BatchImportFindings + GetFindings lite (ASFF-lite) |
+| [Detective](detective.md) | Shipped | CreateGraph/ListGraphs/AcceptInvitation; lab SearchGraph over CT + GuardDuty |
+| [Macie](macie.md) | Shipped | EnableMacie/GetMacieSession; classification job lite; List/GetFindings; lab InjectFindings with canned S3 matches (opt-in) |
+| [Control Tower](controltower.md) | Stub | ListLandingZones empty; GetLandingZone not found |
+| [VPC Flow Logs](vpcflow.md) | Shipped | CreateFlowLogs lite (opaque IDs); InjectFlowLogs to S3/Logs (opt-in) |
+| [CloudWatch Logs](logs.md) | Shipped | Groups/streams, Put/DeleteRetentionPolicy, Put/GetLogEvents, FilterLogEvents (lab filterPattern + JSON field equality), account resource policies, XA subscription filters (awslogs envelope), metric filters lite; Lambda `/aws/lambda/*` START/END/REPORT |
 | [Resource Groups Tagging API](resourcegroupstaggingapi.md) | Shipped | TagResources, UntagResources, GetResources |
 | [Kinesis Data Streams](kinesis.md) | Shipped | Stream CRUD with ShardCount 1..4, Put/Get records per shard, stream resource policy; Lambda ESM in [lambda.md](lambda.md) |
-| [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3, Lambda, or nested OpenSearch (Active domain + RoleARN; skip-without-engine); RoleARN session or destination policy on Put |
+| [Firehose](firehose.md) | Shipped | Delivery stream CRUD, PutRecord(s) to S3, Lambda, nested OpenSearch (Active domain + RoleARN; skip-without-engine), or lab VPC Flow dest; RoleARN session or destination policy on Put |
 | [SES](ses.md) | Shipped | Local catcher: verify, SendEmail/SendRawEmail, ListIdentities, SetIdentityNotificationTopic Bounce, GetSendStatistics |
 | [AppConfig](appconfig.md) | Shipped | Application/Environment/Profile, hosted versions, StartDeployment (immediate DEPLOYED), GetConfiguration / AppConfigData from deployed pointer |
 | [Step Functions](stepfunctions.md) | Shipped | State machine CRUD, StartExecution, Pass/Succeed/Fail/Choice (Equals + GreaterThan/LessThan/IsPresent)/Wait (0–5s)/Parallel/Map (sequential)/Task to Lambda/SQS/SNS/EventBridge; InputPath/ResultPath; lab resource policy for EventBridge RoleArn-less StartExecution |
@@ -39,9 +45,9 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Batch](batch.md) | Shipped | Compute environment / queue / definition lite, SubmitJob on nested DinD |
 | [Glue](glue.md) | Shipped | Data Catalog database and table CRUD (PartitionKeys + SerDe fields for Athena); crawler lite Create/Start/Get/Delete/List |
 | [WAF v2](wafv2.md) | Shipped | WebACL / rule group lite; AssociateWebACL (HTTP API / AppSync / Lambda / ALB); ByteMatch / SizeConstraint / inline IPSet; invoke DefaultAction gate; Evaluate helper |
-| [Config](config.md) | Shipped | Recorder / delivery channel lite; Start writes lab snapshot JSON to delivery S3 then recording flag; SNS notify when snsTopicARN set; compliance stub |
+| [Config](config.md) | Shipped | Recorder / delivery channel lite; Start writes lab snapshot JSON to delivery S3 then recording flag; continuous history while recording + GetResourceConfigHistory; SNS notify when snsTopicARN set; compliance stub |
 | [ACM](acm.md) | Shipped | Request/Describe/List/DeleteCertificate, lab self-signed PEM |
-| [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets, AliasTarget to CloudFront/ELB |
+| [Route 53](route53.md) | Shipped | Hosted zones, A/CNAME ChangeResourceRecordSets, AliasTarget to CloudFront/ELB; lab query log inject (opt-in) |
 | [Cloud Map](servicediscovery.md) | Shipped | Private DNS (requires Vpc) / HTTP namespace, service/instance, Vpc-scoped DiscoverInstances |
 | [Pricing](pricing.md) | Shipped | DescribeServices/GetAttributeValues/GetProducts over static catalog |
 | [AppSync](appsync.md) | Shipped | GraphQL API CRUD, schema, Lambda data source (optional PassRole), nested selections (depth ≤ 3), API_KEY/IAM/Cognito auth |
@@ -59,7 +65,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [RDS Data API](rds-data.md) | Shipped | ExecuteStatement / BatchExecuteStatement; Begin/Commit/Rollback via held `pgx`; prefer `pgx` else nested `psql`; typed OID fields on pgx; named `parameters`; `formatRecordsAs=JSON`; Batch `generatedFields` from `RETURNING`; secretArn fail-closed |
 | [ElastiCache](elasticache.md) | Shipped | Redis/Valkey cache cluster CRUD, nested DinD when engine up |
 | [DocumentDB](docdb.md) | Shipped | docdb Create/Describe/Delete; `creating` until nested Mongo-compatible starts |
-| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON; WHERE equality, COUNT(*), INNER JOIN, GROUP BY, ORDER BY; GetObject/OutputLocation fail closed |
+| [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON; WHERE equality/LIKE/json_extract; COUNT(*), INNER JOIN, GROUP BY, ORDER BY; CloudTrail Records[] + gzip; GetObject/OutputLocation fail closed |
 | [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://`; SigV4 lab query facade `_doc` / allowlisted `_search` |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |

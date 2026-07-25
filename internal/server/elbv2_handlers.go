@@ -58,6 +58,10 @@ func (s *Server) handleELBv2(
 		s.elbDescribeRules(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionELBv2DeleteRule:
 		s.elbDeleteRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case "elasticloadbalancing:ModifyLoadBalancerAttributes", "ModifyLoadBalancerAttributes":
+		s.elbModifyLoadBalancerAttributes(w, r, body, requestID, eventID, verified, readOnly, params)
+	case "elasticloadbalancing:DescribeLoadBalancerAttributes", "DescribeLoadBalancerAttributes":
+		s.elbDescribeLoadBalancerAttributes(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeELBv2Error(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This Elastic Load Balancing action is not implemented.", readOnly, eventID, verified)
@@ -97,6 +101,10 @@ func elbv2Action(action string) string {
 		return catalog.ActionELBv2DescribeRules
 	case "DeleteRule":
 		return catalog.ActionELBv2DeleteRule
+	case "ModifyLoadBalancerAttributes":
+		return "elasticloadbalancing:ModifyLoadBalancerAttributes"
+	case "DescribeLoadBalancerAttributes":
+		return "elasticloadbalancing:DescribeLoadBalancerAttributes"
 	default:
 		return action
 	}
@@ -684,6 +692,89 @@ func (s *Server) elbDeleteRule(
 	payload, _ := elbsvc.DeleteOKJSON()
 	s.writeELBv2OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "DeleteRule", readOnly)
+}
+
+func elbAttributesFromParams(params map[string]any) map[string]string {
+	raw, _ := params["Attributes"].([]any)
+	out := map[string]string{}
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		k, _ := m["Key"].(string)
+		v, _ := m["Value"].(string)
+		if strings.TrimSpace(k) != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func (s *Server) elbModifyLoadBalancerAttributes(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	lbARN, _ := params["LoadBalancerArn"].(string)
+	if !s.authorize(verified, "elasticloadbalancing:ModifyLoadBalancerAttributes", lbARN) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform elasticloadbalancing:ModifyLoadBalancerAttributes.", readOnly, eventID, verified)
+		return
+	}
+	attrs := elbAttributesFromParams(params)
+	if len(attrs) == 0 {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"Attributes required.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.SetELBv2LoadBalancerAttributes(verified.AccountID, lbARN, attrs)
+	if errors.Is(err, store.ErrELBv2NotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "LoadBalancerNotFound",
+			"Load balancer not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrELBv2BadRequest) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to modify load balancer attributes.", readOnly, eventID, verified)
+		return
+	}
+	desc, err := s.store.DescribeELBv2LoadBalancerAttributes(verified.AccountID, lbARN)
+	if err != nil {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe load balancer attributes.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"Attributes": desc})
+	s.writeELBv2OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "ModifyLoadBalancerAttributes", readOnly)
+}
+
+func (s *Server) elbDescribeLoadBalancerAttributes(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	lbARN, _ := params["LoadBalancerArn"].(string)
+	if !s.authorize(verified, "elasticloadbalancing:DescribeLoadBalancerAttributes", lbARN) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform elasticloadbalancing:DescribeLoadBalancerAttributes.", readOnly, eventID, verified)
+		return
+	}
+	desc, err := s.store.DescribeELBv2LoadBalancerAttributes(verified.AccountID, lbARN)
+	if errors.Is(err, store.ErrELBv2NotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "LoadBalancerNotFound",
+			"Load balancer not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe load balancer attributes.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"Attributes": desc})
+	s.writeELBv2OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "DescribeLoadBalancerAttributes", readOnly)
 }
 
 func (s *Server) writeELBv2OK(w http.ResponseWriter, payload []byte) {

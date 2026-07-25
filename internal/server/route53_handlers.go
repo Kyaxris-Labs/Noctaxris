@@ -40,6 +40,8 @@ func (s *Server) handleRoute53(
 		s.r53ChangeRRSets(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionRoute53ListResourceRecordSets:
 		s.r53ListRRSets(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionRoute53InjectQueryLogs:
+		s.r53InjectQueryLogs(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeRoute53Error(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This Route 53 action is not implemented.", readOnly, eventID, verified)
@@ -61,6 +63,8 @@ func route53Action(action string) string {
 		return catalog.ActionRoute53ChangeResourceRecordSets
 	case "ListResourceRecordSets":
 		return catalog.ActionRoute53ListResourceRecordSets
+	case "InjectQueryLogs":
+		return catalog.ActionRoute53InjectQueryLogs
 	default:
 		return action
 	}
@@ -210,6 +214,75 @@ func (s *Server) r53ListRRSets(
 	}
 	s.writeRoute53OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, route53EventSource, "ListResourceRecordSets", readOnly)
+}
+
+func (s *Server) r53InjectQueryLogs(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.cfg.Route53QueryLogInject {
+		s.writeRoute53Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"Route 53 query log inject is disabled. Set NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT=1 to enable.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionRoute53InjectQueryLogs, "*") {
+		s.writeRoute53Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform route53:InjectQueryLogs.", readOnly, eventID, verified)
+		return
+	}
+	logGroup, _ := params["LogGroupName"].(string)
+	logStream, _ := params["LogStreamName"].(string)
+	lines := route53QueryLogLines(params)
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultRoute53Region
+	}
+	at := s.now().UTC()
+	delivered, err := s.store.InjectRoute53QueryLogs(verified.AccountID, region, logGroup, logStream, lines, at)
+	if errors.Is(err, store.ErrRoute53BadRequest) {
+		s.writeRoute53Error(w, r, body, requestID, http.StatusBadRequest, "InvalidInput",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeRoute53Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to inject query logs.", readOnly, eventID, verified)
+		return
+	}
+	if logStream == "" {
+		logStream = store.Route53QueryLabLogStreamName(at)
+	}
+	payload, _ := r53svc.InjectQueryLogsJSON(delivered, logGroup, logStream)
+	s.writeRoute53OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, route53EventSource, "InjectQueryLogs", readOnly,
+		WithAuditRequestParameters(map[string]any{"logGroupName": logGroup, "delivered": delivered}))
+}
+
+func route53QueryLogLines(params map[string]any) []string {
+	var lines []string
+	if raw, ok := params["Lines"].([]any); ok {
+		for _, item := range raw {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				lines = append(lines, s)
+			}
+		}
+	}
+	if raw, ok := params["Records"].([]any); ok {
+		for _, item := range raw {
+			switch v := item.(type) {
+			case string:
+				if strings.TrimSpace(v) != "" {
+					lines = append(lines, v)
+				}
+			case map[string]any:
+				raw, err := json.Marshal(v)
+				if err == nil {
+					lines = append(lines, string(raw))
+				}
+			}
+		}
+	}
+	return lines
 }
 
 func parseRoute53Changes(params map[string]any) []store.Route53Change {

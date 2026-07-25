@@ -60,15 +60,12 @@ func (s *Server) handleGetCallerIdentity(
 	verified *authn.Verified,
 ) {
 	userID, arn := sts.RootCallerIDs(verified.AccountID)
-	identityType := "Root"
 	if verified.Principal.Kind == identity.KindRole {
 		arn = verified.Principal.ARN()
 		userID = fmt.Sprintf("%s:%s:%s", verified.AccountID, verified.Principal.RoleName, verified.Principal.SessionName)
-		identityType = "AssumedRole"
 	} else if verified.Principal.Kind == identity.KindFederated {
 		arn = verified.Principal.ARN()
 		userID = fmt.Sprintf("%s:%s", verified.AccountID, verified.Principal.SessionName)
-		identityType = "FederatedUser"
 	} else if !verified.Principal.IsRoot {
 		userID = verified.AccessKeyID
 		if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.UserName != "" {
@@ -80,7 +77,6 @@ func (s *Server) handleGetCallerIdentity(
 		if arn == "" {
 			arn = fmt.Sprintf("arn:aws:iam::%s:user/%s", verified.AccountID, verified.AccessKeyID)
 		}
-		identityType = "IAMUser"
 	}
 
 	payload, err := sts.GetCallerIdentityXML(verified.AccountID, userID, arn, requestID)
@@ -97,31 +93,7 @@ func (s *Server) handleGetCallerIdentity(
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(payload)
 
-	ev := audit.Event{
-		EventVersion:       eventVersion,
-		EventTime:          s.now().UTC().Format(time.RFC3339),
-		EventSource:        "sts.amazonaws.com",
-		EventName:          "GetCallerIdentity",
-		AWSRegion:          verified.Region,
-		SourceIPAddress:    clientIP(r),
-		UserAgent:          r.UserAgent(),
-		RequestID:          requestID,
-		EventID:            eventID,
-		EventType:          "AwsApiCall",
-		RecipientAccountID: verified.AccountID,
-		ReadOnly:           true,
-		UserIdentity: map[string]any{
-			"type":        identityType,
-			"accountId":   verified.AccountID,
-			"accessKeyId": verified.AccessKeyID,
-			"arn":         arn,
-		},
-		RequestParameters: map[string]any{
-			"httpMethod": r.Method,
-			"path":       r.URL.Path,
-		},
-	}
-	_ = s.audit.Write(context.Background(), ev)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "sts.amazonaws.com", "GetCallerIdentity", true)
 }
 
 func (s *Server) handleCreateAccount(
@@ -440,7 +412,19 @@ func (s *Server) handleAssumeRole(
 		return
 	}
 	s.writeXMLOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, "sts.amazonaws.com", "AssumeRole", false)
+	durationSecs := int64(duration / time.Second)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "sts.amazonaws.com", "AssumeRole", false,
+		WithAuditResources([]audit.Resource{{
+			AccountID: accountID,
+			Type:      "AWS::IAM::Role",
+			ARN:       roleARN,
+		}}),
+		WithAuditRequestParameters(map[string]any{
+			"roleArn":          roleARN,
+			"roleSessionName":  sessionName,
+			"durationSeconds":  durationSecs,
+		}),
+	)
 }
 
 func (s *Server) authorizeOrgs(verified *authn.Verified, action, resource string) bool {
@@ -821,6 +805,7 @@ func (s *Server) writeSuccessAudit(
 	verified *authn.Verified,
 	eventSource, eventName string,
 	readOnly bool,
+	opts ...SuccessAuditOption,
 ) {
 	uid := map[string]any{
 		"type":        "Root",
@@ -841,13 +826,17 @@ func (s *Server) writeSuccessAudit(
 	if verified.Principal.Kind == identity.KindFederated {
 		uid["type"] = "FederatedUser"
 	}
+	if name := auditUserName(verified); name != "" {
+		uid["userName"] = name
+	}
+	s.enrichAuditUserSessionContext(uid, verified)
 	ev := audit.Event{
 		EventVersion:       eventVersion,
 		EventTime:          s.now().UTC().Format(time.RFC3339),
 		EventSource:        eventSource,
 		EventName:          eventName,
 		AWSRegion:          verified.Region,
-		SourceIPAddress:    clientIP(r),
+		SourceIPAddress:    s.auditClientIP(r),
 		UserAgent:          r.UserAgent(),
 		RequestID:          requestID,
 		EventID:            eventID,
@@ -855,12 +844,353 @@ func (s *Server) writeSuccessAudit(
 		RecipientAccountID: verified.AccountID,
 		ReadOnly:           readOnly,
 		UserIdentity:       uid,
-		RequestParameters: map[string]any{
-			"httpMethod": r.Method,
-			"path":       r.URL.Path,
-		},
+		RequestParameters:  baseAuditRequestParams(r),
+	}
+	defaultManagementAuditFields(&ev)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ev)
+		}
 	}
 	_ = s.audit.Write(context.Background(), ev)
+}
+
+// SuccessAuditOption customizes a success audit line without breaking existing callers.
+type SuccessAuditOption func(*audit.Event)
+
+// WithAuditResources sets CloudTrail-shaped resources[] on the audit event.
+func WithAuditResources(resources []audit.Resource) SuccessAuditOption {
+	return func(ev *audit.Event) {
+		if len(resources) == 0 {
+			return
+		}
+		ev.Resources = append([]audit.Resource(nil), resources...)
+	}
+}
+
+// WithAuditRequestParameters merges extra requestParameters (never use for secrets).
+func WithAuditRequestParameters(params map[string]any) SuccessAuditOption {
+	return func(ev *audit.Event) {
+		if len(params) == 0 {
+			return
+		}
+		if ev.RequestParameters == nil {
+			ev.RequestParameters = map[string]any{}
+		}
+		for k, v := range params {
+			ev.RequestParameters[k] = v
+		}
+	}
+}
+
+// WithAuditSessionContext merges CloudTrail-shaped sessionContext under userIdentity.
+func WithAuditSessionContext(ctx map[string]any) SuccessAuditOption {
+	return func(ev *audit.Event) {
+		if len(ctx) == 0 {
+			return
+		}
+		uid, ok := ev.UserIdentity.(map[string]any)
+		if !ok {
+			return
+		}
+		existing, _ := uid["sessionContext"].(map[string]any)
+		if existing == nil {
+			existing = map[string]any{}
+		}
+		for k, v := range ctx {
+			existing[k] = v
+		}
+		uid["sessionContext"] = existing
+		ev.UserIdentity = uid
+	}
+}
+
+func auditBoolPtr(v bool) *bool {
+	return &v
+}
+
+func defaultManagementAuditFields(ev *audit.Event) {
+	if ev == nil {
+		return
+	}
+	if ev.EventCategory == "" {
+		ev.EventCategory = "Management"
+	}
+	if ev.ManagementEvent == nil {
+		ev.ManagementEvent = auditBoolPtr(true)
+	}
+}
+
+func (s *Server) enrichAuditUserSessionContext(uid map[string]any, verified *authn.Verified) {
+	if s == nil || uid == nil || verified == nil {
+		return
+	}
+	issuer := s.auditSessionIssuerLite(verified)
+	if issuer == nil {
+		return
+	}
+	sc, _ := uid["sessionContext"].(map[string]any)
+	if sc == nil {
+		sc = map[string]any{}
+	}
+	if _, ok := sc["sessionIssuer"]; !ok {
+		sc["sessionIssuer"] = issuer
+	}
+	uid["sessionContext"] = sc
+}
+
+func (s *Server) auditSessionIssuerLite(verified *authn.Verified) map[string]any {
+	if verified == nil {
+		return nil
+	}
+	p := verified.Principal
+	switch p.Kind {
+	case identity.KindRole:
+		if p.RoleName == "" {
+			return nil
+		}
+		issuer := map[string]any{
+			"type":      "Role",
+			"accountId": p.AccountID,
+			"userName":  p.RoleName,
+			"arn":       fmt.Sprintf("arn:aws:iam::%s:role/%s", p.AccountID, p.RoleName),
+		}
+		if s != nil {
+			if rec, err := s.store.GetRoleRecord(p.AccountID, p.RoleName); err == nil && rec.RoleID != "" {
+				issuer["principalId"] = rec.RoleID
+			}
+		}
+		return issuer
+	case identity.KindFederated:
+		if p.FederatedProviderARN != "" {
+			return map[string]any{
+				"type":      "IAMUser",
+				"accountId": p.AccountID,
+				"arn":       p.FederatedProviderARN,
+			}
+		}
+		if p.SessionName != "" {
+			return map[string]any{
+				"type":      "IAMUser",
+				"accountId": p.AccountID,
+				"userName":  p.SessionName,
+				"arn":       p.ARN(),
+			}
+		}
+	}
+	return nil
+}
+
+// auditEventSourceForRequest maps the incoming request to a CloudTrail eventSource host.
+func auditEventSourceForRequest(r *http.Request, fallback string) string {
+	if r == nil {
+		if fallback != "" {
+			return fallback
+		}
+		return "noctaxris.amazonaws.com"
+	}
+	if target := strings.TrimSpace(r.Header.Get("X-Amz-Target")); target != "" {
+		if src := auditEventSourceFromJSONTarget(target); src != "" {
+			return src
+		}
+	}
+	if action := strings.TrimSpace(r.URL.Query().Get("Action")); action != "" {
+		if src := auditEventSourceFromQueryAction(action); src != "" {
+			return src
+		}
+	}
+	if host := strings.TrimSpace(r.Host); strings.Contains(host, "s3") {
+		return "s3.amazonaws.com"
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	if path != "" && path != "/" && r.Header.Get("X-Amz-Target") == "" && r.URL.Query().Get("Action") == "" {
+		if !isLambdaRESTPath(path) && !isBedrockRuntimePath(path) {
+			return "s3.amazonaws.com"
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "noctaxris.amazonaws.com"
+}
+
+func auditEventSourceFromJSONTarget(target string) string {
+	dot := strings.LastIndex(target, ".")
+	if dot <= 0 {
+		return ""
+	}
+	prefix := target[:dot]
+	lower := strings.ToLower(prefix)
+	switch {
+	case strings.EqualFold(prefix, "TrentService"), strings.EqualFold(prefix, "AWSKMS"):
+		return "kms.amazonaws.com"
+	case strings.EqualFold(prefix, "AWSSecretsManager"), strings.EqualFold(prefix, "secretsmanager"):
+		return "secretsmanager.amazonaws.com"
+	case strings.EqualFold(prefix, "AmazonSSM"):
+		return "ssm.amazonaws.com"
+	case strings.EqualFold(prefix, "AWSLambda"):
+		return "lambda.amazonaws.com"
+	case strings.Contains(lower, "dynamodb"):
+		return "dynamodb.amazonaws.com"
+	case strings.HasPrefix(lower, "logs_"), strings.EqualFold(prefix, "Logs"):
+		return "logs.amazonaws.com"
+	case strings.Contains(lower, "cloudtrail"):
+		return "cloudtrail.amazonaws.com"
+	case strings.Contains(lower, "athena"), strings.EqualFold(prefix, "AmazonAthena"):
+		return "athena.amazonaws.com"
+	case strings.EqualFold(prefix, "AWSEvents"):
+		return "events.amazonaws.com"
+	case strings.EqualFold(prefix, "AmazonSNS"):
+		return "sns.amazonaws.com"
+	case strings.EqualFold(prefix, "AmazonSQS"):
+		return "sqs.amazonaws.com"
+	case strings.Contains(lower, "organizations"):
+		return "organizations.amazonaws.com"
+	case strings.EqualFold(prefix, "AmazonEC2"), strings.EqualFold(prefix, "AWSEC2"):
+		return "ec2.amazonaws.com"
+	case strings.Contains(lower, "cognito"):
+		return "cognito-idp.amazonaws.com"
+	case strings.Contains(lower, "apigateway"):
+		return "apigateway.amazonaws.com"
+	case strings.Contains(lower, "appsync"):
+		return "appsync.amazonaws.com"
+	case strings.Contains(lower, "elasticmapreduce"), strings.EqualFold(prefix, "ElasticMapReduce"):
+		return "elasticmapreduce.amazonaws.com"
+	case strings.Contains(lower, "glue"), strings.EqualFold(prefix, "AWSGlue"):
+		return "glue.amazonaws.com"
+	case strings.Contains(lower, "stepfunctions"), strings.EqualFold(prefix, "AWSStepFunctions"):
+		return "states.amazonaws.com"
+	case strings.Contains(lower, "firehose"):
+		return "firehose.amazonaws.com"
+	case strings.Contains(lower, "kinesis"):
+		return "kinesis.amazonaws.com"
+	case strings.Contains(lower, "ecs"), strings.Contains(lower, "ec2containerservice"):
+		return "ecs.amazonaws.com"
+	case strings.Contains(lower, "ecr"), strings.HasPrefix(lower, "amazonec2containerregistry"):
+		return "ecr.amazonaws.com"
+	case strings.Contains(lower, "rds"):
+		return "rds.amazonaws.com"
+	case strings.Contains(lower, "cloudformation"):
+		return "cloudformation.amazonaws.com"
+	case strings.Contains(lower, "cloudcontrol"), strings.EqualFold(prefix, "CloudApiService"):
+		return "cloudcontrolapi.amazonaws.com"
+	case strings.Contains(lower, "waf"):
+		return "wafv2.amazonaws.com"
+	case strings.Contains(lower, "config"):
+		return "config.amazonaws.com"
+	case strings.Contains(lower, "iam"):
+		return "iam.amazonaws.com"
+	case strings.Contains(lower, "sts"):
+		return "sts.amazonaws.com"
+	case strings.Contains(lower, "s3"):
+		return "s3.amazonaws.com"
+	}
+	return ""
+}
+
+func auditEventSourceFromQueryAction(action string) string {
+	a := strings.TrimSpace(action)
+	if a == "" {
+		return ""
+	}
+	lower := strings.ToLower(a)
+	switch {
+	case strings.HasPrefix(lower, "assume"), lower == "getcalleridentity", lower == "getsessiontoken",
+		lower == "getfederationtoken", strings.HasPrefix(lower, "decryptauthorizationmessage"):
+		return "sts.amazonaws.com"
+	case strings.HasPrefix(lower, "createaccount"), strings.HasPrefix(lower, "listaccounts"),
+		strings.HasPrefix(lower, "describeorganization"), strings.HasPrefix(lower, "createorganizationalunit"),
+		strings.HasPrefix(lower, "enablepolicytype"), strings.HasPrefix(lower, "createpolicy"),
+		strings.HasPrefix(lower, "attachpolicy"), strings.HasPrefix(lower, "detachpolicy"),
+		strings.HasPrefix(lower, "describepolicy"), strings.HasPrefix(lower, "moveaccount"),
+		strings.HasPrefix(lower, "listorganizationalunits"):
+		return "organizations.amazonaws.com"
+	case strings.HasPrefix(lower, "listbuckets"), strings.HasPrefix(lower, "createbucket"),
+		strings.HasPrefix(lower, "putobject"), strings.HasPrefix(lower, "getobject"),
+		strings.HasPrefix(lower, "deleteobject"), strings.HasPrefix(lower, "headbucket"):
+		return "s3.amazonaws.com"
+	case strings.HasPrefix(lower, "createuser"), strings.HasPrefix(lower, "listusers"),
+		strings.HasPrefix(lower, "createaccesskey"), strings.HasPrefix(lower, "createrole"),
+		strings.HasPrefix(lower, "attachrolepolicy"), strings.HasPrefix(lower, "putrolepolicy"):
+		return "iam.amazonaws.com"
+	}
+	return ""
+}
+
+// writeSiblingKMSDecryptAudit writes a sibling kms.amazonaws.com Decrypt success audit line.
+func (s *Server) writeSiblingKMSDecryptAudit(
+	r *http.Request,
+	requestID, eventID string,
+	verified *authn.Verified,
+	keyARN string,
+	encryptionContext map[string]string,
+) {
+	if s == nil || verified == nil {
+		return
+	}
+	params := map[string]any{}
+	if keyARN != "" {
+		params["keyId"] = keyARN
+	}
+	if len(encryptionContext) > 0 {
+		ctx := make(map[string]any, len(encryptionContext))
+		for k, v := range encryptionContext {
+			ctx[k] = v
+		}
+		params["encryptionContext"] = ctx
+	}
+	var resources []audit.Resource
+	if keyARN != "" {
+		resources = []audit.Resource{{
+			AccountID: verified.AccountID,
+			Type:      "AWS::KMS::Key",
+			ARN:       keyARN,
+		}}
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "kms.amazonaws.com", "Decrypt", true,
+		WithAuditResources(resources),
+		WithAuditRequestParameters(params),
+	)
+}
+
+func auditUserName(verified *authn.Verified) string {
+	if verified == nil {
+		return ""
+	}
+	p := verified.Principal
+	if p.Kind == identity.KindAnonymous {
+		return ""
+	}
+	if p.UserName != "" {
+		return p.UserName
+	}
+	if p.IsRoot || p.Kind == identity.KindRoot {
+		return "root"
+	}
+	if p.Kind == identity.KindRole && p.SessionName != "" {
+		return p.SessionName
+	}
+	if p.Kind == identity.KindFederated && p.SessionName != "" {
+		return p.SessionName
+	}
+	if p.Kind == identity.KindRole && p.RoleName != "" {
+		return p.RoleName
+	}
+	return ""
+}
+
+func baseAuditRequestParams(r *http.Request) map[string]any {
+	out := map[string]any{
+		"httpMethod": r.Method,
+		"path":       r.URL.Path,
+	}
+	if t := strings.TrimSpace(r.Header.Get("X-Amz-Target")); t != "" {
+		out["xAmzTarget"] = t
+	}
+	if a := strings.TrimSpace(r.URL.Query().Get("Action")); a != "" {
+		out["action"] = a
+	}
+	return out
 }
 
 func formParams(r *http.Request, body []byte) url.Values {
@@ -961,9 +1291,9 @@ func (s *Server) auditAPIError(
 	ev := audit.Event{
 		EventVersion:       eventVersion,
 		EventTime:          s.now().UTC().Format(time.RFC3339),
-		EventSource:        "organizations.amazonaws.com",
+		EventSource:        auditEventSourceForRequest(r, "noctaxris.amazonaws.com"),
 		EventName:          eventNameForRequest(r),
-		SourceIPAddress:    clientIP(r),
+		SourceIPAddress:    s.auditClientIP(r),
 		UserAgent:          r.UserAgent(),
 		RequestID:          requestID,
 		EventID:            eventID,
@@ -972,22 +1302,25 @@ func (s *Server) auditAPIError(
 		ReadOnly:           readOnly,
 		ErrorCode:          code,
 		ErrorMessage:       message,
-		RequestParameters: map[string]any{
-			"httpMethod": r.Method,
-			"path":       r.URL.Path,
-		},
+		RequestParameters:  baseAuditRequestParams(r),
 	}
+	defaultManagementAuditFields(&ev)
 	if knownKey {
 		recipient := s.cfg.AccountID
 		if accountID != "" {
 			recipient = accountID
 		}
 		ev.RecipientAccountID = recipient
-		ev.UserIdentity = map[string]any{
+		uid := map[string]any{
 			"type":        "IAMUser",
 			"accountId":   recipient,
 			"accessKeyId": accessKeyID,
 		}
+		if accessKeyID != "" && accessKeyID == s.cfg.RootAccessKeyID {
+			uid["type"] = "Root"
+			uid["userName"] = "root"
+		}
+		ev.UserIdentity = uid
 	}
 	_ = s.audit.Write(context.Background(), ev)
 }

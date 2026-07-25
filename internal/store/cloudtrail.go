@@ -2,6 +2,8 @@ package store
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const cloudtrailEventsFile = "events.jsonl"
@@ -43,6 +47,8 @@ CREATE TABLE IF NOT EXISTS cloudtrail_trails (
   is_logging INTEGER NOT NULL DEFAULT 0,
   delivered_line_offset INTEGER NOT NULL DEFAULT 0,
   home_region TEXT NOT NULL DEFAULT '',
+  include_management_events INTEGER NOT NULL DEFAULT 1,
+  s3_data_events_enabled INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, name)
 );
@@ -57,6 +63,9 @@ type CloudTrailTrail struct {
 	CloudWatchLogsRoleArn     string
 	IsLogging                 bool
 	HomeRegion                string
+	IncludeManagementEvents   bool
+	S3DataEventsEnabled       bool
+	IsOrganizationTrail       bool
 }
 
 // CloudTrailLookupFilter selects events from the local JSONL audit file.
@@ -64,9 +73,13 @@ type CloudTrailLookupFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time
 	// AttributeKey/Value are the single LookupAttributes entry (AWS allows one).
-	AttributeKey   string
-	AttributeValue string
-	MaxResults     int
+	AttributeKey       string
+	AttributeValue     string
+	RecipientAccountID string
+	// EventCategory filters by eventCategory. Empty excludes Insight events (AWS default).
+	// "insight" returns only Insight-category records.
+	EventCategory string
+	MaxResults    int
 }
 
 // CloudTrailEventRecord is one LookupEvents Events[] member.
@@ -89,6 +102,9 @@ func EnsureCloudTrailSchema(db *sql.DB) error {
 	}
 	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE cloudtrail_trails ADD COLUMN delivered_line_offset INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cloudtrail_trails ADD COLUMN include_management_events INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE cloudtrail_trails ADD COLUMN s3_data_events_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cloudtrail_trails ADD COLUMN is_organization_trail INTEGER NOT NULL DEFAULT 0`,
 	}); err != nil {
 		return fmt.Errorf("ensure cloudtrail schema: %w", err)
 	}
@@ -100,12 +116,26 @@ func (s *Store) EnsureCloudTrailSchema() error {
 	return EnsureCloudTrailSchema(s.db)
 }
 
+// CloudTrailLabOrganizationID is the fixed org id used in organization-trail ARNs.
+const CloudTrailLabOrganizationID = "o-noctaxris"
+
 // CloudTrailTrailARN builds arn:aws:cloudtrail:REGION:ACCOUNT:trail/NAME.
 func CloudTrailTrailARN(region, accountID, name string) string {
 	if region == "" {
 		region = DefaultCloudTrailRegion
 	}
 	return fmt.Sprintf("arn:aws:cloudtrail:%s:%s:trail/%s", region, accountID, name)
+}
+
+// CloudTrailTrailARNFor returns the trail ARN, using an organization id path segment when isOrgTrail is set.
+func CloudTrailTrailARNFor(region, accountID, name string, isOrgTrail bool) string {
+	if region == "" {
+		region = DefaultCloudTrailRegion
+	}
+	if isOrgTrail {
+		return fmt.Sprintf("arn:aws:cloudtrail:%s:%s:trail/%s/%s", region, accountID, CloudTrailLabOrganizationID, name)
+	}
+	return CloudTrailTrailARN(region, accountID, name)
 }
 
 // CloudTrailLabLogStreamName is the stream used for lab Logs delivery.
@@ -125,12 +155,39 @@ func normalizeCloudTrailS3KeyPrefix(prefix string) string {
 	return prefix
 }
 
-// CloudTrailDeliveryObjectKey returns the lab-shaped S3 key for a trail delivery object.
-func CloudTrailDeliveryObjectKey(accountID, keyPrefix, trailName string, tsMillis int64) string {
+// cloudTrailDeliveryUniqID returns the suffix unique id for a delivery object key (override in tests).
+var cloudTrailDeliveryUniqID = func() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
+}
+
+// cloudTrailDeliveryGzip reports whether S3 trail bodies should be gzip-compressed.
+var cloudTrailDeliveryGzip = func() bool {
+	return strings.EqualFold(os.Getenv("NOCTAXRIS_CLOUDTRAIL_GZIP"), "1") ||
+		strings.EqualFold(os.Getenv("NOCTAXRIS_CLOUDTRAIL_GZIP"), "true")
+}
+
+// CloudTrailDeliveryObjectKey returns the AWS hive-layout S3 key for a trail delivery object.
+// Shape: {prefix}AWSLogs/{account}/CloudTrail/{region}/{yyyy}/{mm}/{dd}/{account}_CloudTrail_{region}_{stamp}_{uniq}.json[.gz]
+func CloudTrailDeliveryObjectKey(accountID, region, keyPrefix, trailName string, ts time.Time, gzip bool) string {
+	_ = trailName
+	if region == "" {
+		region = DefaultCloudTrailRegion
+	}
+	accountID = strings.TrimSpace(accountID)
 	prefix := normalizeCloudTrailS3KeyPrefix(keyPrefix)
-	safeTrail := strings.ReplaceAll(strings.TrimSpace(trailName), "/", "-")
-	return fmt.Sprintf("%sAWSLogs/%s/CloudTrail/noctaxris-%s-%d.json",
-		prefix, accountID, safeTrail, tsMillis)
+	ts = ts.UTC()
+	yyyy := ts.Format("2006")
+	mm := ts.Format("01")
+	dd := ts.Format("02")
+	stamp := ts.Format("20060102T1504") + "Z"
+	uniq := cloudTrailDeliveryUniqID()
+	ext := ".json"
+	if gzip {
+		ext = ".json.gz"
+	}
+	filename := fmt.Sprintf("%s_CloudTrail_%s_%s_%s%s", accountID, region, stamp, uniq, ext)
+	return fmt.Sprintf("%sAWSLogs/%s/CloudTrail/%s/%s/%s/%s/%s",
+		prefix, accountID, region, yyyy, mm, dd, filename)
 }
 
 // CreateCloudTrailTrail creates a trail with IsLogging=false. The S3 bucket must exist.
@@ -174,14 +231,18 @@ func (s *Store) CreateCloudTrailTrail(accountID string, trail CloudTrailTrail) (
 		}
 	}
 	prefix := strings.TrimSpace(trail.S3KeyPrefix)
+	orgTrail := 0
+	if trail.IsOrganizationTrail {
+		orgTrail = 1
+	}
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
 		`INSERT INTO cloudtrail_trails (
 			account_id, name, s3_bucket_name, s3_key_prefix,
 			cloudwatch_logs_log_group_arn, cloudwatch_logs_role_arn,
-			is_logging, home_region, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		accountID, name, bucket, prefix, cwGroupARN, cwRoleARN, home, now,
+			is_logging, home_region, is_organization_trail, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+		accountID, name, bucket, prefix, cwGroupARN, cwRoleARN, home, orgTrail, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -197,6 +258,9 @@ func (s *Store) CreateCloudTrailTrail(accountID string, trail CloudTrailTrail) (
 		CloudWatchLogsRoleArn:     cwRoleARN,
 		IsLogging:                 false,
 		HomeRegion:                home,
+		IncludeManagementEvents:   true,
+		S3DataEventsEnabled:       false,
+		IsOrganizationTrail:       trail.IsOrganizationTrail,
 	}, nil
 }
 
@@ -207,15 +271,16 @@ func (s *Store) GetCloudTrailTrail(accountID, name string) (CloudTrailTrail, err
 	}
 	name = strings.TrimSpace(name)
 	var t CloudTrailTrail
-	var logging int
+	var logging, incMgmt, s3Data, orgTrail int
 	err := s.db.QueryRow(
 		`SELECT name, s3_bucket_name, s3_key_prefix, cloudwatch_logs_log_group_arn,
-		        cloudwatch_logs_role_arn, is_logging, home_region
+		        cloudwatch_logs_role_arn, is_logging, home_region,
+		        include_management_events, s3_data_events_enabled, is_organization_trail
 		 FROM cloudtrail_trails WHERE account_id = ? AND name = ?`,
 		accountID, name,
 	).Scan(
 		&t.Name, &t.S3BucketName, &t.S3KeyPrefix, &t.CloudWatchLogsLogGroupArn,
-		&t.CloudWatchLogsRoleArn, &logging, &t.HomeRegion,
+		&t.CloudWatchLogsRoleArn, &logging, &t.HomeRegion, &incMgmt, &s3Data, &orgTrail,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CloudTrailTrail{}, ErrCloudTrailNotFound
@@ -224,6 +289,9 @@ func (s *Store) GetCloudTrailTrail(accountID, name string) (CloudTrailTrail, err
 		return CloudTrailTrail{}, fmt.Errorf("get trail: %w", err)
 	}
 	t.IsLogging = logging == 1
+	t.IncludeManagementEvents = incMgmt == 1
+	t.S3DataEventsEnabled = s3Data == 1
+	t.IsOrganizationTrail = orgTrail == 1
 	return t, nil
 }
 
@@ -245,7 +313,8 @@ func (s *Store) DescribeCloudTrailTrails(accountID string, names []string) ([]Cl
 	}
 	rows, err := s.db.Query(
 		`SELECT name, s3_bucket_name, s3_key_prefix, cloudwatch_logs_log_group_arn,
-		        cloudwatch_logs_role_arn, is_logging, home_region
+		        cloudwatch_logs_role_arn, is_logging, home_region,
+		        include_management_events, s3_data_events_enabled, is_organization_trail
 		 FROM cloudtrail_trails WHERE account_id = ? ORDER BY name`,
 		accountID,
 	)
@@ -256,14 +325,17 @@ func (s *Store) DescribeCloudTrailTrails(accountID string, names []string) ([]Cl
 	var out []CloudTrailTrail
 	for rows.Next() {
 		var t CloudTrailTrail
-		var logging int
+		var logging, incMgmt, s3Data, orgTrail int
 		if err := rows.Scan(
 			&t.Name, &t.S3BucketName, &t.S3KeyPrefix, &t.CloudWatchLogsLogGroupArn,
-			&t.CloudWatchLogsRoleArn, &logging, &t.HomeRegion,
+			&t.CloudWatchLogsRoleArn, &logging, &t.HomeRegion, &incMgmt, &s3Data, &orgTrail,
 		); err != nil {
 			return nil, fmt.Errorf("describe trails scan: %w", err)
 		}
 		t.IsLogging = logging == 1
+		t.IncludeManagementEvents = incMgmt == 1
+		t.S3DataEventsEnabled = s3Data == 1
+		t.IsOrganizationTrail = orgTrail == 1
 		if len(want) > 0 {
 			if _, ok := want[t.Name]; !ok {
 				continue
@@ -317,7 +389,7 @@ func (s *Store) StartCloudTrailLogging(accountID, name, dataRoot string) error {
 	if err != nil {
 		return fmt.Errorf("start logging: read events: %w", err)
 	}
-	ts := time.Now().UTC().UnixMilli()
+	ts := time.Now().UTC()
 	if err := s.putCloudTrailS3Delivery(accountID, trail, lines, ts); err != nil {
 		return err
 	}
@@ -372,7 +444,8 @@ func (s *Store) ShipCloudTrailContinuousDeliveries(dataRoot string) error {
 	}
 	rows, err := s.db.Query(
 		`SELECT account_id, name, s3_bucket_name, s3_key_prefix, cloudwatch_logs_log_group_arn,
-		        cloudwatch_logs_role_arn, home_region, delivered_line_offset
+		        cloudwatch_logs_role_arn, home_region, delivered_line_offset,
+		        include_management_events, s3_data_events_enabled
 		 FROM cloudtrail_trails WHERE is_logging = 1 ORDER BY account_id, name`,
 	)
 	if err != nil {
@@ -388,14 +461,17 @@ func (s *Store) ShipCloudTrailContinuousDeliveries(dataRoot string) error {
 	var active []loggingTrail
 	for rows.Next() {
 		var lt loggingTrail
+		var incMgmt, s3Data int
 		if err := rows.Scan(
 			&lt.accountID, &lt.trail.Name, &lt.trail.S3BucketName, &lt.trail.S3KeyPrefix,
 			&lt.trail.CloudWatchLogsLogGroupArn, &lt.trail.CloudWatchLogsRoleArn,
-			&lt.trail.HomeRegion, &lt.offset,
+			&lt.trail.HomeRegion, &lt.offset, &incMgmt, &s3Data,
 		); err != nil {
 			return fmt.Errorf("cloudtrail continuous: scan: %w", err)
 		}
 		lt.trail.IsLogging = true
+		lt.trail.IncludeManagementEvents = incMgmt == 1
+		lt.trail.S3DataEventsEnabled = s3Data == 1
 		active = append(active, lt)
 	}
 	if err := rows.Err(); err != nil {
@@ -433,7 +509,7 @@ func (s *Store) shipCloudTrailTrailDelta(accountID string, trail CloudTrailTrail
 	if len(lines) == 0 {
 		return nil
 	}
-	ts := time.Now().UTC().UnixMilli()
+	ts := time.Now().UTC()
 	if err := s.putCloudTrailS3Delivery(accountID, trail, lines, ts); err != nil {
 		_ = s.clearCloudTrailLogging(accountID, trail.Name)
 		return err
@@ -465,30 +541,95 @@ func (s *Store) clearCloudTrailLogging(accountID, name string) error {
 	return nil
 }
 
-func (s *Store) putCloudTrailS3Delivery(accountID string, trail CloudTrailTrail, lines []string, tsMillis int64) error {
+func (s *Store) putCloudTrailS3Delivery(accountID string, trail CloudTrailTrail, lines []string, deliveredAt time.Time) error {
+	sel := CloudTrailEventSelectors{
+		IncludeManagementEvents: trail.IncludeManagementEvents,
+		S3DataEventsEnabled:     trail.S3DataEventsEnabled,
+	}
 	records := make([]json.RawMessage, 0, len(lines))
 	for _, line := range lines {
 		if !json.Valid([]byte(line)) {
 			continue
 		}
+		if !cloudTrailLinePassesSelectors(line, sel) {
+			continue
+		}
 		records = append(records, json.RawMessage(line))
+	}
+	if len(records) == 0 {
+		return nil
 	}
 	body, err := json.Marshal(map[string]any{"Records": records})
 	if err != nil {
 		return fmt.Errorf("cloudtrail delivery: marshal s3 body: %w", err)
 	}
-	key := CloudTrailDeliveryObjectKey(accountID, trail.S3KeyPrefix, trail.Name, tsMillis)
+	gzipOn := cloudTrailDeliveryGzip()
+	region := trail.HomeRegion
+	if region == "" {
+		region = DefaultCloudTrailRegion
+	}
+	key := CloudTrailDeliveryObjectKey(accountID, region, trail.S3KeyPrefix, trail.Name, deliveredAt, gzipOn)
+	contentType := "application/json"
+	if gzipOn {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(body); err != nil {
+			return fmt.Errorf("cloudtrail delivery: gzip write: %w", err)
+		}
+		if err := zw.Close(); err != nil {
+			return fmt.Errorf("cloudtrail delivery: gzip close: %w", err)
+		}
+		body = buf.Bytes()
+		contentType = "application/gzip"
+	}
 	if _, err := s.PutObject(accountID, trail.S3BucketName, key, PutObjectMeta{
 		Data:        body,
 		PlainSize:   int64(len(body)),
-		ContentType: "application/json",
+		ContentType: contentType,
 	}); err != nil {
 		return fmt.Errorf("cloudtrail delivery: put s3 object: %w", err)
+	}
+	if err := s.putCloudTrailDigestSidecar(accountID, trail.S3BucketName, key, body); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (s *Store) putCloudTrailLogsDelivery(accountID string, trail CloudTrailTrail, lines []string, tsMillis int64) error {
+func cloudTrailLogEventTimestamp(line string, fallback time.Time) int64 {
+	fallbackMillis := fallback.UnixMilli()
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return fallbackMillis
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return fallbackMillis
+	}
+	eventTimeStr, _ := raw["eventTime"].(string)
+	if eventTimeStr == "" {
+		return fallbackMillis
+	}
+	if t, err := time.Parse(time.RFC3339, eventTimeStr); err == nil {
+		return t.UnixMilli()
+	}
+	if t, err := time.Parse(time.RFC3339Nano, eventTimeStr); err == nil {
+		return t.UnixMilli()
+	}
+	return fallbackMillis
+}
+
+func (s *Store) putCloudTrailLogsDelivery(accountID string, trail CloudTrailTrail, lines []string, deliveredAt time.Time) error {
+	sel := CloudTrailEventSelectors{
+		IncludeManagementEvents: trail.IncludeManagementEvents,
+		S3DataEventsEnabled:     trail.S3DataEventsEnabled,
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if cloudTrailLinePassesSelectors(line, sel) {
+			filtered = append(filtered, line)
+		}
+	}
+	lines = filtered
 	group, err := parseLogGroupNameFromARN(trail.CloudWatchLogsLogGroupArn)
 	if err != nil {
 		return fmt.Errorf("%w: CloudWatchLogsLogGroupArn is invalid", ErrCloudTrailBadRequest)
@@ -516,18 +657,19 @@ func (s *Store) putCloudTrailLogsDelivery(accountID string, trail CloudTrailTrai
 		return fmt.Errorf("cloudtrail delivery: get log stream: %w", err)
 	}
 	events := make([]LogEvent, 0, len(lines))
+	fallbackMillis := deliveredAt.UnixMilli()
 	for i, line := range lines {
 		events = append(events, LogEvent{
-			Timestamp: tsMillis,
+			Timestamp: cloudTrailLogEventTimestamp(line, deliveredAt),
 			Message:   line,
-			EventID:   fmt.Sprintf("ct-%d-%d", tsMillis, i),
+			EventID:   fmt.Sprintf("ct-%d-%d", fallbackMillis, i),
 		})
 	}
 	if len(events) == 0 {
 		events = append(events, LogEvent{
-			Timestamp: tsMillis,
+			Timestamp: fallbackMillis,
 			Message:   `{"Records":[]}`,
-			EventID:   fmt.Sprintf("ct-%d-empty", tsMillis),
+			EventID:   fmt.Sprintf("ct-%d-empty", fallbackMillis),
 		})
 	}
 	if _, _, err := s.PutLogEvents(accountID, group, stream, st.UploadSequenceToken, events); err != nil {
@@ -678,12 +820,45 @@ func matchCloudTrailLine(line string, filter CloudTrailLookupFilter) (CloudTrail
 		return CloudTrailEventRecord{}, false, nil
 	}
 
+	if acct := strings.TrimSpace(filter.RecipientAccountID); acct != "" {
+		recipient, _ := raw["recipientAccountId"].(string)
+		if recipient != acct {
+			return CloudTrailEventRecord{}, false, nil
+		}
+	}
+
+	category, _ := raw["eventCategory"].(string)
+	wantCat := strings.TrimSpace(filter.EventCategory)
+	if wantCat == "" {
+		// Default LookupEvents returns management/data history, not Insights.
+		if strings.EqualFold(category, "Insight") {
+			return CloudTrailEventRecord{}, false, nil
+		}
+	} else if strings.EqualFold(wantCat, "insight") {
+		if !strings.EqualFold(category, "Insight") {
+			return CloudTrailEventRecord{}, false, nil
+		}
+	} else if !strings.EqualFold(category, wantCat) {
+		return CloudTrailEventRecord{}, false, nil
+	}
+
 	eventName, _ := raw["eventName"].(string)
 	eventSource, _ := raw["eventSource"].(string)
 	eventID, _ := raw["eventID"].(string)
+	if eventName == "" || eventSource == "" {
+		if details, ok := raw["insightDetails"].(map[string]any); ok {
+			if eventName == "" {
+				eventName, _ = details["eventName"].(string)
+			}
+			if eventSource == "" {
+				eventSource, _ = details["eventSource"].(string)
+			}
+		}
+	}
 	username := cloudTrailUsername(raw)
 	accessKeyID := cloudTrailAccessKeyID(raw)
 	readOnly := cloudTrailReadOnlyString(raw)
+	sourceIP, _ := raw["sourceIPAddress"].(string)
 
 	if key := strings.TrimSpace(filter.AttributeKey); key != "" {
 		want := filter.AttributeValue
@@ -701,6 +876,8 @@ func matchCloudTrailLine(line string, filter CloudTrailLookupFilter) (CloudTrail
 			got = accessKeyID
 		case "readonly":
 			got = readOnly
+		case "sourceipaddress":
+			got = sourceIP
 		default:
 			return CloudTrailEventRecord{}, false, nil
 		}

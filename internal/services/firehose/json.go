@@ -38,6 +38,14 @@ func DescribeDeliveryStreamJSON(st store.FirehoseStream) ([]byte, error) {
 		// AWS shape (primary) plus lab alias for Create symmetry.
 		dest["AmazonopensearchserviceDestinationDescription"] = osDesc
 		dest["OpenSearchDestinationDescription"] = osDesc
+	case "VPCFlow":
+		vpcDesc := map[string]any{
+			"BucketARN": "arn:aws:s3:::" + st.DestBucket,
+			"Prefix":    st.DestPrefix,
+			"RoleARN":   st.RoleARN,
+		}
+		dest["VpcFlowLogsDestinationDescription"] = vpcDesc
+		dest["NoctaxrisVpcFlowDestinationDescription"] = vpcDesc
 	}
 	return json.Marshal(map[string]any{
 		"DeliveryStreamDescription": map[string]any{

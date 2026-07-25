@@ -57,15 +57,7 @@ func (s *Server) pollAllEventSourceMappings() {
 	}
 	for _, m := range mappings {
 		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, qualifier, eventJSON string) (string, error) {
-			if strings.TrimSpace(qualifier) == "" {
-				qualifier = "$LATEST"
-			}
-			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, qualifier)
-			if err != nil {
-				return "", err
-			}
-			out, err := s.executeLambdaInvoke(context.Background(), accountID, functionName, fn, executedVersion, eventJSON)
-			return string(out), err
+			return s.esmPollLambdaInvoke(context.Background(), m.UUID, accountID, functionName, qualifier, eventJSON)
 		})
 	}
 }
@@ -162,12 +154,7 @@ func (s *Server) lambdaCreateEventSourceMapping(
 	// Unit tests leave DockerHost empty: run one poll inline so Receive→Invoke→Delete is deterministic.
 	if strings.TrimSpace(s.cfg.DockerHost) == "" && m.Enabled {
 		_ = s.store.PollEventSourceMappingOnce(m.UUID, func(accountID, functionName, qualifier, eventJSON string) (string, error) {
-			fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, qualifier)
-			if err != nil {
-				return "", err
-			}
-			out, err := s.executeLambdaInvoke(r.Context(), accountID, functionName, fn, executedVersion, eventJSON)
-			return string(out), err
+			return s.esmPollLambdaInvoke(r.Context(), m.UUID, accountID, functionName, qualifier, eventJSON)
 		})
 	}
 	payload, err := lambdasvc.EventSourceMappingJSON(m)
@@ -370,4 +357,23 @@ func (s *Server) lambdaDeleteEventSourceMapping(
 	}
 	s.writeLambdaOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "DeleteEventSourceMapping", readOnly)
+}
+
+func (s *Server) esmPollLambdaInvoke(
+	ctx context.Context,
+	esmUUID, accountID, functionName, qualifier, eventJSON string,
+) (string, error) {
+	if strings.TrimSpace(qualifier) == "" {
+		qualifier = "$LATEST"
+	}
+	fn, executedVersion, err := s.store.ResolveFunction(accountID, functionName, qualifier)
+	if err != nil {
+		return "", err
+	}
+	out, err := s.executeLambdaInvoke(ctx, accountID, functionName, fn, executedVersion, eventJSON)
+	if err != nil {
+		return "", err
+	}
+	s.writeLambdaEventSourceInvokeAudit(accountID, functionName, fn, esmUUID)
+	return string(out), nil
 }

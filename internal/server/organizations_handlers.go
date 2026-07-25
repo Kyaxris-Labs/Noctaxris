@@ -43,6 +43,14 @@ func (s *Server) handleOrgsDepth(
 		s.handleOrgsDetachPolicy(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionOrgsDescribePolicy, "DescribePolicy":
 		s.handleOrgsDescribePolicy(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsListPolicies, catalog.ActionIAMListPolicies, "ListPolicies":
+		s.handleOrgsListPolicies(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsListPoliciesForTarget, "ListPoliciesForTarget":
+		s.handleOrgsListPoliciesForTarget(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsListParents, "ListParents":
+		s.handleOrgsListParents(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionOrgsListAccountsForParent, "ListAccountsForParent":
+		s.handleOrgsListAccountsForParent(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionOrgsMoveAccount, "MoveAccount":
 		s.handleOrgsMoveAccount(w, r, body, requestID, eventID, verified, readOnly)
 	default:
@@ -704,6 +712,290 @@ func (s *Server) handleOrgsMoveAccount(
 	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", "MoveAccount", false)
 }
 
+func (s *Server) handleOrgsListPolicies(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	if !s.authorizeOrgs(verified, catalog.ActionOrgsListPolicies, "*") {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform organizations:ListPolicies.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	params := requestParams(r, body)
+	storeType, ok := orgListPolicyTypeFilter(params)
+	if !ok {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"Filter type must be SERVICE_CONTROL_POLICY or RESOURCE_CONTROL_POLICY.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	policies, err := s.store.ListOrgPolicies(storeType)
+	if err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list policies.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	s.writeOrgsPolicyList(w, r, body, requestID, eventID, verified, readOnly, policies, "ListPolicies")
+}
+
+func (s *Server) handleOrgsListPoliciesForTarget(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	if !s.authorizeOrgs(verified, catalog.ActionOrgsListPoliciesForTarget, "*") {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform organizations:ListPoliciesForTarget.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	params := requestParams(r, body)
+	targetID := params["TargetId"]
+	if targetID == "" {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"TargetId is required.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	targetType, ok := orgTargetType(targetID)
+	if !ok {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"TargetId must be a root, OU, or account id.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	storeType, ok := orgListPolicyTypeFilter(params)
+	if !ok {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"Filter type must be SERVICE_CONTROL_POLICY or RESOURCE_CONTROL_POLICY.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	policies, err := s.store.ListPoliciesForTarget(targetType, targetID)
+	if err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list policies for target.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	if storeType != "" {
+		filtered := policies[:0]
+		for _, p := range policies {
+			if p.Type == storeType {
+				filtered = append(filtered, p)
+			}
+		}
+		policies = filtered
+	}
+	s.writeOrgsPolicyList(w, r, body, requestID, eventID, verified, readOnly, policies, "ListPoliciesForTarget")
+}
+
+func (s *Server) handleOrgsListParents(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	if !s.authorizeOrgs(verified, catalog.ActionOrgsListParents, "*") {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform organizations:ListParents.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	params := requestParams(r, body)
+	childID := params["ChildId"]
+	if childID == "" {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			"ChildId is required.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	parents, err := s.store.ListParents(childID)
+	if err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"Unable to list parents.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	jsonParents := make([]map[string]any, 0, len(parents))
+	xmlParents := make([]organizations.OrgParentEntry, 0, len(parents))
+	for _, p := range parents {
+		jsonParents = append(jsonParents, map[string]any{"Id": p.ID, "Type": p.Type})
+		xmlParents = append(xmlParents, organizations.OrgParentEntry{ID: p.ID, Type: p.Type})
+	}
+	if wantsJSON(r, body) {
+		payload, err := json.Marshal(map[string]any{"Parents": jsonParents})
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build ListParents response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeJSONOK(w, requestID, payload)
+	} else {
+		payload, err := organizations.ListParentsXML(organizations.ListParentsResult{
+			RequestID: requestID,
+			Parents:   xmlParents,
+		})
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build ListParents response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeXMLOK(w, requestID, payload)
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", "ListParents", true)
+}
+
+func (s *Server) handleOrgsListAccountsForParent(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+) {
+	if !s.authorizeOrgs(verified, catalog.ActionOrgsListAccountsForParent, "*") {
+		s.writeAPIError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform organizations:ListAccountsForParent.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	params := requestParams(r, body)
+	parentID := params["ParentId"]
+	if parentID == "" {
+		parentID = store.OrgRootID
+	}
+	accounts, err := s.store.ListAccountsForParent(parentID)
+	if err != nil {
+		s.writeAPIError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"Unable to list accounts for parent.", readOnly, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
+	ids := make([]string, 0, len(accounts))
+	jsonAccounts := make([]map[string]any, 0, len(accounts))
+	for _, a := range accounts {
+		ids = append(ids, a.AccountID)
+		jsonAccounts = append(jsonAccounts, map[string]any{
+			"Id":     a.AccountID,
+			"Status": "ACTIVE",
+			"State":  "ACTIVE",
+		})
+	}
+	if wantsJSON(r, body) {
+		payload, err := json.Marshal(map[string]any{"Accounts": jsonAccounts})
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build ListAccountsForParent response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeJSONOK(w, requestID, payload)
+	} else {
+		payload, err := organizations.ListAccountsForParentXML(organizations.ListAccountsForParentResult{
+			RequestID:  requestID,
+			AccountIDs: ids,
+		})
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build ListAccountsForParent response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeXMLOK(w, requestID, payload)
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", "ListAccountsForParent", true)
+}
+
+func (s *Server) writeOrgsPolicyList(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	policies []store.OrgPolicy,
+	auditAction string,
+) {
+	summaries := make([]organizations.OrgPolicySummary, 0, len(policies))
+	jsonPolicies := make([]map[string]any, 0, len(policies))
+	for _, p := range policies {
+		apiType := orgStoreTypeToAPI(p.Type)
+		arn := orgPolicyARN(verified.AccountID, p.Type, p.ID)
+		summaries = append(summaries, organizations.OrgPolicySummary{
+			ID: p.ID, Name: p.Name, Type: apiType, Arn: arn,
+		})
+		jsonPolicies = append(jsonPolicies, map[string]any{
+			"Id":         p.ID,
+			"Arn":        arn,
+			"Name":       p.Name,
+			"Type":       apiType,
+			"AwsManaged": false,
+		})
+	}
+	if wantsJSON(r, body) {
+		payload, err := json.Marshal(map[string]any{"Policies": jsonPolicies})
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build policy list response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeJSONOK(w, requestID, payload)
+	} else {
+		var payload []byte
+		var err error
+		switch auditAction {
+		case "ListPoliciesForTarget":
+			payload, err = organizations.ListPoliciesForTargetXML(organizations.ListPoliciesResult{
+				RequestID: requestID,
+				Policies:  summaries,
+			})
+		default:
+			payload, err = organizations.ListPoliciesXML(organizations.ListPoliciesResult{
+				RequestID: requestID,
+				Policies:  summaries,
+			})
+		}
+		if err != nil {
+			s.writeAPIError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to build policy list response.", readOnly, eventID,
+				verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		s.writeXMLOK(w, requestID, payload)
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "organizations.amazonaws.com", auditAction, true)
+}
+
+func orgListPolicyTypeFilter(params map[string]string) (string, bool) {
+	apiType := params["PolicyType"]
+	if apiType == "" {
+		apiType = params["Type"]
+	}
+	if apiType == "" {
+		return "", true
+	}
+	storeType, ok := orgAPITypeToStore(apiType)
+	if !ok {
+		return "", false
+	}
+	return storeType, true
+}
+
 func orgAPITypeToStore(apiType string) (string, bool) {
 	switch apiType {
 	case "SERVICE_CONTROL_POLICY", "SCP":
@@ -766,8 +1058,14 @@ func isOrgsDepthAction(action, service string) bool {
 		catalog.ActionOrgsAttachPolicy, "AttachPolicy",
 		catalog.ActionOrgsDetachPolicy, "DetachPolicy",
 		catalog.ActionOrgsDescribePolicy, "DescribePolicy",
+		catalog.ActionOrgsListPolicies,
+		catalog.ActionOrgsListPoliciesForTarget, "ListPoliciesForTarget",
+		catalog.ActionOrgsListParents, "ListParents",
+		catalog.ActionOrgsListAccountsForParent, "ListAccountsForParent",
 		catalog.ActionOrgsMoveAccount, "MoveAccount":
 		return true
+	case catalog.ActionIAMListPolicies, "ListPolicies":
+		return strings.EqualFold(service, "organizations")
 	case catalog.ActionIAMCreatePolicy, "CreatePolicy":
 		return strings.EqualFold(service, "organizations")
 	default:

@@ -60,6 +60,9 @@ type CloudFrontDistribution struct {
 	CallerReference string
 	Status          string
 	CreatedAt       int64
+	LoggingEnabled  bool
+	LoggingBucket   string
+	LoggingPrefix   string
 }
 
 // EnsureCloudFrontSchema creates CloudFront tables if missing.
@@ -69,6 +72,13 @@ func EnsureCloudFrontSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(cloudfrontSchema); err != nil {
 		return fmt.Errorf("ensure cloudfront schema: %w", err)
+	}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_bucket TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_prefix TEXT NOT NULL DEFAULT ''`,
+	}); err != nil {
+		return fmt.Errorf("ensure cloudfront schema: migrate: %w", err)
 	}
 	return nil
 }
@@ -152,30 +162,47 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}, nil
 }
 
+func scanCloudFrontDistribution(
+	scan func(dest ...any) error,
+) (CloudFrontDistribution, error) {
+	var d CloudFrontDistribution
+	var enabledInt, loggingInt int
+	if err := scan(
+		&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.CallerReference, &d.Status, &d.CreatedAt,
+		&loggingInt, &d.LoggingBucket, &d.LoggingPrefix,
+	); err != nil {
+		return CloudFrontDistribution{}, err
+	}
+	d.Enabled = enabledInt != 0
+	d.LoggingEnabled = loggingInt != 0
+	return d, nil
+}
+
 // GetCloudFrontDistribution returns a distribution by ID.
 func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistribution, error) {
 	id = strings.TrimSpace(id)
-	var d CloudFrontDistribution
-	var enabledInt int
-	err := s.db.QueryRow(
-		`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at
-		 FROM cloudfront_distributions WHERE account_id = ? AND id = ?`,
-		accountID, id,
-	).Scan(&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.CallerReference, &d.Status, &d.CreatedAt)
+	d, err := scanCloudFrontDistribution(
+		s.db.QueryRow(
+			`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at,
+			        logging_enabled, logging_bucket, logging_prefix
+			 FROM cloudfront_distributions WHERE account_id = ? AND id = ?`,
+			accountID, id,
+		).Scan,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CloudFrontDistribution{}, ErrCloudFrontNotFound
 	}
 	if err != nil {
 		return CloudFrontDistribution{}, fmt.Errorf("get distribution: %w", err)
 	}
-	d.Enabled = enabledInt != 0
 	return d, nil
 }
 
 // ListCloudFrontDistributions lists distributions for an account.
 func (s *Store) ListCloudFrontDistributions(accountID string) ([]CloudFrontDistribution, error) {
 	rows, err := s.db.Query(
-		`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at
+		`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at,
+		        logging_enabled, logging_bucket, logging_prefix
 		 FROM cloudfront_distributions WHERE account_id = ? ORDER BY id`,
 		accountID,
 	)
@@ -185,12 +212,10 @@ func (s *Store) ListCloudFrontDistributions(accountID string) ([]CloudFrontDistr
 	defer rows.Close()
 	var out []CloudFrontDistribution
 	for rows.Next() {
-		var d CloudFrontDistribution
-		var enabledInt int
-		if err := rows.Scan(&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.CallerReference, &d.Status, &d.CreatedAt); err != nil {
+		d, err := scanCloudFrontDistribution(rows.Scan)
+		if err != nil {
 			return nil, fmt.Errorf("list distributions scan: %w", err)
 		}
-		d.Enabled = enabledInt != 0
 		out = append(out, d)
 	}
 	return out, rows.Err()

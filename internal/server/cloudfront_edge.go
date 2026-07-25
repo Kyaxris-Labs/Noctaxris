@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -71,7 +72,7 @@ func (s *Server) handleCloudFrontEdge(w http.ResponseWriter, r *http.Request, bo
 		_ = json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": defaultAuthnMessage(code)})
 		return
 	}
-	verified.SourceIP = clientIP(r)
+	verified.SourceIP = peerClientIP(r)
 	s.handleCloudFrontEdgeAfterAuth(w, r, body, requestID, eventID, verified, readOnly)
 }
 
@@ -125,7 +126,7 @@ func (s *Server) handleCloudFrontEdgeAfterAuth(
 
 	switch origin.OriginType {
 	case "s3":
-		s.cloudFrontEdgeFetchS3(w, r, verified, requestID, eventID, readOnly, origin.DomainName, objectKey)
+		s.cloudFrontEdgeFetchS3(w, r, verified, requestID, eventID, readOnly, d, origin.DomainName, objectKey)
 	case "apigateway":
 		s.cloudFrontEdgeFetchAPIGateway(w, r, body, requestID, eventID, readOnly, origin.DomainName, objectKey)
 	default:
@@ -135,12 +136,13 @@ func (s *Server) handleCloudFrontEdgeAfterAuth(
 
 func (s *Server) cloudFrontEdgeFetchS3(
 	w http.ResponseWriter, r *http.Request, verified *authn.Verified,
-	requestID, eventID string, readOnly bool, bucket, key string,
+	requestID, eventID string, readOnly bool, dist store.CloudFrontDistribution, bucket, key string,
 ) {
 	if strings.TrimSpace(key) == "" {
 		http.Error(w, "object key required", http.StatusNotFound)
 		return
 	}
+	start := time.Now()
 	meta, data, err := s.store.GetObject(verified.AccountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		http.Error(w, "NoSuchKey", http.StatusNotFound)
@@ -152,6 +154,11 @@ func (s *Server) cloudFrontEdgeFetchS3(
 	}
 	if err != nil {
 		http.Error(w, "origin fetch failed", http.StatusBadGateway)
+		return
+	}
+	status := http.StatusOK
+	if err := s.emitCloudFrontAccessLog(r, verified, dist, key, status, int64(len(data)), start); err != nil {
+		http.Error(w, "access log delivery failed", http.StatusServiceUnavailable)
 		return
 	}
 	if meta.ContentType != "" {
@@ -167,6 +174,46 @@ func (s *Server) cloudFrontEdgeFetchS3(
 		_, _ = w.Write(data)
 	}
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "EdgeGetObject", readOnly)
+}
+
+func (s *Server) emitCloudFrontAccessLog(
+	r *http.Request, verified *authn.Verified, dist store.CloudFrontDistribution,
+	uriStem string, status int, bytesSent int64, start time.Time,
+) error {
+	if !dist.LoggingEnabled {
+		return nil
+	}
+	elapsed := time.Since(start).Seconds()
+	in := store.CloudFrontAccessLogInput{
+		ClientIP:      verified.SourceIP,
+		Method:        r.Method,
+		Host:          r.Host,
+		URIStem:       "/" + strings.TrimPrefix(uriStem, "/"),
+		Status:        status,
+		UserAgent:     r.UserAgent(),
+		BytesSent:     bytesSent,
+		BytesReceived: 0,
+		TimeTaken:     elapsed,
+		RequestTime:   time.Now().UTC(),
+		RequestID:     requestIDFromContext(r),
+	}
+	if in.ClientIP == "" {
+		in.ClientIP = peerClientIP(r)
+	}
+	return s.store.AppendCloudFrontAccessLog(verified.AccountID, dist, in)
+}
+
+func requestIDFromContext(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if v := r.Header.Get("x-amz-request-id"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("x-amzn-requestid"); v != "" {
+		return v
+	}
+	return ""
 }
 
 func (s *Server) cloudFrontEdgeFetchAPIGateway(

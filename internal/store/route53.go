@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -385,13 +386,6 @@ func normalizeZoneID(zoneID string) string {
 	return zoneID
 }
 
-func boolToInt(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
-
 func joinRecords(records []string) string {
 	return strings.Join(records, "\n")
 }
@@ -401,4 +395,80 @@ func splitRecords(s string) []string {
 		return nil
 	}
 	return strings.Split(s, "\n")
+}
+
+// Route53QueryLabLogStreamName is the CloudWatch Logs stream for injected query logs.
+func Route53QueryLabLogStreamName(at time.Time) string {
+	return "route53-query/" + at.UTC().Format("2006/01/02")
+}
+
+// InjectRoute53QueryLogs delivers resolver query log lines to a CloudWatch Logs group.
+func (s *Store) InjectRoute53QueryLogs(accountID, region, logGroup, logStream string, lines []string, at time.Time) (int, error) {
+	logGroup = strings.TrimSpace(logGroup)
+	if logGroup == "" {
+		return 0, fmt.Errorf("%w: LogGroupName required", ErrRoute53BadRequest)
+	}
+	if region == "" {
+		region = DefaultRoute53Region
+	}
+	if logStream == "" {
+		logStream = Route53QueryLabLogStreamName(at)
+	}
+	if len(lines) == 0 {
+		lines = []string{defaultRoute53QueryLogLine(accountID, region, at)}
+	}
+	if _, err := s.EnsureLogGroup(accountID, region, logGroup); err != nil {
+		return 0, fmt.Errorf("route53 query inject ensure group: %w", err)
+	}
+	if _, err := s.getLogStream(accountID, logGroup, logStream); errors.Is(err, ErrLogStreamNotFound) {
+		if _, err := s.CreateLogStream(accountID, region, logGroup, logStream); err != nil &&
+			!errors.Is(err, ErrLogStreamAlreadyExists) {
+			return 0, fmt.Errorf("route53 query inject create stream: %w", err)
+		}
+	} else if err != nil {
+		return 0, fmt.Errorf("route53 query inject get stream: %w", err)
+	}
+	st, err := s.getLogStream(accountID, logGroup, logStream)
+	if err != nil {
+		return 0, fmt.Errorf("route53 query inject get stream: %w", err)
+	}
+	events := make([]LogEvent, 0, len(lines))
+	baseMillis := at.UnixMilli()
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		events = append(events, LogEvent{
+			Message:   line,
+			Timestamp: baseMillis + int64(i),
+		})
+	}
+	if len(events) == 0 {
+		return 0, fmt.Errorf("%w: no query log lines to deliver", ErrRoute53BadRequest)
+	}
+	if _, _, err := s.PutLogEvents(accountID, logGroup, logStream, st.UploadSequenceToken, events); err != nil {
+		return 0, fmt.Errorf("route53 query inject put log events: %w", err)
+	}
+	return len(events), nil
+}
+
+func defaultRoute53QueryLogLine(accountID, region string, at time.Time) string {
+	payload := map[string]any{
+		"version":          "1.100000",
+		"account_id":       accountID,
+		"region":           region,
+		"query_timestamp":  at.UTC().Format(time.RFC3339),
+		"query_name":       "lab.example.com.",
+		"query_type":       "A",
+		"answer_type":      "A",
+		"rcode":            "NOERROR",
+		"srcaddr":          "10.0.1.5",
+		"srcport":          "51514",
+		"transport":        "UDP",
+		"srcids":           map[string]any{"instance": "i-lab00000000000001"},
+		"firewall_rule_action": "ALLOW",
+	}
+	raw, _ := json.Marshal(payload)
+	return string(raw)
 }

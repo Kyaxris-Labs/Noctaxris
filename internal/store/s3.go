@@ -100,6 +100,8 @@ type ObjectMeta struct {
 	CannedACL    string
 	StoragePath  string
 	LastModified string
+	ObjectLockMode          string
+	ObjectLockRetainUntil   string
 }
 
 // ListObjectsResult is a minimal ListObjectsV2 response payload.
@@ -433,6 +435,10 @@ type PutObjectMeta struct {
 	// NotificationEventName overrides the S3 notification eventName (without s3: prefix).
 	// Empty means ObjectCreated:Put. CompleteMultipartUpload sets CompleteMultipartUpload.
 	NotificationEventName string
+	// ObjectLockMode is GOVERNANCE or COMPLIANCE when x-amz-object-lock-mode is set.
+	ObjectLockMode string
+	// ObjectLockRetainUntil is RFC3339 retain-until-date for Object Lock.
+	ObjectLockRetainUntil string
 }
 
 func normalizeCannedACL(acl string) string {
@@ -458,6 +464,9 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		return ObjectMeta{}, err
 	}
 	if _, err := s.GetBucket(accountID, bucket); err != nil {
+		return ObjectMeta{}, err
+	}
+	if err := s.applyObjectLockMeta(accountID, bucket, &meta); err != nil {
 		return ObjectMeta{}, err
 	}
 
@@ -492,8 +501,9 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 
 	_, err = s.db.Exec(
 		`INSERT INTO s3_objects
-		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified,
+		  object_lock_mode, object_lock_retain_until)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, bucket, key) DO UPDATE SET
 		   etag = excluded.etag,
 		   size = excluded.size,
@@ -504,8 +514,11 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		   sse_kms_context = excluded.sse_kms_context,
 		   canned_acl = excluded.canned_acl,
 		   storage_path = excluded.storage_path,
-		   last_modified = excluded.last_modified`,
+		   last_modified = excluded.last_modified,
+		   object_lock_mode = excluded.object_lock_mode,
+		   object_lock_retain_until = excluded.object_lock_retain_until`,
 		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
+		meta.ObjectLockMode, meta.ObjectLockRetainUntil,
 	)
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -560,12 +573,15 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 	var m ObjectMeta
 	var ct, sse, kmsID, sseCtx, acl sql.NullString
 	var sealed []byte
+	var lockMode, lockRetain sql.NullString
 	err = s.db.QueryRow(
 		`SELECT account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek,
-		        COALESCE(sse_kms_context, ''), COALESCE(canned_acl, 'private'), storage_path, last_modified
+		        COALESCE(sse_kms_context, ''), COALESCE(canned_acl, 'private'), storage_path, last_modified,
+		        COALESCE(object_lock_mode, ''), COALESCE(object_lock_retain_until, '')
 		 FROM s3_objects WHERE account_id = ? AND bucket = ? AND key = ?`,
 		accountID, bucket, key,
-	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &sseCtx, &acl, &m.StoragePath, &m.LastModified)
+	).Scan(&m.AccountID, &m.Bucket, &m.Key, &m.ETag, &m.Size, &ct, &sse, &kmsID, &sealed, &sseCtx, &acl, &m.StoragePath, &m.LastModified,
+		&lockMode, &lockRetain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ObjectMeta{}, ErrNoSuchKey
 	}
@@ -590,17 +606,31 @@ func (s *Store) HeadObject(accountID, bucket, key string) (ObjectMeta, error) {
 		m.CannedACL = "private"
 	}
 	m.SealedDEK = sealed
+	if lockMode.Valid {
+		m.ObjectLockMode = lockMode.String
+	}
+	if lockRetain.Valid {
+		m.ObjectLockRetainUntil = lockRetain.String
+	}
 	return m, nil
 }
 
 // DeleteObject removes object metadata and file bytes.
 func (s *Store) DeleteObject(accountID, bucket, key string) error {
+	return s.DeleteObjectWithOptions(accountID, bucket, key, DeleteObjectOptions{})
+}
+
+// DeleteObjectWithOptions removes an object unless Object Lock retention blocks delete.
+func (s *Store) DeleteObjectWithOptions(accountID, bucket, key string, opts DeleteObjectOptions) error {
 	key, err := SanitizeObjectKey(key)
 	if err != nil {
 		return err
 	}
 	meta, err := s.HeadObject(accountID, bucket, key)
 	if err != nil {
+		return err
+	}
+	if err := s.objectLockBlocksDelete(accountID, bucket, key, opts.BypassGovernanceRetention); err != nil {
 		return err
 	}
 	_, err = s.db.Exec(

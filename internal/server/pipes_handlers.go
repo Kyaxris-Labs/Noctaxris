@@ -131,7 +131,8 @@ func (s *Server) pipesCreate(
 		}
 	}
 	enrichment, _ := params["Enrichment"].(string)
-	p, err := s.store.CreatePipeWithEnrichment(verified.AccountID, s.pipesRegion(verified), name, description, source, target, roleARN, enrichment, desired)
+	deadLetter, _ := params["DeadLetterArn"].(string)
+	p, err := s.store.CreatePipeWithEnrichment(verified.AccountID, s.pipesRegion(verified), name, description, source, target, roleARN, enrichment, deadLetter, desired)
 	if errors.Is(err, store.ErrPipeExists) {
 		s.writePipesError(w, r, body, requestID, http.StatusConflict, "ConflictException",
 			"Pipe already exists.", readOnly, eventID, verified)

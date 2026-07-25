@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -68,6 +69,9 @@ type Server struct {
 	// In-process Secrets Manager RotationRules ticker.
 	secretsRotationTickerOnce   sync.Once
 	secretsRotationTickerCancel context.CancelFunc
+
+	clockMu       sync.RWMutex
+	clockOverride *time.Time
 }
 
 type awsError struct {
@@ -89,8 +93,8 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 		cfg:   cfg,
 		store: st,
 		audit: aud,
-		now:   time.Now,
 	}
+	s.now = func() time.Time { return s.effectiveNow() }
 	// CS-016: any EnqueueAsyncInvoke (SNS/EB/Scheduler/Firehose/Invoke Event) starts the worker.
 	st.SetOnAsyncEnqueue(func(job store.LambdaAsyncInvocation) {
 		s.startAsyncInvoke(job, job.AccountID, job.FunctionName, "")
@@ -244,7 +248,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		verified = &authn.Verified{Region: federationRegion(r), Service: "cognito-idp"}
 	} else {
 		var err error
-		verified, err = authn.Verify(r, body, s.now(), sigv4Skew, s.lookupKey)
+		verified, err = authn.Verify(r, body, s.authClock(), sigv4Skew, s.lookupKey)
 		if err != nil {
 			code := authn.Code(err)
 			// Narrow anonymous S3 GetObject/HeadObject gate: only MissingAuthenticationToken,
@@ -264,7 +268,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			s.writeAWSError(w, requestID, http.StatusForbidden, code, msg, readOnly, r, eventID, accessKeyID, "", false)
 			return
 		}
-		verified.SourceIP = clientIP(r)
+		verified.SourceIP = peerClientIP(r)
+		s.recordAccessKeyLastUsed(verified)
 	}
 
 	// Lab facades on :4566 after SigV4 (account-scoped; no anonymous edge/query/file paths).
@@ -322,6 +327,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if isOrgsDepthAction(action, verified.Service) {
 		s.handleOrgsDepth(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if isControlTowerAction(action, verified.Service) {
+		s.handleControlTower(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -423,6 +433,37 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "acm" || strings.HasPrefix(action, "acm:") {
 		s.handleACM(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "noctaxris") || strings.HasPrefix(action, "noctaxris-lab:") {
+		s.handleLabForensics(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "guardduty") || strings.HasPrefix(action, "guardduty:") {
+		s.handleGuardDuty(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "detective") || strings.HasPrefix(action, "detective:") {
+		s.handleDetective(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "macie2") || strings.EqualFold(verified.Service, "macie") ||
+		strings.HasPrefix(action, "macie2:") {
+		s.handleMacie(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "ec2") || strings.HasPrefix(action, "ec2:") {
+		s.handleVPCFlow(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "securityhub") || strings.HasPrefix(action, "securityhub:") {
+		s.handleSecurityHub(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -562,6 +603,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMDeleteAccessKey, "DeleteAccessKey",
 		catalog.ActionIAMListAccessKeys, "ListAccessKeys",
 		catalog.ActionIAMUpdateAccessKey, "UpdateAccessKey",
+		catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed",
+		catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport",
+		catalog.ActionIAMGetCredentialReport, "GetCredentialReport",
 		catalog.ActionIAMCreatePolicy, "CreatePolicy",
 		catalog.ActionIAMGetPolicy, "GetPolicy",
 		catalog.ActionIAMListPolicies, "ListPolicies",
@@ -815,7 +859,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCloudTrailDescribeTrails, "DescribeTrails",
 		catalog.ActionCloudTrailDeleteTrail, "DeleteTrail",
 		catalog.ActionCloudTrailStartLogging, "StartLogging",
-		catalog.ActionCloudTrailStopLogging, "StopLogging":
+		catalog.ActionCloudTrailStopLogging, "StopLogging",
+		catalog.ActionCloudTrailInjectEvents, "InjectEvents",
+		catalog.ActionCloudTrailInjectInsightsEvents, "InjectInsightsEvents",
+		catalog.ActionCloudTrailPutEventSelectors, "PutEventSelectors",
+		catalog.ActionCloudTrailGetEventSelectors, "GetEventSelectors",
+		catalog.ActionCloudTrailValidateLogs, "ValidateLogs":
 		s.handleCloudTrail(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLogsCreateLogGroup, "CreateLogGroup",
 		catalog.ActionLogsCreateLogStream, "CreateLogStream",
@@ -933,7 +982,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionConfigPutConfigurationRecorder, "PutConfigurationRecorder",
 		catalog.ActionConfigPutDeliveryChannel, "PutDeliveryChannel",
 		catalog.ActionConfigStartConfigurationRecorder, "StartConfigurationRecorder",
-		catalog.ActionConfigDescribeComplianceByConfigRule, "DescribeComplianceByConfigRule":
+		catalog.ActionConfigDescribeComplianceByConfigRule, "DescribeComplianceByConfigRule",
+		catalog.ActionConfigGetResourceConfigHistory, "GetResourceConfigHistory":
 		s.handleConfig(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionDynamoDBStreamsListStreams,
 		catalog.ActionDynamoDBStreamsDescribeStream,
@@ -990,11 +1040,44 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionACMListCertificates, "ListCertificates",
 		catalog.ActionACMDeleteCertificate, "DeleteCertificate":
 		s.handleACM(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionGuardDutyCreateDetector, "CreateDetector",
+		catalog.ActionGuardDutyListDetectors, "ListDetectors",
+		catalog.ActionGuardDutyListFindings,
+		catalog.ActionGuardDutyGetFindings,
+		catalog.ActionGuardDutyInjectFindings, "InjectFindings":
+		// ListFindings/GetFindings/InjectFindings also used by Security Hub and Macie;
+		// prefer SigV4 service routing above.
+		if strings.EqualFold(verified.Service, "securityhub") || strings.HasPrefix(action, "securityhub:") {
+			s.handleSecurityHub(w, r, body, requestID, eventID, action, verified, readOnly)
+			break
+		}
+		if strings.EqualFold(verified.Service, "macie2") || strings.EqualFold(verified.Service, "macie") ||
+			strings.HasPrefix(action, "macie2:") {
+			s.handleMacie(w, r, body, requestID, eventID, action, verified, readOnly)
+			break
+		}
+		s.handleGuardDuty(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionMacieEnableMacie, "EnableMacie",
+		catalog.ActionMacieGetMacieSession, "GetMacieSession",
+		catalog.ActionMacieCreateClassificationJob, "CreateClassificationJob",
+		catalog.ActionMacieDescribeClassificationJob, "DescribeClassificationJob",
+		catalog.ActionMacieListClassificationJobs, "ListClassificationJobs",
+		catalog.ActionMacieListFindings,
+		catalog.ActionMacieGetFindings,
+		catalog.ActionMacieInjectFindings:
+		s.handleMacie(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionEC2CreateFlowLogs, "CreateFlowLogs",
+		catalog.ActionEC2InjectFlowLogs, "InjectFlowLogs":
+		s.handleVPCFlow(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionSecurityHubBatchImportFindings, "BatchImportFindings",
+		catalog.ActionSecurityHubGetFindings:
+		s.handleSecurityHub(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionRoute53CreateHostedZone, "CreateHostedZone",
 		catalog.ActionRoute53DeleteHostedZone, "DeleteHostedZone",
 		catalog.ActionRoute53ListHostedZones, "ListHostedZones",
 		catalog.ActionRoute53ChangeResourceRecordSets, "ChangeResourceRecordSets",
-		catalog.ActionRoute53ListResourceRecordSets, "ListResourceRecordSets":
+		catalog.ActionRoute53ListResourceRecordSets, "ListResourceRecordSets",
+		catalog.ActionRoute53InjectQueryLogs, "InjectQueryLogs":
 		s.handleRoute53(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSDCreatePrivateDnsNamespace, "CreatePrivateDnsNamespace",
 		catalog.ActionSDCreateHttpNamespace, "CreateHttpNamespace",
@@ -1110,6 +1193,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionEMRListClusters,
 		catalog.ActionEMRTerminateJobFlows, "TerminateJobFlows":
 		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionLabFreezeClock, "FreezeClock",
+		catalog.ActionLabUnfreezeClock, "UnfreezeClock",
+		catalog.ActionLabSetClock, "SetClock",
+		catalog.ActionLabBulkSeed, "BulkSeed":
+		s.handleLabForensics(w, r, body, requestID, eventID, action, verified, readOnly)
 	default:
 		s.writeAWSError(w, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This API action is not implemented in Noctaxris.", readOnly, r, eventID,
@@ -1420,7 +1508,7 @@ func (s *Server) writeAWSError(
 		EventTime:          s.now().UTC().Format(time.RFC3339),
 		EventSource:        eventSource,
 		EventName:          eventName,
-		SourceIPAddress:    clientIP(r),
+		SourceIPAddress:    s.auditClientIP(r),
 		UserAgent:          r.UserAgent(),
 		RequestID:          requestID,
 		EventID:            eventID,
@@ -1429,10 +1517,7 @@ func (s *Server) writeAWSError(
 		ReadOnly:           readOnly,
 		ErrorCode:          code,
 		ErrorMessage:       message,
-		RequestParameters: map[string]any{
-			"httpMethod": r.Method,
-			"path":       r.URL.Path,
-		},
+		RequestParameters:  baseAuditRequestParams(r),
 	}
 
 	if knownKey {
@@ -1441,11 +1526,16 @@ func (s *Server) writeAWSError(
 			recipient = accountID
 		}
 		ev.RecipientAccountID = recipient
-		ev.UserIdentity = map[string]any{
+		uid := map[string]any{
 			"type":        "IAMUser",
 			"accountId":   recipient,
 			"accessKeyId": accessKeyID,
 		}
+		if accessKeyID != "" && accessKeyID == s.cfg.RootAccessKeyID {
+			uid["type"] = "Root"
+			uid["userName"] = "root"
+		}
+		ev.UserIdentity = uid
 	}
 
 	_ = s.audit.Write(context.Background(), ev)
@@ -1495,6 +1585,22 @@ func resolveAction(r *http.Request, body []byte) string {
 			return ecsAction(short)
 		case strings.Contains(strings.ToLower(prefix), "cloudtrail"):
 			return cloudtrailAction(short)
+		case strings.Contains(strings.ToLower(prefix), "guardduty"),
+			strings.EqualFold(prefix, "NoctaxrisGuardDuty"):
+			return guarddutyAction(short)
+		case strings.Contains(strings.ToLower(prefix), "macie"),
+			strings.EqualFold(prefix, "NoctaxrisMacie"):
+			return macieAction(short)
+		case strings.Contains(strings.ToLower(prefix), "detective"),
+			strings.EqualFold(prefix, "NoctaxrisDetective"):
+			return detectiveAction(short)
+		case strings.EqualFold(prefix, "AmazonEC2"), strings.EqualFold(prefix, "AWSEC2"),
+			strings.EqualFold(prefix, "NoctaxrisEC2"):
+			return vpcFlowAction(short)
+		case strings.Contains(strings.ToLower(prefix), "securityhub"),
+			strings.EqualFold(prefix, "SecurityHub"),
+			strings.EqualFold(prefix, "AWSSecurityHub"):
+			return securityHubAction(short)
 		case strings.HasPrefix(strings.ToLower(prefix), "logs_"),
 			strings.EqualFold(prefix, "Logs"):
 			return logsAction(short)
@@ -1557,8 +1663,12 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.Contains(strings.ToLower(prefix), "certificatemanager"),
 			strings.EqualFold(prefix, "ACM"):
 			return acmAction(short)
+		case strings.Contains(strings.ToLower(prefix), "controltower"):
+			return controlTowerAction(short)
 		case strings.Contains(strings.ToLower(prefix), "route53") &&
 			!strings.Contains(strings.ToLower(prefix), "autonaming"):
+			return route53Action(short)
+		case strings.EqualFold(prefix, "NoctaxrisRoute53"):
 			return route53Action(short)
 		case strings.Contains(strings.ToLower(prefix), "autonaming"),
 			strings.Contains(strings.ToLower(prefix), "servicediscovery"):
@@ -1596,6 +1706,8 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.Contains(strings.ToLower(prefix), "elasticmapreduce"),
 			strings.EqualFold(prefix, "ElasticMapReduce"):
 			return emrAction(short)
+		case strings.EqualFold(prefix, "NoctaxrisLab"):
+			return labForensicsAction(short)
 		}
 		return short
 	}
@@ -1658,6 +1770,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionOrgsDetachPolicy
 	case "DescribePolicy":
 		return catalog.ActionOrgsDescribePolicy
+	case "ListPoliciesForTarget":
+		return catalog.ActionOrgsListPoliciesForTarget
+	case "ListParents":
+		return catalog.ActionOrgsListParents
+	case "ListAccountsForParent":
+		return catalog.ActionOrgsListAccountsForParent
 	case "MoveAccount":
 		return catalog.ActionOrgsMoveAccount
 	case "CreateUser":
@@ -1676,6 +1794,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMListAccessKeys
 	case "UpdateAccessKey":
 		return catalog.ActionIAMUpdateAccessKey
+	case "GetAccessKeyLastUsed":
+		return catalog.ActionIAMGetAccessKeyLastUsed
+	case "GenerateCredentialReport":
+		return catalog.ActionIAMGenerateCredentialReport
+	case "GetCredentialReport":
+		return catalog.ActionIAMGetCredentialReport
 	case "CreatePolicy":
 		return catalog.ActionIAMCreatePolicy
 	case "GetPolicy":
@@ -2261,11 +2385,34 @@ func eventNameForRequest(r *http.Request) string {
 	return r.Method + " " + r.URL.Path
 }
 
-func clientIP(r *http.Request) string {
+func peerClientIP(r *http.Request) string {
 	if host, _, ok := strings.Cut(r.RemoteAddr, ":"); ok && host != "" {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// clientIP is the TCP peer address used for authz (aws:SourceIp). Do not trust XFF here.
+func clientIP(r *http.Request) string {
+	return peerClientIP(r)
+}
+
+// auditClientIP is sourceIPAddress for CloudTrail-shaped audit lines.
+// When NOCTAXRIS_CLOUDTRAIL_TRUST_XFF is enabled, the first X-Forwarded-For hop
+// is used; otherwise the TCP peer address is used (secure default).
+func (s *Server) auditClientIP(r *http.Request) string {
+	if s != nil && s.cfg.CloudTrailTrustXFF {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if first != "" {
+				if host, _, err := net.SplitHostPort(first); err == nil && host != "" {
+					return host
+				}
+				return first
+			}
+		}
+	}
+	return peerClientIP(r)
 }
 
 func newRequestID() string {

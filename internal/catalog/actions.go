@@ -53,7 +53,17 @@ const (
 	ActionOrgsAttachPolicy                     = "organizations:AttachPolicy"
 	ActionOrgsDetachPolicy                     = "organizations:DetachPolicy"
 	ActionOrgsDescribePolicy                   = "organizations:DescribePolicy"
+	ActionOrgsListPolicies                     = "organizations:ListPolicies"
+	ActionOrgsListPoliciesForTarget            = "organizations:ListPoliciesForTarget"
+	ActionOrgsListParents                      = "organizations:ListParents"
+	ActionOrgsListAccountsForParent            = "organizations:ListAccountsForParent"
 	ActionOrgsMoveAccount                      = "organizations:MoveAccount"
+)
+
+// Control Tower honest stubs (no landing zones in lab).
+const (
+	ActionControlTowerListLandingZones = "controltower:ListLandingZones"
+	ActionControlTowerGetLandingZone     = "controltower:GetLandingZone"
 )
 
 // IAM lab actions.
@@ -72,6 +82,9 @@ const (
 	ActionIAMDeleteAccessKey = "iam:DeleteAccessKey"
 	ActionIAMListAccessKeys  = "iam:ListAccessKeys"
 	ActionIAMUpdateAccessKey = "iam:UpdateAccessKey"
+	ActionIAMGetAccessKeyLastUsed        = "iam:GetAccessKeyLastUsed"
+	ActionIAMGenerateCredentialReport    = "iam:GenerateCredentialReport"
+	ActionIAMGetCredentialReport         = "iam:GetCredentialReport"
 )
 
 // Managed policies
@@ -239,6 +252,8 @@ const (
 	ActionS3ListBucketVersions            = "s3:ListBucketVersions"
 	ActionS3PutBucketNotification         = "s3:PutBucketNotification"
 	ActionS3GetBucketNotification         = "s3:GetBucketNotification"
+	ActionS3PutBucketLogging              = "s3:PutBucketLogging"
+	ActionS3GetBucketLogging              = "s3:GetBucketLogging"
 )
 
 // DynamoDB lab actions.
@@ -473,12 +488,78 @@ const (
 
 // CloudTrail lab actions.
 const (
-	ActionCloudTrailLookupEvents  = "cloudtrail:LookupEvents"
-	ActionCloudTrailCreateTrail   = "cloudtrail:CreateTrail"
+	ActionCloudTrailLookupEvents   = "cloudtrail:LookupEvents"
+	ActionCloudTrailCreateTrail    = "cloudtrail:CreateTrail"
 	ActionCloudTrailDescribeTrails = "cloudtrail:DescribeTrails"
-	ActionCloudTrailDeleteTrail   = "cloudtrail:DeleteTrail"
-	ActionCloudTrailStartLogging  = "cloudtrail:StartLogging"
-	ActionCloudTrailStopLogging   = "cloudtrail:StopLogging"
+	ActionCloudTrailDeleteTrail    = "cloudtrail:DeleteTrail"
+	ActionCloudTrailStartLogging   = "cloudtrail:StartLogging"
+	ActionCloudTrailStopLogging    = "cloudtrail:StopLogging"
+	// ActionCloudTrailInjectEvents is a Noctaxris lab extension (not an AWS CloudTrail API).
+	// Gated by NOCTAXRIS_CLOUDTRAIL_INJECT=1.
+	ActionCloudTrailInjectEvents = "cloudtrail:InjectEvents"
+	// ActionCloudTrailInjectInsightsEvents seeds insight-shaped JSONL records (no ML engine).
+	// Gated by NOCTAXRIS_CLOUDTRAIL_INJECT=1.
+	ActionCloudTrailInjectInsightsEvents = "cloudtrail:InjectInsightsEvents"
+	ActionCloudTrailPutEventSelectors = "cloudtrail:PutEventSelectors"
+	ActionCloudTrailGetEventSelectors = "cloudtrail:GetEventSelectors"
+	// ActionCloudTrailValidateLogs is a Noctaxris lab helper (digest sidecar check; not full AWS ValidateLogs).
+	ActionCloudTrailValidateLogs = "cloudtrail:ValidateLogs"
+)
+
+// GuardDuty lab actions.
+const (
+	ActionGuardDutyCreateDetector  = "guardduty:CreateDetector"
+	ActionGuardDutyListDetectors   = "guardduty:ListDetectors"
+	ActionGuardDutyListFindings    = "guardduty:ListFindings"
+	ActionGuardDutyGetFindings     = "guardduty:GetFindings"
+	// ActionGuardDutyInjectFindings is a Noctaxris lab extension (not an AWS GuardDuty API).
+	// Gated by NOCTAXRIS_GUARDDUTY_INJECT=1.
+	ActionGuardDutyInjectFindings = "guardduty:InjectFindings"
+)
+
+// Detective lab actions (CreateGraph/ListGraphs/AcceptInvitation per AWS Detective API; SearchGraph is lab).
+const (
+	ActionDetectiveCreateGraph       = "detective:CreateGraph"
+	ActionDetectiveListGraphs        = "detective:ListGraphs"
+	ActionDetectiveAcceptInvitation  = "detective:AcceptInvitation"
+	ActionDetectiveSearchGraph       = "detective:SearchGraph"
+)
+
+// Macie2 lab actions.
+const (
+	ActionMacieEnableMacie             = "macie2:EnableMacie"
+	ActionMacieGetMacieSession         = "macie2:GetMacieSession"
+	ActionMacieCreateClassificationJob = "macie2:CreateClassificationJob"
+	ActionMacieDescribeClassificationJob = "macie2:DescribeClassificationJob"
+	ActionMacieListClassificationJobs  = "macie2:ListClassificationJobs"
+	ActionMacieListFindings            = "macie2:ListFindings"
+	ActionMacieGetFindings             = "macie2:GetFindings"
+	// ActionMacieInjectFindings is a Noctaxris lab extension (not an AWS Macie API).
+	// Gated by NOCTAXRIS_MACIE_INJECT=1. Seeds sensitive-data findings (canned S3 matches OK).
+	ActionMacieInjectFindings = "macie2:InjectFindings"
+)
+
+// EC2 VPC Flow Logs lab actions.
+const (
+	ActionEC2CreateFlowLogs = "ec2:CreateFlowLogs"
+	// ActionEC2InjectFlowLogs is a Noctaxris lab extension (not an AWS EC2 API).
+	// Gated by NOCTAXRIS_VPCFLOW_INJECT=1.
+	ActionEC2InjectFlowLogs = "ec2:InjectFlowLogs"
+)
+
+// Security Hub lab actions.
+const (
+	ActionSecurityHubBatchImportFindings = "securityhub:BatchImportFindings"
+	ActionSecurityHubGetFindings         = "securityhub:GetFindings"
+)
+
+// Noctaxris Lab forensics actions (not AWS APIs).
+// Gated by NOCTAXRIS_LAB_FORENSICS=1.
+const (
+	ActionLabFreezeClock   = "noctaxris-lab:FreezeClock"
+	ActionLabUnfreezeClock = "noctaxris-lab:UnfreezeClock"
+	ActionLabSetClock      = "noctaxris-lab:SetClock"
+	ActionLabBulkSeed      = "noctaxris-lab:BulkSeed"
 )
 
 // CloudWatch Logs lab actions.
@@ -650,6 +731,7 @@ const (
 	ActionConfigPutDeliveryChannel             = "config:PutDeliveryChannel"
 	ActionConfigStartConfigurationRecorder     = "config:StartConfigurationRecorder"
 	ActionConfigDescribeComplianceByConfigRule = "config:DescribeComplianceByConfigRule"
+	ActionConfigGetResourceConfigHistory       = "config:GetResourceConfigHistory"
 )
 
 // EventBridge Scheduler lab actions.
@@ -676,6 +758,9 @@ const (
 	ActionRoute53ListHostedZones          = "route53:ListHostedZones"
 	ActionRoute53ChangeResourceRecordSets = "route53:ChangeResourceRecordSets"
 	ActionRoute53ListResourceRecordSets   = "route53:ListResourceRecordSets"
+	// ActionRoute53InjectQueryLogs is a Noctaxris lab extension (not an AWS Route 53 API).
+	// Gated by NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT=1.
+	ActionRoute53InjectQueryLogs = "route53:InjectQueryLogs"
 )
 
 // Cloud Map (Service Discovery) lab actions.
@@ -944,7 +1029,13 @@ func KnownAction(action string) bool {
 		ActionOrgsAttachPolicy,
 		ActionOrgsDetachPolicy,
 		ActionOrgsDescribePolicy,
+		ActionOrgsListPolicies,
+		ActionOrgsListPoliciesForTarget,
+		ActionOrgsListParents,
+		ActionOrgsListAccountsForParent,
 		ActionOrgsMoveAccount,
+		ActionControlTowerListLandingZones,
+		ActionControlTowerGetLandingZone,
 		ActionIAMCreateUser,
 		ActionIAMGetUser,
 		ActionIAMListUsers,
@@ -953,6 +1044,9 @@ func KnownAction(action string) bool {
 		ActionIAMDeleteAccessKey,
 		ActionIAMListAccessKeys,
 		ActionIAMUpdateAccessKey,
+		ActionIAMGetAccessKeyLastUsed,
+		ActionIAMGenerateCredentialReport,
+		ActionIAMGetCredentialReport,
 		ActionIAMCreatePolicy,
 		ActionIAMGetPolicy,
 		ActionIAMListPolicies,
@@ -1072,6 +1166,8 @@ func KnownAction(action string) bool {
 		ActionS3ListBucketVersions,
 		ActionS3PutBucketNotification,
 		ActionS3GetBucketNotification,
+		ActionS3PutBucketLogging,
+		ActionS3GetBucketLogging,
 		ActionDynamoDBCreateTable,
 		ActionDynamoDBDescribeTable,
 		ActionDynamoDBDeleteTable,
@@ -1280,6 +1376,36 @@ func KnownAction(action string) bool {
 		ActionCloudTrailDeleteTrail,
 		ActionCloudTrailStartLogging,
 		ActionCloudTrailStopLogging,
+		ActionCloudTrailInjectEvents,
+		ActionCloudTrailInjectInsightsEvents,
+		ActionCloudTrailPutEventSelectors,
+		ActionCloudTrailGetEventSelectors,
+		ActionCloudTrailValidateLogs,
+		ActionGuardDutyCreateDetector,
+		ActionGuardDutyListDetectors,
+		ActionGuardDutyListFindings,
+		ActionGuardDutyGetFindings,
+		ActionGuardDutyInjectFindings,
+		ActionDetectiveCreateGraph,
+		ActionDetectiveListGraphs,
+		ActionDetectiveAcceptInvitation,
+		ActionDetectiveSearchGraph,
+		ActionMacieEnableMacie,
+		ActionMacieGetMacieSession,
+		ActionMacieCreateClassificationJob,
+		ActionMacieDescribeClassificationJob,
+		ActionMacieListClassificationJobs,
+		ActionMacieListFindings,
+		ActionMacieGetFindings,
+		ActionMacieInjectFindings,
+		ActionEC2CreateFlowLogs,
+		ActionEC2InjectFlowLogs,
+		ActionLabFreezeClock,
+		ActionLabUnfreezeClock,
+		ActionLabSetClock,
+		ActionLabBulkSeed,
+		ActionSecurityHubBatchImportFindings,
+		ActionSecurityHubGetFindings,
 		ActionLogsCreateLogGroup,
 		ActionLogsCreateLogStream,
 		ActionLogsDeleteLogGroup,
@@ -1407,6 +1533,7 @@ func KnownAction(action string) bool {
 		ActionConfigPutDeliveryChannel,
 		ActionConfigStartConfigurationRecorder,
 		ActionConfigDescribeComplianceByConfigRule,
+		ActionConfigGetResourceConfigHistory,
 		ActionSchedulerCreateSchedule,
 		ActionSchedulerGetSchedule,
 		ActionSchedulerUpdateSchedule,
@@ -1421,6 +1548,7 @@ func KnownAction(action string) bool {
 		ActionRoute53ListHostedZones,
 		ActionRoute53ChangeResourceRecordSets,
 		ActionRoute53ListResourceRecordSets,
+		ActionRoute53InjectQueryLogs,
 		ActionSDCreatePrivateDnsNamespace,
 		ActionSDCreateHttpNamespace,
 		ActionSDCreateService,

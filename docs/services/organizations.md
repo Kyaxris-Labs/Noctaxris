@@ -19,6 +19,10 @@ Organizations MVP for multi-account labs: create accounts, list accounts, OUs, m
 | `AttachPolicy` | Attach to root, OU, or account target |
 | `DetachPolicy` | Detach from target |
 | `DescribePolicy` | Describe policy content |
+| `ListPolicies` | List org SCP/RCP policies (SigV4 service `organizations`; IAM `ListPolicies` stays on `iam`) |
+| `ListPoliciesForTarget` | Policies attached to root, OU, or account |
+| `ListParents` | Parent root/OU for an account or OU |
+| `ListAccountsForParent` | Accounts under a root or OU |
 
 ### Authz notes
 

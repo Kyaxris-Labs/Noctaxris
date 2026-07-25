@@ -27,8 +27,9 @@ Shared by `FilterLogEvents`, subscription filters, and metric filters. Case-sens
 | `"exact phrase"` | Include exact substring |
 | `-term` / `-"phrase"` | Exclude: fail if message contains term/phrase |
 | `?` / `*` inside an unquoted term | Single-character / any-run wildcards within that term |
+| `{ $.dotted.path = "value" }` | JSON field equality on CT-shaped JSON messages; space-separated AND of such terms (and with substring terms) |
 
-Unsupported patterns return `ValidationException` (no silent fall-through): JSON `{$.field=…}`, space-delimited `[…]`, `%regex%`, `&&` / `||`, and Insights `|` query syntax. This is not CloudWatch Logs Insights (`StartQuery` / `GetQueryResults`).
+Unsupported patterns return `ValidationException` (no silent fall-through): compact/unquoted JSON, space-delimited `[…]`, `%regex%`, `&&` / `||`, Insights `|` query syntax, and JSON ops beyond equality. This is not CloudWatch Logs Insights (`StartQuery` / `GetQueryResults`).
 
 Log group ARN shape: `arn:aws:logs:REGION:ACCOUNT:log-group:NAME`. Stream ARN adds `:log-stream:STREAM`.
 

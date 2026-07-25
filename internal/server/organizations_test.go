@@ -118,6 +118,26 @@ func TestOrganizationsDepthHandlers(t *testing.T) {
 	if iamRec.Code != http.StatusOK || !strings.Contains(iamRec.Body.String(), "StillIAM") {
 		t.Fatalf("IAM CreatePolicy status=%d body=%q", iamRec.Code, iamRec.Body.String())
 	}
+
+	rec = post("Action=ListPolicies&Version=2016-11-28")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), scpID) || !strings.Contains(rec.Body.String(), rcpID) {
+		t.Fatalf("ListPolicies status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=ListPoliciesForTarget&Version=2016-11-28&TargetId=r-root")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), scpID) {
+		t.Fatalf("ListPoliciesForTarget root status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=ListAccountsForParent&Version=2016-11-28&ParentId=" + ouID)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "000000000002") {
+		t.Fatalf("ListAccountsForParent ou status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = post("Action=ListParents&Version=2016-11-28&ChildId=000000000002")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), ouID) || !strings.Contains(rec.Body.String(), "ORGANIZATIONAL_UNIT") {
+		t.Fatalf("ListParents account status=%d body=%q", rec.Code, rec.Body.String())
+	}
 }
 
 func TestOrgsCreatePolicyRequiresEnable(t *testing.T) {

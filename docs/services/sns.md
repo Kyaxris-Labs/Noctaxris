@@ -84,7 +84,7 @@ aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP"
 
 ## Out of lab scope
 
-- Full SNS SAR beyond the lab set (SMS, email, nested filter-policy operators, RedrivePolicy DLQ delivery, delivery retry timing) (out of lab scope; lab FilterPolicy + RawMessageDelivery cover CFN/SDK pipelines)
+- Full SNS SAR beyond the lab set (SMS, email, nested filter-policy operators, delivery retry timing) (out of lab scope; lab FilterPolicy + RawMessageDelivery + RedrivePolicy DLQ cover CFN/SDK pipelines)
 - Exact AWS retry and jitter timing for delivery failures (out of lab scope)
 - High-throughput FIFO quotas (out of lab scope)
 

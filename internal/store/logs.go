@@ -235,6 +235,30 @@ func (s *Store) CreateLogStream(accountID, region, group, stream string) (LogStr
 	}, nil
 }
 
+// EnsureLogGroup returns an existing log group or creates it.
+func (s *Store) EnsureLogGroup(accountID, region, name string) (LogGroup, error) {
+	lg, err := s.CreateLogGroup(accountID, region, name)
+	if err == nil {
+		return lg, nil
+	}
+	if errors.Is(err, ErrLogGroupAlreadyExists) {
+		return s.getLogGroup(accountID, name)
+	}
+	return LogGroup{}, err
+}
+
+// EnsureLogStream returns an existing log stream or creates it under the group.
+func (s *Store) EnsureLogStream(accountID, region, group, stream string) (LogStream, error) {
+	st, err := s.CreateLogStream(accountID, region, group, stream)
+	if err == nil {
+		return st, nil
+	}
+	if errors.Is(err, ErrLogStreamAlreadyExists) {
+		return s.getLogStream(accountID, group, stream)
+	}
+	return LogStream{}, err
+}
+
 // DeleteLogGroup deletes a log group and all streams and events under it.
 func (s *Store) DeleteLogGroup(accountID, name string) error {
 	name = strings.TrimSpace(name)

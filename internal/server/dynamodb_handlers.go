@@ -2585,6 +2585,7 @@ func (s *Server) dynamoUnsealTableCMK(
 			"Unable to load key material.", readOnly, eventID, verified)
 		return nil, nil, "", err
 	}
+	s.writeSiblingKMSDecryptAudit(r, requestID, eventID, verified, key.ARN, encCtx)
 	return materials[0], materials, keyID, nil
 }
 

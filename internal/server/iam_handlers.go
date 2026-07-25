@@ -31,6 +31,7 @@ func (s *Server) handleIAM(
 		return
 	}
 	params := requestParams(r, body)
+	accountID := verified.AccountID
 	resource := "*"
 	switch action {
 	case catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion",
@@ -43,6 +44,10 @@ func (s *Server) handleIAM(
 		if arn := strings.TrimSpace(params["PolicyArn"]); arn != "" {
 			resource = arn
 		}
+	case catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed":
+		if id := strings.TrimSpace(params["AccessKeyId"]); id != "" {
+			resource = "arn:aws:iam::" + accountID + ":access-key/" + id
+		}
 	}
 	if !s.authorize(verified, action, resource) {
 		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
@@ -51,7 +56,6 @@ func (s *Server) handleIAM(
 		return
 	}
 
-	accountID := verified.AccountID
 	var (
 		payload []byte
 		err     error
@@ -161,6 +165,45 @@ func (s *Server) handleIAM(
 			return
 		}
 		payload, err = iam.UpdateAccessKeyXML(requestID)
+	case catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed":
+		keyID := strings.TrimSpace(params["AccessKeyId"])
+		if keyID == "" {
+			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",
+				"AccessKeyId is required.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		usage, getErr := s.store.GetAccessKeyLastUsed(accountID, keyID)
+		if getErr != nil {
+			if errors.Is(getErr, sql.ErrNoRows) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
+					"The specified access key does not exist.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get access key last used.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.GetAccessKeyLastUsedXML(usage, requestID)
+	case catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport":
+		if genErr := s.store.GenerateCredentialReport(accountID, s.now().UTC()); genErr != nil {
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to generate credential report.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.GenerateCredentialReportXML("COMPLETE", requestID)
+	case catalog.ActionIAMGetCredentialReport, "GetCredentialReport":
+		csv, generated, state, getErr := s.store.GetCredentialReport(accountID)
+		if getErr != nil {
+			if errors.Is(getErr, store.ErrCredentialReportNotPresent) {
+				s.writeAWSError(w, requestID, http.StatusNotFound, "ReportNotPresent",
+					"Credential report does not exist.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+				return
+			}
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get credential report.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.GetCredentialReportXML(csv, generated, state, requestID)
 	case catalog.ActionIAMCreatePolicy, "CreatePolicy":
 		doc := params["PolicyDocument"]
 		name := params["PolicyName"]

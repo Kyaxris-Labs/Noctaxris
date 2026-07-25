@@ -385,6 +385,182 @@ func DetachPolicyXML(requestID string) ([]byte, error) {
 	return out, nil
 }
 
+// OrgPolicySummary is a ListPolicies / ListPoliciesForTarget policy summary entry.
+type OrgPolicySummary struct {
+	ID   string
+	Name string
+	Type string
+	Arn  string
+}
+
+// ListPoliciesResult holds ListPolicies XML fields.
+type ListPoliciesResult struct {
+	RequestID string
+	Policies  []OrgPolicySummary
+}
+
+type listPoliciesResponse struct {
+	XMLName            xml.Name `xml:"ListPoliciesResponse"`
+	XMLNS              string   `xml:"xmlns,attr"`
+	ListPoliciesResult struct {
+		Policies struct {
+			Member []struct {
+				Id         string `xml:"Id"`
+				Arn        string `xml:"Arn"`
+				Name       string `xml:"Name"`
+				Type       string `xml:"Type"`
+				AwsManaged bool   `xml:"AwsManaged"`
+			} `xml:"member"`
+		} `xml:"Policies"`
+	} `xml:"ListPoliciesResult"`
+	ResponseMetadata struct {
+		RequestId string `xml:"RequestId"`
+	} `xml:"ResponseMetadata"`
+}
+
+// ListPoliciesXML builds ListPolicies response XML.
+func ListPoliciesXML(r ListPoliciesResult) ([]byte, error) {
+	resp := listPoliciesResponse{XMLNS: orgsXMLNS}
+	for _, p := range r.Policies {
+		resp.ListPoliciesResult.Policies.Member = append(resp.ListPoliciesResult.Policies.Member, struct {
+			Id         string `xml:"Id"`
+			Arn        string `xml:"Arn"`
+			Name       string `xml:"Name"`
+			Type       string `xml:"Type"`
+			AwsManaged bool   `xml:"AwsManaged"`
+		}{Id: p.ID, Arn: p.Arn, Name: p.Name, Type: p.Type})
+	}
+	resp.ResponseMetadata.RequestId = r.RequestID
+	out, err := xml.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ListPolicies: %w", err)
+	}
+	return out, nil
+}
+
+type listPoliciesForTargetResponse struct {
+	XMLName                       xml.Name `xml:"ListPoliciesForTargetResponse"`
+	XMLNS                         string   `xml:"xmlns,attr"`
+	ListPoliciesForTargetResult   struct {
+		Policies struct {
+			Member []struct {
+				Id         string `xml:"Id"`
+				Arn        string `xml:"Arn"`
+				Name       string `xml:"Name"`
+				Type       string `xml:"Type"`
+				AwsManaged bool   `xml:"AwsManaged"`
+			} `xml:"member"`
+		} `xml:"Policies"`
+	} `xml:"ListPoliciesForTargetResult"`
+	ResponseMetadata struct {
+		RequestId string `xml:"RequestId"`
+	} `xml:"ResponseMetadata"`
+}
+
+// ListPoliciesForTargetXML builds ListPoliciesForTarget response XML.
+func ListPoliciesForTargetXML(r ListPoliciesResult) ([]byte, error) {
+	resp := listPoliciesForTargetResponse{XMLNS: orgsXMLNS}
+	for _, p := range r.Policies {
+		resp.ListPoliciesForTargetResult.Policies.Member = append(resp.ListPoliciesForTargetResult.Policies.Member, struct {
+			Id         string `xml:"Id"`
+			Arn        string `xml:"Arn"`
+			Name       string `xml:"Name"`
+			Type       string `xml:"Type"`
+			AwsManaged bool   `xml:"AwsManaged"`
+		}{Id: p.ID, Arn: p.Arn, Name: p.Name, Type: p.Type})
+	}
+	resp.ResponseMetadata.RequestId = r.RequestID
+	out, err := xml.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ListPoliciesForTarget: %w", err)
+	}
+	return out, nil
+}
+
+// OrgParentEntry is a ListParents parent member.
+type OrgParentEntry struct {
+	ID   string
+	Type string
+}
+
+// ListParentsResult holds ListParents XML fields.
+type ListParentsResult struct {
+	RequestID string
+	Parents   []OrgParentEntry
+}
+
+type listParentsResponse struct {
+	XMLName           xml.Name `xml:"ListParentsResponse"`
+	XMLNS             string   `xml:"xmlns,attr"`
+	ListParentsResult struct {
+		Parents struct {
+			Member []struct {
+				Id   string `xml:"Id"`
+				Type string `xml:"Type"`
+			} `xml:"member"`
+		} `xml:"Parents"`
+	} `xml:"ListParentsResult"`
+	ResponseMetadata struct {
+		RequestId string `xml:"RequestId"`
+	} `xml:"ResponseMetadata"`
+}
+
+// ListParentsXML builds ListParents response XML.
+func ListParentsXML(r ListParentsResult) ([]byte, error) {
+	resp := listParentsResponse{XMLNS: orgsXMLNS}
+	for _, p := range r.Parents {
+		resp.ListParentsResult.Parents.Member = append(resp.ListParentsResult.Parents.Member, struct {
+			Id   string `xml:"Id"`
+			Type string `xml:"Type"`
+		}{Id: p.ID, Type: p.Type})
+	}
+	resp.ResponseMetadata.RequestId = r.RequestID
+	out, err := xml.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ListParents: %w", err)
+	}
+	return out, nil
+}
+
+// ListAccountsForParentResult holds ListAccountsForParent XML fields.
+type ListAccountsForParentResult struct {
+	RequestID  string
+	AccountIDs []string
+}
+
+type listAccountsForParentResponse struct {
+	XMLName                       xml.Name `xml:"ListAccountsForParentResponse"`
+	XMLNS                         string   `xml:"xmlns,attr"`
+	ListAccountsForParentResult   struct {
+		Accounts struct {
+			Member []struct {
+				Id     string `xml:"Id"`
+				Status string `xml:"Status"`
+			} `xml:"member"`
+		} `xml:"Accounts"`
+	} `xml:"ListAccountsForParentResult"`
+	ResponseMetadata struct {
+		RequestId string `xml:"RequestId"`
+	} `xml:"ResponseMetadata"`
+}
+
+// ListAccountsForParentXML builds ListAccountsForParent response XML.
+func ListAccountsForParentXML(r ListAccountsForParentResult) ([]byte, error) {
+	resp := listAccountsForParentResponse{XMLNS: orgsXMLNS}
+	for _, id := range r.AccountIDs {
+		resp.ListAccountsForParentResult.Accounts.Member = append(resp.ListAccountsForParentResult.Accounts.Member, struct {
+			Id     string `xml:"Id"`
+			Status string `xml:"Status"`
+		}{Id: id, Status: "ACTIVE"})
+	}
+	resp.ResponseMetadata.RequestId = r.RequestID
+	out, err := xml.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ListAccountsForParent: %w", err)
+	}
+	return out, nil
+}
+
 // MoveAccountXML builds MoveAccount response XML.
 func MoveAccountXML(requestID string) ([]byte, error) {
 	type resp struct {

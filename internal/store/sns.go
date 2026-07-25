@@ -577,6 +577,24 @@ func (s *Store) deliverSNSSubscription(msg PublishedMessage, sub Subscription) {
 	}
 	log.Printf("sns delivery failed subscription=%s protocol=%s endpoint=%s err=%v",
 		sub.SubscriptionARN, sub.Protocol, sub.Endpoint, lastErr)
+	s.snsRedriveFailedDelivery(sub, msg, lastErr)
+}
+
+func (s *Store) snsRedriveFailedDelivery(sub Subscription, msg PublishedMessage, lastErr error) {
+	dlqARN, ok := parseSNSRedrivePolicy(sub.Attributes)
+	if !ok {
+		return
+	}
+	body, err := json.Marshal(snsNotificationEnvelope(msg))
+	if err != nil {
+		log.Printf("sns redrive marshal failed subscription=%s err=%v", sub.SubscriptionARN, err)
+		return
+	}
+	if err := s.sendLabDLQMessage(sub.Owner, dlqARN, body); err != nil {
+		log.Printf("sns redrive failed subscription=%s dlq=%s err=%v", sub.SubscriptionARN, dlqARN, err)
+		return
+	}
+	_ = lastErr
 }
 
 func (s *Store) deliverSNSSubscriptionOnce(msg PublishedMessage, sub Subscription) error {

@@ -31,7 +31,16 @@ CREATE TABLE IF NOT EXISTS access_keys (
   session_policy TEXT,
   federated_user TEXT,
   mfa_authenticated INTEGER NOT NULL DEFAULT 0,
-  mfa_authenticated_at TEXT
+  mfa_authenticated_at TEXT,
+  last_used_at TEXT,
+  last_used_service TEXT,
+  last_used_region TEXT
+);
+CREATE TABLE IF NOT EXISTS iam_credential_reports (
+  account_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  content_csv BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS policies (
   policy_id TEXT PRIMARY KEY,
@@ -543,6 +552,10 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := EnsureS3ForensicsSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := EnsureDynamoDBStreamsSchema(db); err != nil {
 		db.Close()
 		return nil, err
@@ -576,6 +589,22 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureACMSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureGuardDutySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureDetectiveSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureMacieSchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := EnsureSecurityHubSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -759,6 +788,15 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE users ADD COLUMN create_date TEXT`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE access_keys ADD COLUMN mfa_authenticated_at TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN last_used_at TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN last_used_service TEXT`,
+		`ALTER TABLE access_keys ADD COLUMN last_used_region TEXT`,
+		`CREATE TABLE IF NOT EXISTS iam_credential_reports (
+  account_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  content_csv BLOB NOT NULL
+)`,
 		`ALTER TABLE kms_keys ADD COLUMN deletion_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE kms_keys ADD COLUMN key_rotation_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE kms_keys ADD COLUMN last_rotation_date TEXT NOT NULL DEFAULT ''`,

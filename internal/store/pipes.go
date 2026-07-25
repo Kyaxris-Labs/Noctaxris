@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS pipes (
   target_arn TEXT NOT NULL,
   role_arn TEXT NOT NULL DEFAULT '',
   enrichment_arn TEXT NOT NULL DEFAULT '',
+  dead_letter_arn TEXT NOT NULL DEFAULT '',
   source_cursor TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, name)
@@ -49,6 +50,7 @@ type Pipe struct {
 	TargetARN      string
 	RoleARN        string
 	EnrichmentARN  string
+	DeadLetterARN  string
 	SourceCursor   string
 	CreatedAt      int64
 }
@@ -63,6 +65,9 @@ func EnsurePipesSchema(db *sql.DB) error {
 	}
 	if err := execMigrateStmt(db, `ALTER TABLE pipes ADD COLUMN enrichment_arn TEXT NOT NULL DEFAULT ''`, nil); err != nil {
 		return fmt.Errorf("ensure pipes schema: enrichment_arn: %w", err)
+	}
+	if err := execMigrateStmt(db, `ALTER TABLE pipes ADD COLUMN dead_letter_arn TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure pipes schema: dead_letter_arn: %w", err)
 	}
 	return nil
 }
@@ -82,11 +87,11 @@ func PipeARN(region, accountID, name string) string {
 
 // CreatePipe inserts a pipe.
 func (s *Store) CreatePipe(accountID, region, name, description, sourceARN, targetARN, roleARN, desiredState string) (Pipe, error) {
-	return s.CreatePipeWithEnrichment(accountID, region, name, description, sourceARN, targetARN, roleARN, "", desiredState)
+	return s.CreatePipeWithEnrichment(accountID, region, name, description, sourceARN, targetARN, roleARN, "", "", desiredState)
 }
 
-// CreatePipeWithEnrichment inserts a pipe with optional Lambda enrichment ARN.
-func (s *Store) CreatePipeWithEnrichment(accountID, region, name, description, sourceARN, targetARN, roleARN, enrichmentARN, desiredState string) (Pipe, error) {
+// CreatePipeWithEnrichment inserts a pipe with optional Lambda enrichment and DLQ ARNs.
+func (s *Store) CreatePipeWithEnrichment(accountID, region, name, description, sourceARN, targetARN, roleARN, enrichmentARN, deadLetterARN, desiredState string) (Pipe, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Pipe{}, fmt.Errorf("%w: Name is required", ErrPipeBadReq)
@@ -95,6 +100,7 @@ func (s *Store) CreatePipeWithEnrichment(accountID, region, name, description, s
 		return Pipe{}, fmt.Errorf("%w: Source and Target are required", ErrPipeBadReq)
 	}
 	enrichmentARN = strings.TrimSpace(enrichmentARN)
+	deadLetterARN = strings.TrimSpace(deadLetterARN)
 	if enrichmentARN != "" && !strings.Contains(enrichmentARN, ":lambda:") {
 		return Pipe{}, fmt.Errorf("%w: Enrichment must be a Lambda ARN", ErrPipeBadReq)
 	}
@@ -117,9 +123,9 @@ func (s *Store) CreatePipeWithEnrichment(accountID, region, name, description, s
 		current = "STOPPED"
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO pipes (account_id, name, arn, description, desired_state, current_state, source_arn, target_arn, role_arn, enrichment_arn, source_cursor, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
-		accountID, name, arn, description, desiredState, current, sourceARN, targetARN, roleARN, enrichmentARN, now,
+		`INSERT INTO pipes (account_id, name, arn, description, desired_state, current_state, source_arn, target_arn, role_arn, enrichment_arn, dead_letter_arn, source_cursor, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)`,
+		accountID, name, arn, description, desiredState, current, sourceARN, targetARN, roleARN, enrichmentARN, deadLetterARN, now,
 	)
 	if err != nil {
 		return Pipe{}, fmt.Errorf("create pipe: %w", err)
@@ -128,8 +134,29 @@ func (s *Store) CreatePipeWithEnrichment(accountID, region, name, description, s
 		Name: name, ARN: arn, Description: description,
 		DesiredState: desiredState, CurrentState: current,
 		SourceARN: sourceARN, TargetARN: targetARN, RoleARN: roleARN,
-		EnrichmentARN: enrichmentARN, CreatedAt: now,
+		EnrichmentARN: enrichmentARN, DeadLetterARN: deadLetterARN, CreatedAt: now,
 	}, nil
+}
+
+func (s *Store) pipeSendDLQ(accountID string, p Pipe, payload string, cause error) {
+	if cause == nil {
+		return
+	}
+	dlqARN := strings.TrimSpace(p.DeadLetterARN)
+	if dlqARN == "" {
+		return
+	}
+	body, err := json.Marshal(map[string]any{
+		"pipeArn": p.ARN,
+		"error":   cause.Error(),
+		"payload": payload,
+	})
+	if err != nil {
+		return
+	}
+	if err := s.sendLabDLQMessage(accountID, dlqARN, body); err != nil {
+		log.Printf("pipes dlq delivery failed pipe=%s dlq=%s err=%v", p.ARN, dlqARN, err)
+	}
 }
 
 // GetPipe returns a pipe by name.
@@ -137,10 +164,10 @@ func (s *Store) GetPipe(accountID, name string) (Pipe, error) {
 	var p Pipe
 	err := s.db.QueryRow(
 		`SELECT name, arn, description, desired_state, current_state, source_arn, target_arn, role_arn,
-		        COALESCE(enrichment_arn, ''), source_cursor, created_at
+		        COALESCE(enrichment_arn, ''), COALESCE(dead_letter_arn, ''), source_cursor, created_at
 		 FROM pipes WHERE account_id = ? AND name = ?`,
 		accountID, name,
-	).Scan(&p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.SourceCursor, &p.CreatedAt)
+	).Scan(&p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.DeadLetterARN, &p.SourceCursor, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pipe{}, ErrPipeNotFound
 	}
@@ -172,7 +199,7 @@ func (s *Store) DeletePipe(accountID, name string) error {
 func (s *Store) ListPipes(accountID string) ([]Pipe, error) {
 	rows, err := s.db.Query(
 		`SELECT name, arn, description, desired_state, current_state, source_arn, target_arn, role_arn,
-		        COALESCE(enrichment_arn, ''), source_cursor, created_at
+		        COALESCE(enrichment_arn, ''), COALESCE(dead_letter_arn, ''), source_cursor, created_at
 		 FROM pipes WHERE account_id = ? ORDER BY name`,
 		accountID,
 	)
@@ -183,7 +210,7 @@ func (s *Store) ListPipes(accountID string) ([]Pipe, error) {
 	out := []Pipe{}
 	for rows.Next() {
 		var p Pipe
-		if err := rows.Scan(&p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.SourceCursor, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.DeadLetterARN, &p.SourceCursor, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list pipes: scan: %w", err)
 		}
 		out = append(out, p)
@@ -198,7 +225,7 @@ func (s *Store) ListRunningPipes() ([]struct {
 }, error) {
 	rows, err := s.db.Query(
 		`SELECT account_id, name, arn, description, desired_state, current_state, source_arn, target_arn, role_arn,
-		        COALESCE(enrichment_arn, ''), source_cursor, created_at
+		        COALESCE(enrichment_arn, ''), COALESCE(dead_letter_arn, ''), source_cursor, created_at
 		 FROM pipes WHERE current_state = 'RUNNING' ORDER BY account_id, name`,
 	)
 	if err != nil {
@@ -212,7 +239,7 @@ func (s *Store) ListRunningPipes() ([]struct {
 	for rows.Next() {
 		var accountID string
 		var p Pipe
-		if err := rows.Scan(&accountID, &p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.SourceCursor, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&accountID, &p.Name, &p.ARN, &p.Description, &p.DesiredState, &p.CurrentState, &p.SourceARN, &p.TargetARN, &p.RoleARN, &p.EnrichmentARN, &p.DeadLetterARN, &p.SourceCursor, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list running pipes: scan: %w", err)
 		}
 		out = append(out, struct {
@@ -288,9 +315,11 @@ func (s *Store) pollPipeFromSQS(accountID string, p Pipe, sourceARN, targetARN s
 		}
 		body, err := s.pipeEnrichPayload(accountID, p, string(msg.Body), invoke)
 		if err != nil {
+			s.pipeSendDLQ(accountID, p, string(msg.Body), err)
 			return err
 		}
 		if err := s.deliverPipePayload(accountID, targetARN, body, invoke); err != nil {
+			s.pipeSendDLQ(accountID, p, body, err)
 			return err
 		}
 		if err := s.DeleteMessage(queueAccount, queueName, msg.ReceiptHandle); err != nil {
@@ -340,9 +369,11 @@ func (s *Store) pollPipeFromDynamoStream(accountID string, p Pipe, sourceARN, ta
 		}
 		body, err := s.pipeEnrichPayload(accountID, p, string(payload), invoke)
 		if err != nil {
+			s.pipeSendDLQ(accountID, p, string(payload), err)
 			return err
 		}
 		if err := s.deliverPipePayload(accountID, targetARN, body, invoke); err != nil {
+			s.pipeSendDLQ(accountID, p, body, err)
 			return err
 		}
 	}
@@ -398,9 +429,11 @@ func (s *Store) pollPipeFromEventBus(accountID string, p Pipe, sourceARN, target
 		}
 		enriched, err := s.pipeEnrichPayload(accountID, p, body, invoke)
 		if err != nil {
+			s.pipeSendDLQ(accountID, p, body, err)
 			return err
 		}
 		if err := s.deliverPipePayload(accountID, targetARN, enriched, invoke); err != nil {
+			s.pipeSendDLQ(accountID, p, enriched, err)
 			return err
 		}
 		lastID = e.entryID

@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
@@ -624,7 +626,17 @@ func (s *Server) lambdaCreateFunction(
 		return
 	}
 	s.writeLambdaOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "CreateFunction", readOnly)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "CreateFunction", readOnly,
+		WithAuditResources([]audit.Resource{{
+			AccountID: verified.AccountID,
+			Type:      "AWS::Lambda::Function",
+			ARN:       fn.FunctionARN,
+		}}),
+		WithAuditRequestParameters(map[string]any{
+			"functionName": name,
+			"runtime":      runtime,
+		}),
+	)
 }
 
 func (s *Server) lambdaGetFunction(
@@ -2018,7 +2030,8 @@ func (s *Server) lambdaInvoke(
 		// Worker starts via Store.OnAsyncEnqueue (wired in server.New).
 		if strings.Contains(r.URL.Path, "/invocations") {
 			s.writeLambdaInvokeRESTAccepted(w, requestID, executedVersion)
-			s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)
+			s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly,
+				lambdaInvokeAuditOpts(accountID, name, fn)...)
 			return
 		}
 		payload, err := lambdasvc.InvokeAsyncAcceptedJSON(executedVersion)
@@ -2028,7 +2041,8 @@ func (s *Server) lambdaInvoke(
 			return
 		}
 		s.writeLambdaAccepted(w, requestID, payload)
-		s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)
+		s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly,
+			lambdaInvokeAuditOpts(accountID, name, fn)...)
 		return
 	}
 	if invocationType != "RequestResponse" {
@@ -2050,7 +2064,8 @@ func (s *Server) lambdaInvoke(
 	}
 	if strings.Contains(r.URL.Path, "/invocations") {
 		s.writeLambdaInvokeREST(w, requestID, result, executedVersion)
-		s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)
+		s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly,
+			lambdaInvokeAuditOpts(accountID, name, fn)...)
 		return
 	}
 	payload, err := lambdasvc.InvokeJSON(result, 200, executedVersion)
@@ -2060,7 +2075,21 @@ func (s *Server) lambdaInvoke(
 		return
 	}
 	s.writeLambdaOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lambdaEventSource, "Invoke", readOnly,
+		lambdaInvokeAuditOpts(accountID, name, fn)...)
+}
+
+func lambdaInvokeAuditOpts(accountID, name string, fn store.LambdaFunction) []SuccessAuditOption {
+	return []SuccessAuditOption{
+		WithAuditResources([]audit.Resource{{
+			AccountID: accountID,
+			Type:      "AWS::Lambda::Function",
+			ARN:       fn.FunctionARN,
+		}}),
+		WithAuditRequestParameters(map[string]any{
+			"functionName": name,
+		}),
+	}
 }
 
 func (s *Server) startAsyncInvoke(job store.LambdaAsyncInvocation, accountID, name, executedVersion string) {
@@ -2093,15 +2122,43 @@ func (s *Server) executeLambdaInvoke(
 	fn store.LambdaFunction,
 	executedVersion, eventJSON string,
 ) ([]byte, error) {
+	invokeRequestID := strings.ReplaceAll(uuid.NewString(), "-", "")
+	start := s.now().UTC()
+	memoryMB := clampLambdaMemory(fn.Memory)
+
+	var payload []byte
+	var stdout string
+	var err error
+
 	if s.lambdaInvokeHook != nil {
-		return s.lambdaInvokeHook(ctx, accountID, name, fn, executedVersion, eventJSON)
+		payload, err = s.lambdaInvokeHook(ctx, accountID, name, fn, executedVersion, eventJSON)
+	} else if strings.TrimSpace(s.cfg.DockerHost) == "" {
+		err = errors.New("compute unavailable")
+	} else {
+		payload, stdout, err = s.runLambdaComputeInvoke(ctx, accountID, name, fn, executedVersion, eventJSON)
 	}
-	if strings.TrimSpace(s.cfg.DockerHost) == "" {
-		return nil, errors.New("compute unavailable")
+
+	end := s.now().UTC()
+	if err == nil {
+		durationMs := end.Sub(start).Milliseconds()
+		billedMs := durationMs
+		if billedMs < 1 {
+			billedMs = 1
+		}
+		s.shipLambdaInvokeLogs(accountID, name, executedVersion, invokeRequestID, start, durationMs, billedMs, memoryMB, stdout)
 	}
+	return payload, err
+}
+
+func (s *Server) runLambdaComputeInvoke(
+	ctx context.Context,
+	accountID, name string,
+	fn store.LambdaFunction,
+	executedVersion, eventJSON string,
+) ([]byte, string, error) {
 	cli, err := s.lambdaInvoker()
 	if err != nil {
-		return nil, errors.New("compute unavailable")
+		return nil, "", errors.New("compute unavailable")
 	}
 
 	endpoint := strings.TrimSpace(s.cfg.LambdaEndpointURL)
@@ -2110,7 +2167,7 @@ func (s *Server) executeLambdaInvoke(
 	}
 	minted, err := s.mintRoleSessionEnv(fn.RoleARN, lambdaInvokeSession, endpoint, store.DefaultLambdaRegion)
 	if err != nil {
-		return nil, fmt.Errorf("mint execution role credentials: %w", err)
+		return nil, "", fmt.Errorf("mint execution role credentials: %w", err)
 	}
 	env := mergeLambdaInvokeEnv(fn.Env, minted)
 
@@ -2119,20 +2176,20 @@ func (s *Server) executeLambdaInvoke(
 		eventHostPath := filepath.ToSlash(filepath.Join(s.cfg.DataRoot, eventRel))
 		eventAbs := filepath.Join(s.cfg.DataRoot, eventRel)
 		if err := os.MkdirAll(eventAbs, store.LabSharedDirMode); err != nil {
-			return nil, fmt.Errorf("prepare image invoke event dir: %w", err)
+			return nil, "", fmt.Errorf("prepare image invoke event dir: %w", err)
 		}
 		if err := os.Chmod(eventAbs, store.LabSharedDirMode); err != nil {
-			return nil, fmt.Errorf("chmod image invoke event dir: %w", err)
+			return nil, "", fmt.Errorf("chmod image invoke event dir: %w", err)
 		}
 		imageOpts, err := s.prepareLambdaImageRunOpts(accountID, fn, env, eventJSON, endpoint, eventHostPath)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		result, err := cli.RunImageInvoke(ctx, imageOpts)
 		if err != nil {
-			return nil, err
+			return nil, result.Logs, err
 		}
-		return result.Payload, nil
+		return result.Payload, result.Logs, nil
 	}
 
 	codePath := store.FunctionCodeDirInContainer(s.cfg.DataRoot, accountID, name)
@@ -2144,7 +2201,7 @@ func (s *Server) executeLambdaInvoke(
 	}
 	layerPaths, err := s.store.ResolveLayerCodeDirs(s.cfg.DataRoot, accountID, fn.Layers)
 	if err != nil {
-		return nil, fmt.Errorf("invalid layer configuration: %w", err)
+		return nil, "", fmt.Errorf("invalid layer configuration: %w", err)
 	}
 	result, err := cli.RunInvoke(ctx, compute.RunOpts{
 		CodeHostPath:   codePath,
@@ -2158,9 +2215,116 @@ func (s *Server) executeLambdaInvoke(
 		LayerHostPaths: layerPaths,
 	})
 	if err != nil {
-		return nil, err
+		return nil, result.Logs, err
 	}
-	return result.Payload, nil
+	return result.Payload, result.Logs, nil
+}
+
+func (s *Server) shipLambdaInvokeLogs(
+	accountID, functionName, executedVersion, invokeRequestID string,
+	start time.Time,
+	durationMs, billedMs int64,
+	memoryMB int,
+	stdout string,
+) {
+	if s.store == nil {
+		return
+	}
+	region := store.DefaultLambdaRegion
+	group := "/aws/lambda/" + functionName
+	if _, err := s.store.EnsureLogGroup(accountID, region, group); err != nil {
+		return
+	}
+	verLabel := strings.TrimSpace(executedVersion)
+	if verLabel == "" {
+		verLabel = "$LATEST"
+	}
+	stream := fmt.Sprintf("%s/[%s]%s", start.Format("2006/01/02"), verLabel, strings.ReplaceAll(uuid.NewString(), "-", ""))
+	st, err := s.store.EnsureLogStream(accountID, region, group, stream)
+	if err != nil {
+		return
+	}
+
+	versionPart := ""
+	if verLabel != "" {
+		versionPart = " Version: " + verLabel
+	}
+	msgs := []string{
+		fmt.Sprintf("START RequestId: %s%s", invokeRequestID, versionPart),
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		msgs = append(msgs, line)
+	}
+	msgs = append(msgs,
+		fmt.Sprintf("END RequestId: %s", invokeRequestID),
+		fmt.Sprintf("REPORT RequestId: %s\tDuration: %.2f ms\tBilled Duration: %d ms\tMemory Size: %d MB\tMax Memory Used: %d MB",
+			invokeRequestID, float64(durationMs), billedMs, memoryMB, memoryMB),
+	)
+
+	startMs := start.UnixMilli()
+	events := make([]store.LogEvent, 0, len(msgs))
+	for i, msg := range msgs {
+		events = append(events, store.LogEvent{
+			Timestamp: startMs + int64(i),
+			Message:   msg,
+		})
+	}
+	seq := st.UploadSequenceToken
+	for len(events) > 0 {
+		const maxBatch = 100
+		n := len(events)
+		if n > maxBatch {
+			n = maxBatch
+		}
+		batch := events[:n]
+		events = events[n:]
+		next, _, putErr := s.store.PutLogEvents(accountID, group, stream, seq, batch)
+		if putErr != nil {
+			return
+		}
+		seq = next
+	}
+}
+
+func (s *Server) writeLambdaEventSourceInvokeAudit(accountID, functionName string, fn store.LambdaFunction, esmUUID string) {
+	if s.audit == nil {
+		return
+	}
+	mgmt := true
+	ev := audit.Event{
+		EventVersion:       eventVersion,
+		EventTime:          s.now().UTC().Format(time.RFC3339),
+		EventSource:        lambdaEventSource,
+		EventName:          "Invoke",
+		AWSRegion:          store.DefaultLambdaRegion,
+		SourceIPAddress:    "lambda.amazonaws.com",
+		RequestID:          uuid.NewString(),
+		EventID:            uuid.NewString(),
+		EventType:          "AwsApiCall",
+		EventCategory:      "Management",
+		ManagementEvent:    &mgmt,
+		RecipientAccountID: accountID,
+		ReadOnly:           false,
+		UserIdentity: map[string]any{
+			"type":      "AWSService",
+			"invokedBy": "lambda.amazonaws.com",
+		},
+	}
+	opts := append(lambdaInvokeAuditOpts(accountID, functionName, fn),
+		WithAuditRequestParameters(map[string]any{
+			"eventSourceMappingUUID": esmUUID,
+		}),
+	)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ev)
+		}
+	}
+	_ = s.audit.Write(context.Background(), ev)
 }
 
 func (s *Server) writeLambdaAccepted(w http.ResponseWriter, requestID string, payload []byte) {

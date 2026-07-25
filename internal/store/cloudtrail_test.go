@@ -1,7 +1,10 @@
 package store_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +78,42 @@ func TestLookupCloudTrailEventsFilters(t *testing.T) {
 	}
 	if len(byUser) != 1 || byUser[0].EventName != "CreateBucket" {
 		t.Fatalf("byUser=%+v", byUser)
+	}
+}
+
+func TestLookupCloudTrailEventsSourceIPAddress(t *testing.T) {
+	dir := t.TempDir()
+	writeCloudTrailFixture(t, dir,
+		`{"eventTime":"2026-07-20T10:00:00Z","eventName":"A","eventID":"1","eventSource":"x","sourceIPAddress":"198.51.100.10","userIdentity":{"userName":"u"}}`,
+		`{"eventTime":"2026-07-20T11:00:00Z","eventName":"B","eventID":"2","eventSource":"x","sourceIPAddress":"203.0.113.5","userIdentity":{"userName":"u"}}`,
+	)
+	got, err := store.LookupCloudTrailEvents(dir, store.CloudTrailLookupFilter{
+		AttributeKey:   "SourceIPAddress",
+		AttributeValue: "198.51.100.10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].EventId != "1" {
+		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestLookupCloudTrailEventsRecipientAccount(t *testing.T) {
+	dir := t.TempDir()
+	writeCloudTrailFixture(t, dir,
+		`{"eventTime":"2026-07-20T10:00:00Z","eventName":"A","eventID":"ev-mine","eventSource":"x","recipientAccountId":"000000000001","userIdentity":{"userName":"u"}}`,
+		`{"eventTime":"2026-07-20T11:00:00Z","eventName":"B","eventID":"ev-other","eventSource":"x","recipientAccountId":"000000000099","userIdentity":{"userName":"u"}}`,
+	)
+	got, err := store.LookupCloudTrailEvents(dir, store.CloudTrailLookupFilter{
+		RecipientAccountID: "000000000001",
+		MaxResults:         10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].EventId != "ev-mine" {
+		t.Fatalf("got=%+v", got)
 	}
 }
 
@@ -154,10 +193,10 @@ func TestCloudTrailContinuousDeliveryAfterStartLogging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Contents) != 1 {
-		t.Fatalf("after StartLogging objects=%d want 1", len(listed.Contents))
+	if len(listed.Contents) != 2 {
+		t.Fatalf("after StartLogging objects=%d want 2 (log + digest)", len(listed.Contents))
 	}
-	startKey := listed.Contents[0].Key
+	startKey := firstCloudTrailLogObjectKey(listed)
 
 	appendCloudTrailFixture(t, dir,
 		`{"eventTime":"2026-07-20T11:00:00Z","eventName":"CreateBucket","eventID":"ev-continuous","eventSource":"s3.amazonaws.com","userIdentity":{"userName":"root"}}`,
@@ -170,13 +209,13 @@ func TestCloudTrailContinuousDeliveryAfterStartLogging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Contents) != 2 {
-		t.Fatalf("after continuous ship objects=%d want 2 keys=%v", len(listed.Contents), objectKeys(listed))
+	if len(listed.Contents) != 4 {
+		t.Fatalf("after continuous ship objects=%d want 4 keys=%v", len(listed.Contents), objectKeys(listed))
 	}
 
 	var continuousKey string
 	for _, obj := range listed.Contents {
-		if obj.Key != startKey {
+		if isCloudTrailLogObjectKey(obj.Key) && obj.Key != startKey {
 			continuousKey = obj.Key
 			break
 		}
@@ -209,8 +248,8 @@ func TestCloudTrailContinuousDeliveryAfterStartLogging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Contents) != 2 {
-		t.Fatalf("after idle ship objects=%d want 2", len(listed.Contents))
+	if len(listed.Contents) != 4 {
+		t.Fatalf("after idle ship objects=%d want 4", len(listed.Contents))
 	}
 }
 
@@ -317,9 +356,22 @@ func TestCloudTrailStopLoggingSkipsContinuous(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Contents) != 1 {
-		t.Fatalf("after stop+ship objects=%d want 1 (start snapshot only)", len(listed.Contents))
+	if len(listed.Contents) != 2 {
+		t.Fatalf("after stop+ship objects=%d want 2 (start log + digest)", len(listed.Contents))
 	}
+}
+
+func isCloudTrailLogObjectKey(key string) bool {
+	return strings.Contains(key, "/CloudTrail/") && !strings.Contains(key, "CloudTrail-Digest")
+}
+
+func firstCloudTrailLogObjectKey(listed store.ListObjectsResult) string {
+	for _, o := range listed.Contents {
+		if isCloudTrailLogObjectKey(o.Key) {
+			return o.Key
+		}
+	}
+	return ""
 }
 
 func objectKeys(listed store.ListObjectsResult) []string {
@@ -328,4 +380,148 @@ func objectKeys(listed store.ListObjectsResult) []string {
 		out = append(out, o.Key)
 	}
 	return out
+}
+
+func TestCloudTrailDeliveryObjectKeyHiveLayout(t *testing.T) {
+	ts := time.Date(2026, 7, 25, 13, 45, 30, 0, time.UTC)
+	key := store.CloudTrailDeliveryObjectKey("000000000001", "us-west-2", "pfx/", "ignored-trail", ts, false)
+	prefix := "pfx/AWSLogs/000000000001/CloudTrail/us-west-2/2026/07/25/000000000001_CloudTrail_us-west-2_20260725T1345Z_"
+	if !strings.HasPrefix(key, prefix) {
+		t.Fatalf("key=%q want prefix %q", key, prefix)
+	}
+	if !strings.HasSuffix(key, ".json") {
+		t.Fatalf("key=%q want .json suffix", key)
+	}
+	if strings.Contains(key, ".json.gz") {
+		t.Fatalf("key=%q should not be gzipped", key)
+	}
+
+	gzKey := store.CloudTrailDeliveryObjectKey("000000000001", store.DefaultCloudTrailRegion, "", "t", ts, true)
+	if !strings.HasSuffix(gzKey, ".json.gz") {
+		t.Fatalf("gzKey=%q want .json.gz suffix", gzKey)
+	}
+	if !strings.Contains(gzKey, "/CloudTrail/"+store.DefaultCloudTrailRegion+"/") {
+		t.Fatalf("gzKey=%q missing region segment", gzKey)
+	}
+}
+
+func TestCloudTrailDeliveryGzipRoundTrip(t *testing.T) {
+	t.Setenv("NOCTAXRIS_CLOUDTRAIL_GZIP", "1")
+	t.Cleanup(func() { t.Setenv("NOCTAXRIS_CLOUDTRAIL_GZIP", "") })
+
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	const account = "000000000001"
+	const bucket = "ct-gzip-bucket"
+	if _, err := st.CreateBucket(account, bucket); err != nil {
+		t.Fatal(err)
+	}
+	writeCloudTrailFixture(t, dir,
+		`{"eventTime":"2026-07-20T10:00:00Z","eventName":"A","eventID":"ev-gzip","eventSource":"x","userIdentity":{"userName":"u"}}`,
+	)
+	if _, err := st.CreateCloudTrailTrail(account, store.CloudTrailTrail{
+		Name: "gzip-trail", S3BucketName: bucket, HomeRegion: store.DefaultCloudTrailRegion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartCloudTrailLogging(account, "gzip-trail", dir); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := st.ListObjectsV2(account, bucket, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Contents) != 2 {
+		t.Fatalf("objects=%d want 2 (log + digest)", len(listed.Contents))
+	}
+	objKey := firstCloudTrailLogObjectKey(listed)
+	if !strings.HasSuffix(objKey, ".json.gz") {
+		t.Fatalf("key=%q want .json.gz", objKey)
+	}
+	_, raw, err := st.GetObject(account, bucket, objKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gr.Close()
+	body, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "ev-gzip") {
+		t.Fatalf("decompressed body missing ev-gzip: %s", body)
+	}
+}
+
+func TestCloudTrailLogsDeliveryEventTimeTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	const account = "000000000001"
+	const bucket = "ct-ts-bucket"
+	const group = "/noctaxris/cloudtrail-ts"
+	if _, err := st.CreateBucket(account, bucket); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateLogGroup(account, store.DefaultCloudTrailRegion, group); err != nil {
+		t.Fatal(err)
+	}
+	writeCloudTrailFixture(t, dir,
+		`{"eventTime":"2026-07-20T10:00:00Z","eventName":"A","eventID":"ev-a","eventSource":"x","userIdentity":{"userName":"u"}}`,
+	)
+	if _, err := st.CreateCloudTrailTrail(account, store.CloudTrailTrail{
+		Name:                      "ts-trail",
+		S3BucketName:              bucket,
+		CloudWatchLogsLogGroupArn: "arn:aws:logs:us-east-1:000000000001:log-group:" + group,
+		HomeRegion:                store.DefaultCloudTrailRegion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartCloudTrailLogging(account, "ts-trail", dir); err != nil {
+		t.Fatal(err)
+	}
+
+	wantMillis := time.Date(2026, 7, 20, 11, 0, 0, 0, time.UTC).UnixMilli()
+	appendCloudTrailFixture(t, dir,
+		`{"eventTime":"2026-07-20T11:00:00Z","eventName":"B","eventID":"ev-b","eventSource":"x","userIdentity":{"userName":"u"}}`,
+	)
+	if err := st.ShipCloudTrailContinuousDeliveries(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	stream := store.CloudTrailLabLogStreamName("ts-trail")
+	events, err := st.GetLogEvents(account, group, stream, 0, 0, true, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotMillis int64
+	for _, ev := range events {
+		if strings.Contains(ev.Message, "ev-b") {
+			gotMillis = ev.Timestamp
+			break
+		}
+	}
+	if gotMillis != wantMillis {
+		t.Fatalf("ev-b timestamp=%d want %d", gotMillis, wantMillis)
+	}
 }

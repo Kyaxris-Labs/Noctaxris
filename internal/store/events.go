@@ -82,6 +82,7 @@ type EventTarget struct {
 	Input                  string
 	InputPath              string
 	InputTransformerJSON   string
+	DeadLetterARN          string
 }
 
 // EventTargetInput is the PutTargets input shape.
@@ -92,6 +93,7 @@ type EventTargetInput struct {
 	Input            string
 	InputPath        string
 	InputTransformer *EventBridgeInputTransformer
+	DeadLetterARN    string
 }
 
 // PutEventsEntry is a single PutEvents entry.
@@ -116,7 +118,23 @@ type PutEventsResult struct {
 	Entries          []PutEventsResultEntry
 }
 
-// EventRuleMatch records a rule/target match for a PutEvents entry.
+// EventTargetDeliveryRecord is a lab delivery outcome for a matched rule target.
+type EventTargetDeliveryRecord struct {
+	EntryID      string
+	TargetID     string
+	TargetARN    string
+	Status       string
+	ErrorMessage string
+	DLQSent      bool
+	CreatedAt    string
+}
+
+const (
+	eventDeliverySuccess = "SUCCESS"
+	eventDeliveryFailed  = "FAILED"
+)
+
+// EventRuleMatch records which rule/target matched a PutEvents entry.
 type EventRuleMatch struct {
 	EntryID   string
 	RuleARN   string
@@ -175,6 +193,20 @@ CREATE TABLE IF NOT EXISTS event_rule_matches (
 CREATE INDEX IF NOT EXISTS idx_event_rules_bus ON event_rules(account_id, bus_name);
 CREATE INDEX IF NOT EXISTS idx_event_targets_rule ON event_targets(account_id, bus_name, rule_name);
 CREATE INDEX IF NOT EXISTS idx_event_rule_matches_entry ON event_rule_matches(entry_id);
+CREATE TABLE IF NOT EXISTS event_target_deliveries (
+  delivery_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  bus_name TEXT NOT NULL,
+  rule_name TEXT NOT NULL,
+  entry_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  target_arn TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_message TEXT NOT NULL DEFAULT '',
+  dlq_sent INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_target_deliveries_rule ON event_target_deliveries(account_id, bus_name, rule_name, created_at);
 `
 
 // EnsureEventsSchema creates EventBridge tables if missing.
@@ -187,6 +219,9 @@ func EnsureEventsSchema(db *sql.DB) error {
 	}
 	if err := execMigrateStmt(db, `ALTER TABLE event_targets ADD COLUMN input_transformer_json TEXT NOT NULL DEFAULT ''`, nil); err != nil {
 		return fmt.Errorf("ensure events schema: input_transformer_json: %w", err)
+	}
+	if err := execMigrateStmt(db, `ALTER TABLE event_targets ADD COLUMN dead_letter_arn TEXT NOT NULL DEFAULT ''`, nil); err != nil {
+		return fmt.Errorf("ensure events schema: dead_letter_arn: %w", err)
 	}
 	return nil
 }
@@ -582,19 +617,21 @@ func (s *Store) PutTargets(accountID, busName, ruleName string, targets []EventT
 		}
 		_, err = tx.Exec(
 			`INSERT INTO event_targets
-			 (account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path, input_transformer_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 (account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path, input_transformer_json, dead_letter_arn)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id, bus_name, rule_name, target_id) DO UPDATE SET
 			   target_arn = excluded.target_arn,
 			   role_arn = excluded.role_arn,
 			   input_json = excluded.input_json,
 			   input_path = excluded.input_path,
-			   input_transformer_json = excluded.input_transformer_json`,
+			   input_transformer_json = excluded.input_transformer_json,
+			   dead_letter_arn = excluded.dead_letter_arn`,
 			accountID, busName, ruleName, id, arn,
 			roleARN,
 			strings.TrimSpace(tgt.Input),
 			strings.TrimSpace(tgt.InputPath),
 			transformerJSON,
+			strings.TrimSpace(tgt.DeadLetterARN),
 		)
 		if err != nil {
 			return fmt.Errorf("put targets: %w", err)
@@ -637,7 +674,7 @@ func (s *Store) ListTargetsByRule(accountID, busName, ruleName string) ([]EventT
 	busName = normalizeEventBusName(busName)
 	rows, err := s.db.Query(
 		`SELECT account_id, bus_name, rule_name, target_id, target_arn, role_arn, input_json, input_path,
-		        COALESCE(input_transformer_json, '')
+		        COALESCE(input_transformer_json, ''), COALESCE(dead_letter_arn, '')
 		 FROM event_targets WHERE account_id = ? AND bus_name = ? AND rule_name = ?
 		 ORDER BY target_id`,
 		accountID, busName, ruleName,
@@ -651,7 +688,7 @@ func (s *Store) ListTargetsByRule(accountID, busName, ruleName string) ([]EventT
 		var tgt EventTarget
 		if err := rows.Scan(
 			&tgt.AccountID, &tgt.BusName, &tgt.RuleName, &tgt.ID, &tgt.ARN,
-			&tgt.RoleARN, &tgt.Input, &tgt.InputPath, &tgt.InputTransformerJSON,
+			&tgt.RoleARN, &tgt.Input, &tgt.InputPath, &tgt.InputTransformerJSON, &tgt.DeadLetterARN,
 		); err != nil {
 			return nil, fmt.Errorf("list targets by rule: %w", err)
 		}
@@ -840,6 +877,87 @@ func (s *Store) deliverEventTarget(accountID, entryID string, rule EventRule, tg
 		log.Printf("events delivery failed entry=%s rule=%s target=%s err=%v",
 			entryID, rule.ARN, arn, deliverErr)
 	}
+	s.recordEventTargetDelivery(accountID, rule.BusName, rule.Name, entryID, tgt, deliverErr)
+}
+
+func (s *Store) recordEventTargetDelivery(accountID, busName, ruleName, entryID string, tgt EventTarget, deliverErr error) {
+	status := eventDeliverySuccess
+	errMsg := ""
+	if deliverErr != nil {
+		status = eventDeliveryFailed
+		errMsg = deliverErr.Error()
+	}
+	dlqSent := false
+	if deliverErr != nil {
+		dlqARN := strings.TrimSpace(tgt.DeadLetterARN)
+		if dlqARN != "" {
+			payload := map[string]any{
+				"entryId":   entryID,
+				"targetArn": tgt.ARN,
+				"error":     errMsg,
+			}
+			body, mErr := json.Marshal(payload)
+			if mErr == nil {
+				if err := s.sendLabDLQMessage(accountID, dlqARN, body); err == nil {
+					dlqSent = true
+				} else {
+					log.Printf("events dlq delivery failed entry=%s target=%s dlq=%s err=%v", entryID, tgt.ARN, dlqARN, err)
+				}
+			}
+		}
+	}
+	created := nowRFC3339()
+	_, err := s.db.Exec(
+		`INSERT INTO event_target_deliveries
+		 (delivery_id, account_id, bus_name, rule_name, entry_id, target_id, target_arn, status, error_message, dlq_sent, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uuid.NewString(), accountID, normalizeEventBusName(busName), ruleName, entryID, tgt.ID, tgt.ARN,
+		status, errMsg, boolToInt(dlqSent), created,
+	)
+	if err != nil {
+		log.Printf("events record delivery history failed entry=%s target=%s err=%v", entryID, tgt.ARN, err)
+	}
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// ListEventTargetDeliveryHistory returns recent delivery records for a rule (newest first).
+func (s *Store) ListEventTargetDeliveryHistory(accountID, busName, ruleName string, limit int) ([]EventTargetDeliveryRecord, error) {
+	if _, err := s.DescribeRule(accountID, busName, ruleName); err != nil {
+		return nil, err
+	}
+	busName = normalizeEventBusName(busName)
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(
+		`SELECT entry_id, target_id, target_arn, status, error_message, dlq_sent, created_at
+		 FROM event_target_deliveries
+		 WHERE account_id = ? AND bus_name = ? AND rule_name = ?
+		 ORDER BY created_at DESC, delivery_id DESC
+		 LIMIT ?`,
+		accountID, busName, ruleName, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list event delivery history: %w", err)
+	}
+	defer rows.Close()
+	out := []EventTargetDeliveryRecord{}
+	for rows.Next() {
+		var rec EventTargetDeliveryRecord
+		var dlq int
+		if err := rows.Scan(&rec.EntryID, &rec.TargetID, &rec.TargetARN, &rec.Status, &rec.ErrorMessage, &dlq, &rec.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list event delivery history: %w", err)
+		}
+		rec.DLQSent = dlq != 0
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) deliverEventTargetToLogs(accountID, logGroupARN, body, source, created string) error {

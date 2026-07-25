@@ -295,6 +295,125 @@ func (s *Store) ListEnabledOrgPolicyTypes(rootID string) ([]string, error) {
 	return out, nil
 }
 
+// OrgParent is a ListParents entry (root or OU).
+type OrgParent struct {
+	ID   string
+	Type string // ROOT or ORGANIZATIONAL_UNIT
+}
+
+// ListOrgPolicies returns all organization policies, optionally filtered by store type (SCP or RCP).
+func (s *Store) ListOrgPolicies(policyType string) ([]OrgPolicy, error) {
+	var rows *sql.Rows
+	var err error
+	policyType = strings.TrimSpace(policyType)
+	if policyType != "" {
+		rows, err = s.db.Query(
+			`SELECT id, type, name, document FROM org_policies WHERE type = ? ORDER BY name`,
+			policyType,
+		)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT id, type, name, document FROM org_policies ORDER BY name`,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list org policies: %w", err)
+	}
+	defer rows.Close()
+
+	var out []OrgPolicy
+	for rows.Next() {
+		var p OrgPolicy
+		if err := rows.Scan(&p.ID, &p.Type, &p.Name, &p.Document); err != nil {
+			return nil, fmt.Errorf("list org policies: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list org policies: %w", err)
+	}
+	if out == nil {
+		out = []OrgPolicy{}
+	}
+	return out, nil
+}
+
+// ListAccountsForParent returns member accounts placed directly under parentID (root or OU).
+func (s *Store) ListAccountsForParent(parentID string) ([]Account, error) {
+	if parentID == "" {
+		return nil, fmt.Errorf("list accounts for parent: parent_id required")
+	}
+	if err := s.validateOrgParentID(parentID); err != nil {
+		return nil, fmt.Errorf("list accounts for parent: %w", err)
+	}
+	accounts, err := s.ListAccounts()
+	if err != nil {
+		return nil, err
+	}
+	var out []Account
+	for _, a := range accounts {
+		pid, err := s.AccountParentID(a.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		if pid == parentID {
+			out = append(out, a)
+		}
+	}
+	if out == nil {
+		out = []Account{}
+	}
+	return out, nil
+}
+
+// ListParents returns root and OU ancestors for an account or organizational unit id.
+func (s *Store) ListParents(childID string) ([]OrgParent, error) {
+	childID = strings.TrimSpace(childID)
+	if childID == "" {
+		return nil, fmt.Errorf("list parents: child_id required")
+	}
+	if childID == OrgRootID || strings.HasPrefix(childID, "r-") {
+		return []OrgParent{}, nil
+	}
+
+	var current string
+	var err error
+	switch {
+	case strings.HasPrefix(childID, "ou-"):
+		current, err = s.ouParentID(childID)
+	case len(childID) == 12:
+		if err := validate.AccountID(childID); err != nil {
+			return nil, fmt.Errorf("list parents: child_id must be a root, OU, or account id")
+		}
+		current, err = s.AccountParentID(childID)
+	default:
+		return nil, fmt.Errorf("list parents: child_id must be a root, OU, or account id")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list parents: %w", err)
+	}
+
+	var parents []OrgParent
+	for current != "" {
+		if current == OrgRootID || strings.HasPrefix(current, "r-") {
+			parents = append(parents, OrgParent{ID: current, Type: "ROOT"})
+			break
+		}
+		if !strings.HasPrefix(current, "ou-") {
+			return nil, fmt.Errorf("list parents: invalid parent %s", current)
+		}
+		parents = append(parents, OrgParent{ID: current, Type: "ORGANIZATIONAL_UNIT"})
+		current, err = s.ouParentID(current)
+		if err != nil {
+			return nil, fmt.Errorf("list parents: %w", err)
+		}
+	}
+	if parents == nil {
+		parents = []OrgParent{}
+	}
+	return parents, nil
+}
+
 // ListPoliciesForTarget returns org policies attached to the given target.
 func (s *Store) ListPoliciesForTarget(targetType, targetID string) ([]OrgPolicy, error) {
 	rows, err := s.db.Query(

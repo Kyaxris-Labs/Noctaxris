@@ -305,3 +305,82 @@ func TestConfigRecorder(t *testing.T) {
 		t.Fatalf("get snapshot: %v len=%d", err, len(data))
 	}
 }
+
+func TestConfigGetResourceConfigHistory(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := st.CreateBucket(testAccountID, "config-hist"); err != nil {
+		t.Fatal(err)
+	}
+	putRec := []byte(url.Values{
+		"Action":                     {"PutConfigurationRecorder"},
+		"Version":                    {"2014-11-12"},
+		"ConfigurationRecorder.Name": {"default"},
+	}.Encode())
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", putRec)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, req, putRec, testAccessKey, testSecret, testRegion, "config", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PutConfigurationRecorder status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	delivBody := []byte(url.Values{
+		"Action":                       {"PutDeliveryChannel"},
+		"Version":                      {"2014-11-12"},
+		"DeliveryChannel.Name":         {"default"},
+		"DeliveryChannel.s3BucketName": {"config-hist"},
+	}.Encode())
+	delivReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", delivBody)
+	delivReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, delivReq, delivBody, testAccessKey, testSecret, testRegion, "config", now)
+	delivRec := httptest.NewRecorder()
+	handler.ServeHTTP(delivRec, delivReq)
+	if delivRec.Code != http.StatusOK {
+		t.Fatalf("PutDeliveryChannel status=%d body=%q", delivRec.Code, delivRec.Body.String())
+	}
+
+	startBody := []byte(url.Values{
+		"Action":                    {"StartConfigurationRecorder"},
+		"Version":                   {"2014-11-12"},
+		"ConfigurationRecorderName": {"default"},
+	}.Encode())
+	startReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", startBody)
+	startReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, startReq, startBody, testAccessKey, testSecret, testRegion, "config", now)
+	startRec := httptest.NewRecorder()
+	handler.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("StartConfigurationRecorder status=%d body=%q", startRec.Code, startRec.Body.String())
+	}
+
+	bucketReq := mustNewRequest(t, http.MethodPut, "http://127.0.0.1:4566/config-tracked", []byte{})
+	signHeader(t, bucketReq, []byte{}, testAccessKey, testSecret, testRegion, "s3", now)
+	bucketRec := httptest.NewRecorder()
+	handler.ServeHTTP(bucketRec, bucketReq)
+	if bucketRec.Code != http.StatusOK {
+		t.Fatalf("CreateBucket status=%d body=%q", bucketRec.Code, bucketRec.Body.String())
+	}
+
+	histBody := []byte(url.Values{
+		"Action":       {"GetResourceConfigHistory"},
+		"Version":      {"2014-11-12"},
+		"resourceType": {"AWS::S3::Bucket"},
+		"resourceId":   {"config-tracked"},
+	}.Encode())
+	histReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", histBody)
+	histReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, histReq, histBody, testAccessKey, testSecret, testRegion, "config", now)
+	histRec := httptest.NewRecorder()
+	handler.ServeHTTP(histRec, histReq)
+	if histRec.Code != http.StatusOK {
+		t.Fatalf("GetResourceConfigHistory status=%d body=%q", histRec.Code, histRec.Body.String())
+	}
+	body := histRec.Body.String()
+	if !strings.Contains(body, "config-tracked") || !strings.Contains(body, "<configurationItemStatus>OK</configurationItemStatus>") {
+		t.Fatalf("unexpected history XML: %q", body)
+	}
+}

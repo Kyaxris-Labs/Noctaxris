@@ -371,6 +371,9 @@ func (s *Server) eventsPutTargets(
 			}
 			in.InputTransformer = tr
 		}
+		if dlc, ok := m["DeadLetterConfig"].(map[string]any); ok {
+			in.DeadLetterARN = stringParam(dlc["Arn"])
+		}
 		inputs = append(inputs, in)
 	}
 	if len(inputs) == 0 {

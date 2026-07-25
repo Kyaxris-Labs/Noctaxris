@@ -198,6 +198,26 @@ func parseFirehoseDestination(params map[string]any) (destType, bucket, prefix, 
 	if osCfg, ok := params["OpenSearchDestinationConfiguration"].(map[string]any); ok {
 		return parseFirehoseOpenSearchDest(osCfg)
 	}
+	if vpc, ok := params["VpcFlowLogsDestinationConfiguration"].(map[string]any); ok {
+		destType = "VPCFlow"
+		bucket, _ = vpc["BucketARN"].(string)
+		if bucket == "" {
+			bucket, _ = vpc["Bucket"].(string)
+		}
+		prefix, _ = vpc["Prefix"].(string)
+		roleARN, _ = vpc["RoleARN"].(string)
+		return
+	}
+	if vpc, ok := params["NoctaxrisVpcFlowDestinationConfiguration"].(map[string]any); ok {
+		destType = "VPCFlow"
+		bucket, _ = vpc["BucketARN"].(string)
+		if bucket == "" {
+			bucket, _ = vpc["Bucket"].(string)
+		}
+		prefix, _ = vpc["Prefix"].(string)
+		roleARN, _ = vpc["RoleARN"].(string)
+		return
+	}
 	destType = "S3"
 	return
 }

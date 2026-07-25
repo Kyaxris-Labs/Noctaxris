@@ -219,6 +219,10 @@ func (s *Server) handleS3(
 		s.s3PutBucketNotificationConfiguration(w, r, body, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("notification"):
 		s.s3GetBucketNotificationConfiguration(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("logging"):
+		s.s3PutBucketLogging(w, r, body, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("logging"):
+		s.s3GetBucketLogging(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("versioning"):
 		s.s3PutBucketVersioning(w, r, body, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("versioning"):
@@ -365,7 +369,14 @@ func (s *Server) s3CreateBucket(w http.ResponseWriter, r *http.Request, requestI
 			"Access Denied", "CreateBucket")
 		return
 	}
-	_, err := s.store.CreateBucket(verified.AccountID, bucket)
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+	}
+	objectLock := createBucketObjectLockEnabled(r, body)
+	_, err := s.store.CreateBucketWithOptions(verified.AccountID, bucket, store.CreateBucketOptions{
+		ObjectLockEnabled: objectLock,
+	})
 	if errors.Is(err, store.ErrInvalidBucketName) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidBucketName",
 			"The specified bucket is not valid.", "CreateBucket")
@@ -384,7 +395,15 @@ func (s *Server) s3CreateBucket(w http.ResponseWriter, r *http.Request, requestI
 	w.Header().Set(requestIDHeader, requestID)
 	w.Header().Set("Location", "/"+bucket)
 	w.WriteHeader(http.StatusOK)
-	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "CreateBucket", readOnly)
+	_ = s.store.AppendS3BucketConfigHistory(verified.AccountID, bucket, false)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "CreateBucket", readOnly,
+		WithAuditResources([]audit.Resource{{
+			AccountID: verified.AccountID,
+			Type:      "AWS::S3::Bucket",
+			ARN:       store.BucketARN(bucket),
+		}}),
+		WithAuditRequestParameters(map[string]any{"bucketName": bucket}),
+	)
 }
 
 func (s *Server) s3DeleteBucket(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket string) {
@@ -422,6 +441,7 @@ func (s *Server) s3DeleteBucket(w http.ResponseWriter, r *http.Request, requestI
 	}
 	w.Header().Set(requestIDHeader, requestID)
 	w.WriteHeader(http.StatusNoContent)
+	_ = s.store.AppendS3BucketConfigHistory(ref.accountID, bucket, true)
 	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "DeleteBucket", readOnly)
 }
 
@@ -745,6 +765,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		PlainSize:   int64(len(body)),
 		ETag:        etag,
 	}
+	s3ObjectLockFromRequest(r, &meta)
 	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &meta, sse, kmsKeyParam, resource, "PutObject"); !ok {
 		return
 	}
@@ -755,7 +776,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 			"The specified bucket does not exist", "PutObject")
 		return
 	}
-	if errors.Is(err, store.ErrInvalidObjectKey) || errors.Is(err, store.ErrInvalidBucketName) {
+	if errors.Is(err, store.ErrInvalidObjectKey) || errors.Is(err, store.ErrInvalidBucketName) || errors.Is(err, store.ErrObjectLockRequired) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
 			err.Error(), "PutObject")
 		return
@@ -778,7 +799,17 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		w.Header().Set(headerSSEKMSKeyID, obj.KMSKeyID)
 	}
 	w.WriteHeader(http.StatusOK)
-	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "PutObject", readOnly)
+	s.emitS3ServerAccessLog(ref.accountID, bucket, "REST.PUT.OBJECT", key, requestID, r, verified, http.StatusOK, int64(len(body)), obj.Size)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "PutObject", readOnly,
+		WithAuditResources([]audit.Resource{
+			{AccountID: verified.AccountID, Type: "AWS::S3::Bucket", ARN: store.BucketARN(bucket)},
+			{AccountID: verified.AccountID, Type: "AWS::S3::Object", ARN: store.ObjectARN(bucket, key)},
+		}),
+		WithAuditRequestParameters(map[string]any{
+			"bucketName": bucket,
+			"key":        key,
+		}),
+	)
 }
 
 func (s *Server) s3CopyObject(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, destBucket, destKey string) {
@@ -937,6 +968,17 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, status, code, msg, "GetObject")
 		return
 	}
+	if meta.SSEAlgorithm == sseAWSKMS && meta.KMSKeyID != "" {
+		keyID, rerr := s.store.ResolveKeyID(verified.AccountID, meta.KMSKeyID)
+		if rerr == nil {
+			if kmsKey, gerr := s.store.GetKey(keyID); gerr == nil {
+				objectARN := store.ObjectARN(meta.Bucket, meta.Key)
+				customerCtx, _ := parseStoredS3CustomerEncryptionContext(meta.SSEKMSContextJSON)
+				encCtx := s3SSEKMSEncryptionContext(objectARN, customerCtx)
+				s.writeSiblingKMSDecryptAudit(r, requestID, eventID, verified, kmsKey.ARN, encCtx)
+			}
+		}
+	}
 	w.Header().Set(requestIDHeader, requestID)
 	w.Header().Set("Content-Type", meta.ContentType)
 	w.Header().Set("ETag", `"`+meta.ETag+`"`)
@@ -953,7 +995,14 @@ func (s *Server) s3GetObject(w http.ResponseWriter, r *http.Request, requestID, 
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(plain)
-	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "GetObject", readOnly)
+	s.emitS3ServerAccessLog(ref.accountID, bucket, "REST.GET.OBJECT", key, requestID, r, verified, http.StatusOK, int64(len(plain)), meta.Size)
+	auditVid := versionID
+	if auditVid == "" {
+		auditVid = vid
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "GetObject", readOnly,
+		s.s3ObjectDataAuditOpts(verified, bucket, key, auditVid)...,
+	)
 }
 
 func (s *Server) s3HeadObject(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {
@@ -1014,12 +1063,20 @@ func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestI
 			"Access Denied", "DeleteObject")
 		return
 	}
-	err := s.store.DeleteObject(ref.accountID, bucket, key)
+	versionID := r.URL.Query().Get("versionId")
+	delOpts := store.DeleteObjectOptions{BypassGovernanceRetention: s3BypassGovernanceRetention(r)}
+	result, err := s.store.DeleteObjectVersionedWithOptions(ref.accountID, bucket, key, versionID, delOpts)
+	if errors.Is(err, store.ErrObjectLockRetention) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+			"Object is WORM protected", "DeleteObject")
+		return
+	}
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
-		// AWS DeleteObject is idempotent for missing keys.
 		w.Header().Set(requestIDHeader, requestID)
 		w.WriteHeader(http.StatusNoContent)
-		s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "DeleteObject", readOnly)
+		s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "DeleteObject", readOnly,
+			s.s3ObjectDataAuditOpts(verified, bucket, key, versionID)...,
+		)
 		return
 	}
 	if err != nil {
@@ -1028,8 +1085,42 @@ func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestI
 		return
 	}
 	w.Header().Set(requestIDHeader, requestID)
+	if result.DeleteMarker {
+		w.Header().Set("x-amz-delete-marker", "true")
+	}
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
+	}
 	w.WriteHeader(http.StatusNoContent)
-	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "DeleteObject", readOnly)
+	s.emitS3ServerAccessLog(ref.accountID, bucket, "REST.DELETE.OBJECT", key, requestID, r, verified, http.StatusNoContent, 0, 0)
+	auditVid := versionID
+	if auditVid == "" && result.VersionID != "" {
+		auditVid = result.VersionID
+	}
+	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "DeleteObject", readOnly,
+		s.s3ObjectDataAuditOpts(verified, bucket, key, auditVid)...,
+	)
+}
+
+func (s *Server) s3ObjectDataAuditOpts(verified *authn.Verified, bucket, key, versionID string) []SuccessAuditOption {
+	accountID := ""
+	if verified != nil {
+		accountID = verified.AccountID
+	}
+	params := map[string]any{
+		"bucketName": bucket,
+		"key":        strings.TrimPrefix(key, "/"),
+	}
+	if versionID != "" {
+		params["versionId"] = versionID
+	}
+	return []SuccessAuditOption{
+		WithAuditResources([]audit.Resource{
+			{AccountID: accountID, Type: "AWS::S3::Bucket", ARN: store.BucketARN(bucket)},
+			{AccountID: accountID, Type: "AWS::S3::Object", ARN: store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))},
+		}),
+		WithAuditRequestParameters(params),
+	}
 }
 
 func (s *Server) s3CreateMultipartUpload(w http.ResponseWriter, r *http.Request, requestID, eventID string, verified *authn.Verified, readOnly bool, bucket, key string) {

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Forensic depth
+
+- CloudTrail: lab `InjectEvents` (opt-in); richer live audit (`userName`, `sessionContext`, `eventCategory`/`managementEvent`, safer requestParameters, broader `resources[]`); service-correct error `eventSource`; sibling `kms:Decrypt` audit on Secrets/SSM/S3 SSE-KMS/DDB reads; AWSLogs hive S3 keys + optional `NOCTAXRIS_CLOUDTRAIL_GZIP`; Logs delivery timestamps from `eventTime`
+- Athena: unwrap CloudTrail `Records[]`, gzip object read, `WHERE` `LIKE` and `json_extract` lite
+- Lambda: Invoke ships `/aws/lambda/*` START/END/REPORT (+ stdout when available); richer Invoke CT; ESM poll Invoke audit
+- Logs: JSON field-equality `filterPattern` subset for CT-shaped messages
+- S3: delete markers + version-aware delete; Get/Delete CT enrichment
+- GuardDuty: Create/ListDetectors, List/GetFindings, lab `InjectFindings` (`NOCTAXRIS_GUARDDUTY_INJECT`)
+- Security Hub: `BatchImportFindings` + `GetFindings` lite (ASFF-lite)
+- ELBv2 / CloudFront: access logs to in-account S3 when enabled
+- VPC Flow Logs lab seed: opaque IDs, CreateFlowLogs lite, inject (`NOCTAXRIS_VPCFLOW_INJECT`) → S3/Logs v2 ACCEPT/REJECT
+- Config: continuous history while recording + `GetResourceConfigHistory` (S3 bucket create/delete hooks)
+- IAM: AssumeRole CT enrichment; `GetAccessKeyLastUsed`; `GenerateCredentialReport` / `GetCredentialReport`
+- CloudTrail: `PutEventSelectors` / `GetEventSelectors` lite; digest sidecar + lab `ValidateLogs`
+- Detective lite: CreateGraph/ListGraphs/AcceptInvitation; lab SearchGraph over CT + GuardDuty
+- Lab forensics APIs (`NOCTAXRIS_LAB_FORENSICS`): FreezeClock/UnfreezeClock/SetClock/BulkSeed
+- Messaging: SNS RedrivePolicy DLQ; EventBridge target DLQ + delivery history; Pipes DLQ
+- S3: Object Lock lite; server access logging
+- Orgs: ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent; account-scoped Lookup; org trail flag (`IsOrganizationTrail`)
+- Optionals: Route53 query log inject; Firehose VPC Flow dest; SQS DLQ provenance; Control Tower honest stub (ListLandingZones empty / GetLandingZone not found)
+- Macie lite: EnableMacie/GetMacieSession; Create/Describe/ListClassificationJobs (sync COMPLETE); List/GetFindings; lab `InjectFindings` (`NOCTAXRIS_MACIE_INJECT`) with Finding lite or canned S3 matches
+- CloudTrail Insights lite: `LookupEvents` honors `EventCategory=insight`; lab `InjectInsightsEvents` seeds `AwsCloudTrailInsight` JSONL (no ML engine; same `NOCTAXRIS_CLOUDTRAIL_INJECT` gate)
+- Fix: `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` now loaded into config (was documented but unwired)
+
+### CloudTrail inject and richer audit
+
+- Lab `cloudtrail:InjectEvents` (`NoctaxrisCloudTrail.InjectEvents`): opt-in via `NOCTAXRIS_CLOUDTRAIL_INJECT=1` (default AccessDenied); writes AWS-shaped JSONL into `$DATAROOT/cloudtrail/events.jsonl` (single or batch, cap 50) for LookupEvents and trail delivery
+- Live audit: `userIdentity.userName`; safer requestParameters (`httpMethod`/`path`/`xAmzTarget`/`action` plus handler opts); `resources[]` on S3 CreateBucket/PutObject and Lambda CreateFunction; audit `sourceIPAddress` XFF via `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1` only (authz SourceIp stays TCP peer)
+- LookupEvents lab attribute `SourceIPAddress`
+
 ## 1.1.2
 
 Patch after 1.1.1: edge, search, analytics, governance, and workflow lab depth; Cognito and Lambda MQ gap closure; SDK/docs polish; CloudTrail continuous JSONL delivery. Docker Hub: `kyaxris/noctaxris` (`1.1.2`, `1.1`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
