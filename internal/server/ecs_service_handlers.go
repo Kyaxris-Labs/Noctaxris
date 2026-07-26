@@ -400,3 +400,97 @@ func (s *Server) ecsListServices(
 	s.writeECSOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ecsEventSource, "ListServices", readOnly)
 }
+
+// Lab tag APIs for Terraform refresh after CreateService / RegisterTaskDefinition.
+func (s *Server) ecsListTagsForResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeECS(verified, catalog.ActionECSListTagsForResource, arn) {
+		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecs:ListTagsForResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecssvc.ListTagsForResourceJSON()
+	if err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECSOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecsEventSource, "ListTagsForResource", readOnly)
+}
+
+func (s *Server) ecsTagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeECS(verified, catalog.ActionECSTagResource, arn) {
+		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecs:TagResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecssvc.EmptyOKJSON()
+	if err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECSOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecsEventSource, "TagResource", readOnly)
+}
+
+func (s *Server) ecsUntagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECSError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorizeECS(verified, catalog.ActionECSUntagResource, arn) {
+		s.writeECSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecs:UntagResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecssvc.EmptyOKJSON()
+	if err != nil {
+		s.writeECSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECSOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecsEventSource, "UntagResource", readOnly)
+}

@@ -24,7 +24,8 @@ type RunOpts struct {
 	CodeHostPath string
 	// Runtime is the lab Lambda runtime (e.g. python3.12, nodejs20.x).
 	Runtime string
-	// Handler is "module.function" (Python) or "file.export" (Node.js).
+	// Handler is "module.function" (Python), "file.export" (Node.js),
+	// or "package.Class::method" / "package.Class" (Java; default method handleRequest).
 	Handler string
 	// TimeoutSec is the container wall-clock limit (default 30).
 	TimeoutSec int

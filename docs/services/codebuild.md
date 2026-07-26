@@ -11,12 +11,12 @@ Lab CodeBuild core: project create/list/get/update/delete, StartBuild / StartBui
 | Projects | `CreateProject`, `ListProjects`, `BatchGetProjects`, `UpdateProject`, `DeleteProject` (source `NO_SOURCE`, `S3`, or `CODECOMMIT`; inline buildspec; environment image; project `environment.environmentVariables`; `source.allowOverride`; artifacts `NO_ARTIFACTS` or `S3`) |
 | Builds | `StartBuild` (including `environmentVariablesOverride` / `buildspecOverride`), `StartBuildBatch` (matrix or buildspec `batch.build-list` / `batch.build-matrix`), `BatchGetBuilds`, `ListBuilds`, `StopBuild` |
 | Override-lock | When `source.allowOverride` is `false`, `StartBuild` / `StartBuildBatch` reject non-empty `buildspecOverride` or `environmentVariablesOverride` with `InvalidInputException` (matrix children from project buildspec still allowed) |
-| Artifacts | When project `artifacts.type=S3` (bucket in `location`, optional `path`/`name`/`packaging`), successful reap uploads a small logs-derived ZIP (or text) object from captured build logs (not a workspace export of `/codebuild/src`) and sets build `artifacts.location`; `BatchGetBuilds` surfaces it |
+| Artifacts | When project `artifacts.type=S3` (bucket in `location`, optional `path`/`name`/`packaging`), successful reap uploads a ZIP (or text/tar) to S3 and sets build `artifacts.location`. Prefer Exec+tar of `/codebuild/src` (entry `codebuild-src.tar` inside ZIP) harvested before container stop; fall back to logs-derived `build.log` when the workspace is empty or Exec fails. Never uses Docker `CopyFromContainer` |
 | CODECOMMIT source | `source.type=CODECOMMIT` with `source.location` as a lab repository name or CodeCommit ARN. StartBuild materializes the lab tree (`MaterializeCodeCommitRepo`) and injects files into the nested container via a tar/base64 unpack under `/codebuild/src` (no Docker bind; works with existing `RunECSTask`). Missing repos fail closed with `InvalidInputException` before compute. Empty project buildspec loads `buildspec.yml` / `.yaml` / `.json` from the repo when present |
-| Config stubs | `vpcConfig`, `cache`, `secondarySources`, `fleet` / `projectFleet`, and `reportGroupArns` persist as JSON and echo on Create/Update/BatchGetProjects. Config-only: no real VPC attach, cache backend, fleets, or report publishing |
+| Config stubs | `vpcConfig`, `cache`, `secondarySources`, `fleet` / `projectFleet`, and `reportGroupArns` persist as JSON and echo on Create/Update/BatchGetProjects (decorative `status=ACTIVE` on vpc/cache/fleet). Validated shapes: `cache.type` in `NO_CACHE`/`LOCAL`/`S3`; `vpcConfig.vpcId` + non-empty `subnets`; `fleet.fleetArn` ARN; `reportGroupArns` ARN list. Config-only: no real VPC attach, cache backend, fleets, or report publishing |
 | Lab image | Optional tool-bearing image under `docker/codebuild-lab/` (see [codebuild-lab-image.md](codebuild-lab-image.md)); pull via lab registry refs already allowed by the DinD allowlist |
 | IMDS mirror | Nested builds started via `RunECSTask` with minted `AWS_*` also get link-local `169.254.170.2` container-credential env on Internal `noctaxris-ecs` (not published on the host API listen). Prefer `AWS_CONTAINER_CREDENTIALS_FULL_URI` (`http://169.254.170.2:9254/v2/credentials/...`); relative URI alone assumes port 80 and will not hit the lab mirror. `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` is set alongside FULL_URI |
-| Webhooks (lab) | Receive path `POST /_noctaxris/codebuild/webhook/{account}/{project}` with lite `filterGroups` (`EVENT` / `HEAD_REF` / `FILE_PATH`) into StartBuild. No AWS-shaped `CreateWebhook` control-plane API; seed rows via store upsert (see [Lab webhooks](#lab-webhooks)). Not GitHub SaaS |
+| Webhooks | AWS-shaped `CreateWebhook` / `DeleteWebhook` / `ListWebhooks` (JSON protocol) plus receive path `POST /_noctaxris/codebuild/webhook/{account}/{project}` with lite `filterGroups` (`EVENT` / `HEAD_REF` / `FILE_PATH`) into StartBuild. `payloadUrl` points at the lab receive path (not GitHub SaaS). Optional secret via request or auto-minted; receive checks `X-Noctaxris-Webhook-Secret` when set |
 | Roles | `CreateProject` / `UpdateProject` require `serviceRole`. Caller needs `iam:PassRole`. Role trust must Allow `sts:AssumeRole` for `codebuild.amazonaws.com`. StartBuild mints temporary AWS_* credentials for the project `serviceRole` into the nested container. Lab registry pull tokens use the service role ARN |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). StartBuild starts the container and returns `IN_PROGRESS`; exit is reaped in the background. Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled once with authenticated Registry V2 |
 | Endpoint mint | Nested build env includes `AWS_ENDPOINT_URL_*` aliases for Secrets Manager (`AWS_ENDPOINT_URL_SECRETSMANAGER`, `AWS_ENDPOINT_URL_SECRETS_MANAGER`), CloudWatch Logs (`AWS_ENDPOINT_URL_LOGS`), SNS (`AWS_ENDPOINT_URL_SNS`), and CodeBuild (`AWS_ENDPOINT_URL_CODEBUILD`), plus the shared mint set used by ECS-path compute |
@@ -48,19 +48,19 @@ CodeBuild nested containers use the same DinD path as ECS (`noctaxris-ecs`). Hos
 
 ### Lab webhooks
 
-There is no public AWS-shaped `CreateWebhook` / `DeleteWebhook` / `ListWebhooks` control-plane surface. Register a lab webhook by seeding a store row (`UpsertCodeBuildWebhook`: account, project name, optional `filterGroups` JSON, optional shared secret). Operators and tests seed that way; missing webhook rows return HTTP 404 on receive.
+Register via `CreateWebhook` (`projectName`, optional `filterGroups`, optional `secret`). Response includes `webhook.payloadUrl` / `webhook.url` pointing at `POST /_noctaxris/codebuild/webhook/{account}/{project}` and a `secret` (auto-minted when omitted). `ListWebhooks` (optional `projectName` filter) and `DeleteWebhook` manage rows. Store upsert remains available for operators/tests.
 
 Receive (unauthenticated lab path; optional shared secret):
 
 ```http
 POST /_noctaxris/codebuild/webhook/{account}/{project}
 Content-Type: application/json
-X-Noctaxris-Webhook-Secret: <optional; required when the seeded secret is non-empty>
+X-Noctaxris-Webhook-Secret: <optional; required when the webhook secret is non-empty>
 
 {"event":"PUSH","headRef":"refs/heads/main","filePaths":["src/app.go"]}
 ```
 
-Body fields: `event` (required), `headRef` or `head_ref`, `filePaths` or `file_paths`. Filter groups support `EVENT`, `HEAD_REF`, and `FILE_PATH` (lite). Matched posts call StartBuild; unmatched filters return `{"triggered":false}`. Without `NOCTAXRIS_DOCKER_HOST`, a matched post returns 503 and does not create a build row.
+Body fields: `event` (required), `headRef` or `head_ref`, `filePaths` or `file_paths`. Filter groups support `EVENT`, `HEAD_REF`, and `FILE_PATH` (lite). Matched posts call StartBuild; unmatched filters return `{"triggered":false}`. Without `NOCTAXRIS_DOCKER_HOST`, a matched post returns 503 and does not create a build row. Missing webhook rows return HTTP 404.
 
 ## How to verify / CLI smoke
 
@@ -89,6 +89,4 @@ aws codebuild list-builds --endpoint-url "$EP"
 ## Not yet / deferred
 
 - Full GitHub SaaS / CodeBreach incident clone claims (lab webhooks stay local HTTP only)
-- AWS-shaped `CreateWebhook` / `DeleteWebhook` / `ListWebhooks` control-plane APIs (seed via store upsert only)
-- Real VPC networking, cache backends, fleets, or report-group execution (config stubs only)
-- Artifact capture of the nested `/codebuild/src` workspace (current S3 artifacts are logs-derived only)
+- Real VPC networking, cache backends, fleets, or report-group execution (validated config stubs only)

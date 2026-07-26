@@ -88,6 +88,16 @@ func TestValidateRunOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts Java Class::method handler", func(t *testing.T) {
+		err := compute.ValidateRunOpts(compute.RunOpts{
+			Runtime:      store.LambdaRuntimeJava21,
+			CodeHostPath: "/var/lib/noctaxris/fn",
+			Handler:      "example.Echo::handleRequest",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestValidateImageRunOpts(t *testing.T) {

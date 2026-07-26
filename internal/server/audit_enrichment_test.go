@@ -154,6 +154,59 @@ func TestS3CreateBucketAuditResources(t *testing.T) {
 	}
 }
 
+func TestSecretsCreateSecretAuditResources(t *testing.T) {
+	srv, auditDir := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustSecretsJSON(t, handler, "CreateSecret", map[string]any{
+		"Name": "audit-res-secret", "SecretString": "not-logged",
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateSecret status=%d body=%q", create.Code, create.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	wantARN, _ := created["ARN"].(string)
+	if wantARN == "" {
+		t.Fatalf("missing ARN in CreateSecret response: %s", create.Body.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(auditDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var last map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatal(err)
+	}
+	if name, _ := last["eventName"].(string); name != "CreateSecret" {
+		t.Fatalf("eventName=%v", last["eventName"])
+	}
+	resources, _ := last["resources"].([]any)
+	if len(resources) < 1 {
+		t.Fatalf("resources=%v", last["resources"])
+	}
+	first, _ := resources[0].(map[string]any)
+	if typ, _ := first["type"].(string); typ != "AWS::SecretsManager::Secret" {
+		t.Fatalf("type=%v", first["type"])
+	}
+	if arn, _ := first["ARN"].(string); arn != wantARN {
+		t.Fatalf("ARN=%v want %q", first["ARN"], wantARN)
+	}
+	params, _ := last["requestParameters"].(map[string]any)
+	if params["name"] != "audit-res-secret" {
+		t.Fatalf("requestParameters=%v", params)
+	}
+	rawLine := lines[len(lines)-1]
+	if strings.Contains(rawLine, "not-logged") || strings.Contains(rawLine, "SecretString") {
+		t.Fatalf("secret material leaked into audit line: %s", rawLine)
+	}
+}
+
 func TestAuditAPIErrorUsesServiceEventSource(t *testing.T) {
 	srv, auditDir := newTestServer(t)
 	handler := srv.Handler()

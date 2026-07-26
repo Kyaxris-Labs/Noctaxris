@@ -1,10 +1,13 @@
 package store_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -429,7 +432,7 @@ func TestCodeBuildS3ArtifactsPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.LogsText = "artifact logs"
-	loc, err := st.PublishCodeBuildBuildArtifacts(account, b)
+	loc, err := st.PublishCodeBuildBuildArtifacts(account, b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,5 +547,54 @@ func TestCodeBuildCodeCommitSourceResolveAndMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(shell, "/codebuild/src") || !strings.Contains(shell, "base64 -d") {
 		t.Fatalf("shell=%q", shell)
+	}
+}
+
+func TestCodeBuildPublishWorkspaceTarArtifacts(t *testing.T) {
+	st := openCodeBuildStore(t)
+	account := "000000000009"
+	region := store.DefaultCodeBuildRegion
+	_, err := st.CreateCodeBuildProject(account, region, store.CreateCodeBuildProjectInput{
+		Name:        "ws-art-proj",
+		ServiceRole: "arn:aws:iam::" + account + ":role/CodeBuildRole",
+		SourceType:  "NO_SOURCE",
+		Buildspec:   "echo art",
+		Image:       "alpine:3.20",
+		Artifacts: map[string]any{
+			"type":      "S3",
+			"location":  "cb-ws-artifacts",
+			"name":      "build.zip",
+			"packaging": "ZIP",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.StartCodeBuildBuild(account, region, store.StartCodeBuildBuildOpts{ProjectName: "ws-art-proj"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.LogsText = "logs"
+	loc, err := st.PublishCodeBuildBuildArtifacts(account, b, []byte("fake-tar-bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc == "" {
+		t.Fatal("empty location")
+	}
+	_, data, err := st.GetObject(account, "cb-ws-artifacts", b.ID+"/build.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	if !slices.Contains(names, "codebuild-src.tar") || !slices.Contains(names, "build.log") {
+		t.Fatalf("zip entries=%v", names)
 	}
 }

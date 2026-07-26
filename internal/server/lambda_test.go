@@ -518,16 +518,24 @@ func TestLambdaCreateFunctionAcceptedRuntimes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		runtime string
+		handler string
 	}{
-		{"py311-fn", store.LambdaRuntimePython311},
-		{"node20-fn", store.LambdaRuntimeNodejs20x},
+		{"py311-fn", store.LambdaRuntimePython311, "app.handler"},
+		{"py312-fn", store.LambdaRuntimePython312, "app.handler"},
+		{"py313-fn", store.LambdaRuntimePython313, "app.handler"},
+		{"py314-fn", store.LambdaRuntimePython314, "app.handler"},
+		{"node20-fn", store.LambdaRuntimeNodejs20x, "app.handler"},
+		{"node22-fn", store.LambdaRuntimeNodejs22x, "app.handler"},
+		{"node24-fn", store.LambdaRuntimeNodejs24x, "app.handler"},
+		{"java21-fn", store.LambdaRuntimeJava21, "example.Handler::handleRequest"},
+		{"java25-fn", store.LambdaRuntimeJava25, "example.Handler::handleRequest"},
 	} {
 		t.Run(tc.runtime, func(t *testing.T) {
 			rec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
 				"FunctionName": tc.name,
 				"Runtime":      tc.runtime,
 				"Role":         roleARN,
-				"Handler":      "app.handler",
+				"Handler":      tc.handler,
 				"Code": map[string]any{
 					"ZipFile": zip,
 				},

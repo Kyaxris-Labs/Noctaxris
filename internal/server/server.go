@@ -786,7 +786,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionECRPutImage, "PutImage",
 		catalog.ActionECRBatchGetImage, "BatchGetImage",
 		catalog.ActionECRListImages, "ListImages",
-		catalog.ActionECRBatchDeleteImage, "BatchDeleteImage":
+		catalog.ActionECRBatchDeleteImage, "BatchDeleteImage",
+		catalog.ActionECRListTagsForResource,
+		catalog.ActionECRTagResource,
+		catalog.ActionECRUntagResource:
 		s.handleECR(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionEventsPutEvents, "PutEvents",
 		catalog.ActionEventsCreateEventBus, "CreateEventBus",
@@ -858,7 +861,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionECSUpdateService, "UpdateService",
 		catalog.ActionECSDeleteService, "DeleteService",
 		catalog.ActionECSDescribeServices, "DescribeServices",
-		catalog.ActionECSListServices, "ListServices":
+		catalog.ActionECSListServices, "ListServices",
+		catalog.ActionECSListTagsForResource,
+		catalog.ActionECSTagResource,
+		catalog.ActionECSUntagResource:
 		s.handleECS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudTrailLookupEvents, "LookupEvents",
 		catalog.ActionCloudTrailCreateTrail, "CreateTrail",
@@ -938,7 +944,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCodeBuildStartBuildBatch, "StartBuildBatch",
 		catalog.ActionCodeBuildStopBuild, "StopBuild",
 		catalog.ActionCodeBuildBatchGetBuilds, "BatchGetBuilds",
-		catalog.ActionCodeBuildListBuilds, "ListBuilds":
+		catalog.ActionCodeBuildListBuilds, "ListBuilds",
+		catalog.ActionCodeBuildCreateWebhook, "CreateWebhook",
+		catalog.ActionCodeBuildDeleteWebhook, "DeleteWebhook",
+		catalog.ActionCodeBuildListWebhooks, "ListWebhooks":
 		s.handleCodeBuild(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCodeCommitCreateRepository,
 		catalog.ActionCodeCommitGetRepository, "GetRepository",

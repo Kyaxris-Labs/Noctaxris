@@ -79,6 +79,20 @@ func DeleteRepositoryPolicyJSON(name, registryID string) ([]byte, error) {
 	})
 }
 
+// ListTagsForResourceJSON builds a ListTagsForResource response (lab: empty tags).
+func ListTagsForResourceJSON(tags []store.ResourceTag) ([]byte, error) {
+	entries := make([]map[string]string, 0, len(tags))
+	for _, t := range tags {
+		entries = append(entries, map[string]string{"Key": t.Key, "Value": t.Value})
+	}
+	return json.Marshal(map[string]any{"tags": entries})
+}
+
+// EmptyOKJSON builds an empty success body for TagResource / UntagResource.
+func EmptyOKJSON() ([]byte, error) {
+	return []byte(`{}`), nil
+}
+
 // PutImageJSON builds a PutImage response.
 func PutImageJSON(img store.Image) ([]byte, error) {
 	entry, err := imageDetailJSON(img)

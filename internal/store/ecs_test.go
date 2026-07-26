@@ -248,3 +248,37 @@ func TestDeregisterTaskDefinition(t *testing.T) {
 		t.Fatalf("status=%q want INACTIVE", got.Status)
 	}
 }
+
+func TestDescribeServicesAcceptsServiceARN(t *testing.T) {
+	st := openECSStore(t)
+	account := "000000000001"
+	containers := []map[string]any{
+		{"name": "app", "image": "alpine:3.20"},
+	}
+	td, err := st.RegisterTaskDefinition(account, "us-east-1", store.RegisterTaskDefinitionInput{
+		Family:           "svc-arn-lookup",
+		ContainerDefs:    containers,
+		TaskRoleARN:      "arn:aws:iam::000000000001:role/ecsTaskRole",
+		ExecutionRoleARN: "arn:aws:iam::000000000001:role/ecsExecutionRole",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := st.CreateService(account, "us-east-1", store.CreateServiceInput{
+		Cluster:        "default",
+		ServiceName:    "lab-svc",
+		TaskDefinition: td.ARN,
+		DesiredCount:   0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterARN := "arn:aws:ecs:us-east-1:000000000001:cluster/default"
+	got, err := st.DescribeServices(account, clusterARN, []string{svc.ServiceARN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ServiceName != "lab-svc" || got[0].ServiceARN != svc.ServiceARN {
+		t.Fatalf("describe by ARN=%+v want lab-svc %q", got, svc.ServiceARN)
+	}
+}

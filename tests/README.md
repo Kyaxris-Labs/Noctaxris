@@ -54,11 +54,14 @@ From the repo root (bash / WSL / Git Bash):
 ```bash
 bash tests/run-all.sh
 
-# Advanced fullstack + Terraform lab-fullstack (longer)
+# Advanced fullstack + Terraform lab-fullstack + Lambda runtime stacks (longer)
 NOCTAXRIS_ADVANCED=1 bash tests/run-all.sh
 
 # Terraform lab-fullstack only (after lab-core), without full ADVANCED SDK
 TF_FULLSTACK=1 bash tests/run-all.sh
+
+# Terraform Lambda runtime stacks only (python3.14 / nodejs24.x / java21+java25)
+TF_LAMBDA_RUNTIMES=1 bash tests/run-all.sh
 
 # Nested Lambda Invoke in SDK suites (Compose noctaxris-engine healthy)
 NOCTAXRIS_NESTED=1 bash tests/run-all.sh
@@ -67,7 +70,7 @@ NOCTAXRIS_NESTED=1 bash tests/run-all.sh
 Or run each suite:
 
 ```bash
-# SDK round-trips (STS, S3, DynamoDB, IAM, KMS, SQS, SNS, Lambda CRUD, EventBridge, SSM, Secrets)
+# SDK round-trips (STS, S3, DynamoDB, IAM, KMS, SQS, SNS, Lambda CRUD + all lab zip runtimes, EventBridge, SSM, Secrets)
 cd tests/sdk/go && go test ./... -count=1 -timeout 10m
 
 cd tests/sdk/nodejs && npm install && npm test
@@ -79,6 +82,16 @@ bash tests/terraform/run.sh
 
 # Terraform advanced stack (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda zip, EventBridge, SSM, Secrets)
 STACK=lab-fullstack bash tests/terraform/run.sh
+
+# Terraform Lambda runtime projects (need hashicorp/aws >= 6.21 for newer runtime enums)
+STACK=lab-lambda-python bash tests/terraform/run.sh
+STACK=lab-lambda-nodejs bash tests/terraform/run.sh
+STACK=lab-lambda-java bash tests/terraform/run.sh
+
+# Terraform microservice stacks (serverless pipeline + ECR/ECS; live DesiredCount opt-in)
+STACK=lab-ms-serverless bash tests/terraform/run.sh
+STACK=lab-ms-ecs bash tests/terraform/run.sh
+STACK=lab-ms-ecs TF_MS_LIVE=1 bash tests/terraform/run.sh
 
 # CloudFormation CreateStack / Describe / Delete (JSON or YAML lab subset)
 cd tests/cloudformation/go && go test ./... -count=1 -timeout 5m
@@ -99,16 +112,16 @@ Failures on assertions happen only when the endpoint is up.
 
 | Suite | Coverage |
 |-------|----------|
-| `tests/sdk/go` | Create/list/get/delete round-trips with unique prefixes and cleanup |
-| `tests/sdk/nodejs` | Same service set via AWS SDK for JavaScript v3 (`node:test`) |
-| `tests/sdk/python` | Same service set via boto3 + pytest |
-| `tests/terraform` | Real HCL, custom `endpoints` to Noctaxris; `lab-core` (S3 + IAM + DynamoDB + KMS) and `STACK=lab-fullstack` multi-resource apply then destroy |
-| `tests/cloudformation` | JSON/YAML lab templates for S3, IAM Role, SQS, DynamoDB, Lambda |
+| `tests/sdk/go` | Create/list/get/delete round-trips with unique prefixes and cleanup; Lambda zip runtimes `python3.11`–`3.14`, `nodejs20.x`/`22.x`/`24.x`, `java21`/`java25` |
+| `tests/sdk/nodejs` | Same service set via AWS SDK for JavaScript v3 (`node:test`), including Lambda runtime matrix |
+| `tests/sdk/python` | Same service set via boto3 + pytest, including Lambda runtime matrix |
+| `tests/terraform` | Real HCL, custom `endpoints` to Noctaxris; `lab-core`, `lab-fullstack`, `lab-lambda-*`, `lab-ms-serverless`, `lab-ms-ecs` (`live` for ECS DesiredCount) |
+| `tests/cloudformation` | JSON/YAML lab templates for S3, IAM Role, SQS, DynamoDB, Lambda (Python ZipFile plus sample Node/Java YAML under `templates/`) |
 
 ## Honest limitations
 
 - CloudFormation lab subset: JSON or YAML; ChangeSet lite; nested stacks (lab S3 TemplateURL); drift lite; resources toward lab-fullstack (S3, IAM Role, SQS(+QueuePolicy), DynamoDB, Lambda ZipFile, KMS, SNS, Events, SSM, Secrets, nested Stack); DependsOn + `Ref`/`Fn::GetAtt`/`Fn::Sub`/`Fn::Join`. Unknown types/props fail closed.
-- Default Lambda SDK tests cover Create/Get/List/Delete. Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
+- Default Lambda SDK tests cover Create/Get/List/Delete for every lab zip runtime (Python/Node/Java). Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
 - Edge / data / workflow / nested SDK rows (CloudFront edge, Transfer files, Glue crawler, AppConfig deploy, Config history, SFN Choice, CloudTrail delivery, Route53 Alias, ELBv2 rules, AppSync PassRole) run whenever the API is up. Nested OpenSearch / ActiveMQ / Firehose OpenSearch / Lambda MQ ESM rows skip when engines are not Active/RUNNING.
 - Forensic depth surfaces (CloudTrail inject/Insights, GuardDuty/Security Hub/Macie/Detective, VPC Flow inject, Object Lock / access logs, lab clock/BulkSeed, and related) are covered by `go test ./internal/...` unit tests; they are not yet required rows in SDK `run-all.sh`.
 - Terraform needs the Terraform binary on `PATH`. The runner skips when it is missing.
@@ -118,7 +131,7 @@ Gaps and follow-ups: [HANDOFF.md](HANDOFF.md).
 
 ## Advanced suites
 
-Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. Both fold into `run-all.sh` when `NOCTAXRIS_ADVANCED=1`.
+Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. Lambda runtime Terraform projects (`lab-lambda-python`, `lab-lambda-nodejs`, `lab-lambda-java`) run with `TF_LAMBDA_RUNTIMES=1` or `NOCTAXRIS_ADVANCED=1`. Both fold into `run-all.sh` when `NOCTAXRIS_ADVANCED=1`.
 
 ```bash
 export NOCTAXRIS_ADVANCED=1
@@ -129,11 +142,17 @@ NOCTAXRIS_ADVANCED=1 bash tests/run-all.sh
 # Terraform lab-fullstack only (after lab-core), without full ADVANCED SDK
 TF_FULLSTACK=1 bash tests/run-all.sh
 
+# Terraform Lambda runtime stacks only
+TF_LAMBDA_RUNTIMES=1 bash tests/run-all.sh
+
 # Or individually:
 cd tests/sdk/nodejs && npm install && node --test --test-name-pattern=fullstack test/fullstack.test.mjs
 cd tests/sdk/python && pip install -r requirements.txt && pytest test_fullstack.py
 cd tests/sdk/go && go test ./... -count=1 -timeout 10m -run Fullstack
 STACK=lab-fullstack bash tests/terraform/run.sh
+STACK=lab-lambda-python bash tests/terraform/run.sh
+STACK=lab-lambda-nodejs bash tests/terraform/run.sh
+STACK=lab-lambda-java bash tests/terraform/run.sh
 ```
 
 | Suite | Path | Status |
@@ -142,6 +161,8 @@ STACK=lab-fullstack bash tests/terraform/run.sh
 | Python SDK | `tests/sdk/python/test_fullstack.py` | Implemented (same gate) |
 | Go SDK | `tests/sdk/go/fullstack_test.go` | Implemented (same gate) |
 | Terraform | `tests/terraform/stacks/lab-fullstack/` | Implemented (`STACK=lab-fullstack` or `NOCTAXRIS_ADVANCED=1` in `run-all.sh`) |
+| Terraform Lambda runtimes | `tests/terraform/stacks/lab-lambda-{python,nodejs,java}/` | Implemented (`TF_LAMBDA_RUNTIMES=1` or `NOCTAXRIS_ADVANCED=1`) |
+| Terraform microservice | `tests/terraform/stacks/lab-ms-serverless/`, `lab-ms-ecs/` | Implemented (`TF_MS=1` / `TF_MS_LIVE=1` or `NOCTAXRIS_ADVANCED=1`) |
 | Nested Invoke | `*lambda*invoke*` per language | Implemented (gate `NOCTAXRIS_NESTED=1`) |
 
 Assertions cover EventBridge → SQS delivery (including SourceArn queue policy), SNS → SQS fan-out, data-plane reads (S3/DDB/SSM SecureString/Secrets), empty delivery without an events queue policy, and SecureString decrypt denied when the CMK policy omits `kms:Decrypt`.

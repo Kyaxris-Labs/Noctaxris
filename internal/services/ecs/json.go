@@ -82,15 +82,30 @@ func ListClustersJSON(clusterARNs []string) ([]byte, error) {
 }
 
 func serviceJSON(svc store.ECSService) map[string]any {
+	// Include a completed PRIMARY deployment so Terraform aws_ecs_service create
+	// waiters (servicesStable) succeed for DesiredCount 0 control-plane applies.
 	return map[string]any{
-		"serviceArn":     svc.ServiceARN,
-		"serviceName":    svc.ServiceName,
-		"clusterArn":     svc.ClusterARN,
-		"taskDefinition": svc.TaskDefinition,
-		"desiredCount":   svc.DesiredCount,
-		"runningCount":   svc.RunningCount,
-		"pendingCount":   svc.PendingCount,
-		"status":         svc.Status,
+		"serviceArn":          svc.ServiceARN,
+		"serviceName":         svc.ServiceName,
+		"clusterArn":          svc.ClusterARN,
+		"taskDefinition":      svc.TaskDefinition,
+		"desiredCount":        svc.DesiredCount,
+		"runningCount":        svc.RunningCount,
+		"pendingCount":        svc.PendingCount,
+		"status":              svc.Status,
+		"launchType":          "EC2",
+		"schedulingStrategy":  "REPLICA",
+		"enableExecuteCommand": false,
+		"deployments": []map[string]any{{
+			"id":             "ecs-svc/" + svc.ServiceName,
+			"status":         "PRIMARY",
+			"taskDefinition": svc.TaskDefinition,
+			"desiredCount":   svc.DesiredCount,
+			"runningCount":   svc.RunningCount,
+			"pendingCount":   svc.PendingCount,
+			"rolloutState":   "COMPLETED",
+		}},
+		"events": []any{},
 	}
 }
 
@@ -111,6 +126,16 @@ func DescribeServicesJSON(services []store.ECSService) ([]byte, error) {
 // ListServicesJSON builds a ListServices response.
 func ListServicesJSON(serviceARNs []string) ([]byte, error) {
 	return json.Marshal(map[string]any{"serviceArns": serviceARNs})
+}
+
+// ListTagsForResourceJSON builds ListTagsForResource (lab: empty tags; ECS uses key/value).
+func ListTagsForResourceJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"tags": []any{}})
+}
+
+// EmptyOKJSON builds TagResource / UntagResource success body.
+func EmptyOKJSON() ([]byte, error) {
+	return []byte(`{}`), nil
 }
 
 func taskDefinitionJSON(td store.ECSTaskDefinition) map[string]any {

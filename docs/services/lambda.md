@@ -10,7 +10,7 @@ Lab-complete Lambda with zip and container image packaging, versions and aliases
 |------|----------|
 | APIs | `CreateFunction`, `GetFunction`, `DeleteFunction`, `ListFunctions`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`, `Invoke`, `PublishVersion`, `ListVersionsByFunction` (JSON target and REST `GET /{api}/functions/{name}/versions`; response includes `$LATEST`), `GetFunctionCodeSigningConfig` (lab: success without `CodeSigningConfigArn`), `PutFunctionEventInvokeConfig`, `GetFunctionEventInvokeConfig`, `DeleteFunctionEventInvokeConfig`, `CreateAlias`, `UpdateAlias`, `DeleteAlias`, `GetAlias`, `ListAliases`, `PublishLayerVersion`, `GetLayerVersion`, `ListLayerVersions`, `DeleteLayerVersion`, `AddPermission`, `RemovePermission`, `GetPolicy`, `CreateEventSourceMapping`, `GetEventSourceMapping`, `ListEventSourceMappings`, `UpdateEventSourceMapping`, `DeleteEventSourceMapping`, `CreateFunctionUrlConfig`, `GetFunctionUrlConfig`, `DeleteFunctionUrlConfig`, `ListFunctionUrlConfigs`, `ListTags` |
 | Packaging | Zip upload (`Code.ZipFile`) or `PackageType=Image` with `Code.ImageUri` (lab ECR refs pull with Registry V2 auth) |
-| Runtimes (zip) | `python3.11`, `python3.12`, `nodejs20.x` |
+| Runtimes (zip) | `python3.11`, `python3.12`, `python3.13`, `python3.14`, `nodejs20.x`, `nodejs22.x`, `nodejs24.x`, `java21`, `java25` |
 | Versions | `PublishVersion` freezes code and config. `$LATEST` stays mutable |
 | Aliases | Point at published version numbers. Invoke accepts bare name, `name:version`, or `name:alias` |
 | Layers | Up to five same-account layer-version ARNs per function. Merged at `/opt` on zip and Image Invoke. `FunctionConfiguration.Layers` returns AWS Layer objects (`Arn`, `CodeSize`), not bare ARN strings |
@@ -33,7 +33,7 @@ Zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through 
 
 Compose starts `noctaxris-engine` (Docker-in-Docker) on the Compose network. Set `NOCTAXRIS_COMPUTE_RUNTIME=dind` or leave it unset. Unknown values fail process start. The path never falls through to host Docker. Prefer WSL or Linux with Docker Desktop for nested smoke; Windows-native hosts without a Linux VM cannot run DinD nested compute.
 
-Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports pinned AWS Lambda Python/Node base tags (`public.ecr.aws/lambda/python:3.12`, `:3.11`, `nodejs:20`, or the same path with `@sha256:...`) and slim `python:` / `node:` refs. Unrecognized ImageUri entrypoints fail closed unless the image is a lab ECR ref (full-container exec of the image ENTRYPOINT/CMD). For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`. Invoke issues a registry token as the function execution role ARN and pulls with Registry V2 auth (role must Allow `ecr:BatchGetImage`).
+Image functions pull `ImageUri` inside DinD. Lab one-shot Invoke supports pinned AWS Lambda Python/Node/Java base tags (`public.ecr.aws/lambda/python:3.11`, `:3.12`, `:3.13`, `:3.14`, `nodejs:20`, `:22`, `:24`, `java:21`, `:25`, or the same path with `@sha256:...`), slim `python:` / `node:` refs matching those minors, and Temurin `eclipse-temurin:21-jdk` / `:25-jdk` (plus JRE pins). Zip Java Invoke prefers Temurin JDK images so the lab can `javac` a reflection bootstrap; Handler is `package.Class::method` or `package.Class` (default method `handleRequest`). Lab smoke handlers may use `public static String handleRequest(String in)`. Unrecognized ImageUri entrypoints fail closed unless the image is a lab ECR ref (full-container exec of the image ENTRYPOINT/CMD). For private lab images, push to the ECR lab registry ([ecr.md](ecr.md)) and reference `127.0.0.1:4566/ACCOUNT/REPO:tag` in `Code.ImageUri`. Invoke issues a registry token as the function execution role ARN and pulls with Registry V2 auth (role must Allow `ecr:BatchGetImage`).
 
 `Environment.Variables` rejects reserved keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_LAMBDA_*`, lab `AWS_ENDPOINT_URL*`, and related runtime keys) with `InvalidParameterValueException`. Invoke applies function env first, then always overlays minted execution-role credentials and lab endpoint URLs. `Timeout` is clamped to 1–900 seconds; `MemorySize` to 128–10240 MB (mapped to the nested container memory limit). Zip Invoke uses a per-invoke scratch directory for the event payload and merged layer `/opt` tree.
 
@@ -85,6 +85,57 @@ aws lambda invoke \
 
 cat /tmp/noctaxris-invoke-out.json
 ```
+
+Node.js 24 zip create (CRUD; sync Invoke needs DinD like Python):
+
+```bash
+mkdir -p /tmp/noctaxris-lambda-node
+cat > /tmp/noctaxris-lambda-node/index.js <<'JS'
+exports.handler = async (event) => ({ ok: true, echo: event });
+JS
+(cd /tmp/noctaxris-lambda-node && zip -q /tmp/noctaxris-fn-node.zip index.js)
+
+FN_NODE="noctaxris-node-$RANDOM"
+aws lambda create-function \
+  --function-name "$FN_NODE" \
+  --runtime nodejs24.x \
+  --role "$ROLE_ARN" \
+  --handler index.handler \
+  --zip-file fileb:///tmp/noctaxris-fn-node.zip \
+  --endpoint-url "$EP"
+
+aws lambda get-function --function-name "$FN_NODE" --endpoint-url "$EP" \
+  --query 'Configuration.Runtime' --output text
+```
+
+Java 21 zip create. Handler is `package.Class::method` (or `package.Class` with default `handleRequest`). Lab one-shot Invoke compiles a reflection bootstrap with `javac` (Temurin JDK image preferred):
+
+```bash
+mkdir -p /tmp/noctaxris-lambda-java/example
+cat > /tmp/noctaxris-lambda-java/example/Handler.java <<'JAVA'
+package example;
+public class Handler {
+  public static String handleRequest(String in) {
+    return "{\"ok\":true}";
+  }
+}
+JAVA
+(cd /tmp/noctaxris-lambda-java && zip -qr /tmp/noctaxris-fn-java.zip example)
+
+FN_JAVA="noctaxris-java-$RANDOM"
+aws lambda create-function \
+  --function-name "$FN_JAVA" \
+  --runtime java21 \
+  --role "$ROLE_ARN" \
+  --handler example.Handler::handleRequest \
+  --zip-file fileb:///tmp/noctaxris-fn-java.zip \
+  --endpoint-url "$EP"
+
+aws lambda get-function --function-name "$FN_JAVA" --endpoint-url "$EP" \
+  --query 'Configuration.[Runtime,Handler]' --output text
+```
+
+SDK coverage: Go/Node/Python suites create/get/delete every lab zip runtime (`tests/sdk/*/lambda*runtime*`). Terraform projects: `STACK=lab-lambda-python` (`python3.14`), `STACK=lab-lambda-nodejs` (`nodejs24.x`), `STACK=lab-lambda-java` (`java21` + `java25`) via `tests/terraform/run.sh` (or `TF_LAMBDA_RUNTIMES=1` / `NOCTAXRIS_ADVANCED=1` in `tests/run-all.sh`). Provider constraint for those stacks is `hashicorp/aws` `>= 6.21.0` so newer runtime enums validate.
 
 PublishVersion, alias, and Invoke by qualifier:
 

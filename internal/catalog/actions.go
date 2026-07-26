@@ -446,6 +446,9 @@ const (
 	ActionECRUploadLayerPart             = "ecr:UploadLayerPart"
 	ActionECRCompleteLayerUpload         = "ecr:CompleteLayerUpload"
 	ActionECRBatchCheckLayerAvailability = "ecr:BatchCheckLayerAvailability"
+	ActionECRListTagsForResource         = "ecr:ListTagsForResource"
+	ActionECRTagResource                 = "ecr:TagResource"
+	ActionECRUntagResource               = "ecr:UntagResource"
 )
 
 // ECS lab actions.
@@ -465,6 +468,9 @@ const (
 	ActionECSDeleteService            = "ecs:DeleteService"
 	ActionECSDescribeServices         = "ecs:DescribeServices"
 	ActionECSListServices             = "ecs:ListServices"
+	ActionECSListTagsForResource      = "ecs:ListTagsForResource"
+	ActionECSTagResource              = "ecs:TagResource"
+	ActionECSUntagResource            = "ecs:UntagResource"
 )
 
 // Secrets Manager lab actions.
@@ -957,6 +963,9 @@ const (
 	ActionCodeBuildStopBuild         = "codebuild:StopBuild"
 	ActionCodeBuildBatchGetBuilds    = "codebuild:BatchGetBuilds"
 	ActionCodeBuildListBuilds        = "codebuild:ListBuilds"
+	ActionCodeBuildCreateWebhook     = "codebuild:CreateWebhook"
+	ActionCodeBuildDeleteWebhook     = "codebuild:DeleteWebhook"
+	ActionCodeBuildListWebhooks      = "codebuild:ListWebhooks"
 )
 
 // CodeCommit lab actions (filesystem-backed store; not git smart-HTTP).
@@ -1372,6 +1381,9 @@ func KnownAction(action string) bool {
 		ActionECRUploadLayerPart,
 		ActionECRCompleteLayerUpload,
 		ActionECRBatchCheckLayerAvailability,
+		ActionECRListTagsForResource,
+		ActionECRTagResource,
+		ActionECRUntagResource,
 		ActionECSRegisterTaskDefinition,
 		ActionECSDescribeTaskDefinition,
 		ActionECSListTaskDefinitions,
@@ -1387,6 +1399,9 @@ func KnownAction(action string) bool {
 		ActionECSDeleteService,
 		ActionECSDescribeServices,
 		ActionECSListServices,
+		ActionECSListTagsForResource,
+		ActionECSTagResource,
+		ActionECSUntagResource,
 		ActionCloudTrailLookupEvents,
 		ActionCloudTrailCreateTrail,
 		ActionCloudTrailDescribeTrails,
@@ -1494,6 +1509,9 @@ func KnownAction(action string) bool {
 		ActionCodeBuildStopBuild,
 		ActionCodeBuildBatchGetBuilds,
 		ActionCodeBuildListBuilds,
+		ActionCodeBuildCreateWebhook,
+		ActionCodeBuildDeleteWebhook,
+		ActionCodeBuildListWebhooks,
 		ActionCodeCommitCreateRepository,
 		ActionCodeCommitGetRepository,
 		ActionCodeCommitListRepositories,

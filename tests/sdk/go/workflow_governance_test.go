@@ -2,6 +2,8 @@ package sdk_test
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/appsync"
 	appsynctypes "github.com/aws/aws-sdk-go-v2/service/appsync/types"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
+	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lamtypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -136,6 +139,139 @@ func TestCloudTrailCreateTrailStartLoggingS3(t *testing.T) {
 	if !found {
 		t.Fatalf("missing CloudTrail delivery object: %+v", listed.Contents)
 	}
+}
+
+func TestCloudTrailInjectEventsLookupAndValidateLogs(t *testing.T) {
+	requireReady(t)
+	if os.Getenv("NOCTAXRIS_CLOUDTRAIL_INJECT") != "1" {
+		t.Skip("set NOCTAXRIS_CLOUDTRAIL_INJECT=1 on the API process for lab InjectEvents")
+	}
+	cfg := loadAWSConfig(t)
+	s3c := newS3(t, cfg)
+	ct := newCloudTrail(t, cfg)
+	ctx := context.Background()
+	prefix := uniquePrefix(t)
+	bucket := strings.ToLower(prefix + "-ctinj")
+	trail := prefix + "-inj"
+	if len(trail) > 64 {
+		trail = trail[:64]
+	}
+	eventID := "sdk-inj-" + prefix
+	sourceIP := "198.51.100.44"
+
+	injStatus, injBody, _ := signedJSONTarget(t, "cloudtrail", "NoctaxrisCloudTrail.InjectEvents", map[string]any{
+		"Events": []map[string]any{{
+			"eventTime":       "2026-07-20T15:00:00Z",
+			"sourceIPAddress": sourceIP,
+			"userIdentity":    map[string]any{"type": "IAMUser", "userName": "sdk-forensic"},
+			"eventSource":     "signin.amazonaws.com",
+			"eventName":       "ConsoleLogin",
+			"eventID":         eventID,
+			"readOnly":        false,
+		}},
+	})
+	if injStatus != 200 {
+		t.Fatalf("InjectEvents status=%d body=%s", injStatus, injBody)
+	}
+
+	byIP, err := ct.LookupEvents(ctx, &cloudtrail.LookupEventsInput{
+		LookupAttributes: []cttypes.LookupAttribute{{
+			AttributeKey:   cttypes.LookupAttributeKey("SourceIPAddress"),
+			AttributeValue: aws.String(sourceIP),
+		}},
+		MaxResults: aws.Int32(10),
+	})
+	if err != nil {
+		t.Fatalf("LookupEvents SourceIPAddress: %v", err)
+	}
+	if !cloudTrailLookupContains(byIP, eventID) {
+		t.Fatalf("LookupEvents SourceIPAddress missing %s: %+v", eventID, byIP.Events)
+	}
+
+	byName, err := ct.LookupEvents(ctx, &cloudtrail.LookupEventsInput{
+		LookupAttributes: []cttypes.LookupAttribute{{
+			AttributeKey:   cttypes.LookupAttributeKeyEventName,
+			AttributeValue: aws.String("ConsoleLogin"),
+		}},
+		MaxResults: aws.Int32(10),
+	})
+	if err != nil {
+		t.Fatalf("LookupEvents EventName: %v", err)
+	}
+	if !cloudTrailLookupContains(byName, eventID) {
+		t.Fatalf("LookupEvents EventName missing %s: %+v", eventID, byName.Events)
+	}
+
+	if _, err := s3c.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	t.Cleanup(func() {
+		listed, _ := s3c.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String("AWSLogs/")})
+		if listed != nil {
+			for _, obj := range listed.Contents {
+				_, _ = s3c.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: obj.Key})
+			}
+		}
+		_, _ = s3c.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+		_, _ = ct.DeleteTrail(ctx, &cloudtrail.DeleteTrailInput{Name: aws.String(trail)})
+	})
+
+	if _, err := ct.CreateTrail(ctx, &cloudtrail.CreateTrailInput{
+		Name: aws.String(trail), S3BucketName: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("CreateTrail: %v", err)
+	}
+	if _, err := ct.StartLogging(ctx, &cloudtrail.StartLoggingInput{Name: aws.String(trail)}); err != nil {
+		t.Fatalf("StartLogging: %v", err)
+	}
+	listed, err := s3c.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket), Prefix: aws.String("AWSLogs/")})
+	if err != nil {
+		t.Fatalf("ListObjectsV2: %v", err)
+	}
+	var logKey string
+	for _, obj := range listed.Contents {
+		if obj.Key == nil {
+			continue
+		}
+		k := *obj.Key
+		if strings.Contains(k, "/CloudTrail/") && !strings.Contains(k, "CloudTrail-Digest") {
+			logKey = k
+			break
+		}
+	}
+	if logKey == "" {
+		t.Fatalf("missing CloudTrail log object: %+v", listed.Contents)
+	}
+
+	valStatus, valBody, valParsed := signedJSONTarget(t, "cloudtrail", "CloudTrail_20131101.ValidateLogs", map[string]any{
+		"S3BucketName": bucket,
+		"S3ObjectKey":  logKey,
+	})
+	if valStatus != 200 {
+		t.Fatalf("ValidateLogs status=%d body=%s", valStatus, valBody)
+	}
+	if valid, _ := valParsed["Valid"].(bool); !valid {
+		t.Fatalf("ValidateLogs Valid=%v body=%s", valParsed["Valid"], valBody)
+	}
+}
+
+func cloudTrailLookupContains(out *cloudtrail.LookupEventsOutput, needle string) bool {
+	if out == nil {
+		return false
+	}
+	for _, ev := range out.Events {
+		if ev.EventId != nil && *ev.EventId == needle {
+			return true
+		}
+		if ev.CloudTrailEvent != nil && strings.Contains(*ev.CloudTrailEvent, needle) {
+			return true
+		}
+		raw, _ := json.Marshal(ev)
+		if strings.Contains(string(raw), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestELBv2CreateRulePathPattern(t *testing.T) {

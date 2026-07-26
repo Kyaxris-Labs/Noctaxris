@@ -471,3 +471,95 @@ func TestCodeBuildCodeCommitCreateAndStartWithoutCompute(t *testing.T) {
 		t.Fatalf("missing repo body=%q", denied.Body.String())
 	}
 }
+
+func TestCodeBuildCreateDeleteListWebhook(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "cb-wh", codebuildTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cb-wh"
+	create := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "wh-proj",
+		"serviceRole": roleARN,
+		"source": map[string]any{
+			"type":      "NO_SOURCE",
+			"buildspec": `{"version":"0.2","phases":{"build":{"commands":["echo hi"]}}}`,
+		},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateProject status=%d body=%q", create.Code, create.Body.String())
+	}
+
+	wh := mustCodeBuildJSON(t, handler, "CreateWebhook", map[string]any{
+		"projectName": "wh-proj",
+		"filterGroups": []any{
+			[]any{map[string]any{"type": "EVENT", "pattern": "PUSH"}},
+		},
+	}, now)
+	if wh.Code != http.StatusOK {
+		t.Fatalf("CreateWebhook status=%d body=%q", wh.Code, wh.Body.String())
+	}
+	if !strings.Contains(wh.Body.String(), "/_noctaxris/codebuild/webhook/") || !strings.Contains(wh.Body.String(), "secret") {
+		t.Fatalf("CreateWebhook body=%q", wh.Body.String())
+	}
+
+	list := mustCodeBuildJSON(t, handler, "ListWebhooks", map[string]any{
+		"projectName": "wh-proj",
+	}, now)
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "wh-proj") && !strings.Contains(list.Body.String(), "payloadUrl") {
+		t.Fatalf("ListWebhooks status=%d body=%q", list.Code, list.Body.String())
+	}
+	if !strings.Contains(list.Body.String(), "payloadUrl") {
+		t.Fatalf("ListWebhooks missing payloadUrl body=%q", list.Body.String())
+	}
+
+	del := mustCodeBuildJSON(t, handler, "DeleteWebhook", map[string]any{"projectName": "wh-proj"}, now)
+	if del.Code != http.StatusOK {
+		t.Fatalf("DeleteWebhook status=%d body=%q", del.Code, del.Body.String())
+	}
+	listAfter := mustCodeBuildJSON(t, handler, "ListWebhooks", map[string]any{"projectName": "wh-proj"}, now)
+	if listAfter.Code != http.StatusOK || strings.Contains(listAfter.Body.String(), `"secret"`) {
+		// empty webhooks array is fine
+		var parsed map[string]any
+		_ = json.Unmarshal(listAfter.Body.Bytes(), &parsed)
+		arr, _ := parsed["webhooks"].([]any)
+		if len(arr) != 0 {
+			t.Fatalf("ListWebhooks after delete=%q", listAfter.Body.String())
+		}
+	}
+}
+
+func TestCodeBuildConfigStubValidation(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+	mustCreateIAMRole(t, handler, "cb-stub", codebuildTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cb-stub"
+
+	badCache := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "bad-cache",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "echo"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+		"cache":       map[string]any{"type": "REDIS"},
+	}, now)
+	if badCache.Code != http.StatusBadRequest {
+		t.Fatalf("bad cache status=%d body=%q", badCache.Code, badCache.Body.String())
+	}
+
+	badVPC := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "bad-vpc",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "echo"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+		"vpcConfig":   map[string]any{"vpcId": "vpc-1"},
+	}, now)
+	if badVPC.Code != http.StatusBadRequest {
+		t.Fatalf("bad vpc status=%d body=%q", badVPC.Code, badVPC.Body.String())
+	}
+}

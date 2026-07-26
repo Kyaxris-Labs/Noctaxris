@@ -9,7 +9,10 @@ import {
 } from "@aws-sdk/client-appsync";
 import {
   CreateTrailCommand,
+  DeleteTrailCommand,
+  LookupEventsCommand,
   StartLoggingCommand,
+  StopLoggingCommand,
 } from "@aws-sdk/client-cloudtrail";
 import {
   CreateRoleCommand,
@@ -232,6 +235,138 @@ test("CloudTrail CreateTrail StartLogging S3 delivery list", async (t) => {
     delivered,
     `expected CloudTrail delivery object under AWSLogs/: ${JSON.stringify(listed.Contents)}`,
   );
+});
+
+test("CloudTrail InjectEvents LookupEvents SourceIP/EventName + ValidateLogs", async (t) => {
+  if (!(await requireReady(t))) return;
+  if (process.env.NOCTAXRIS_CLOUDTRAIL_INJECT !== "1") {
+    t.skip(
+      "set NOCTAXRIS_CLOUDTRAIL_INJECT=1 on the API process for lab InjectEvents",
+    );
+    return;
+  }
+  const s3 = newS3();
+  const ct = newCloudTrail();
+  const prefix = uniquePrefix();
+  const bucket = `${prefix}-ctinj`.toLowerCase();
+  const trailName = `${prefix}-inj`.slice(0, 64);
+  const eventID = `sdk-inj-${prefix}`;
+  const sourceIP = "198.51.100.44";
+
+  const inj = await signedJsonTarget(
+    "cloudtrail",
+    "NoctaxrisCloudTrail.InjectEvents",
+    {
+      Events: [
+        {
+          eventTime: "2026-07-20T15:00:00Z",
+          sourceIPAddress: sourceIP,
+          userIdentity: { type: "IAMUser", userName: "sdk-forensic" },
+          eventSource: "signin.amazonaws.com",
+          eventName: "ConsoleLogin",
+          eventID,
+          readOnly: false,
+        },
+      ],
+    },
+  );
+  assert.equal(inj.status, 200, inj.body);
+
+  const byIP = await ct.send(
+    new LookupEventsCommand({
+      LookupAttributes: [
+        { AttributeKey: "SourceIPAddress", AttributeValue: sourceIP },
+      ],
+      MaxResults: 10,
+    }),
+  );
+  const ipHit = (byIP.Events || []).some(
+    (ev) =>
+      ev.EventId === eventID ||
+      (ev.CloudTrailEvent || "").includes(eventID),
+  );
+  assert.ok(ipHit, `LookupEvents SourceIPAddress missing ${eventID}`);
+
+  const byName = await ct.send(
+    new LookupEventsCommand({
+      LookupAttributes: [
+        { AttributeKey: "EventName", AttributeValue: "ConsoleLogin" },
+      ],
+      MaxResults: 10,
+    }),
+  );
+  const nameHit = (byName.Events || []).some(
+    (ev) =>
+      ev.EventId === eventID ||
+      (ev.CloudTrailEvent || "").includes(eventID),
+  );
+  assert.ok(nameHit, `LookupEvents EventName missing ${eventID}`);
+
+  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+  t.after(async () => {
+    try {
+      await ct.send(new StopLoggingCommand({ Name: trailName }));
+    } catch {
+      /* ignore */
+    }
+    try {
+      await ct.send(new DeleteTrailCommand({ Name: trailName }));
+    } catch {
+      /* ignore */
+    }
+    try {
+      const listed = await s3.send(
+        new ListObjectsV2Command({ Bucket: bucket, Prefix: "AWSLogs/" }),
+      );
+      for (const obj of listed.Contents || []) {
+        if (!obj.Key) continue;
+        try {
+          await s3.send(
+            new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }),
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      await s3.send(new DeleteBucketCommand({ Bucket: bucket }));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  await ct.send(
+    new CreateTrailCommand({
+      Name: trailName,
+      S3BucketName: bucket,
+    }),
+  );
+  await ct.send(new StartLoggingCommand({ Name: trailName }));
+
+  const listed = await s3.send(
+    new ListObjectsV2Command({ Bucket: bucket, Prefix: "AWSLogs/" }),
+  );
+  const logKey = (listed.Contents || [])
+    .map((o) => o.Key || "")
+    .find(
+      (k) =>
+        k.includes("/CloudTrail/") && !k.includes("CloudTrail-Digest"),
+    );
+  assert.ok(
+    logKey,
+    `missing CloudTrail log object: ${JSON.stringify(listed.Contents)}`,
+  );
+
+  const validated = await signedJsonTarget(
+    "cloudtrail",
+    "CloudTrail_20131101.ValidateLogs",
+    { S3BucketName: bucket, S3ObjectKey: logKey },
+  );
+  assert.equal(validated.status, 200, validated.body);
+  assert.equal(validated.json?.Valid, true, validated.body);
 });
 
 test("ELBv2 CreateRule path-pattern (no /alb/ invoke)", async (t) => {

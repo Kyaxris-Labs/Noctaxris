@@ -83,7 +83,10 @@ func validateNestedOpenSearchHost(host string) error {
 	return store.ValidateNestedOpenSearchHost(host)
 }
 
-// validateOpenSearchLabSearchBody allowlists query.match, query.match_all, and size only.
+// validateOpenSearchLabSearchBody allowlists a lite _search DSL:
+// top-level query/size/aggs|aggregations/sort; query.match|match_all|bool;
+// bool must/should/must_not/filter with nested match|match_all only;
+// aggs terms|value_count lite; sort field+order only. Fail-closed otherwise.
 func validateOpenSearchLabSearchBody(body []byte) error {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
@@ -95,25 +98,14 @@ func validateOpenSearchLabSearchBody(body []byte) error {
 	}
 	for k := range m {
 		switch k {
-		case "query", "size":
+		case "query", "size", "aggs", "aggregations", "sort":
 		default:
-			return fmt.Errorf("unsupported search key %q (allowed: query, size)", k)
+			return fmt.Errorf("unsupported search key %q (allowed: query, size, aggs, aggregations, sort)", k)
 		}
 	}
 	if raw, ok := m["query"]; ok {
-		qm, ok := raw.(map[string]any)
-		if !ok {
-			return fmt.Errorf("query must be an object")
-		}
-		if len(qm) == 0 {
-			return fmt.Errorf("query object is empty")
-		}
-		for k := range qm {
-			switch k {
-			case "match", "match_all":
-			default:
-				return fmt.Errorf("unsupported query type %q (allowed: match, match_all)", k)
-			}
+		if err := validateOpenSearchLabQuery(raw); err != nil {
+			return err
 		}
 	}
 	if raw, ok := m["size"]; ok {
@@ -121,6 +113,236 @@ func validateOpenSearchLabSearchBody(body []byte) error {
 		case float64, json.Number:
 		default:
 			return fmt.Errorf("size must be a number")
+		}
+	}
+	if raw, ok := m["aggs"]; ok {
+		if err := validateOpenSearchLabAggs(raw); err != nil {
+			return err
+		}
+	}
+	if raw, ok := m["aggregations"]; ok {
+		if err := validateOpenSearchLabAggs(raw); err != nil {
+			return err
+		}
+	}
+	if raw, ok := m["sort"]; ok {
+		if err := validateOpenSearchLabSort(raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOpenSearchLabQuery(raw any) error {
+	qm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("query must be an object")
+	}
+	if len(qm) == 0 {
+		return fmt.Errorf("query object is empty")
+	}
+	for k, v := range qm {
+		switch k {
+		case "match", "match_all":
+		case "bool":
+			if err := validateOpenSearchLabBool(v); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported query type %q (allowed: match, match_all, bool)", k)
+		}
+	}
+	return nil
+}
+
+func validateOpenSearchLabBool(raw any) error {
+	bm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("bool must be an object")
+	}
+	if len(bm) == 0 {
+		return fmt.Errorf("bool object is empty")
+	}
+	for k, v := range bm {
+		switch k {
+		case "must", "should", "must_not", "filter":
+			if err := validateOpenSearchLabBoolClauses(k, v); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unsupported bool key %q (allowed: must, should, must_not, filter)", k)
+		}
+	}
+	return nil
+}
+
+func validateOpenSearchLabBoolClauses(clause string, raw any) error {
+	switch v := raw.(type) {
+	case map[string]any:
+		return validateOpenSearchLabLeafQuery(clause, v)
+	case []any:
+		for i, item := range v {
+			qm, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("bool.%s[%d] must be an object", clause, i)
+			}
+			if err := validateOpenSearchLabLeafQuery(clause, qm); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("bool.%s must be an object or array", clause)
+	}
+}
+
+// validateOpenSearchLabLeafQuery allowlists only match/match_all under bool clauses (no nested bool).
+func validateOpenSearchLabLeafQuery(clause string, qm map[string]any) error {
+	if len(qm) == 0 {
+		return fmt.Errorf("bool.%s query object is empty", clause)
+	}
+	for k := range qm {
+		switch k {
+		case "match", "match_all":
+		default:
+			return fmt.Errorf("unsupported bool.%s query type %q (allowed: match, match_all)", clause, k)
+		}
+	}
+	return nil
+}
+
+func validateOpenSearchLabAggs(raw any) error {
+	am, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("aggs must be an object")
+	}
+	for name, def := range am {
+		dm, ok := def.(map[string]any)
+		if !ok {
+			return fmt.Errorf("agg %q must be an object", name)
+		}
+		if len(dm) == 0 {
+			return fmt.Errorf("agg %q object is empty", name)
+		}
+		for k, v := range dm {
+			switch k {
+			case "terms":
+				if err := validateOpenSearchLabTermsAgg(name, v); err != nil {
+					return err
+				}
+			case "value_count":
+				if err := validateOpenSearchLabValueCountAgg(name, v); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unsupported agg type %q on %q (allowed: terms, value_count)", k, name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateOpenSearchLabTermsAgg(name string, raw any) error {
+	tm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("agg %q terms must be an object", name)
+	}
+	if len(tm) == 0 {
+		return fmt.Errorf("agg %q terms object is empty", name)
+	}
+	for k, v := range tm {
+		switch k {
+		case "field":
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("agg %q terms.field must be a string", name)
+			}
+		case "size":
+			switch v.(type) {
+			case float64, json.Number:
+			default:
+				return fmt.Errorf("agg %q terms.size must be a number", name)
+			}
+		default:
+			return fmt.Errorf("unsupported terms key %q on agg %q (allowed: field, size)", k, name)
+		}
+	}
+	if _, ok := tm["field"]; !ok {
+		return fmt.Errorf("agg %q terms requires field", name)
+	}
+	return nil
+}
+
+func validateOpenSearchLabValueCountAgg(name string, raw any) error {
+	vm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("agg %q value_count must be an object", name)
+	}
+	if len(vm) == 0 {
+		return fmt.Errorf("agg %q value_count object is empty", name)
+	}
+	for k, v := range vm {
+		switch k {
+		case "field":
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("agg %q value_count.field must be a string", name)
+			}
+		default:
+			return fmt.Errorf("unsupported value_count key %q on agg %q (allowed: field)", k, name)
+		}
+	}
+	if _, ok := vm["field"]; !ok {
+		return fmt.Errorf("agg %q value_count requires field", name)
+	}
+	return nil
+}
+
+func validateOpenSearchLabSort(raw any) error {
+	switch v := raw.(type) {
+	case []any:
+		for i, item := range v {
+			if err := validateOpenSearchLabSortClause(item); err != nil {
+				return fmt.Errorf("sort[%d]: %w", i, err)
+			}
+		}
+		return nil
+	case map[string]any:
+		return validateOpenSearchLabSortClause(v)
+	default:
+		return fmt.Errorf("sort must be an object or array")
+	}
+}
+
+func validateOpenSearchLabSortClause(raw any) error {
+	sm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("sort clause must be an object")
+	}
+	if len(sm) != 1 {
+		return fmt.Errorf("sort clause must have exactly one field")
+	}
+	for field, spec := range sm {
+		if field == "" {
+			return fmt.Errorf("sort field must be non-empty")
+		}
+		switch s := spec.(type) {
+		case map[string]any:
+			if len(s) == 0 {
+				return fmt.Errorf("sort.%s object is empty", field)
+			}
+			for k, v := range s {
+				if k != "order" {
+					return fmt.Errorf("unsupported sort key %q on %q (allowed: order)", k, field)
+				}
+				order, ok := v.(string)
+				if !ok {
+					return fmt.Errorf("sort.%s.order must be a string", field)
+				}
+				if order != "asc" && order != "desc" {
+					return fmt.Errorf("sort.%s.order must be asc or desc", field)
+				}
+			}
+		default:
+			return fmt.Errorf("sort.%s must be an object with order", field)
 		}
 	}
 	return nil

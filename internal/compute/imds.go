@@ -27,8 +27,9 @@ const (
 	// ECSIMDSContainerName is the long-lived DinD sidecar on noctaxris-ecs.
 	ECSIMDSContainerName = "noctaxris-ecs-imds"
 
-	// ECSIMDSImage is the allowlisted alpine base for the credentials httpd.
-	ECSIMDSImage = "alpine:3.20"
+	// ECSIMDSImage is the allowlisted base for the credentials HTTP mirror.
+	// alpine:3.20 busybox has no httpd applet (sidecar exited 127); python slim is pinned.
+	ECSIMDSImage = "python:3.12-slim"
 
 	ecsIMDSRelativePrefix = "/v2/credentials/"
 	ecsIMDSDocRoot        = "/www"
@@ -148,7 +149,7 @@ func (c *Client) ensureECSIMDSMirror(ctx context.Context) (string, error) {
 	}
 
 	cmd := fmt.Sprintf(
-		"mkdir -p %s%s && exec httpd -f -p %d -h %s",
+		"mkdir -p %s%s && exec python -m http.server %d --bind 0.0.0.0 --directory %s",
 		ecsIMDSDocRoot, ecsIMDSRelativePrefix, ECSIMDSListenPort, ecsIMDSDocRoot,
 	)
 	sec := nestedTaskSecurity(64)
@@ -177,7 +178,12 @@ func (c *Client) ensureECSIMDSMirror(ctx context.Context) (string, error) {
 	}
 	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, ECSIMDSContainerName)
 	if err != nil {
-		return "", fmt.Errorf("compute: ecs imds create: %w", err)
+		// Stale name after a failed remove or race: force remove and retry once.
+		_ = c.removeECSIMDSContainer(ctx)
+		create, err = c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, ECSIMDSContainerName)
+		if err != nil {
+			return "", fmt.Errorf("compute: ecs imds create: %w", err)
+		}
 	}
 	if err := c.cli.ContainerStart(ctx, create.ID, container.StartOptions{}); err != nil {
 		_ = c.cli.ContainerRemove(context.Background(), create.ID, container.RemoveOptions{Force: true})

@@ -4,7 +4,7 @@
 
 Lab LookupEvents over the existing JSONL audit under the data root `cloudtrail/` directory, plus CreateTrail with StartLogging delivery to in-account S3 and/or CloudWatch Logs. After StartLogging, new JSONL lines are shipped continuously to the same destinations. Identity authz. PassRole when `CloudWatchLogsRoleArn` is set (`cloudtrail.amazonaws.com` trust).
 
-Optional lab inject (`cloudtrail:InjectEvents`) seeds forensic-shaped JSONL events when explicitly enabled. Lab `InjectInsightsEvents` seeds insight-shaped records for `LookupEvents` with `EventCategory=insight` (no Insights ML engine). Live audit lines include `userIdentity.userName`, richer safe `requestParameters`, and `resources[]` on key S3/Lambda paths. X-Forwarded-For for audit `sourceIPAddress` is opt-in only.
+Optional lab inject (`cloudtrail:InjectEvents`) seeds forensic-shaped JSONL events when explicitly enabled. Lab `InjectInsightsEvents` seeds insight-shaped records for `LookupEvents` with `EventCategory=insight` (no Insights ML engine). Live audit lines include `userIdentity.userName`, richer safe `requestParameters`, and `resources[]` on key S3/Lambda/Secrets paths. X-Forwarded-For for audit `sourceIPAddress` is opt-in only.
 
 ## Implemented
 
@@ -23,8 +23,8 @@ Filters for LookupEvents: `StartTime` / `EndTime`, one `LookupAttributes` entry 
 Success and error audit lines write AWS-shaped fields into `$DATAROOT/cloudtrail/events.jsonl`:
 
 - `userIdentity` includes `type`, `accountId`, `accessKeyId`, `arn`, and `userName` (root / IAM user / role session name)
-- `requestParameters` always includes `httpMethod` and `path`; also `xAmzTarget` or query `action` when present. Handlers may add safe scalars (for example S3 `bucketName`/`key`, Lambda `functionName`). Bodies, passwords, tokens, and secrets are not logged
-- `resources[]` on CreateBucket / PutObject / CreateFunction (`accountId`, `type`, `ARN`)
+- `resources[]` on CreateBucket / PutObject / CreateFunction / CreateSecret / DeleteSecret (`accountId`, `type`, `ARN`)
+- `requestParameters` always includes `httpMethod` and `path`; also `xAmzTarget` or query `action` when present. Handlers may add safe scalars (for example S3 `bucketName`/`key`, Lambda `functionName`, Secrets `name`/`secretId`). Bodies, passwords, tokens, and secrets are not logged
 - `sourceIPAddress` defaults to the TCP peer (`RemoteAddr`). Set `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1` to use the first `X-Forwarded-For` hop for audit only. Authz `aws:SourceIp` always stays the TCP peer
 - `eventCategory` / `managementEvent` default to Management / true on live audit lines
 - AssumedRole / Federated callers may include `userIdentity.sessionContext.sessionIssuer` lite
@@ -128,6 +128,28 @@ aws cloudtrail stop-logging --name lab-trail --endpoint-url "$EP"
 ```
 
 PassRole for the Logs role requires `cloudtrail.amazonaws.com` trust and caller `iam:PassRole`. Skip Logs branch when only testing S3 delivery.
+
+### InjectEvents + ValidateLogs
+
+Requires `NOCTAXRIS_CLOUDTRAIL_INJECT=1` on the API process (default off returns AccessDenied). Seed a forensic line with signed `NoctaxrisCloudTrail.InjectEvents`, then filter with LookupEvents (`SourceIPAddress` / `EventName`). After CreateTrail + StartLogging, call lab `ValidateLogs` against a delivered log object key to assert the digest sidecar (`Valid: true`).
+
+```bash
+# API process must have NOCTAXRIS_CLOUDTRAIL_INJECT=1
+# Inject via SigV4 POST (X-Amz-Target: NoctaxrisCloudTrail.InjectEvents), then:
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=SourceIPAddress,AttributeValue=198.51.100.10 \
+  --endpoint-url "$EP"
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin \
+  --endpoint-url "$EP"
+
+# After StartLogging, pick a /CloudTrail/ object key (not CloudTrail-Digest) and:
+# SigV4 POST CloudTrail_20131101.ValidateLogs
+#   {"S3BucketName":"ct-lab","S3ObjectKey":"<log-key>"}
+# expect {"Valid":true}
+```
+
+SDK suites (Go `workflow_governance_test.go`, Node `workflow.test.mjs`, Python `test_cloudtrail.py`) skip the inject path unless `NOCTAXRIS_CLOUDTRAIL_INJECT=1`.
 
 ## Not yet / deferred
 

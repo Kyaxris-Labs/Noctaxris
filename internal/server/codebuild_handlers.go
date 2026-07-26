@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +61,12 @@ func (s *Server) handleCodeBuild(
 		s.codebuildBatchGetBuilds(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCodeBuildListBuilds:
 		s.codebuildListBuilds(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodeBuildCreateWebhook:
+		s.codebuildCreateWebhook(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodeBuildDeleteWebhook:
+		s.codebuildDeleteWebhook(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodeBuildListWebhooks:
+		s.codebuildListWebhooks(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCodeBuildError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CodeBuild action is not implemented.", readOnly, eventID, verified)
@@ -89,6 +98,12 @@ func codebuildAction(action string) string {
 		return catalog.ActionCodeBuildBatchGetBuilds
 	case "ListBuilds":
 		return catalog.ActionCodeBuildListBuilds
+	case "CreateWebhook":
+		return catalog.ActionCodeBuildCreateWebhook
+	case "DeleteWebhook":
+		return catalog.ActionCodeBuildDeleteWebhook
+	case "ListWebhooks":
+		return catalog.ActionCodeBuildListWebhooks
 	default:
 		return action
 	}
@@ -163,6 +178,48 @@ func parseCodeBuildConfigStubs(params map[string]any) (vpc, cache, fleet map[str
 	}
 	reportArns = stringSliceParam(params["reportGroupArns"])
 	return vpc, cache, fleet, secondary, reportArns
+}
+
+// validateCodeBuildConfigStubs fail-closes invalid stub shapes. No runtime attach.
+func validateCodeBuildConfigStubs(vpc, cache, fleet map[string]any, reportArns []string) error {
+	if cache != nil {
+		typ := strings.ToUpper(strings.TrimSpace(stringParam(cache["type"])))
+		switch typ {
+		case "NO_CACHE", "LOCAL", "S3":
+		case "":
+			return fmt.Errorf("%w: cache.type is required", store.ErrCodeBuildInvalidInput)
+		default:
+			return fmt.Errorf("%w: cache.type must be NO_CACHE, LOCAL, or S3", store.ErrCodeBuildInvalidInput)
+		}
+	}
+	if vpc != nil {
+		if strings.TrimSpace(stringParam(vpc["vpcId"])) == "" {
+			return fmt.Errorf("%w: vpcConfig.vpcId is required", store.ErrCodeBuildInvalidInput)
+		}
+		subnets, ok := vpc["subnets"].([]any)
+		if !ok || len(subnets) == 0 {
+			return fmt.Errorf("%w: vpcConfig.subnets must be a non-empty array", store.ErrCodeBuildInvalidInput)
+		}
+	}
+	if fleet != nil {
+		arn := strings.TrimSpace(stringParam(fleet["fleetArn"]))
+		if arn == "" {
+			arn = strings.TrimSpace(stringParam(fleet["arn"]))
+		}
+		if arn == "" {
+			return fmt.Errorf("%w: fleet.fleetArn is required", store.ErrCodeBuildInvalidInput)
+		}
+		if !strings.HasPrefix(arn, "arn:") {
+			return fmt.Errorf("%w: fleet.fleetArn must be an ARN", store.ErrCodeBuildInvalidInput)
+		}
+	}
+	for i, arn := range reportArns {
+		arn = strings.TrimSpace(arn)
+		if arn == "" || !strings.HasPrefix(arn, "arn:") {
+			return fmt.Errorf("%w: reportGroupArns[%d] must be an ARN", store.ErrCodeBuildInvalidInput, i)
+		}
+	}
+	return nil
 }
 
 func decodeCodeBuildStubObject(raw string) map[string]any {
@@ -326,6 +383,11 @@ func (s *Server) codebuildCreateProject(
 	image := stringParam(env["image"])
 	envVars := parseCodeBuildEnvVars(env["environmentVariables"])
 	vpc, cache, fleet, secondary, reportArns := parseCodeBuildConfigStubs(params)
+	if err := validateCodeBuildConfigStubs(vpc, cache, fleet, reportArns); err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 
 	resource := store.CodeBuildProjectARN(s.codebuildRegion(verified), verified.AccountID, name)
 	if name == "" {
@@ -479,6 +541,11 @@ func (s *Server) codebuildUpdateProject(
 	}
 	if _, ok := params["reportGroupArns"]; !ok {
 		reportArns = decodeCodeBuildStubStringSlice(existing.ReportArnsJSON)
+	}
+	if err := validateCodeBuildConfigStubs(vpc, cache, fleet, reportArns); err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			err.Error(), readOnly, eventID, verified)
+		return
 	}
 
 	p, err := s.store.UpdateCodeBuildProject(verified.AccountID, s.codebuildRegion(verified), store.UpdateCodeBuildProjectInput{
@@ -1007,15 +1074,46 @@ func (s *Server) reapCodeBuild(accountID, buildID, projectName, containerID stri
 	_ = s.store.SetCodeBuildBuildLogs(accountID, buildID, logsText, logGroup, logStream)
 	s.shipCodeBuildLogsBestEffort(accountID, logGroup, logStream, logsText)
 
+	var workspaceTar []byte
+	if status == store.CodeBuildStatusSucceeded {
+		workspaceTar = s.harvestCodeBuildWorkspaceTar(ctx, cli, containerID)
+	}
+
 	_ = cli.StopECSTask(context.Background(), containerID)
 	_ = s.store.SetCodeBuildBuildRuntime(accountID, buildID, containerID, status, time.Now().UTC().Format(time.RFC3339))
 
 	if status == store.CodeBuildStatusSucceeded {
 		builds, err := s.store.BatchGetCodeBuildBuilds(accountID, []string{buildID})
 		if err == nil && len(builds) == 1 {
-			_, _ = s.store.PublishCodeBuildBuildArtifacts(accountID, builds[0])
+			_, _ = s.store.PublishCodeBuildBuildArtifacts(accountID, builds[0], workspaceTar)
 		}
 	}
+}
+
+// harvestCodeBuildWorkspaceTar Exec+tar+/base64 of /codebuild/src before stop (never CopyFromContainer).
+func (s *Server) harvestCodeBuildWorkspaceTar(ctx context.Context, cli *compute.Client, containerID string) []byte {
+	if cli == nil || strings.TrimSpace(containerID) == "" {
+		return nil
+	}
+	res, err := cli.Exec(ctx, compute.ExecOpts{
+		ContainerID: containerID,
+		Cmd: []string{
+			"/bin/sh", "-c",
+			`if [ -d /codebuild/src ] && [ "$(ls -A /codebuild/src 2>/dev/null)" ]; then tar -C /codebuild/src -cf - . | base64 | tr -d '\n'; fi`,
+		},
+	})
+	if err != nil || res.ExitCode != 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(res.Stdout)
+	if raw == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(decoded) == 0 {
+		return nil
+	}
+	return decoded
 }
 
 func (s *Server) shipCodeBuildLogsBestEffort(accountID, group, stream, logsText string) {
@@ -1094,6 +1192,153 @@ func (s *Server) codebuildListBuilds(
 	}
 	s.writeCodeBuildOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, codebuildEventSource, "ListBuilds", readOnly)
+}
+
+func (s *Server) codebuildLabWebhookPayloadURL(accountID, projectName string) string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("NOCTAXRIS_PUBLIC_ENDPOINT")), "/")
+	if base == "" {
+		base = defaultCodeBuildEndpoint
+	}
+	return base + store.LabCodeBuildWebhookPathPrefix + "/" + accountID + "/" + projectName
+}
+
+func (s *Server) codebuildCreateWebhook(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	projectName := stringParam(params["projectName"])
+	resource := store.CodeBuildProjectARN(s.codebuildRegion(verified), verified.AccountID, projectName)
+	if projectName == "" {
+		resource = "*"
+	}
+	if !s.authorize(verified, catalog.ActionCodeBuildCreateWebhook, resource) {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codebuild:CreateWebhook.", readOnly, eventID, verified)
+		return
+	}
+	filtersJSON := "[]"
+	if raw, ok := params["filterGroups"]; ok && raw != nil {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+				"filterGroups must be JSON-serializable.", readOnly, eventID, verified)
+			return
+		}
+		filtersJSON = string(b)
+	}
+	secret := stringParam(params["secret"])
+	if secret == "" {
+		var seed [16]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to mint webhook secret.", readOnly, eventID, verified)
+			return
+		}
+		secret = hex.EncodeToString(seed[:])
+	}
+	wh, err := s.store.UpsertCodeBuildWebhook(verified.AccountID, store.CodeBuildWebhook{
+		ProjectName:      projectName,
+		FilterGroupsJSON: filtersJSON,
+		Secret:           secret,
+		PayloadJSON:      "{}",
+	})
+	if errors.Is(err, store.ErrCodeBuildProjectNotFound) {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Project not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCodeBuildInvalidInput) {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to create webhook.", readOnly, eventID, verified)
+		return
+	}
+	payloadURL := s.codebuildLabWebhookPayloadURL(verified.AccountID, wh.ProjectName)
+	payload, err := cbsvc.CreateWebhookJSON(wh, payloadURL)
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeCodeBuildOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codebuildEventSource, "CreateWebhook", readOnly)
+}
+
+func (s *Server) codebuildDeleteWebhook(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	projectName := stringParam(params["projectName"])
+	resource := store.CodeBuildProjectARN(s.codebuildRegion(verified), verified.AccountID, projectName)
+	if projectName == "" {
+		resource = "*"
+	}
+	if !s.authorize(verified, catalog.ActionCodeBuildDeleteWebhook, resource) {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codebuild:DeleteWebhook.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteCodeBuildWebhook(verified.AccountID, projectName)
+	if errors.Is(err, store.ErrCodeBuildWebhookNotFound) {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Webhook not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete webhook.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := cbsvc.DeleteWebhookJSON()
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeCodeBuildOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codebuildEventSource, "DeleteWebhook", readOnly)
+}
+
+func (s *Server) codebuildListWebhooks(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionCodeBuildListWebhooks, "*") {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codebuild:ListWebhooks.", readOnly, eventID, verified)
+		return
+	}
+	webhooks, err := s.store.ListCodeBuildWebhooks(verified.AccountID)
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list webhooks.", readOnly, eventID, verified)
+		return
+	}
+	projectFilter := stringParam(params["projectName"])
+	if projectFilter != "" {
+		filtered := webhooks[:0]
+		for _, wh := range webhooks {
+			if wh.ProjectName == projectFilter {
+				filtered = append(filtered, wh)
+			}
+		}
+		webhooks = filtered
+	}
+	accountID := verified.AccountID
+	payload, err := cbsvc.ListWebhooksJSON(webhooks, func(projectName string) string {
+		return s.codebuildLabWebhookPayloadURL(accountID, projectName)
+	})
+	if err != nil {
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeCodeBuildOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codebuildEventSource, "ListWebhooks", readOnly)
 }
 
 func (s *Server) writeCodeBuildOK(w http.ResponseWriter, requestID string, payload []byte) {

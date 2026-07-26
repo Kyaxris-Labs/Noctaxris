@@ -93,6 +93,52 @@ func ListBuildsJSON(ids []string) ([]byte, error) {
 	return json.Marshal(map[string]any{"ids": ids})
 }
 
+// CreateWebhookJSON builds a CreateWebhook response.
+// payloadURL is the lab receive path (not a GitHub SaaS URL).
+func CreateWebhookJSON(wh store.CodeBuildWebhook, payloadURL string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"webhook": webhookMap(wh, payloadURL),
+	})
+}
+
+// DeleteWebhookJSON builds an empty DeleteWebhook response.
+func DeleteWebhookJSON() ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+// ListWebhooksJSON builds a ListWebhooks response.
+func ListWebhooksJSON(webhooks []store.CodeBuildWebhook, payloadURLFor func(projectName string) string) ([]byte, error) {
+	items := make([]map[string]any, 0, len(webhooks))
+	for _, wh := range webhooks {
+		url := ""
+		if payloadURLFor != nil {
+			url = payloadURLFor(wh.ProjectName)
+		}
+		items = append(items, webhookMap(wh, url))
+	}
+	if items == nil {
+		items = []map[string]any{}
+	}
+	return json.Marshal(map[string]any{"webhooks": items})
+}
+
+func webhookMap(wh store.CodeBuildWebhook, payloadURL string) map[string]any {
+	var groups any = []any{}
+	if strings.TrimSpace(wh.FilterGroupsJSON) != "" {
+		_ = json.Unmarshal([]byte(wh.FilterGroupsJSON), &groups)
+	}
+	m := map[string]any{
+		"url":          payloadURL,
+		"payloadUrl":   payloadURL,
+		"filterGroups": groups,
+		"status":       "ACTIVE",
+	}
+	if wh.Secret != "" {
+		m["secret"] = wh.Secret
+	}
+	return m
+}
+
 func projectMap(p store.CodeBuildProject) map[string]any {
 	var artifacts map[string]any
 	_ = json.Unmarshal([]byte(p.Artifacts), &artifacts)
@@ -120,16 +166,37 @@ func projectMap(p store.CodeBuildProject) map[string]any {
 		"created":   p.CreatedAt,
 	}
 	if v := decodeOptionalJSON(p.VpcConfigJSON); v != nil {
-		m["vpcConfig"] = v
+		if vm, ok := v.(map[string]any); ok {
+			if _, has := vm["status"]; !has {
+				vm["status"] = "ACTIVE"
+			}
+			m["vpcConfig"] = vm
+		} else {
+			m["vpcConfig"] = v
+		}
 	}
 	if v := decodeOptionalJSON(p.CacheJSON); v != nil {
-		m["cache"] = v
+		if cm, ok := v.(map[string]any); ok {
+			if _, has := cm["status"]; !has {
+				cm["status"] = "ACTIVE"
+			}
+			m["cache"] = cm
+		} else {
+			m["cache"] = v
+		}
 	}
 	if v := decodeOptionalJSON(p.SecondarySourcesJSON); v != nil {
 		m["secondarySources"] = v
 	}
 	if v := decodeOptionalJSON(p.FleetJSON); v != nil {
-		m["fleet"] = v
+		if fm, ok := v.(map[string]any); ok {
+			if _, has := fm["status"]; !has {
+				fm["status"] = "ACTIVE"
+			}
+			m["fleet"] = fm
+		} else {
+			m["fleet"] = v
+		}
 	}
 	if v := decodeOptionalJSON(p.ReportArnsJSON); v != nil {
 		m["reportGroupArns"] = v

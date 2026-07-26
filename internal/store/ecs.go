@@ -176,6 +176,30 @@ func normalizeECSClusterName(name string) string {
 	if name == "" {
 		return DefaultECSClusterName
 	}
+	// Accept cluster ARN: arn:aws:ecs:region:account:cluster/name
+	const marker = ":cluster/"
+	if i := strings.Index(name, marker); i >= 0 {
+		name = name[i+len(marker):]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return DefaultECSClusterName
+	}
+	return name
+}
+
+// normalizeECSServiceName accepts a bare service name or a service ARN
+// (arn:aws:ecs:region:account:service/cluster/name).
+func normalizeECSServiceName(name string) string {
+	name = strings.TrimSpace(name)
+	const marker = ":service/"
+	if i := strings.Index(name, marker); i >= 0 {
+		rest := name[i+len(marker):]
+		if slash := strings.LastIndex(rest, "/"); slash >= 0 && slash+1 < len(rest) {
+			return strings.TrimSpace(rest[slash+1:])
+		}
+		return strings.TrimSpace(rest)
+	}
 	return name
 }
 

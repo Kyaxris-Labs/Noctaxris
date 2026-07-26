@@ -50,6 +50,14 @@ func TestOpenSearchLabSearchBodyAllowlist(t *testing.T) {
 		`{"size":10}`,
 		`{"query":{"match_all":{}}}`,
 		`{"query":{"match":{"title":"hello"}},"size":5}`,
+		`{"query":{"bool":{"must":[]}}}`,
+		`{"query":{"bool":{"must":[{"match":{"title":"hello"}}],"filter":{"match_all":{}},"should":[{"match":{"tag":"a"}}],"must_not":[{"match":{"tag":"b"}}]}}}`,
+		`{"aggs":{}}`,
+		`{"aggs":{"by_tag":{"terms":{"field":"tag","size":5}},"n":{"value_count":{"field":"id"}}}}`,
+		`{"aggregations":{"n":{"value_count":{"field":"id"}}}}`,
+		`{"query":{"match_all":{}},"sort":[]}`,
+		`{"sort":[{"title":{"order":"asc"}},{"price":{"order":"desc"}}]}`,
+		`{"query":{"bool":{"must":{"match":{"title":"x"}}}},"aggs":{"by_tag":{"terms":{"field":"tag"}}},"sort":{"title":{"order":"asc"}},"size":3}`,
 	}
 	for _, body := range okBodies {
 		if err := validateOpenSearchLabSearchBody([]byte(body)); err != nil {
@@ -57,11 +65,19 @@ func TestOpenSearchLabSearchBodyAllowlist(t *testing.T) {
 		}
 	}
 	badBodies := []string{
-		`{"aggs":{}}`,
-		`{"query":{"bool":{"must":[]}}}`,
 		`{"query":{"term":{"a":1}}}`,
 		`{"_source":true}`,
-		`{"query":{"match_all":{}},"sort":[]}`,
+		`{"query":{"bool":{"must":[{"term":{"a":1}}]}}}`,
+		`{"query":{"bool":{"minimum_should_match":1}}}`,
+		`{"query":{"bool":{"must":[{"bool":{"must":[{"match_all":{}}]}}]}}}`,
+		`{"aggs":{"x":{"sum":{"field":"n"}}}}`,
+		`{"aggs":{"x":{"terms":{"field":"tag","script":"1"}}}}`,
+		`{"aggs":{"x":{"value_count":{"field":"id","missing":0}}}}`,
+		`{"aggs":{"x":{"terms":{"field":"tag"},"aggs":{"y":{"value_count":{"field":"id"}}}}}}`,
+		`{"sort":["title"]}`,
+		`{"sort":[{"title":{"order":"asc","mode":"avg"}}]}`,
+		`{"sort":[{"title":"asc"}]}`,
+		`{"highlight":{}}`,
 		`not-json`,
 	}
 	for _, body := range badBodies {
@@ -172,7 +188,7 @@ func TestOpenSearchLabRejectUnknownDSL(t *testing.T) {
 	})
 	t.Cleanup(func() { openSearchLabTransport = prev })
 
-	body := []byte(`{"query":{"bool":{"must":[]}}}`)
+	body := []byte(`{"query":{"term":{"a":1}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/opensearch/labdsl/lab/idx/_search", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	srv.handleOpenSearchLabQuery(rec, req, body, "req", "evt", nil, false)

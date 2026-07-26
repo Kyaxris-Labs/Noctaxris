@@ -22,9 +22,35 @@ var runtimeImageMap = map[string]FunctionImages{
 		Preferred: "public.ecr.aws/lambda/python:3.11",
 		Fallback:  "python:3.11-slim",
 	},
+	store.LambdaRuntimePython313: {
+		Preferred: "public.ecr.aws/lambda/python:3.13",
+		Fallback:  "python:3.13-slim",
+	},
+	store.LambdaRuntimePython314: {
+		Preferred: "public.ecr.aws/lambda/python:3.14",
+		Fallback:  "python:3.14-slim",
+	},
 	store.LambdaRuntimeNodejs20x: {
 		Preferred: "public.ecr.aws/lambda/nodejs:20",
 		Fallback:  "node:20-slim",
+	},
+	store.LambdaRuntimeNodejs22x: {
+		Preferred: "public.ecr.aws/lambda/nodejs:22",
+		Fallback:  "node:22-slim",
+	},
+	store.LambdaRuntimeNodejs24x: {
+		Preferred: "public.ecr.aws/lambda/nodejs:24",
+		Fallback:  "node:24-slim",
+	},
+	// Zip one-shot compiles a reflection bootstrap with javac. Prefer Temurin JDK
+	// (javac present); fall back to AWS Lambda Java bases when the JDK pull fails.
+	store.LambdaRuntimeJava21: {
+		Preferred: "eclipse-temurin:21-jdk",
+		Fallback:  "public.ecr.aws/lambda/java:21",
+	},
+	store.LambdaRuntimeJava25: {
+		Preferred: "eclipse-temurin:25-jdk",
+		Fallback:  "public.ecr.aws/lambda/java:25",
 	},
 }
 
@@ -92,10 +118,122 @@ result = fn(event, None)
 print(json.dumps(result))
 `
 
+// oneShotJavaShell writes a reflection bootstrap, compiles it with javac (needs JDK),
+// and invokes HANDLER as package.Class::method (default method handleRequest).
+// Lab smoke: public static String handleRequest(String in) { return in; }
+const oneShotJavaShell = `set -eu
+if ! command -v javac >/dev/null 2>&1; then
+  echo "noctaxris: javac not found in image (need JDK for Java zip one-shot)" >&2
+  exit 1
+fi
+cat > /tmp/NoctaxrisInvoke.java <<'JAVA'
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public class NoctaxrisInvoke {
+  public static void main(String[] args) throws Exception {
+    String handler = System.getenv("AWS_LAMBDA_FUNCTION_HANDLER");
+    if (handler == null || handler.isEmpty()) {
+      handler = System.getenv("HANDLER");
+    }
+    if (handler == null || handler.isEmpty()) {
+      System.err.println("handler required (package.Class::method or package.Class)");
+      System.exit(1);
+    }
+    String className;
+    String methodName = "handleRequest";
+    int sep = handler.indexOf("::");
+    if (sep >= 0) {
+      className = handler.substring(0, sep).trim();
+      String m = handler.substring(sep + 2).trim();
+      if (!m.isEmpty()) {
+        methodName = m;
+      }
+    } else {
+      className = handler.trim();
+    }
+    if (className.isEmpty() || !className.contains(".")) {
+      System.err.println("handler must be package.Class[::method]");
+      System.exit(1);
+    }
+    String eventPath = System.getenv("NOCTAXRIS_EVENT_PATH");
+    if (eventPath == null || eventPath.isEmpty()) {
+      eventPath = "/var/task/.noctaxris-event.json";
+    }
+    String event = Files.readString(Path.of(eventPath), StandardCharsets.UTF_8);
+    Class<?> cls = Class.forName(className);
+    Method method = findMethod(cls, methodName);
+    Object[] params = buildParams(method, event);
+    Object target = null;
+    if (!Modifier.isStatic(method.getModifiers())) {
+      target = cls.getDeclaredConstructor().newInstance();
+    }
+    Object result = method.invoke(target, params);
+    if (result == null) {
+      System.out.println("null");
+    } else if (result instanceof String) {
+      System.out.println((String) result);
+    } else {
+      System.out.println(String.valueOf(result));
+    }
+  }
+
+  private static Method findMethod(Class<?> cls, String name) throws NoSuchMethodException {
+    Method stringOne = null;
+    Method any = null;
+    for (Method m : cls.getMethods()) {
+      if (!m.getName().equals(name)) {
+        continue;
+      }
+      Class<?>[] pts = m.getParameterTypes();
+      if (pts.length == 1 && pts[0] == String.class) {
+        return m;
+      }
+      if (pts.length == 1 && stringOne == null) {
+        stringOne = m;
+      }
+      if (pts.length <= 2 && any == null) {
+        any = m;
+      }
+    }
+    if (stringOne != null) {
+      return stringOne;
+    }
+    if (any != null) {
+      return any;
+    }
+    throw new NoSuchMethodException(cls.getName() + "." + name);
+  }
+
+  private static Object[] buildParams(Method method, String event) {
+    Class<?>[] pts = method.getParameterTypes();
+    Object[] params = new Object[pts.length];
+    for (int i = 0; i < pts.length; i++) {
+      if (pts[i] == String.class || pts[i] == Object.class || pts[i] == CharSequence.class) {
+        params[i] = event;
+      } else {
+        params[i] = null;
+      }
+    }
+    return params;
+  }
+}
+JAVA
+javac -cp '/var/task/*:/var/task' /tmp/NoctaxrisInvoke.java
+exec java -cp '/tmp:/var/task/*:/var/task' NoctaxrisInvoke
+`
+
 func pythonMinorVersion(runtime string) string {
 	switch strings.TrimSpace(runtime) {
 	case store.LambdaRuntimePython311:
 		return "3.11"
+	case store.LambdaRuntimePython313:
+		return "3.13"
+	case store.LambdaRuntimePython314:
+		return "3.14"
 	default:
 		return "3.12"
 	}
@@ -126,6 +264,12 @@ func zipOneShotCommand(runtime string) (oneShotCommand, error) {
 			Flag:   "-e",
 			Script: oneShotNodejs,
 		}, nil
+	case store.IsJavaLambdaRuntime(runtime):
+		return oneShotCommand{
+			Exe:    "/bin/sh",
+			Flag:   "-c",
+			Script: oneShotJavaShell,
+		}, nil
 	default:
 		return oneShotCommand{}, fmt.Errorf("compute: unsupported runtime %q", runtime)
 	}
@@ -136,10 +280,16 @@ func imageOneShotCommand(imageURI string) (oneShotCommand, bool) {
 	switch {
 	case strings.Contains(ref, "/lambda/python:3.11") || strings.HasPrefix(ref, "python:3.11"):
 		return oneShotCommand{Exe: "python", Flag: "-c", Script: oneShotPythonScript(store.LambdaRuntimePython311)}, true
+	case strings.Contains(ref, "/lambda/python:3.13") || strings.HasPrefix(ref, "python:3.13"):
+		return oneShotCommand{Exe: "python", Flag: "-c", Script: oneShotPythonScript(store.LambdaRuntimePython313)}, true
+	case strings.Contains(ref, "/lambda/python:3.14") || strings.HasPrefix(ref, "python:3.14"):
+		return oneShotCommand{Exe: "python", Flag: "-c", Script: oneShotPythonScript(store.LambdaRuntimePython314)}, true
 	case strings.Contains(ref, "/lambda/python") || strings.HasPrefix(ref, "python:"):
 		return oneShotCommand{Exe: "python", Flag: "-c", Script: oneShotPythonScript(store.LambdaRuntimePython312)}, true
 	case strings.Contains(ref, "/lambda/nodejs") || strings.HasPrefix(ref, "node:"):
 		return oneShotCommand{Exe: "node", Flag: "-e", Script: oneShotNodejs}, true
+	case strings.Contains(ref, "/lambda/java") || strings.HasPrefix(ref, "eclipse-temurin:"):
+		return oneShotCommand{Exe: "/bin/sh", Flag: "-c", Script: oneShotJavaShell}, true
 	default:
 		return oneShotCommand{}, false
 	}
@@ -151,6 +301,8 @@ func zipRuntimeEnv(runtime string) []string {
 		return []string{"PYTHONPATH=/var/task"}
 	case store.IsNodeLambdaRuntime(runtime):
 		return []string{"NODE_PATH=/var/task:/opt/nodejs/node_modules"}
+	case store.IsJavaLambdaRuntime(runtime):
+		return []string{"LAMBDA_TASK_ROOT=/var/task"}
 	default:
 		return nil
 	}

@@ -1199,6 +1199,9 @@ func envVarsFromBatchEnv(v any) []CodeBuildEnvVar {
 }
 
 func codebuildStringFromAny(v any) string {
+	if v == nil {
+		return ""
+	}
 	switch t := v.(type) {
 	case string:
 		return t
@@ -1207,7 +1210,7 @@ func codebuildStringFromAny(v any) string {
 	case bool:
 		return fmt.Sprintf("%t", t)
 	default:
-		return strings.TrimSpace(fmt.Sprintf("%v", v))
+		return strings.TrimSpace(fmt.Sprintf("%v", t))
 	}
 }
 
@@ -1465,8 +1468,9 @@ func CodeBuildArtifactObjectKey(target CodeBuildS3ArtifactTarget, buildID string
 }
 
 // PublishCodeBuildBuildArtifacts uploads a lab artifact object when project artifacts.type=S3.
-// Content is a small ZIP (or plain text when packaging=NONE) of captured logs.
-func (s *Store) PublishCodeBuildBuildArtifacts(accountID string, b CodeBuildBuild) (string, error) {
+// When workspaceTar is non-empty, the ZIP (or body) prefers that workspace archive; otherwise
+// content is logs-derived (build.log) as before.
+func (s *Store) PublishCodeBuildBuildArtifacts(accountID string, b CodeBuildBuild, workspaceTar []byte) (string, error) {
 	p, err := s.GetCodeBuildProject(accountID, b.ProjectName)
 	if err != nil {
 		return "", err
@@ -1476,20 +1480,32 @@ func (s *Store) PublishCodeBuildBuildArtifacts(accountID string, b CodeBuildBuil
 		return "", nil
 	}
 	key := CodeBuildArtifactObjectKey(target, b.ID)
-	body := []byte(b.LogsText)
-	if len(body) == 0 {
-		body = []byte("noctaxris-codebuild-artifact\n")
+	logsBody := []byte(b.LogsText)
+	if len(logsBody) == 0 {
+		logsBody = []byte("noctaxris-codebuild-artifact\n")
 	}
 	var data []byte
 	contentType := "text/plain"
-	if target.Packaging == "ZIP" || strings.HasSuffix(strings.ToLower(target.Name), ".zip") {
+	useZip := target.Packaging == "ZIP" || strings.HasSuffix(strings.ToLower(target.Name), ".zip")
+	if useZip {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
+		if len(workspaceTar) > 0 {
+			w, err := zw.Create("codebuild-src.tar")
+			if err != nil {
+				return "", fmt.Errorf("create zip workspace entry: %w", err)
+			}
+			if _, err := w.Write(workspaceTar); err != nil {
+				_ = zw.Close()
+				return "", fmt.Errorf("write zip workspace entry: %w", err)
+			}
+		}
 		w, err := zw.Create("build.log")
 		if err != nil {
+			_ = zw.Close()
 			return "", fmt.Errorf("create zip entry: %w", err)
 		}
-		if _, err := w.Write(body); err != nil {
+		if _, err := w.Write(logsBody); err != nil {
 			_ = zw.Close()
 			return "", fmt.Errorf("write zip entry: %w", err)
 		}
@@ -1498,8 +1514,11 @@ func (s *Store) PublishCodeBuildBuildArtifacts(accountID string, b CodeBuildBuil
 		}
 		data = buf.Bytes()
 		contentType = "application/zip"
+	} else if len(workspaceTar) > 0 {
+		data = workspaceTar
+		contentType = "application/x-tar"
 	} else {
-		data = body
+		data = logsBody
 	}
 	if _, err := s.GetBucket(accountID, target.Bucket); err != nil {
 		if _, cerr := s.CreateBucket(accountID, target.Bucket); cerr != nil {

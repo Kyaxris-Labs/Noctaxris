@@ -146,7 +146,7 @@ func (s *Store) CreateService(accountID, region string, in CreateServiceInput) (
 // GetService returns a service by cluster and name.
 func (s *Store) GetService(accountID, cluster, serviceName string) (ECSService, error) {
 	clusterName := normalizeECSClusterName(cluster)
-	serviceName = strings.TrimSpace(serviceName)
+	serviceName = normalizeECSServiceName(serviceName)
 	row := s.db.QueryRow(
 		`SELECT account_id, cluster_name, service_name, service_arn, task_def_arn, desired_count, status, created_at, updated_at,
 		        COALESCE(passed_task_role_arn, ''), COALESCE(passed_execution_role_arn, '')
@@ -232,7 +232,7 @@ func (s *Store) DeleteService(accountID, cluster, serviceName string) (ECSServic
 	_, err := s.db.Exec(
 		`UPDATE ecs_services SET status = 'INACTIVE', desired_count = 0, updated_at = ?
 		 WHERE account_id = ? AND cluster_name = ? AND service_name = ?`,
-		now, accountID, normalizeECSClusterName(cluster), strings.TrimSpace(serviceName),
+		now, accountID, normalizeECSClusterName(cluster), normalizeECSServiceName(serviceName),
 	)
 	if err != nil {
 		return ECSService{}, fmt.Errorf("delete service: %w", err)

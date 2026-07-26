@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
@@ -286,7 +287,14 @@ func (s *Server) secretsCreateSecret(
 		return
 	}
 	s.writeSecretsOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "CreateSecret", readOnly)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "CreateSecret", readOnly,
+		WithAuditResources([]audit.Resource{{
+			AccountID: verified.AccountID,
+			Type:      "AWS::SecretsManager::Secret",
+			ARN:       sec.ARN,
+		}}),
+		WithAuditRequestParameters(map[string]any{"name": name}),
+	)
 }
 
 func (s *Server) secretsGetSecretValue(
@@ -484,7 +492,14 @@ func (s *Server) secretsDeleteSecret(
 		return
 	}
 	s.writeSecretsOK(w, requestID, payload)
-	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "DeleteSecret", readOnly)
+	s.writeSuccessAudit(r, requestID, eventID, verified, secretsEventSource, "DeleteSecret", readOnly,
+		WithAuditResources([]audit.Resource{{
+			AccountID: verified.AccountID,
+			Type:      "AWS::SecretsManager::Secret",
+			ARN:       sec.ARN,
+		}}),
+		WithAuditRequestParameters(map[string]any{"secretId": secretID}),
+	)
 }
 
 func (s *Server) secretsRestoreSecret(

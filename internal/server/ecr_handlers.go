@@ -58,6 +58,12 @@ func (s *Server) handleECR(
 		s.ecrListImages(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionECRBatchDeleteImage:
 		s.ecrBatchDeleteImage(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECRListTagsForResource:
+		s.ecrListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECRTagResource:
+		s.ecrTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECRUntagResource:
+		s.ecrUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeECRError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This ECR action is not implemented.", readOnly, eventID, verified)
@@ -91,6 +97,12 @@ func ecrAction(action string) string {
 		return catalog.ActionECRListImages
 	case "BatchDeleteImage":
 		return catalog.ActionECRBatchDeleteImage
+	case "ListTagsForResource":
+		return catalog.ActionECRListTagsForResource
+	case "TagResource":
+		return catalog.ActionECRTagResource
+	case "UntagResource":
+		return catalog.ActionECRUntagResource
 	default:
 		return action
 	}
@@ -697,6 +709,101 @@ func (s *Server) ecrBatchDeleteImage(
 	}
 	s.writeECROK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ecrEventSource, "BatchDeleteImage", readOnly)
+}
+
+// Lab tag APIs: Terraform provider refresh calls ListTagsForResource after CreateRepository.
+// Tags are not persisted; Tag/Untag accept and return empty success.
+func (s *Server) ecrListTagsForResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionECRListTagsForResource, arn) {
+		s.writeECRError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecr:ListTagsForResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecrsvc.ListTagsForResourceJSON(nil)
+	if err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecrEventSource, "ListTagsForResource", readOnly)
+}
+
+func (s *Server) ecrTagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionECRTagResource, arn) {
+		s.writeECRError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecr:TagResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecrsvc.EmptyOKJSON()
+	if err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecrEventSource, "TagResource", readOnly)
+}
+
+func (s *Server) ecrUntagResource(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	_ = body
+	arn := strings.TrimSpace(stringParam(params["resourceArn"]))
+	if arn == "" {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"resourceArn is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionECRUntagResource, arn) {
+		s.writeECRError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ecr:UntagResource.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := ecrsvc.EmptyOKJSON()
+	if err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeECROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ecrEventSource, "UntagResource", readOnly)
 }
 
 func (s *Server) writeECROK(w http.ResponseWriter, requestID string, payload []byte) {

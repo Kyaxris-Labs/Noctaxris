@@ -67,6 +67,12 @@ func (s *Server) handleECS(
 		s.ecsDescribeServices(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionECSListServices:
 		s.ecsListServices(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSListTagsForResource:
+		s.ecsListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSTagResource:
+		s.ecsTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionECSUntagResource:
+		s.ecsUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeECSError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This ECS action is not implemented.", readOnly, eventID, verified)
@@ -108,6 +114,12 @@ func ecsAction(action string) string {
 		return catalog.ActionECSDescribeServices
 	case "ListServices":
 		return catalog.ActionECSListServices
+	case "ListTagsForResource":
+		return catalog.ActionECSListTagsForResource
+	case "TagResource":
+		return catalog.ActionECSTagResource
+	case "UntagResource":
+		return catalog.ActionECSUntagResource
 	default:
 		return action
 	}
