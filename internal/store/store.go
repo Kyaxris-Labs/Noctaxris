@@ -377,11 +377,37 @@ type s3ObjectLock struct {
 	refs int
 }
 
+// emptyStateDB caches one fully-bootstrapped state.db per process. Unit tests open a
+// fresh data root per case; copying the template avoids re-running ~70 Ensure*Schema
+// DDL passes (dominant cost under -race CI).
+var (
+	emptyStateOnce  sync.Once
+	emptyStateBytes []byte
+	emptyStateErr   error
+)
+
+// Open opens or creates the SQLite store under dataRoot.
 func Open(dataRoot string, master MasterKey) (*Store, error) {
+	return openStore(dataRoot, master, true)
+}
+
+func openStore(dataRoot string, master MasterKey, useEmptyTemplate bool) (*Store, error) {
 	if err := os.MkdirAll(dataRoot, 0o700); err != nil {
 		return nil, err
 	}
 	dbPath := filepath.Join(dataRoot, "state.db")
+	fresh := false
+	if _, err := os.Stat(dbPath); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		fresh = true
+		if useEmptyTemplate {
+			if err := materializeEmptyStateDB(dbPath); err != nil {
+				return nil, err
+			}
+		}
+	}
 	// Apply busy_timeout on every pooled connection (DSN pragma, not a one-shot Exec).
 	// Do not set global _txlock=immediate: nested writers (e.g. CFN → CreateBucket)
 	// would busy-wait against an open outer transaction.
@@ -391,308 +417,153 @@ func Open(dataRoot string, master MasterKey) (*Store, error) {
 		return nil, err
 	}
 	// Single API process only against one data root (multi-instance unsupported).
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, err
+	fromTemplate := fresh && useEmptyTemplate
+	if !fromTemplate {
+		if _, err := db.Exec(schema); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	s := &Store{db: db, master: master, dataRoot: dataRoot, s3ObjectLocks: map[string]*s3ObjectLock{}}
 	if err := s.migrateSchema(); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if err := EnsureManagedPolicyVersionsSchema(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("open store: ensure managed policy versions schema: %w", err)
-	}
-	if err := EnsureLambdaVersionSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaLayerSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaAsyncSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaImageSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaPolicySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaESMSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLambdaFunctionURLSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSSMSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSecretsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSNSSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureEventsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureECRSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureECSSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureECSServiceSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureOrgAccountPlacementSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLogsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLogsSubscriptionSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLogsMetricFilterSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureLogsResourcePolicySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureTaggingSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureKinesisSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureKinesisResourcePolicySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSESSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureAppConfigSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSFNSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSFNResourcePolicySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureKMSKeyMaterialSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCodeBuildSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureBatchSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCFNSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCodePipelineSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureFirehoseSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureGlueSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureWAFSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureConfigSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureS3VersioningSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureS3NotificationsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureS3ForensicsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureDynamoDBStreamsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureDynamoDBTransactSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSchedulerSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsurePipesSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureMQSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureElastiCacheSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureDocDBSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureTransferSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureACMSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureGuardDutySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureDetectiveSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureMacieSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureSecurityHubSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureRoute53Schema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureServiceDiscoverySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureAppSyncSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureAPIGatewayV2Schema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCognitoSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCloudControlSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureBCMExportSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureBudgetsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCodeDeploySchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureCloudFrontSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureELBv2Schema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureS3VectorsSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureBedrockSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureTextractSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureTranscribeSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureEMRSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureAthenaSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureOpenSearchSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureRDSSchema(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := EnsureRDSDataSchema(db); err != nil {
-		db.Close()
-		return nil, err
+	// Fresh template copies already include service DDL. Existing data roots still need
+	// bootstrap so newly added Ensure* tables appear on upgrade.
+	if !fromTemplate {
+		if err := bootstrapServiceSchemas(db); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	if err := s.ensureSchemaVersion(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func materializeEmptyStateDB(dst string) error {
+	emptyStateOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "noctaxris-empty-state-*")
+		if err != nil {
+			emptyStateErr = fmt.Errorf("empty state template: mkdir: %w", err)
+			return
+		}
+		defer os.RemoveAll(dir)
+		st, err := openStore(dir, MasterKey{}, false)
+		if err != nil {
+			emptyStateErr = fmt.Errorf("empty state template: bootstrap: %w", err)
+			return
+		}
+		if err := st.Close(); err != nil {
+			emptyStateErr = fmt.Errorf("empty state template: close: %w", err)
+			return
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "state.db"))
+		if err != nil {
+			emptyStateErr = fmt.Errorf("empty state template: read: %w", err)
+			return
+		}
+		emptyStateBytes = raw
+	})
+	if emptyStateErr != nil {
+		return emptyStateErr
+	}
+	if len(emptyStateBytes) == 0 {
+		return fmt.Errorf("empty state template: empty bytes")
+	}
+	if err := os.WriteFile(dst, emptyStateBytes, 0o600); err != nil {
+		return fmt.Errorf("empty state template: write %s: %w", dst, err)
+	}
+	return nil
+}
+
+func bootstrapServiceSchemas(db *sql.DB) error {
+	ensurers := []struct {
+		name string
+		fn   func(*sql.DB) error
+	}{
+		{"managed policy versions", EnsureManagedPolicyVersionsSchema},
+		{"lambda version", EnsureLambdaVersionSchema},
+		{"lambda layer", EnsureLambdaLayerSchema},
+		{"lambda async", EnsureLambdaAsyncSchema},
+		{"lambda image", EnsureLambdaImageSchema},
+		{"lambda policy", EnsureLambdaPolicySchema},
+		{"lambda esm", EnsureLambdaESMSchema},
+		{"lambda function url", EnsureLambdaFunctionURLSchema},
+		{"ssm", EnsureSSMSchema},
+		{"secrets", EnsureSecretsSchema},
+		{"sns", EnsureSNSSchema},
+		{"events", EnsureEventsSchema},
+		{"ecr", EnsureECRSchema},
+		{"ecs", EnsureECSSchema},
+		{"ecs service", EnsureECSServiceSchema},
+		{"org account placement", EnsureOrgAccountPlacementSchema},
+		{"logs", EnsureLogsSchema},
+		{"logs subscription", EnsureLogsSubscriptionSchema},
+		{"logs metric filter", EnsureLogsMetricFilterSchema},
+		{"logs resource policy", EnsureLogsResourcePolicySchema},
+		{"tagging", EnsureTaggingSchema},
+		{"kinesis", EnsureKinesisSchema},
+		{"kinesis resource policy", EnsureKinesisResourcePolicySchema},
+		{"ses", EnsureSESSchema},
+		{"appconfig", EnsureAppConfigSchema},
+		{"sfn", EnsureSFNSchema},
+		{"sfn resource policy", EnsureSFNResourcePolicySchema},
+		{"kms key material", EnsureKMSKeyMaterialSchema},
+		{"codebuild", EnsureCodeBuildSchema},
+		{"batch", EnsureBatchSchema},
+		{"cfn", EnsureCFNSchema},
+		{"codepipeline", EnsureCodePipelineSchema},
+		{"firehose", EnsureFirehoseSchema},
+		{"glue", EnsureGlueSchema},
+		{"waf", EnsureWAFSchema},
+		{"config", EnsureConfigSchema},
+		{"s3 versioning", EnsureS3VersioningSchema},
+		{"s3 notifications", EnsureS3NotificationsSchema},
+		{"s3 forensics", EnsureS3ForensicsSchema},
+		{"dynamodb streams", EnsureDynamoDBStreamsSchema},
+		{"dynamodb transact", EnsureDynamoDBTransactSchema},
+		{"scheduler", EnsureSchedulerSchema},
+		{"pipes", EnsurePipesSchema},
+		{"mq", EnsureMQSchema},
+		{"elasticache", EnsureElastiCacheSchema},
+		{"docdb", EnsureDocDBSchema},
+		{"transfer", EnsureTransferSchema},
+		{"acm", EnsureACMSchema},
+		{"guardduty", EnsureGuardDutySchema},
+		{"detective", EnsureDetectiveSchema},
+		{"macie", EnsureMacieSchema},
+		{"securityhub", EnsureSecurityHubSchema},
+		{"route53", EnsureRoute53Schema},
+		{"service discovery", EnsureServiceDiscoverySchema},
+		{"appsync", EnsureAppSyncSchema},
+		{"apigatewayv2", EnsureAPIGatewayV2Schema},
+		{"cognito", EnsureCognitoSchema},
+		{"cloudcontrol", EnsureCloudControlSchema},
+		{"bcm export", EnsureBCMExportSchema},
+		{"budgets", EnsureBudgetsSchema},
+		{"codedeploy", EnsureCodeDeploySchema},
+		{"cloudfront", EnsureCloudFrontSchema},
+		{"elbv2", EnsureELBv2Schema},
+		{"s3 vectors", EnsureS3VectorsSchema},
+		{"bedrock", EnsureBedrockSchema},
+		{"textract", EnsureTextractSchema},
+		{"transcribe", EnsureTranscribeSchema},
+		{"emr", EnsureEMRSchema},
+		{"athena", EnsureAthenaSchema},
+		{"opensearch", EnsureOpenSearchSchema},
+		{"rds", EnsureRDSSchema},
+		{"rds data", EnsureRDSDataSchema},
+	}
+	for _, e := range ensurers {
+		if err := e.fn(db); err != nil {
+			return fmt.Errorf("open store: ensure %s schema: %w", e.name, err)
+		}
+	}
+	return nil
 }
 
 // DataRoot returns the store data directory (object bytes live under s3/).

@@ -85,7 +85,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 | Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab), CloudWatch Logs, Resource Groups Tagging API |
 | Streams and delivery | Kinesis, Firehose, Amazon MQ, Transfer Family, SES, AppConfig, Step Functions |
 | IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2, Control Tower (stub) |
-| Compute | Lambda, ECR, ECS, CodeBuild, CodePipeline, CodeDeploy, Batch, AppSync |
+| Compute | Lambda, ECR, ECS, CodeBuild, CodeCommit, CodePipeline, CodeDeploy, Batch, AppSync |
 | API edge | API Gateway HTTP API |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
 | Billing | Pricing, BCM Data Exports, Cost Explorer, Budgets |
@@ -342,7 +342,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Landing zone create/enable, controls catalog, Account Factory.</td>
     </tr>
     <tr>
-      <td rowspan="8" align="center" valign="middle">Compute</td>
+      <td rowspan="9" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
       <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, Kinesis, and Amazon MQ event source mappings (MQ Create requires RUNNING nested broker; allowlisted <code>noctaxris-mq-*</code> only; RabbitMQ AMQP 0-9-1 Dial + <code>basic.get</code> on queue <code>noctaxris</code> returns real bodies; ActiveMQ stays dial-then-empty; unit tests may inject <code>MQReceiveFunc</code>), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys, NewImage, and OldImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>nodejs20.x</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign IAM principals and service-principal XA grants with SourceAccount/SourceArn), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
       <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM, ActiveMQ AMQP 1.0/JMS consumer for MQ ESM (dial-only empty), FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
@@ -359,8 +359,13 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>CodeBuild</td>
-      <td>CreateProject, StartBuild, BatchGetBuilds, ListBuilds. Inline or S3 buildspec. PassRole with codebuild.amazonaws.com. Nested DinD via the shared compute client (no host <code>docker.sock</code>).</td>
-      <td>VPC, fleets, CodeCommit, batch build matrix, artifact publishing depth.</td>
+      <td>Create/Update/DeleteProject, List/BatchGetProjects, StartBuild, StartBuildBatch, BatchGetBuilds, ListBuilds, StopBuild. Sources <code>NO_SOURCE</code> / <code>S3</code> / <code>CODECOMMIT</code>; override-lock via <code>source.allowOverride</code>; S3 artifacts (logs-derived ZIP/text on successful reap); lab IMDS <code>AWS_CONTAINER_CREDENTIALS_FULL_URI</code> on <code>169.254.170.2:9254</code>; lab webhooks (store-seed registration + <code>POST /_noctaxris/codebuild/webhook/{account}/{project}</code>). PassRole with <code>codebuild.amazonaws.com</code>. Nested DinD via the shared compute client (no host <code>docker.sock</code>); host-gateway ExtraHosts opt-in like ECS.</td>
+      <td>Real VPC / fleets / cache / report-group execution (config stubs only). GitHub SaaS webhooks. AWS-shaped CreateWebhook control-plane API.</td>
+    </tr>
+    <tr>
+      <td>CodeCommit</td>
+      <td>Create/Get/List/DeleteRepository, PutFile, GetFile, GetFolder. Lab filesystem git store under the data root (not git smart-HTTP). CodeBuild <code>CODECOMMIT</code> StartBuild materializes the lab tree into nested builds.</td>
+      <td>Git smart-HTTP / SSH clone and push, multi-branch refs, merge, pull requests, full CreateCommit / GetCommit / GetDifferences depth.</td>
     </tr>
     <tr>
       <td>CodePipeline</td>

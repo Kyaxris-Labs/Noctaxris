@@ -47,8 +47,29 @@ func TestMintRoleSessionEnvInjectsCredentials(t *testing.T) {
 	if env["AWS_SECRET_ACCESS_KEY"] == "" || env["AWS_SESSION_TOKEN"] == "" {
 		t.Fatal("missing secret or session token")
 	}
-	if env["AWS_ENDPOINT_URL"] != "http://host.docker.internal:4566" {
+	wantEndpoint := "http://host.docker.internal:4566"
+	if env["AWS_ENDPOINT_URL"] != wantEndpoint {
 		t.Fatalf("AWS_ENDPOINT_URL=%q", env["AWS_ENDPOINT_URL"])
+	}
+	for _, key := range []string{
+		"AWS_ENDPOINT_URL_STS",
+		"AWS_ENDPOINT_URL_IAM",
+		"AWS_ENDPOINT_URL_S3",
+		"AWS_ENDPOINT_URL_DYNAMODB",
+		"AWS_ENDPOINT_URL_SQS",
+		"AWS_ENDPOINT_URL_LAMBDA",
+		"AWS_ENDPOINT_URL_KMS",
+		"AWS_ENDPOINT_URL_ECR",
+		"AWS_ENDPOINT_URL_ECS",
+		"AWS_ENDPOINT_URL_SNS",
+		"AWS_ENDPOINT_URL_LOGS",
+		"AWS_ENDPOINT_URL_CODEBUILD",
+		"AWS_ENDPOINT_URL_SECRETSMANAGER",
+		"AWS_ENDPOINT_URL_SECRETS_MANAGER",
+	} {
+		if env[key] != wantEndpoint {
+			t.Fatalf("%s=%q want %q", key, env[key], wantEndpoint)
+		}
 	}
 	acct, secret, isRoot, err := st.LookupAccessKey(env["AWS_ACCESS_KEY_ID"])
 	if err != nil {

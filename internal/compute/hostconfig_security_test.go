@@ -34,7 +34,7 @@ func TestImageInvokeHostConfigSecurity(t *testing.T) {
 
 func TestECSTaskHostConfigSecurity(t *testing.T) {
 	t.Setenv(EnvInjectECSHostGateway, "")
-	hc := ecsTaskHostConfig(512)
+	hc := ecsTaskHostConfig(512, nil)
 	if !hostConfigSecurityOK(hc) {
 		t.Fatalf("ecs HostConfig not hardened: Privileged=%v CapAdd=%#v CapDrop=%#v", hc.Privileged, hc.CapAdd, hc.CapDrop)
 	}

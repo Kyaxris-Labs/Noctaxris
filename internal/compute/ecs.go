@@ -76,6 +76,21 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		return "", fmt.Errorf("compute: pull image %s: %w", opts.ImageURI, err)
 	}
 
+	// When AWS_* role creds are present, mirror them on Internal noctaxris-ecs via
+	// link-local ExtraHosts → sidecar (not the host API listen). Prefer
+	// AWS_CONTAINER_CREDENTIALS_FULL_URI (port 9254); relative URI alone assumes :80.
+	taskEnv := opts.Env
+	imdsHosts, uriEnv, err := c.attachECSIMDSEnv(ctx, taskEnv)
+	if err != nil {
+		return "", err
+	}
+	if len(uriEnv) > 0 {
+		taskEnv = cloneStringMap(taskEnv)
+		for k, v := range uriEnv {
+			taskEnv[k] = v
+		}
+	}
+
 	env := []string{
 		"AWS_DEFAULT_REGION=us-east-1",
 		"AWS_ENDPOINT_URL=" + endpoint,
@@ -88,8 +103,13 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		"AWS_ENDPOINT_URL_KMS=" + endpoint,
 		"AWS_ENDPOINT_URL_ECR=" + endpoint,
 		"AWS_ENDPOINT_URL_ECS=" + endpoint,
+		"AWS_ENDPOINT_URL_SNS=" + endpoint,
+		"AWS_ENDPOINT_URL_LOGS=" + endpoint,
+		"AWS_ENDPOINT_URL_CODEBUILD=" + endpoint,
+		"AWS_ENDPOINT_URL_SECRETSMANAGER=" + endpoint,
+		"AWS_ENDPOINT_URL_SECRETS_MANAGER=" + endpoint,
 	}
-	for k, v := range opts.Env {
+	for k, v := range taskEnv {
 		if k == "" {
 			continue
 		}
@@ -97,7 +117,7 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	}
 
 	name := "noctaxris-ecs-" + uuid.NewString()
-	hostConfig := ecsTaskHostConfig(opts.MemoryMB)
+	hostConfig := ecsTaskHostConfig(opts.MemoryMB, imdsHosts)
 	cfg := &container.Config{
 		Image: opts.ImageURI,
 		Env:   env,

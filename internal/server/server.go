@@ -197,6 +197,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isLabCodeBuildWebhookPath(r.URL.Path) {
+		s.handleLabCodeBuildWebhook(w, r)
+		return
+	}
+
 	if isRegistryV2Path(r.URL.Path) {
 		s.handleRegistryV2(w, r)
 		return
@@ -925,10 +930,24 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSFNDeleteResourcePolicy:
 		s.handleSFN(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCodeBuildCreateProject, "CreateProject",
+		catalog.ActionCodeBuildUpdateProject, "UpdateProject",
+		catalog.ActionCodeBuildDeleteProject, "DeleteProject",
+		catalog.ActionCodeBuildListProjects, "ListProjects",
+		catalog.ActionCodeBuildBatchGetProjects, "BatchGetProjects",
 		catalog.ActionCodeBuildStartBuild, "StartBuild",
+		catalog.ActionCodeBuildStartBuildBatch, "StartBuildBatch",
+		catalog.ActionCodeBuildStopBuild, "StopBuild",
 		catalog.ActionCodeBuildBatchGetBuilds, "BatchGetBuilds",
 		catalog.ActionCodeBuildListBuilds, "ListBuilds":
 		s.handleCodeBuild(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCodeCommitCreateRepository,
+		catalog.ActionCodeCommitGetRepository, "GetRepository",
+		catalog.ActionCodeCommitListRepositories, "ListRepositories",
+		catalog.ActionCodeCommitDeleteRepository,
+		catalog.ActionCodeCommitPutFile, "PutFile",
+		catalog.ActionCodeCommitGetFile, "GetFile",
+		catalog.ActionCodeCommitGetFolder, "GetFolder":
+		s.handleCodeCommit(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionBatchCreateComputeEnvironment, "CreateComputeEnvironment",
 		catalog.ActionBatchCreateJobQueue, "CreateJobQueue",
 		catalog.ActionBatchRegisterJobDefinition, "RegisterJobDefinition",
@@ -1619,6 +1638,8 @@ func resolveAction(r *http.Request, body []byte) string {
 			return sfnAction(short)
 		case strings.HasPrefix(strings.ToLower(prefix), "codebuild"):
 			return codebuildAction(short)
+		case strings.HasPrefix(strings.ToLower(prefix), "codecommit"):
+			return codecommitAction(short)
 		case strings.HasPrefix(strings.ToLower(prefix), "awsbatch"),
 			strings.EqualFold(prefix, "Batch"):
 			return batchAction(short)

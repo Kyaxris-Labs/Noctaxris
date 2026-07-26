@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -37,5 +38,44 @@ func TestEnsureRootEncrypted(t *testing.T) {
 	}
 	if err := st.Ping(); err != nil {
 		t.Fatalf("ping: %v", err)
+	}
+}
+
+func TestOpenEmptyStateTemplateProvidesServiceTables(t *testing.T) {
+	// Warm the process template (first Open may pay full DDL).
+	dir1 := t.TempDir()
+	key1, err := store.LoadOrCreateMasterKey(filepath.Join(dir1, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st1, err := store.Open(dir1, key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dir2 := t.TempDir()
+	key2, err := store.LoadOrCreateMasterKey(filepath.Join(dir2, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	st2, err := store.Open(dir2, key2)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st2.Close() })
+	// Template copy + migrate should be far below a cold Ensure* bootstrap (~hundreds of ms).
+	if elapsed > 2*time.Second {
+		t.Fatalf("templated Open took %v; expected << cold bootstrap", elapsed)
+	}
+	if _, err := st2.CreateTopic("000000000001", "us-east-1", "template-topic", nil); err != nil {
+		t.Fatalf("CreateTopic after templated Open: %v", err)
+	}
+	if _, err := st2.CreateManagedPolicy("000000000001", "TemplatePolicy", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`); err != nil {
+		t.Fatalf("CreateManagedPolicy after templated Open: %v", err)
 	}
 }

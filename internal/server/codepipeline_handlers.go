@@ -235,7 +235,9 @@ func (s *Server) cpStartExecution(
 		region = store.DefaultCodeBuildRegion
 	}
 	runBuild := func(projectName string) (buildID, status string, err error) {
-		b, err := s.store.StartCodeBuildBuild(verified.AccountID, region, projectName, "")
+		b, err := s.store.StartCodeBuildBuild(verified.AccountID, region, store.StartCodeBuildBuildOpts{
+			ProjectName: projectName,
+		})
 		if err != nil {
 			return "", "Failed", err
 		}

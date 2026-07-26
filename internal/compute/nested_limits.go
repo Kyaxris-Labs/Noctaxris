@@ -58,12 +58,17 @@ func imageInvokeHostConfig(binds []string, memoryMB int) *container.HostConfig {
 }
 
 // ecsTaskHostConfig builds HostConfig for ECS / CodeBuild / Batch nested tasks.
-func ecsTaskHostConfig(memoryMB int) *container.HostConfig {
+// extraHosts are merged after the optional host-gateway ExtraHosts (IMDS link-local).
+func ecsTaskHostConfig(memoryMB int, extraHosts []string) *container.HostConfig {
 	sec := nestedTaskSecurity(memoryMB)
+	hosts := ecsHostGatewayExtraHosts()
+	if len(extraHosts) > 0 {
+		hosts = append(append([]string{}, hosts...), extraHosts...)
+	}
 	return &container.HostConfig{
 		AutoRemove:  false,
 		NetworkMode: container.NetworkMode(ECSNetworkName),
-		ExtraHosts:  ecsHostGatewayExtraHosts(),
+		ExtraHosts:  hosts,
 		Privileged:  false,
 		CapDrop:     append([]string(nil), sec.CapDrop...),
 		SecurityOpt: append([]string(nil), sec.SecurityOpt...),

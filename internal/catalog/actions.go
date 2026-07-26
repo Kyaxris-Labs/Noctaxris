@@ -947,10 +947,27 @@ const (
 
 // CodeBuild lab actions.
 const (
-	ActionCodeBuildCreateProject  = "codebuild:CreateProject"
-	ActionCodeBuildStartBuild     = "codebuild:StartBuild"
-	ActionCodeBuildBatchGetBuilds = "codebuild:BatchGetBuilds"
-	ActionCodeBuildListBuilds     = "codebuild:ListBuilds"
+	ActionCodeBuildCreateProject     = "codebuild:CreateProject"
+	ActionCodeBuildUpdateProject     = "codebuild:UpdateProject"
+	ActionCodeBuildDeleteProject     = "codebuild:DeleteProject"
+	ActionCodeBuildListProjects      = "codebuild:ListProjects"
+	ActionCodeBuildBatchGetProjects  = "codebuild:BatchGetProjects"
+	ActionCodeBuildStartBuild        = "codebuild:StartBuild"
+	ActionCodeBuildStartBuildBatch   = "codebuild:StartBuildBatch"
+	ActionCodeBuildStopBuild         = "codebuild:StopBuild"
+	ActionCodeBuildBatchGetBuilds    = "codebuild:BatchGetBuilds"
+	ActionCodeBuildListBuilds        = "codebuild:ListBuilds"
+)
+
+// CodeCommit lab actions (filesystem-backed store; not git smart-HTTP).
+const (
+	ActionCodeCommitCreateRepository = "codecommit:CreateRepository"
+	ActionCodeCommitGetRepository    = "codecommit:GetRepository"
+	ActionCodeCommitListRepositories = "codecommit:ListRepositories"
+	ActionCodeCommitDeleteRepository = "codecommit:DeleteRepository"
+	ActionCodeCommitPutFile          = "codecommit:PutFile"
+	ActionCodeCommitGetFile          = "codecommit:GetFile"
+	ActionCodeCommitGetFolder        = "codecommit:GetFolder"
 )
 
 // Batch lab actions.
@@ -1468,9 +1485,22 @@ func KnownAction(action string) bool {
 		ActionSFNGetResourcePolicy,
 		ActionSFNDeleteResourcePolicy,
 		ActionCodeBuildCreateProject,
+		ActionCodeBuildUpdateProject,
+		ActionCodeBuildDeleteProject,
+		ActionCodeBuildListProjects,
+		ActionCodeBuildBatchGetProjects,
 		ActionCodeBuildStartBuild,
+		ActionCodeBuildStartBuildBatch,
+		ActionCodeBuildStopBuild,
 		ActionCodeBuildBatchGetBuilds,
 		ActionCodeBuildListBuilds,
+		ActionCodeCommitCreateRepository,
+		ActionCodeCommitGetRepository,
+		ActionCodeCommitListRepositories,
+		ActionCodeCommitDeleteRepository,
+		ActionCodeCommitPutFile,
+		ActionCodeCommitGetFile,
+		ActionCodeCommitGetFolder,
 		ActionBatchCreateComputeEnvironment,
 		ActionBatchCreateJobQueue,
 		ActionBatchRegisterJobDefinition,
