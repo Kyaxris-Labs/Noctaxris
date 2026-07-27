@@ -19,7 +19,18 @@ var (
 
 const DefaultRDSRegion = "us-east-1"
 
-const DefaultRDSPostgresImage = "postgres:16-alpine"
+const (
+	DefaultRDSPostgresImage = "postgres:16-alpine"
+	DefaultRDSMySQLImage    = "mysql:8.0"
+	DefaultRDSMariaDBImage  = "mariadb:11"
+)
+
+// ValidRDSEngines are CreateDBInstance Engine values accepted by this lab core.
+var ValidRDSEngines = map[string]struct{}{
+	"postgres": {},
+	"mysql":    {},
+	"mariadb":  {},
+}
 
 const rdsSchema = `
 CREATE TABLE IF NOT EXISTS rds_db_instances (
@@ -61,7 +72,7 @@ type RDSDBInstance struct {
 	CreatedAt            int64
 }
 
-// CreateRDSDBInstanceInput is the create path for nested Postgres labs.
+// CreateRDSDBInstanceInput is the create path for nested RDS labs (postgres, mysql, mariadb).
 type CreateRDSDBInstanceInput struct {
 	DBInstanceIdentifier string
 	Engine               string
@@ -106,18 +117,84 @@ func RDSDBInstanceARN(region, accountID, identifier string) string {
 	return fmt.Sprintf("arn:aws:rds:%s:%s:db:%s", region, accountID, identifier)
 }
 
+// NormalizeRDSEngine lowercases Engine and defaults empty to postgres.
+func NormalizeRDSEngine(engine string) string {
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	if engine == "" {
+		return "postgres"
+	}
+	return engine
+}
+
+// IsValidRDSEngine reports whether Engine is accepted by CreateDBInstance.
+func IsValidRDSEngine(engine string) bool {
+	_, ok := ValidRDSEngines[NormalizeRDSEngine(engine)]
+	return ok
+}
+
+// DefaultRDSImage returns the pinned nested image for an RDS engine.
+func DefaultRDSImage(engine string) string {
+	switch NormalizeRDSEngine(engine) {
+	case "mysql":
+		return DefaultRDSMySQLImage
+	case "mariadb":
+		return DefaultRDSMariaDBImage
+	default:
+		return DefaultRDSPostgresImage
+	}
+}
+
+// DefaultRDSPort returns the nested listen port for an RDS engine.
+func DefaultRDSPort(engine string) int {
+	switch NormalizeRDSEngine(engine) {
+	case "mysql", "mariadb":
+		return 3306
+	default:
+		return 5432
+	}
+}
+
+// DefaultRDSMasterUsername returns the lab default master user for an engine.
+func DefaultRDSMasterUsername(engine string) string {
+	switch NormalizeRDSEngine(engine) {
+	case "mysql", "mariadb":
+		return "root"
+	default:
+		return "postgres"
+	}
+}
+
+// DefaultRDSDBName returns the lab default database name for an engine.
+func DefaultRDSDBName(engine string) string {
+	switch NormalizeRDSEngine(engine) {
+	case "mysql", "mariadb":
+		return "appdb"
+	default:
+		return "postgres"
+	}
+}
+
+// DefaultRDSEngineVersion returns the lab default EngineVersion string.
+func DefaultRDSEngineVersion(engine string) string {
+	switch NormalizeRDSEngine(engine) {
+	case "mysql":
+		return "8.0"
+	case "mariadb":
+		return "11"
+	default:
+		return "16"
+	}
+}
+
 // CreateRDSDBInstance inserts a DB instance row. Nested engine start is the caller's job.
 func (s *Store) CreateRDSDBInstance(accountID, region string, in CreateRDSDBInstanceInput) (RDSDBInstance, error) {
 	id := strings.ToLower(strings.TrimSpace(in.DBInstanceIdentifier))
 	if id == "" {
 		return RDSDBInstance{}, fmt.Errorf("%w: DBInstanceIdentifier is required", ErrRDSBadRequest)
 	}
-	engine := strings.ToLower(strings.TrimSpace(in.Engine))
-	if engine == "" {
-		engine = "postgres"
-	}
-	if engine != "postgres" {
-		return RDSDBInstance{}, fmt.Errorf("%w: Engine must be postgres for this lab core", ErrRDSBadRequest)
+	engine := NormalizeRDSEngine(in.Engine)
+	if !IsValidRDSEngine(engine) {
+		return RDSDBInstance{}, fmt.Errorf("%w: Engine must be postgres, mysql, or mariadb", ErrRDSBadRequest)
 	}
 	if region == "" {
 		region = DefaultRDSRegion
@@ -128,15 +205,15 @@ func (s *Store) CreateRDSDBInstance(accountID, region string, in CreateRDSDBInst
 	}
 	version := strings.TrimSpace(in.EngineVersion)
 	if version == "" {
-		version = "16"
+		version = DefaultRDSEngineVersion(engine)
 	}
 	user := strings.TrimSpace(in.MasterUsername)
 	if user == "" {
-		user = "postgres"
+		user = DefaultRDSMasterUsername(engine)
 	}
 	port := in.EndpointPort
 	if port <= 0 {
-		port = 5432
+		port = DefaultRDSPort(engine)
 	}
 	storage := in.AllocatedStorage
 	if storage <= 0 {
@@ -148,7 +225,7 @@ func (s *Store) CreateRDSDBInstance(accountID, region string, in CreateRDSDBInst
 	}
 	dbName := strings.TrimSpace(in.DBName)
 	if dbName == "" {
-		dbName = "postgres"
+		dbName = DefaultRDSDBName(engine)
 	}
 
 	var existing string
@@ -235,13 +312,18 @@ func (s *Store) CreateRDSDBInstance(accountID, region string, in CreateRDSDBInst
 }
 
 // UpdateRDSDBInstanceRuntime updates nested container fields after StartDataPlane.
+// When endpointPort <= 0, the existing row's engine default port is used (postgres 5432, mysql/mariadb 3306).
 func (s *Store) UpdateRDSDBInstanceRuntime(accountID, identifier, status, containerID, endpointAddress string, endpointPort int) error {
 	identifier = strings.ToLower(strings.TrimSpace(identifier))
 	if identifier == "" {
 		return fmt.Errorf("%w: DBInstanceIdentifier is required", ErrRDSBadRequest)
 	}
 	if endpointPort <= 0 {
-		endpointPort = 5432
+		inst, err := s.DescribeRDSDBInstance(accountID, identifier)
+		if err != nil {
+			return err
+		}
+		endpointPort = DefaultRDSPort(inst.Engine)
 	}
 	res, err := s.db.Exec(
 		`UPDATE rds_db_instances SET db_instance_status = ?, container_id = ?, endpoint_address = ?, endpoint_port = ?

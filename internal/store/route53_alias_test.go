@@ -77,7 +77,7 @@ func TestRoute53AliasELBCreate(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "r53-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "r53-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -88,7 +88,16 @@ func TestSNSHTTPCatcherAllowlistAndDelivery(t *testing.T) {
 		t.Fatalf("want reject non-catcher path got %v", err)
 	}
 
-	// Allowlist must not short-circuit private/loopback/metadata host checks.
+	// Allowlist alone (egress unset) must fail closed for non-catcher URLs.
+	publicHook := "https://example.com/sns-hook"
+	t.Setenv(store.EnvSNSHTTPAllowlist, publicHook)
+	t.Setenv(store.EnvSNSHTTPEgress, "")
+	if _, err := st.Subscribe(account, topic.TopicARN, "http", publicHook); !errors.Is(err, store.ErrSNSEndpointNotAllowed) {
+		t.Fatalf("allowlist without egress: want reject got %v", err)
+	}
+
+	// Allowlist must not short-circuit private/loopback/metadata host checks when egress is on.
+	t.Setenv(store.EnvSNSHTTPEgress, "1")
 	t.Setenv(store.EnvSNSHTTPAllowlist, "http://127.0.0.1:9/hook,http://169.254.169.254/latest,http://10.0.0.5/hook")
 	for _, ep := range []string{
 		"http://127.0.0.1:9/hook",
@@ -99,6 +108,7 @@ func TestSNSHTTPCatcherAllowlistAndDelivery(t *testing.T) {
 			t.Fatalf("allowlisted unsafe %s: want reject got %v", ep, err)
 		}
 	}
+	t.Setenv(store.EnvSNSHTTPEgress, "")
 	t.Setenv(store.EnvSNSHTTPAllowlist, "")
 
 	endpoint := "http://127.0.0.1:4566" + store.LabSNSHTTPCatcherPath

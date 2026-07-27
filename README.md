@@ -73,7 +73,7 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Per-service CLI smoke: [docs/services/](docs/services/index.md).
+Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Default host publish is `127.0.0.1:4566` only. Opt-in loopback TCP for selected nested data ports: add `-f docker/compose.lab-nested-ports.yaml` (see [ops.md](docs/ops.md#compose-overlays-lab-opt-in)). Per-service CLI smoke: [docs/services/](docs/services/index.md).
 
 ## Services
 
@@ -81,14 +81,16 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 |------|----------|
 | Identity | IAM, STS, Organizations, Cognito User Pools |
 | Crypto | KMS |
-| Data | S3, DynamoDB, DynamoDB Streams, SQS, SSM, Secrets Manager, SNS, EventBridge, Scheduler, Pipes, S3 Vectors, RDS, RDS Data API, ElastiCache, DocumentDB |
-| Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab), CloudWatch Logs, Resource Groups Tagging API |
-| Streams and delivery | Kinesis, Firehose, Amazon MQ, Transfer Family, SES, AppConfig, Step Functions |
+| Data | S3, DynamoDB, DynamoDB Streams, SQS, SSM, Secrets Manager, SNS, EventBridge, Scheduler, Pipes, S3 Vectors, RDS, RDS Data API, ElastiCache, MemoryDB, DocumentDB, Neptune |
+| Audit and tags | CloudTrail, GuardDuty, Security Hub, Detective, Macie, VPC Flow Logs (lab; see EC2), CloudWatch Logs, CloudWatch Metrics/Alarms, Resource Groups Tagging API |
+| Streams and delivery | Kinesis, Firehose, Amazon MQ, MSK, Transfer Family, SES, AppConfig, Step Functions |
 | IaC, edge, and governance | CloudFormation, Cloud Control, Glue, WAF v2, Config, ACM, Route 53, Cloud Map, CloudFront, ELB v2, Control Tower (stub) |
-| Compute | Lambda, ECR, ECS, CodeBuild, CodeCommit, CodePipeline, CodeDeploy, Batch, AppSync |
-| API edge | API Gateway HTTP API |
+| Compute | Lambda, ECR, ECS, EC2 (lab nested), EKS, CodeBuild, CodeCommit, CodePipeline, CodeDeploy, Batch, AppSync |
+| API edge | API Gateway REST, HTTP API, WebSocket lab lite |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
-| Billing | Pricing, BCM Data Exports, Cost Explorer, Budgets |
+| Billing | Pricing, BCM Data Exports, Cost and Usage Reports, Cost Explorer, Budgets |
+| Devices | IoT Core / IoT Data (HTTP shadows) |
+| Control plane labs | Lightsail, Auto Scaling, Elastic Beanstalk, AWS Backup |
 
 Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
 
@@ -133,15 +135,15 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Out of lab scope: Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, cross-account grant flows, true AWS-owned managed keys. (Resource tags ship: ListResourceTags / TagResource / UntagResource / CreateKey Tags.)</td>
     </tr>
     <tr>
-      <td rowspan="15" align="center" valign="middle">Data</td>
+      <td rowspan="17" align="center" valign="middle">Data</td>
       <td>S3</td>
       <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put/Delete with delete markers, ListObjectVersions including DeleteMarker), Object Lock lite (CreateBucket ObjectLockEnabled + retain-until; GOVERNANCE bypass header), Put/GetBucketLogging server access logs, Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked). Get/Delete CloudTrail resources + versionId.</td>
       <td>Out of lab scope: lifecycle, CORS/website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
-      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/Update SET/REMOVE/ConditionCheck lab subset with ConditionExpression, ClientRequestToken idempotency, stream append on success, soft cap 25), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
-      <td>Out of lab scope: more than two GSIs, LSI, PartiQL, global tables, cross-account / XA transact, live PITR, billing depth.</td>
+      <td>Tables, item CRUD, Query/Scan with up to two lab GSIs and two lab LSIs, BatchGet/BatchWrite, TransactWriteItems/TransactGetItems (same-account Put/Delete/Update SET/REMOVE/ConditionCheck lab subset with ConditionExpression, ClientRequestToken idempotency, stream append on success, soft cap 25), PartiQL ExecuteStatement/BatchExecuteStatement lite (INSERT/SELECT/UPDATE/DELETE; fail closed on JOIN/nested SELECT), table resource policies (same-account or, cross-account and), CMK encryption, TTL configure and lazy expiry. Stream enablement for DynamoDB Streams lab core.</td>
+      <td>Out of lab scope: more than two GSIs/LSIs, richer PartiQL, global tables, cross-account / XA transact, live PITR, billing depth.</td>
     </tr>
     <tr>
       <td>DynamoDB Streams</td>
@@ -166,7 +168,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>SNS</td>
       <td>Topic CRUD including FIFO (<code>.fifo</code>, MessageGroupId/dedup), Publish, Subscribe and Unsubscribe (including XA Subscribe to foreign topic ARNs), List*, Get/SetTopicAttributes, Get/SetSubscriptionAttributes (lab FilterPolicy + RawMessageDelivery + RedrivePolicy DLQ after retry exhaustion), Add/RemovePermission, topic policies (same-account or, cross-account and), confirmed sqs/lambda delivery (destination policy must Allow sns.amazonaws.com; foreign SQS and Lambda ARNs supported) plus loopback HTTP(S) catcher (deny-by-default egress).</td>
-      <td>Out of lab scope: SMS, email, nested filter-policy operators, HT FIFO quotas, exact AWS retry timing. Will not ship: open-internet HTTP(S) webhooks (loopback catcher only).</td>
+      <td>Out of lab scope: SMS, email, nested filter-policy operators, HT FIFO quotas, exact AWS retry timing. HTTP(S) beyond the loopback catcher is opt-in only (<code>NOCTAXRIS_SNS_HTTP_EGRESS=1</code> + allowlist; no open SSRF).</td>
     </tr>
     <tr>
       <td>EventBridge</td>
@@ -190,26 +192,36 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>RDS</td>
-      <td>CreateDBInstance / DescribeDBInstances / DeleteDBInstance for engine <code>postgres</code>. Nested Postgres via DinD data-plane helper when engine is up. Nested-network endpoint only. Master credentials in Secrets Manager.</td>
-      <td>Out of lab scope: MySQL, Multi-AZ, read replicas, Aurora full cluster matrix, IAM DB auth tokens. Will not ship: host-published Postgres ports (Data API on <code>:4566</code> only).</td>
+      <td>CreateDBInstance / DescribeDBInstances / DeleteDBInstance for engines <code>postgres</code>, <code>mysql</code>, and <code>mariadb</code>. Nested Postgres (<code>postgres:16-alpine</code>), MySQL (<code>mysql:8.0</code>), or MariaDB (<code>mariadb:11</code>) via DinD data-plane helper when engine is up. Nested-network endpoint only. Master credentials in Secrets Manager.</td>
+      <td>Out of lab scope: Multi-AZ, read replicas, Aurora full cluster matrix, IAM DB auth tokens, Oracle/SQL Server. Will not ship: host-published DB ports (Postgres Data API on <code>:4566</code>; MySQL/MariaDB nested wire only).</td>
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code>. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT). <code>formatRecordsAs=JSON</code>; Batch <code>generatedFields</code> from <code>RETURNING</code> via <code>pgx</code>.</td>
-      <td>Out of lab scope: <code>ExecuteSql</code> legacy, AWS 3-minute idle (lab 5m), cross-process transaction resume. Nested <code>pgx</code> dial still needs API reachability to the DinD data network.</td>
+      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code> for engine <code>postgres</code> only. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT). <code>formatRecordsAs=JSON</code>; Batch <code>generatedFields</code> from <code>RETURNING</code> via <code>pgx</code>. MySQL/MariaDB resourceArn returns BadRequestException.</td>
+      <td>Out of lab scope: <code>ExecuteSql</code> legacy, AWS 3-minute idle (lab 5m), cross-process transaction resume, MySQL/MariaDB Data API. Nested <code>pgx</code> dial still needs API reachability to the DinD data network.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
       <td>CreateCacheCluster / DescribeCacheClusters / DeleteCacheCluster for redis or valkey. Status creating until nested Valkey/Redis starts; available only with engine. Nested-network endpoint only.</td>
-      <td>Cluster mode / replication group matrix, Redis AUTH depth, MemoryDB, host-published cache ports.</td>
+      <td>Cluster mode / replication group matrix, Redis AUTH depth, host-published cache ports.</td>
+    </tr>
+    <tr>
+      <td>MemoryDB</td>
+      <td>CreateCluster / DescribeClusters / DeleteCluster (JSON 1.1 AmazonMemoryDB). Status creating until nested Valkey/Redis starts; available only with engine. Nested-network endpoint only. DescribeUsers / DescribeACLs return empty stubs.</td>
+      <td>User/ACL create-delete matrix, TLS/IAM auth depth, multi-shard Multi-AZ, host-published MemoryDB ports.</td>
     </tr>
     <tr>
       <td>DocumentDB</td>
       <td>CreateDBCluster / DescribeDBClusters / DeleteDBCluster (<code>Engine=docdb</code>). Status creating until nested Mongo-compatible starts; available only with engine. Nested-network endpoint only. Not Neptune.</td>
-      <td>Neptune, change streams, full TLS client auth matrix, host-published document ports.</td>
+      <td>Change streams, full TLS client auth matrix, host-published document ports.</td>
     </tr>
     <tr>
-      <td rowspan="8" align="center" valign="middle">Audit and tags</td>
+      <td>Neptune</td>
+      <td>CreateDBCluster / DescribeDBClusters / DeleteDBCluster (<code>Engine=neptune</code>, SigV4 <code>neptune</code>). Status creating until nested Gremlin Server starts; available only with engine. Nested-network endpoint <code>{id}.neptune.noctaxris.internal:8182</code> only.</td>
+      <td>openCypher/Neo4j backend, CreateDBInstance matrix, IAM DB auth, HTTP Gremlin on <code>:4566</code>, host-published Gremlin ports.</td>
+    </tr>
+    <tr>
+      <td rowspan="9" align="center" valign="middle">Audit and tags</td>
       <td>CloudTrail</td>
       <td>LookupEvents over local <code>cloudtrail/events.jsonl</code> with time and attribute filters (lab <code>SourceIPAddress</code>; account-scoped <code>recipientAccountId</code>; <code>EventCategory=insight</code> for insight-shaped records). CreateTrail/DescribeTrails/DeleteTrail/StartLogging/StopLogging: StartLogging delivers one lab JSONL snapshot to in-account S3 and optional CloudWatch Logs then sets IsLogging; while logging, new JSONL lines ship continuously (AWSLogs hive keys; optional gzip via <code>NOCTAXRIS_CLOUDTRAIL_GZIP</code>; Logs timestamps from <code>eventTime</code>; digest sidecar + lab <code>ValidateLogs</code>). <code>PutEventSelectors</code>/<code>GetEventSelectors</code> lite (management + optional S3 data). Org trail flag (<code>IsOrganizationTrail</code>) on management account. Lab <code>InjectEvents</code> / <code>InjectInsightsEvents</code> when <code>NOCTAXRIS_CLOUDTRAIL_INJECT=1</code> (no Insights ML engine). Live audit: userName, sessionContext lite, eventCategory/managementEvent, safer requestParameters, resources on key paths, sibling KMS Decrypt audits, service-derived error eventSource; audit XFF via <code>NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1</code> only.</td>
       <td>Insights ML/anomaly engine and PutInsightSelectors, Lake, full multi-account org-trail delivery matrix, cross-account lookup.</td>
@@ -242,7 +254,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>CloudWatch Logs</td>
       <td>Create/DeleteLogGroup, Create/DeleteLogStream, DescribeLogGroups/DescribeLogStreams, PutRetentionPolicy/DeleteRetentionPolicy (AWS-allowed day values; expired events purged), PutLogEvents/GetLogEvents, FilterLogEvents (optional stream names, time bounds, lab filterPattern subset: space-AND terms, quoted phrases, <code>?</code>/<code>*</code> globs, optional <code>-term</code> exclude, JSON <code>{ $.path = \"value\" }</code> equality for CT-shaped messages; lab page cap), account Put/Get/Delete/DescribeResourcePolicies, Put/Delete/DescribeSubscriptionFilters to Lambda (awslogs envelope) or lab SQS under destination owner, Put/Delete/DescribeMetricFilters with honest metricFilterCount and store datapoints. Identity EvaluateFull; PassRole on subscription roleArn. Lambda Invoke auto-ships <code>/aws/lambda/*</code> START/END/REPORT.</td>
-      <td>Out of lab scope: Insights query engine, full CloudWatch filter syntax, full Metrics/Alarms API, Kinesis/Firehose/OpenSearch subscription destinations, full pagination parity.</td>
+      <td>Out of lab scope: Insights query engine, full CloudWatch filter syntax, Kinesis/Firehose/OpenSearch subscription destinations, full pagination parity.</td>
+    </tr>
+    <tr>
+      <td>CloudWatch Metrics / Alarms</td>
+      <td>PutMetricData, ListMetrics, GetMetricStatistics, GetMetricData (MetricStat only), PutMetricAlarm, DescribeAlarms, DeleteAlarms, SetAlarmState. JSON via <code>GraniteServiceVersion20100801.*</code> (SigV4 <code>monitoring</code>).</td>
+      <td>Metric math expressions, composite/anomaly alarms, alarm action fan-out, dashboards, metric streams, smithy-rpc-v2-cbor.</td>
     </tr>
     <tr>
       <td>Resource Groups Tagging API</td>
@@ -250,10 +267,10 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Resource Groups CRUD, GroupBy, tag policy compliance, service-native tag API parity.</td>
     </tr>
     <tr>
-      <td rowspan="7" align="center" valign="middle">Streams and delivery</td>
+      <td rowspan="8" align="center" valign="middle">Streams and delivery</td>
       <td>Kinesis Data Streams</td>
-      <td>Create/Delete/Describe/ListStreams with ShardCount 1..4, PutRecord/PutRecords (partition-key hash to shard), GetShardIterator/GetRecords per shard, stream Put/Get/DeleteResourcePolicy. Lambda event source mapping polls all shards sequentially: see Lambda row.</td>
-      <td>Shard split/merge APIs, enhanced fan-out, encryption depth, Kinesis Data Analytics.</td>
+      <td>Create/Delete/Describe/ListStreams with ShardCount 1..4, PutRecord/PutRecords (partition-key hash to shard), GetShardIterator/GetRecords per shard, RegisterStreamConsumer/Describe/List/Deregister, SubscribeToShard lab JSON long-poll, UpdateShardCount (UNIFORM_SCALING within 1..4), stream Put/Get/DeleteResourcePolicy. Lambda event source mapping polls all shards sequentially: see Lambda row.</td>
+      <td>HTTP/2 SubscribeToShard event-stream push, ParallelizationFactor ESM, remapping historical records after scale, encryption depth, Kinesis Data Analytics.</td>
     </tr>
     <tr>
       <td>Firehose</td>
@@ -263,7 +280,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>Amazon MQ</td>
       <td>CreateBroker/DescribeBroker/ListBrokers/DeleteBroker. RabbitMQ or ActiveMQ nested DinD when engine up (CREATION_IN_PROGRESS→RUNNING, Internal AMQP). No DinD → CREATION_FAILED + stub://. PubliclyAccessible=true rejected. No host/WAN broker ports. Lambda MQ ESM Create when RUNNING (see Lambda row).</td>
-      <td>MSK/Kafka, full admin APIs, public broker endpoints. Blocked: ActiveMQ AMQP 1.0/JMS consumer for Lambda ESM (dial-only empty batch).</td>
+      <td>Full admin APIs, public broker endpoints. Blocked: ActiveMQ AMQP 1.0/JMS consumer for Lambda ESM (dial-only empty batch).</td>
+    </tr>
+    <tr>
+      <td>MSK</td>
+      <td>CreateCluster/DescribeCluster/ListClusters/DeleteCluster/GetBootstrapBrokers. Nested Redpanda when DinD up (CREATING→ACTIVE). No DinD → FAILED. Bootstrap brokers nested-network only (<code>noctaxris-msk-&lt;name&gt;:9092</code>). No host/WAN Kafka ports.</td>
+      <td>CreateClusterV2/serverless, TLS/SASL/IAM auth endpoints, multi-broker topology, host-published Kafka ports.</td>
     </tr>
     <tr>
       <td>Transfer Family</td>
@@ -333,8 +355,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>ELB v2</td>
-      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type application only (network rejected). Target types lambda or ip. Path-pattern and host-header listener rules (exact or trailing <code>*</code> prefix; AND when both present) select target group on lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission. DescribeTargetHealth healthy when a listener or rule forwards and permission Allows; IP stays unused. No EC2.</td>
-      <td>ALB Cognito auth action, HTTP-header / query-string conditions, IP target dataplane, NLB.</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type <code>application</code> or <code>network</code> (other values rejected). Target types lambda, ip, or instance (lab-opaque <code>i-*</code>; no EC2). ALB: HTTP/HTTPS listeners; path-pattern and host-header rules; lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). NLB: TCP/TLS listeners; control-plane + DescribeTargetHealth only (no L4 dataplane). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission for Lambda. DescribeTargetHealth healthy when a listener or rule forwards (Lambda also needs permission Allows).</td>
+      <td>ALB Cognito auth action, HTTP-header / query-string conditions, NLB L4 proxy / UDP, IP/instance dataplane, Gateway LB.</td>
     </tr>
     <tr>
       <td>Control Tower</td>
@@ -342,10 +364,10 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Landing zone create/enable, controls catalog, Account Factory.</td>
     </tr>
     <tr>
-      <td rowspan="9" align="center" valign="middle">Compute</td>
+      <td rowspan="11" align="center" valign="middle">Compute</td>
       <td>Lambda</td>
       <td>Zip or Image CreateFunction through UpdateConfiguration, PublishVersion and aliases, layers (max 5, <code>/opt</code> on zip and Image Invoke), sync and async Invoke (Event with SQS DLQ/OnFailure), SQS, DynamoDB Streams, Kinesis, and Amazon MQ event source mappings (MQ Create requires RUNNING nested broker; allowlisted <code>noctaxris-mq-*</code> only; RabbitMQ AMQP 0-9-1 Dial + <code>basic.get</code> on queue <code>noctaxris</code> returns real bodies; ActiveMQ stays dial-then-empty; unit tests may inject <code>MQReceiveFunc</code>), FilterCriteria (EventBridge operators on SQS body / DynamoDB Keys, NewImage, and OldImage / Kinesis data and partitionKey), and ReportBatchItemFailures, Function URLs lite (NONE with CORS <code>*</code> or AllowOrigins allowlist, or AWS_IAM on <code>/lambda-url/...</code>), runtimes <code>python3.11</code>/<code>python3.12</code>/<code>python3.13</code>/<code>python3.14</code>/<code>nodejs20.x</code>/<code>nodejs22.x</code>/<code>nodejs24.x</code>/<code>java21</code>/<code>java25</code>, Invoke qualifiers, AddPermission/GetPolicy/RemovePermission (lab foreign IAM principals and service-principal XA grants with SourceAccount/SourceArn), ImageUri pull of lab ECR <code>127.0.0.1:4566/ACCOUNT/REPO:tag</code> with Registry V2 auth, PassRole plus <code>lambda.amazonaws.com</code> trust, nested DinD with TLS (no host <code>docker.sock</code>), platform egress deny. Live Invoke requires healthy <code>noctaxris-engine</code>.</td>
-      <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM, ActiveMQ AMQP 1.0/JMS consumer for MQ ESM (dial-only empty), FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
+      <td>Out of lab scope: Enhanced fan-out / ParallelizationFactor Kinesis ESM (stream EFO register/subscribe/UpdateShardCount are under Kinesis), ActiveMQ AMQP 1.0/JMS consumer for MQ ESM (dial-only empty), FilterCriteria <code>$or</code>/<code>wildcard</code>/<code>cidr</code> and FilterCriteria KMS encryption, provisioned concurrency, weighted aliases, Function URL CORS methods/headers depth, EventBridge/Lambda OnFailure destinations, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth. Will not ship: non-lab private registries (lab ECR on <code>:4566</code> only).</td>
     </tr>
     <tr>
       <td>ECR</td>
@@ -356,6 +378,16 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>ECS</td>
       <td>Register/Describe/List/DeregisterTaskDefinition (requires taskRoleArn and executionRoleArn), RunTask/Describe/List/Stop, CreateService/UpdateService/DeleteService/DescribeServices/ListServices with DesiredCount lab reconciler, DescribeClusters/ListClusters, PassRole plus <code>ecs-tasks.amazonaws.com</code> trust, nested DinD on <code>noctaxris-ecs</code> Internal network (host-gateway ExtraHosts off by default; opt in with <code>NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1</code> or <code>docker/compose.lab-ecs-host-gateway.yaml</code>), task-role credential injection. Live RunTask requires healthy <code>noctaxris-engine</code>.</td>
       <td>Out of lab scope: load balancers, awsvpc ENI, capacity providers, ECS Exec, Service Connect, autoscaling/circuit breakers/placement/EBS/Firelens, multi-cluster, fully rootless nested engine (default is already restricted DinD; privileged opt-in exists), full SAR depth.</td>
+    </tr>
+    <tr>
+      <td>EC2 (lab nested)</td>
+      <td>RunInstances / DescribeInstances / DescribeImages / StopInstances / StartInstances / TerminateInstances (Query). Nested keep-alive containers on Internal <code>noctaxris-ec2</code> via DinD TLS (no host <code>docker.sock</code>). Lab AMI map (<code>ami-alpine</code>, <code>ami-amazonlinux2023</code>, <code>ami-ubuntu2204</code>); unknown AMI → alpine allowlist pin. Without engine, instances stay <code>pending</code>. VPC Flow CreateFlowLogs / InjectFlowLogs remain under the same <code>ec2</code> service (see VPC Flow Logs row).</td>
+      <td>Security groups, ENIs, VPC/subnet plane, SSH/UserData/IMDS, RebootInstances, host port publish.</td>
+    </tr>
+    <tr>
+      <td>EKS</td>
+      <td>CreateCluster / DescribeCluster / ListClusters / DeleteCluster (REST <code>/clusters</code>). Metadata-only <code>ACTIVE</code> with nested endpoint string <code>https://noctaxris-eks-&lt;name&gt;:6443</code>. Empty ListNodegroups stub. No nested k3s; no live kubectl / CA data.</td>
+      <td>Nested k3s, kubectl / update-kubeconfig, nodegroups beyond empty list, Fargate profiles, add-ons, access entries.</td>
     </tr>
     <tr>
       <td>CodeBuild</td>
@@ -388,10 +420,15 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Amplify, subscriptions/MQTT, AppSync JS/VTL runtimes, OIDC beyond Cognito, field arguments/aliases/fragments.</td>
     </tr>
     <tr>
-      <td rowspan="1" align="center" valign="middle">API edge</td>
-      <td>API Gateway HTTP API</td>
-      <td>CreateApi/GetApi/UpdateApi/GetApis/DeleteApi, CreateIntegration, GetIntegrations, CreateAuthorizer, GetAuthorizers, CreateRoute, GetRoutes, CreateStage. REST <code>/v2/apis...</code> is routed before lab ECR Registry <code>/v2/</code>. Lambda AWS_PROXY only. Optional <code>CorsConfiguration</code> (origins/methods/headers/MaxAge/credentials; OPTIONS preflight without an OPTIONS route). Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (simple <code>isAuthorized</code> / IAM policy; Deny short-circuits before integration). Optional CredentialsArn PassRole for apigateway.amazonaws.com. Invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
-      <td>Out of lab scope: REST API v1, WebSocket, REST TOKEN authorizers, authorizer result caching, custom domains beyond ACM string link, HTTP API resource policies. Will not ship: HTTP_PROXY / VPC link integrations.</td>
+      <td rowspan="2" align="center" valign="middle">API edge</td>
+      <td>API Gateway REST API</td>
+      <td>CreateRestApi/GetRestApi/GetRestApis/DeleteRestApi, CreateResource/GetResources/DeleteResource, PutMethod/GetMethod/DeleteMethod, PutIntegration/GetIntegration (<code>AWS_PROXY</code> Lambda + <code>MOCK</code>), CreateDeployment/CreateStage/GetStage. Method auth NONE or AWS_IAM. Invoke on <code>/restapis/{apiId}/{stage}/_user_request_/{path}</code> (Floci shape).</td>
+      <td>REQUEST/TOKEN authorizers, usage plans, API keys, OpenAPI import/export, method response maps beyond MOCK default. HTTP_PROXY / VPC link default-deny (opt-in allowlist when enabled).</td>
+    </tr>
+    <tr>
+      <td>API Gateway HTTP API / WebSocket</td>
+      <td>CreateApi/GetApi/UpdateApi/GetApis/DeleteApi, CreateIntegration, GetIntegrations, CreateAuthorizer, GetAuthorizers, CreateRoute, GetRoutes, CreateStage. ProtocolType HTTP or WEBSOCKET. REST <code>/v2/apis...</code> is routed before lab ECR Registry <code>/v2/</code>. Lambda AWS_PROXY; optional opt-in HTTP_PROXY/VPC_LINK with allowlist. Optional <code>CorsConfiguration</code> (HTTP). Route auth NONE, JWT (Cognito JWKS), AWS_IAM (<code>execute-api:Invoke</code>), or CUSTOM REQUEST Lambda authorizer (HTTP). WebSocket routes <code>$connect</code>/<code>$disconnect</code>/<code>$default</code>; lab invoke <code>/ws-api/{apiId}/{stage}/...</code>; PostToConnection on <code>/execute-api/.../@connections/...</code>. HTTP invoke on <code>/http-api/{apiId}/{stage}/{path}</code>.</td>
+      <td>Out of lab scope: REST TOKEN authorizers, authorizer result caching, custom domains beyond ACM string link, HTTP API resource policies, real <code>ws://</code> upgrade. Will not ship: open HTTP_PROXY / VPC link without <code>NOCTAXRIS_APIGW_HTTP_PROXY=1</code> and allowlist.</td>
     </tr>
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
@@ -425,7 +462,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Streaming transcription, Call Analytics, writing transcripts into lab S3.</td>
     </tr>
     <tr>
-      <td rowspan="4" align="center" valign="middle">Billing</td>
+      <td rowspan="5" align="center" valign="middle">Billing</td>
       <td>Pricing</td>
       <td>DescribeServices/GetAttributeValues/GetProducts over a tiny static embedded price list. Identity authz.</td>
       <td>Live AWS price list sync.</td>
@@ -433,7 +470,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>BCM Data Exports</td>
       <td>CreateExport/GetExport/ListExports/DeleteExport. Sample CSV/JSON under the data root. Identity authz.</td>
-      <td>Scheduled CUR delivery to S3, Parquet variants.</td>
+      <td>Scheduled delivery variants beyond sample files.</td>
+    </tr>
+    <tr>
+      <td>Cost and Usage Reports</td>
+      <td>Put/Modify/Describe/DeleteReportDefinition. Optional tiny CSV/JSON PutObject to S3Bucket/S3Prefix (no DuckDB). Identity authz.</td>
+      <td>DuckDB/Parquet sidecar, FOCUS projectors from live usage enumerators, scheduled daily emit.</td>
     </tr>
     <tr>
       <td>Cost Explorer</td>
@@ -444,6 +486,33 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Budgets</td>
       <td>CreateBudget/DescribeBudget/DescribeBudgets/DeleteBudget. SNS subscriber ARNs under NotificationsWithSubscribers receive one lab LAB_CREATE Publish on CreateBudget (not ACTUAL).</td>
       <td>Budget actions that mutate accounts, RI/SP coverage, live CE-driven ACTUAL/FORECASTED threshold evaluation.</td>
+    </tr>
+    <tr>
+      <td rowspan="1" align="center" valign="middle">Devices</td>
+      <td>IoT Core / Data</td>
+      <td>Things CRUD; CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal/ListThingPrincipals; Update/Get/DeleteThingShadow over HTTP JSON. Identity authz.</td>
+      <td>Embedded MQTT broker, rules engine depth, Jobs.</td>
+    </tr>
+    <tr>
+      <td rowspan="4" align="center" valign="middle">Control plane labs</td>
+      <td>Lightsail</td>
+      <td>GetBlueprints/GetBundles; CreateInstances/GetInstance/GetInstances; Start/Stop/Reboot/DeleteInstance (state machine only).</td>
+      <td>Real VMs; disks/static IPs/key pairs; container services and managed databases.</td>
+    </tr>
+    <tr>
+      <td>Auto Scaling</td>
+      <td>Launch configuration CRUD; AutoScalingGroup CRUD; SetDesiredCapacity reconciles lab EC2 (Pending without engine; InService when running); ForceDelete terminates members.</td>
+      <td>Nested EC2 launch reconcile; lifecycle hooks; scaling policies; target group attach.</td>
+    </tr>
+    <tr>
+      <td>Elastic Beanstalk</td>
+      <td>Application/version/environment CRUD lite; TerminateEnvironment; ListAvailableSolutionStacks (Ready/Green store only).</td>
+      <td>Real platform deploy; configuration settings depth.</td>
+    </tr>
+    <tr>
+      <td>AWS Backup</td>
+      <td>Vault/plan CRUD; StartBackupJob completes with recovery-point metadata for S3/DDB ARN strings.</td>
+      <td>Real snapshot engine; selections; async job delay.</td>
     </tr>
   </tbody>
 </table>

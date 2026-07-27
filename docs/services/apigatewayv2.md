@@ -2,20 +2,24 @@
 
 **Status:** shipped (lab core)
 
-HTTP API (API Gateway v2) lite: CreateApi / UpdateApi (CORS) / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT, IAM, and Lambda authorizers. Optional HTTP API `CorsConfiguration` for browser preflight. No REST API v1. No HTTP_PROXY to arbitrary URLs.
+HTTP API (API Gateway v2) lite: CreateApi / UpdateApi (CORS) / CreateIntegration / CreateAuthorizer / CreateRoute / CreateStage, Lambda AWS_PROXY invoke. JWT, IAM, and Lambda authorizers. Optional HTTP API `CorsConfiguration` for browser preflight. Optional opt-in `HTTP_PROXY` / `VPC_LINK` with allowlist (default deny). REST API v1 and WebSocket notes: [apigateway.md](apigateway.md).
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | API | `CreateApi` (ProtocolType HTTP, optional `CorsConfiguration`), `GetApi`, `UpdateApi` (lab: `CorsConfiguration`), `GetApis`, `DeleteApi` |
-| Integration | `CreateIntegration` (AWS_PROXY Lambda ARN only, optional `CredentialsArn` with PassRole), `GetIntegrations` |
+| Integration | `CreateIntegration` (AWS_PROXY Lambda ARN; optional `CredentialsArn` with PassRole; opt-in `HTTP_PROXY` / `VPC_LINK`), `GetIntegrations` |
 | Authorizer | `CreateAuthorizer` (JWT: Issuer + Audience; REQUEST Lambda authorizer), `GetAuthorizers` |
 | Route | `CreateRoute` (AuthorizationType NONE, JWT, AWS_IAM, or CUSTOM), `GetRoutes` |
 | Stage | `CreateStage` (`$default` common) |
 | REST vs Registry | HTTP API management REST under `/v2/apis...` is matched before lab ECR Docker Registry `/v2/` on the same listener |
 | Invoke | `GET/POST http://127.0.0.1:4566/http-api/{apiId}/{stage}/{path}` |
 | CORS | `CorsConfiguration` on CreateApi/UpdateApi: `AllowOrigins`, `AllowMethods`, `AllowHeaders`, `ExposeHeaders`, `MaxAge`, `AllowCredentials`. Browser `OPTIONS` preflight is answered without an OPTIONS route when CORS is set. Matching origins receive CORS headers on integration responses. `AllowCredentials` with `AllowOrigins: *` fails closed |
+
+### HTTP_PROXY / VPC_LINK (opt-in)
+
+Default deny. Set `NOCTAXRIS_APIGW_HTTP_PROXY=1` and list destinations in `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (comma-separated hosts or URL prefixes). Link-local / metadata / loopback / private hosts require an allowlist entry that names that host. No redirect follow; pinned DialContext. Details: [apigateway.md](apigateway.md#http_proxy--vpc_link-opt-in), [configuration.md](../configuration.md), [security-defaults.md](../security-defaults.md).
 
 ### Route auth
 
@@ -105,12 +109,12 @@ Expect `204` and `Access-Control-Allow-Origin: https://app.example` when the ori
 
 ## Out of lab scope
 
-- REST API (v1) and WebSocket APIs (out of lab scope; HTTP API Lambda proxy + JWT/IAM/CUSTOM is the marketed edge)
 - REST TOKEN authorizers (out of lab scope; HTTP API REQUEST only)
 - Authorizer result caching / TTL (out of lab scope)
 - Custom domains beyond lab ACM string linkage (out of lab scope)
 - HTTP API resource policies (out of lab scope; IAM invoke via `execute-api:Invoke` only — not invented)
+- WebSocket real `ws://` upgrade (out of lab scope; see [apigateway.md](apigateway.md) HTTP stand-in)
 
 ## Will not ship
 
-- `HTTP_PROXY` / VPC link integrations (will not ship; arbitrary URL proxy is open-SSRF class; AWS_PROXY Lambda only)
+- Open `HTTP_PROXY` / VPC link without `NOCTAXRIS_APIGW_HTTP_PROXY=1` and allowlist (will not ship; arbitrary URL proxy is open-SSRF class)

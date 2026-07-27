@@ -23,7 +23,7 @@ func TestELBv2AppendAccessLogToS3(t *testing.T) {
 	if _, err := st.CreateBucket(account, "alb-logs"); err != nil {
 		t.Fatal(err)
 	}
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "log-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "log-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestELBv2AppendAccessLogToS3(t *testing.T) {
 func TestELBv2AccessLogsRejectMissingBucket(t *testing.T) {
 	st := openS3Store(t)
 	account := "111122223333"
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "no-bucket-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "no-bucket-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}

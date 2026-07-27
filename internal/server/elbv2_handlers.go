@@ -132,9 +132,9 @@ func (s *Server) elbCreateLB(
 	if lbType == "" {
 		lbType = "application"
 	}
-	if lbType != "application" {
+	if lbType != "application" && lbType != "network" {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
-			"Type must be application (network load balancers are not implemented).", readOnly, eventID, verified)
+			"Type must be application or network.", readOnly, eventID, verified)
 		return
 	}
 	if !s.authorize(verified, catalog.ActionELBv2CreateLoadBalancer, "*") {
@@ -146,7 +146,7 @@ func (s *Server) elbCreateLB(
 	if region == "" {
 		region = store.DefaultELBv2Region
 	}
-	lb, err := s.store.CreateELBv2LoadBalancer(verified.AccountID, region, name, scheme)
+	lb, err := s.store.CreateELBv2LoadBalancer(verified.AccountID, region, name, scheme, lbType)
 	if errors.Is(err, store.ErrELBv2BadRequest) {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
 			err.Error(), readOnly, eventID, verified)

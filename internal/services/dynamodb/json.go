@@ -77,6 +77,36 @@ func tableDescription(t store.DynamoTable) map[string]any {
 		desc["GlobalSecondaryIndexes"] = gsiList
 	}
 
+	if t.HasLSI() {
+		lsiList := []map[string]any{}
+		for _, l := range t.LSIs() {
+			lsiKeySchema := []map[string]string{
+				{"AttributeName": t.HashKeyName, "KeyType": "HASH"},
+				{"AttributeName": l.RangeKeyName, "KeyType": "RANGE"},
+			}
+			found := false
+			for _, existing := range attrs {
+				if existing["AttributeName"] == l.RangeKeyName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				attrs = append(attrs, map[string]string{
+					"AttributeName": l.RangeKeyName, "AttributeType": l.RangeKeyType,
+				})
+			}
+			lsiList = append(lsiList, map[string]any{
+				"IndexName":   l.IndexName,
+				"KeySchema":   lsiKeySchema,
+				"Projection":  map[string]string{"ProjectionType": "ALL"},
+				"IndexStatus": "ACTIVE",
+			})
+		}
+		desc["AttributeDefinitions"] = attrs
+		desc["LocalSecondaryIndexes"] = lsiList
+	}
+
 	ttlStatus := store.TTLStatusDisabled
 	if t.TTLEnabled {
 		ttlStatus = store.TTLStatusEnabled

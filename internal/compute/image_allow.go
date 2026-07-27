@@ -124,12 +124,18 @@ func isPinnedLabImage(ref string) bool {
 		"eclipse-temurin:25-jre":                    {},
 		"alpine:3.20":                               {},
 		"public.ecr.aws/docker/library/alpine:3.20": {},
+		"public.ecr.aws/amazonlinux/amazonlinux:2023": {},
+		"public.ecr.aws/docker/library/ubuntu:22.04":  {},
 		"postgres:16-alpine":                        {},
+		"mysql:8.0":                                 {},
+		"mariadb:11":                                {},
 		"valkey/valkey:8-alpine":                    {},
 		"mongo:7":                                   {},
 		"rabbitmq:3.13-alpine":                      {},
 		"apache/activemq-classic:5.18.3":            {},
 		"opensearchproject/opensearch:2.11.1":       {},
+		"tinkerpop/gremlin-server:3.7.3":            {},
+		"redpandadata/redpanda:v24.2.4":             {},
 	}
 	_, ok := pinnedExact[lower]
 	return ok

@@ -75,6 +75,10 @@ func (s *Server) handleELBv2LabListener(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if lb.Type == "network" {
+		http.Error(w, "network load balancers have no HTTP lab dataplane (control-plane and target health only)", http.StatusBadRequest)
+		return
+	}
 
 	region := store.DefaultELBv2Region
 	logState := &elbLabAccessLogState{

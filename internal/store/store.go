@@ -370,6 +370,10 @@ type Store struct {
 	// s3ObjectMu + s3ObjectLocks serialize PutObject file+SQL per account/bucket/key.
 	s3ObjectMu    sync.Mutex
 	s3ObjectLocks map[string]*s3ObjectLock
+
+	// wsConnOnce + wsConn hold in-memory WebSocket API lab connections (PostToConnection).
+	wsConnOnce sync.Once
+	wsConn     *sync.Map
 }
 
 type s3ObjectLock struct {
@@ -530,7 +534,11 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"pipes", EnsurePipesSchema},
 		{"mq", EnsureMQSchema},
 		{"elasticache", EnsureElastiCacheSchema},
+		{"memorydb", EnsureMemoryDBSchema},
 		{"docdb", EnsureDocDBSchema},
+		{"neptune", EnsureNeptuneSchema},
+		{"msk", EnsureMSKSchema},
+		{"eks", EnsureEKSSchema},
 		{"transfer", EnsureTransferSchema},
 		{"acm", EnsureACMSchema},
 		{"guardduty", EnsureGuardDutySchema},
@@ -541,10 +549,19 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"service discovery", EnsureServiceDiscoverySchema},
 		{"appsync", EnsureAppSyncSchema},
 		{"apigatewayv2", EnsureAPIGatewayV2Schema},
+		{"apigateway rest", EnsureAPIGatewayRESTSchema},
 		{"cognito", EnsureCognitoSchema},
 		{"cloudcontrol", EnsureCloudControlSchema},
 		{"bcm export", EnsureBCMExportSchema},
 		{"budgets", EnsureBudgetsSchema},
+		{"cur", EnsureCURSchema},
+		{"iot", EnsureIoTSchema},
+		{"cloudwatch", EnsureCloudWatchSchema},
+		{"lightsail", EnsureLightsailSchema},
+		{"ec2", EnsureEC2Schema},
+		{"autoscaling", EnsureASGSchema},
+		{"beanstalk", EnsureBeanstalkSchema},
+		{"backup", EnsureBackupSchema},
 		{"codedeploy", EnsureCodeDeploySchema},
 		{"cloudfront", EnsureCloudFrontSchema},
 		{"elbv2", EnsureELBv2Schema},
@@ -688,6 +705,14 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE dynamodb_items ADD COLUMN gsi_sk TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_items ADD COLUMN gsi2_pk TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_items ADD COLUMN gsi2_sk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi_range_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi_range_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi2_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi2_range_key_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_tables ADD COLUMN lsi2_range_key_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_items ADD COLUMN lsi_sk TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dynamodb_items ADD COLUMN lsi2_sk TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE s3_buckets ADD COLUMN versioning_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sqs_messages ADD COLUMN message_group_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sqs_messages ADD COLUMN message_deduplication_id TEXT NOT NULL DEFAULT ''`,

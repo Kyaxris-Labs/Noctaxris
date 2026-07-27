@@ -2,6 +2,7 @@ import { AppConfigClient } from "@aws-sdk/client-appconfig";
 import { AppConfigDataClient } from "@aws-sdk/client-appconfigdata";
 import { AppSyncClient } from "@aws-sdk/client-appsync";
 import { ApiGatewayV2Client } from "@aws-sdk/client-apigatewayv2";
+import { APIGatewayClient } from "@aws-sdk/client-api-gateway";
 import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { ConfigServiceClient } from "@aws-sdk/client-config-service";
@@ -10,6 +11,7 @@ import { EventBridgeClient } from "@aws-sdk/client-eventbridge";
 import { FirehoseClient } from "@aws-sdk/client-firehose";
 import { GlueClient } from "@aws-sdk/client-glue";
 import { IAMClient } from "@aws-sdk/client-iam";
+import { KinesisClient } from "@aws-sdk/client-kinesis";
 import { KMSClient } from "@aws-sdk/client-kms";
 import { LambdaClient } from "@aws-sdk/client-lambda";
 import { MqClient } from "@aws-sdk/client-mq";
@@ -192,6 +194,10 @@ export function newDDB() {
   return new DynamoDBClient(baseConfig());
 }
 
+export function newKinesis() {
+  return new KinesisClient(baseConfig());
+}
+
 export function newIAM() {
   return new IAMClient(baseConfig());
 }
@@ -226,6 +232,10 @@ export function newSecrets() {
 
 export function newAPIGWv2() {
   return new ApiGatewayV2Client(baseConfig());
+}
+
+export function newAPIGW() {
+  return new APIGatewayClient(baseConfig());
 }
 
 export function newCognito() {

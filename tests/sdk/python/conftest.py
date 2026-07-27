@@ -214,6 +214,11 @@ def dynamodb_client():
 
 
 @pytest.fixture
+def kinesis_client():
+    return boto3.client("kinesis", **_creds())
+
+
+@pytest.fixture
 def iam_client():
     return boto3.client("iam", **_creds())
 
@@ -256,6 +261,11 @@ def secretsmanager_client():
 @pytest.fixture
 def apigatewayv2_client():
     return boto3.client("apigatewayv2", **_creds())
+
+
+@pytest.fixture
+def apigateway_client():
+    return boto3.client("apigateway", **_creds())
 
 
 @pytest.fixture

@@ -133,7 +133,7 @@ func TestELBv2LambdaTarget(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	account := "000000000001"
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "lab-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "lab-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +141,8 @@ func TestELBv2LambdaTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateELBv2TargetGroup(account, "us-east-1", "bad", "instance", "HTTP", 80); err == nil {
-		t.Fatal("expected instance target type rejected")
+	if _, err := st.CreateELBv2TargetGroup(account, "us-east-1", "bad", "alb", "HTTP", 80); err == nil {
+		t.Fatal("expected unsupported target type rejected")
 	}
 	listener, err := st.CreateELBv2Listener(account, "us-east-1", lb.ARN, tg.ARN, "HTTP", 80)
 	if err != nil || listener.ListenerARN == "" {

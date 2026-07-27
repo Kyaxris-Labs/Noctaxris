@@ -21,7 +21,7 @@ func TestELBv2PathRuleMatchAndPriority(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	account := "000000000001"
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "rules-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "rules-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestELBv2HostHeaderRuleMatchAndPriority(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	account := "000000000001"
-	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "host-alb", "internet-facing")
+	lb, err := st.CreateELBv2LoadBalancer(account, "us-east-1", "host-alb", "internet-facing", "application")
 	if err != nil {
 		t.Fatal(err)
 	}

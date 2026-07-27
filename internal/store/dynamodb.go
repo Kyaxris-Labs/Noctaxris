@@ -76,6 +76,12 @@ type DynamoTable struct {
 	GSI2HashKeyType  string
 	GSI2RangeKeyName string
 	GSI2RangeKeyType string
+	LSIName          string
+	LSIRangeKeyName  string
+	LSIRangeKeyType  string
+	LSI2Name         string
+	LSI2RangeKeyName string
+	LSI2RangeKeyType string
 	TTLAttributeName string
 	TTLEnabled       bool
 	StreamEnabled    bool
@@ -219,6 +225,8 @@ const dynamoTableSelect = `account_id, table_name, table_arn, status, hash_key_n
 		        gsi_name, gsi_hash_key_name, gsi_hash_key_type, gsi_range_key_name, gsi_range_key_type,
 		        COALESCE(gsi2_name, ''), COALESCE(gsi2_hash_key_name, ''), COALESCE(gsi2_hash_key_type, ''),
 		        COALESCE(gsi2_range_key_name, ''), COALESCE(gsi2_range_key_type, ''),
+		        COALESCE(lsi_name, ''), COALESCE(lsi_range_key_name, ''), COALESCE(lsi_range_key_type, ''),
+		        COALESCE(lsi2_name, ''), COALESCE(lsi2_range_key_name, ''), COALESCE(lsi2_range_key_type, ''),
 		        ttl_attribute_name, ttl_enabled,
 		        COALESCE(stream_enabled, 0), COALESCE(stream_view_type, ''), COALESCE(stream_label, '')`
 
@@ -234,6 +242,8 @@ func scanDynamoTable(scanner interface {
 		&t.ResourcePolicy, &t.SSEType, &t.KMSKeyID, &t.CreationDate,
 		&t.GSIName, &t.GSIHashKeyName, &t.GSIHashKeyType, &t.GSIRangeKeyName, &t.GSIRangeKeyType,
 		&t.GSI2Name, &t.GSI2HashKeyName, &t.GSI2HashKeyType, &t.GSI2RangeKeyName, &t.GSI2RangeKeyType,
+		&t.LSIName, &t.LSIRangeKeyName, &t.LSIRangeKeyType,
+		&t.LSI2Name, &t.LSI2RangeKeyName, &t.LSI2RangeKeyType,
 		&t.TTLAttributeName, &ttlEnabled,
 		&streamEnabled, &t.StreamViewType, &t.StreamLabel,
 	)
@@ -515,6 +525,14 @@ func (s *Store) PutItemBytesMultiGSI(
 	accountID, table, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK string,
 	itemJSON []byte, sealed bool, sealedDEK []byte,
 ) error {
+	return s.PutItemBytesIndexed(accountID, table, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, "", "", itemJSON, sealed, sealedDEK)
+}
+
+// PutItemBytesIndexed upserts an item with GSI and LSI index key columns.
+func (s *Store) PutItemBytesIndexed(
+	accountID, table, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, lsiSK, lsi2SK string,
+	itemJSON []byte, sealed bool, sealedDEK []byte,
+) error {
 	if _, err := s.GetTable(accountID, table); err != nil {
 		return err
 	}
@@ -524,17 +542,19 @@ func (s *Store) PutItemBytesMultiGSI(
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO dynamodb_items
-		 (account_id, table_name, item_pk, item_sk, gsi_pk, gsi_sk, gsi2_pk, gsi2_sk, item_json, sealed, sealed_dek)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (account_id, table_name, item_pk, item_sk, gsi_pk, gsi_sk, gsi2_pk, gsi2_sk, lsi_sk, lsi2_sk, item_json, sealed, sealed_dek)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(account_id, table_name, item_pk, item_sk) DO UPDATE SET
 		   gsi_pk = excluded.gsi_pk,
 		   gsi_sk = excluded.gsi_sk,
 		   gsi2_pk = excluded.gsi2_pk,
 		   gsi2_sk = excluded.gsi2_sk,
+		   lsi_sk = excluded.lsi_sk,
+		   lsi2_sk = excluded.lsi2_sk,
 		   item_json = excluded.item_json,
 		   sealed = excluded.sealed,
 		   sealed_dek = excluded.sealed_dek`,
-		accountID, table, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, itemJSON, sealedFlag, sealedDEK,
+		accountID, table, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, lsiSK, lsi2SK, itemJSON, sealedFlag, sealedDEK,
 	)
 	if err != nil {
 		return fmt.Errorf("put item: %w", err)

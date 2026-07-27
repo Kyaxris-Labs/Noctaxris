@@ -355,17 +355,41 @@ func TestELBv2CreateListenerAndRegisterLambda(t *testing.T) {
 	}
 
 	reject := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateTargetGroup", "elasticloadbalancing", map[string]any{
-		"Name": "ec2-nope", "TargetType": "instance",
+		"Name": "ec2-nope", "TargetType": "alb",
 	}, now)
 	if reject.Code == http.StatusOK {
-		t.Fatalf("expected instance target type rejected")
+		t.Fatalf("expected unsupported target type rejected")
 	}
 
 	nlb := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateLoadBalancer", "elasticloadbalancing", map[string]any{
 		"Name": "lab-nlb", "Type": "network",
 	}, now)
-	if nlb.Code == http.StatusOK {
-		t.Fatalf("Type=network must be rejected: %q", nlb.Body.String())
+	if nlb.Code != http.StatusOK {
+		t.Fatalf("Type=network must be accepted: status=%d body=%q", nlb.Code, nlb.Body.String())
+	}
+	var nlbOut map[string]any
+	_ = json.Unmarshal(nlb.Body.Bytes(), &nlbOut)
+	nlbs, _ := nlbOut["LoadBalancers"].([]any)
+	nlbMap, _ := nlbs[0].(map[string]any)
+	if typ, _ := nlbMap["Type"].(string); typ != "network" {
+		t.Fatalf("Type want network got %v body=%q", nlbMap["Type"], nlb.Body.String())
+	}
+	nlbARN, _ := nlbMap["LoadBalancerArn"].(string)
+	if !strings.Contains(nlbARN, "loadbalancer/net/") {
+		t.Fatalf("NLB ARN want loadbalancer/net/ got %q", nlbARN)
+	}
+	delNLB := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.DeleteLoadBalancer", "elasticloadbalancing", map[string]any{
+		"LoadBalancerArn": nlbARN,
+	}, now)
+	if delNLB.Code != http.StatusOK {
+		t.Fatalf("DeleteLoadBalancer NLB status=%d body=%q", delNLB.Code, delNLB.Body.String())
+	}
+
+	badType := mustJSONTarget(t, handler, "ElasticLoadBalancing_v2.CreateLoadBalancer", "elasticloadbalancing", map[string]any{
+		"Name": "lab-gateway", "Type": "gateway",
+	}, now)
+	if badType.Code == http.StatusOK {
+		t.Fatalf("Type=gateway must be rejected: %q", badType.Body.String())
 	}
 }
 

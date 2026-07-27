@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Terraform apply + destroy against a running Noctaxris API.
-# STACK=lab-core (default), lab-fullstack, lab-lambda-*, lab-ms-serverless, lab-ms-ecs
+# STACK=lab-core (default), lab-fullstack, lab-lambda-*, lab-ms-serverless, lab-ms-ecs,
+# lab-parity-observe, lab-parity-compute (also via TF_PARITY=1 / NOCTAXRIS_ADVANCED=1)
 #
 # lab-ms-ecs: set TF_MS_LIVE=1 for -var=live=true (DesiredCount>0; needs DinD).
 #
 # Lab-JSON edge/data surfaces (CloudFront, Transfer, Glue crawler, AppConfig, Config,
-# SFN, CloudTrail, Firehose OS, Route53 Alias, ELBv2, AppSync, MQ) are SDK-only —
-# do not add fake TF resources for them.
+# SFN, CloudTrail, Firehose OS, Route53 Alias, ELBv2, AppSync, MQ, CloudWatch alarms)
+# are SDK-only — do not add fake TF resources for them.
 # When Compose publishes 127.0.0.1:4566 on a Windows host, skip this runner from WSL
 # (WSL loopback is not the Windows host). Do not widen Compose publish to work around it.
 set -euo pipefail
@@ -125,6 +126,11 @@ required = {
     "lab-ms-ecs": [
         "repository_name", "task_definition_arn", "service_name",
         "desired_count", "task_role_arn", "execution_role_arn",
+    ],
+    "lab-parity-observe": ["table_name", "lsi_name"],
+    "lab-parity-compute": [
+        "launch_configuration_name", "asg_name", "asg_desired_capacity",
+        "eks_cluster_name", "eks_cluster_arn", "eks_role_arn",
     ],
 }.get(stack, [])
 missing = [k for k in required if outs.get(k, {}).get("value") in (None, "")]

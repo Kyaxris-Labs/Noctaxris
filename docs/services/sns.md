@@ -13,7 +13,7 @@ Lab-complete SNS core: topic CRUD (including FIFO), publish, subscribe (SQS, Lam
 | Publish | `Publish` (message id plus fan-out to confirmed subscriptions) |
 | Subscriptions | `Subscribe`, `ConfirmSubscription`, `Unsubscribe`, `ListSubscriptions`, `ListSubscriptionsByTopic`, `GetSubscriptionAttributes`, `SetSubscriptionAttributes` (`FilterPolicy` / `FilterPolicyScope` lab exact-match subset, `RawMessageDelivery`, persisted `DeliveryPolicy` / `RedrivePolicy`) |
 | Topic policy | `AddPermission`, `RemovePermission`, and Policy attribute on create or `SetTopicAttributes` |
-| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` only to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`), or exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` that resolve to public hosts (private/loopback/metadata rejected; no redirect follow; outbound dial uses a pinned safe DialContext). Arbitrary loopback ports are rejected |
+| Protocols | `sqs` and `lambda` (lab auto-confirm). `http` and `https` default to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`) only. Exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` are accepted only when `NOCTAXRIS_SNS_HTTP_EGRESS=1`, and only for hosts that resolve to public addresses (private/loopback/metadata rejected; no redirect follow; outbound dial uses a pinned safe DialContext). Without egress, allowlist entries are ignored (fail closed). Arbitrary loopback ports are rejected |
 | Delivery | Confirmed subscriptions apply lab `FilterPolicy` before fan-out (`MessageAttributes` default; `MessageBody` for JSON bodies). Confirmed `sqs` subscriptions receive the SNS-to-SQS JSON envelope, or the raw message body when `RawMessageDelivery=true`, when the queue policy Allows `sns.amazonaws.com`. Confirmed `lambda` subscriptions receive an SNS Records event via the async invoke path when the function policy Allows `sns.amazonaws.com`. Confirmed HTTP subscriptions POST JSON to the allowlisted endpoint. Best-effort with up to two attempts per target; after retry exhaustion, subscription `RedrivePolicy` may SendMessage to a configured SQS DLQ |
 | Destinations | Lambda async `DestinationConfig.OnFailure` may target an SNS topic ARN (Publish) or an SQS queue ARN |
 
@@ -88,6 +88,6 @@ aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP"
 - Exact AWS retry and jitter timing for delivery failures (out of lab scope)
 - High-throughput FIFO quotas (out of lab scope)
 
-## Will not ship
+## Opt-in HTTP egress
 
-- Open-internet SNS HTTP(S) webhooks (will not ship; deny-by-default egress / no open SSRF; loopback catcher only)
+Default deny: only the loopback lab catcher. Set `NOCTAXRIS_SNS_HTTP_EGRESS=1` and list exact destination URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` for non-catcher HTTP(S) delivery. See [configuration.md](../configuration.md) and [security-defaults.md](../security-defaults.md). This is not open-internet webhooks: destinations stay allowlisted, private/metadata hosts stay rejected, and redirects are not followed.

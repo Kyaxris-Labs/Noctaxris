@@ -4,6 +4,8 @@
 
 HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and real SQL transactions (`BeginTransaction` / `CommitTransaction` / `RollbackTransaction`). Supports `formatRecordsAs=JSON` and Batch `generatedFields` from `RETURNING` via `pgx`. Requires `resourceArn` (RDS DB instance ARN) and `secretArn` (Secrets Manager).
 
+**Engine support:** Postgres only. MySQL and MariaDB instances are accepted by the RDS control plane (see [rds.md](rds.md)) but Data API calls against those `resourceArn` values return `BadRequestException`. Use the nested MySQL/MariaDB wire protocol (or a future Data API extension), not this facade.
+
 ## Implemented
 
 | Area | Actions |
@@ -14,6 +16,7 @@ HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and r
 | Execute in txn | `ExecuteStatement` / `BatchExecuteStatement` with `transactionId` use the held `pgx` conn (no nested-psql for txn-scoped SQL) |
 | Authz | Identity `EvaluateFull` on `rds-data:*` |
 | Secrets | Rejects missing or mismatched `secretArn` (fail closed) |
+| Engine gate | Non-`postgres` engines → `BadRequestException` (honest Postgres-only Data API) |
 | Unavailable | No nested Postgres / pgx dial failure for Begin or txn sessions → `DatabaseUnavailableException` (no canned SELECT success) |
 | Result shape | `pgx`: OID-mapped fields (boolean / long / double / string / blob). nested-psql: SELECT cells as `stringValue` / `VARCHAR`; DML uses command-tag update counts. `formatRecordsAs=JSON` returns simplified row objects in `formattedRecords` (clears `records` / `columnMetadata`). Batch `updateResults[].generatedFields` populated from `RETURNING` (first row) via `pgx` |
 | Parameters | Named `:name` binds via `pgx` when the nested DSN dials; nested-psql fallback rewrites to typed SQL literals |
@@ -109,6 +112,7 @@ NOCTAXRIS_TEST_PGX_DSN='postgres://USER:PASS@HOST:5432/DB?sslmode=disable' \
 ## Not yet / deferred
 
 - Full result type matrix beyond OID-mapped / VARCHAR cells (array types, nested structures)
+- MySQL / MariaDB Data API (control-plane engines exist; SQL path remains Postgres-only)
 
 ## Out of lab scope
 

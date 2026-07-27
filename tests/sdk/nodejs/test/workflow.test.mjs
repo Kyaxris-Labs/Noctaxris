@@ -557,6 +557,42 @@ test("ELBv2 CreateRule path-pattern (no /alb/ invoke)", async (t) => {
   assert.match(desc.body, /\/api\*/);
 });
 
+test("ELBv2 CreateLoadBalancer Type=network", async (t) => {
+  if (!(await requireReady(t))) return;
+  const prefix = uniquePrefix();
+  const lbName = `${prefix}-nlb`.replace(/_/g, "-").slice(0, 32);
+
+  const lb = await signedJsonTarget(
+    "elasticloadbalancing",
+    "ElasticLoadBalancing_v2.CreateLoadBalancer",
+    { Name: lbName, Type: "network" },
+  );
+  assert.equal(lb.status, 200, lb.body);
+  const lbArn = lb.json?.LoadBalancers?.[0]?.LoadBalancerArn;
+  const lbType = lb.json?.LoadBalancers?.[0]?.Type;
+  assert.equal(lbType, "network", lb.body);
+  assert.ok(String(lbArn).includes("loadbalancer/net/"), lb.body);
+  t.after(async () => {
+    try {
+      await signedJsonTarget(
+        "elasticloadbalancing",
+        "ElasticLoadBalancing_v2.DeleteLoadBalancer",
+        { LoadBalancerArn: lbArn },
+      );
+    } catch {
+      /* ignore */
+    }
+  });
+
+  const desc = await signedJsonTarget(
+    "elasticloadbalancing",
+    "ElasticLoadBalancing_v2.DescribeLoadBalancers",
+    { LoadBalancerArns: [lbArn] },
+  );
+  assert.equal(desc.status, 200, desc.body);
+  assert.equal(desc.json?.LoadBalancers?.[0]?.Type, "network", desc.body);
+});
+
 test("AppSync CreateDataSource serviceRoleArn + two CreateResolver fields", async (t) => {
   if (!(await requireReady(t))) return;
   const iam = newIAM();

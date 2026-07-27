@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -94,6 +95,13 @@ func newS3(t *testing.T, cfg aws.Config) *s3.Client {
 func newDDB(t *testing.T, cfg aws.Config) *dynamodb.Client {
 	t.Helper()
 	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
+		o.BaseEndpoint = aws.String(endpoint())
+	})
+}
+
+func newKinesis(t *testing.T, cfg aws.Config) *kinesis.Client {
+	t.Helper()
+	return kinesis.NewFromConfig(cfg, func(o *kinesis.Options) {
 		o.BaseEndpoint = aws.String(endpoint())
 	})
 }

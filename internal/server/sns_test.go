@@ -141,3 +141,35 @@ func TestSNSTopicPolicyAloneAllowPublish(t *testing.T) {
 		t.Fatalf("missing MessageId in %q", rec.Body.String())
 	}
 }
+
+func TestSNSHTTPSubscribeRequiresEgressForAllowlist(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	topicARN := snsCreateTopic(t, handler, "http-egress", now)
+	publicHook := "https://example.com/sns-hook"
+
+	t.Setenv("NOCTAXRIS_SNS_HTTP_ALLOWLIST", publicHook)
+	t.Setenv("NOCTAXRIS_SNS_HTTP_EGRESS", "")
+
+	deny := mustSNSQuery(t, handler,
+		"Action=Subscribe&Version=2010-03-31&TopicArn="+url.QueryEscape(topicARN)+
+			"&Protocol=https&Endpoint="+url.QueryEscape(publicHook),
+		testAccessKey, testSecret, now)
+	if deny.Code != http.StatusBadRequest {
+		t.Fatalf("Subscribe without egress status=%d want 400 body=%q", deny.Code, deny.Body.String())
+	}
+	if !strings.Contains(deny.Body.String(), "InvalidParameter") {
+		t.Fatalf("expected InvalidParameter in %q", deny.Body.String())
+	}
+
+	catcher := "http://127.0.0.1:4566/_noctaxris/sns-http-catcher"
+	ok := mustSNSQuery(t, handler,
+		"Action=Subscribe&Version=2010-03-31&TopicArn="+url.QueryEscape(topicARN)+
+			"&Protocol=http&Endpoint="+url.QueryEscape(catcher),
+		testAccessKey, testSecret, now)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("Subscribe catcher status=%d want 200 body=%q", ok.Code, ok.Body.String())
+	}
+}

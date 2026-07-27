@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GSIs per table), BatchGet/BatchWrite, TransactWrite/TransactGet (same-account lab subset), table resource policies, CMK encryption, and TTL with lazy expiry on read.
+Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GSIs and two lab LSIs per table), BatchGet/BatchWrite, TransactWrite/TransactGet (same-account lab subset), PartiQL `ExecuteStatement` / `BatchExecuteStatement` lite, table resource policies, CMK encryption, and TTL with lazy expiry on read.
 
 ## Implemented
 
@@ -12,8 +12,10 @@ Lab-complete DynamoDB: tables, item CRUD, Query/Scan (including up to two lab GS
 | Continuous backups | `DescribeContinuousBackups` (lab stub: continuous `ENABLED`, PITR `DISABLED`) |
 | Tags | `ListTagsOfResource`, `TagResource`, `UntagResource` (table ARN via `ResourceArn`; `Tags` as `{Key,Value}`) |
 | GSI | Up to two lab global secondary indexes per table (`CreateTable` or `UpdateTable` `Create` GSI updates) |
+| LSI | Up to two lab local secondary indexes on `CreateTable` only (same HASH as table; alternate RANGE; table must have a RANGE key; `ProjectionType` ALL) |
 | Items | `PutItem`, `GetItem`, `DeleteItem`, `UpdateItem` |
-| Query / Scan | `Query`, `Scan` (base table and lab GSIs via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`; optional `FilterExpression` with the same lab subset as `ConditionExpression`, fail-closed on unsupported operators) |
+| Query / Scan | `Query`, `Scan` (base table and lab GSI/LSI via `IndexName`; sort-key `EQ`/`BETWEEN`/`begins_with`/comparisons on `KeyConditionExpression`; optional `FilterExpression` with the same lab subset as `ConditionExpression`, fail-closed on unsupported operators) |
+| PartiQL | `ExecuteStatement`, `BatchExecuteStatement` (lab soft cap 25): `INSERT INTO … VALUE`, `SELECT * FROM … WHERE` key equality, `UPDATE … SET` key equality, `DELETE FROM … WHERE` key equality; `?` Parameters; fail closed on JOIN, nested SELECT, IN, GROUP BY, ORDER BY, LIMIT |
 | Batch | `BatchGetItem`, `BatchWriteItem` (lab soft cap 25; overflow returned in `UnprocessedKeys` / `UnprocessedItems`) |
 | Transactions | `TransactWriteItems` (`Put` / `Delete` / `Update` SET/REMOVE / `ConditionCheck` existence; optional `ClientRequestToken` idempotency, 10-minute window; stream append on successful Put/Delete/Update), `TransactGetItems` (same-account tables; lab soft cap 25; duplicate item keys cancel the write) |
 | Resource policy | `PutResourcePolicy`, `GetResourcePolicy`, `DeleteResourcePolicy` |
@@ -118,11 +120,52 @@ aws dynamodb transact-get-items --endpoint-url "$EP" --transact-items "[
 ]"
 ```
 
+LSI create + query:
+
+```bash
+TABLE="noctaxris-lsi-$RANDOM"
+aws dynamodb create-table \
+  --table-name "$TABLE" \
+  --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S AttributeName=status,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
+  --local-secondary-indexes '[{"IndexName":"ByStatus","KeySchema":[{"AttributeName":"pk","KeyType":"HASH"},{"AttributeName":"status","KeyType":"RANGE"}],"Projection":{"ProjectionType":"ALL"}}]' \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url "$EP"
+aws dynamodb put-item --table-name "$TABLE" --item '{"pk":{"S":"u1"},"sk":{"S":"o1"},"status":{"S":"OPEN"}}' --endpoint-url "$EP"
+aws dynamodb query --table-name "$TABLE" --index-name ByStatus \
+  --key-condition-expression "pk = :pk AND #s = :st" \
+  --expression-attribute-names '{"#s":"status"}' \
+  --expression-attribute-values '{":pk":{"S":"u1"},":st":{"S":"OPEN"}}' \
+  --endpoint-url "$EP"
+```
+
+SDK LSI Query soft-skips when the API is down. Terraform: `STACK=lab-parity-observe` (`TF_PARITY=1` / `NOCTAXRIS_ADVANCED=1`).
+
+PartiQL:
+
+```bash
+TABLE="noctaxris-partiql-$RANDOM"
+aws dynamodb create-table \
+  --table-name "$TABLE" \
+  --attribute-definitions AttributeName=pk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url "$EP"
+aws dynamodb execute-statement \
+  --statement "INSERT INTO \"$TABLE\" VALUE {'pk':?,'data':?}" \
+  --parameters '[{"S":"1"},{"S":"hello"}]' \
+  --endpoint-url "$EP"
+aws dynamodb execute-statement \
+  --statement "SELECT * FROM \"$TABLE\" WHERE pk=?" \
+  --parameters '[{"S":"1"}]' \
+  --endpoint-url "$EP"
+```
+
 ## Not yet / deferred
 
 None for lab-core TransactWrite (stream view types and ESM OldImage filters: see [dynamodbstreams.md](dynamodbstreams.md) and [lambda.md](lambda.md)).
 
 ## Out of lab scope
 
-- Full DynamoDB SAR beyond the lab set (more than two GSIs, LSI, PartiQL, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity) (out of lab scope; Transact lab subset + two GSIs cover marketed core)
+- Full DynamoDB SAR beyond the lab set (more than two GSIs, more than two LSIs, Contributor Insights, export/import, global tables, UpdateContinuousBackups / live PITR restore, on-demand vs provisioned billing depth, full pagination parity, richer PartiQL) (out of lab scope; Transact lab subset + two GSIs + two LSIs + PartiQL lite cover marketed core)
 - AWS 100-item TransactItems limit (lab soft cap 25), cross-account / XA transact, Transact Update/conditions on SSE-KMS sealed items, richer `ConditionCheck` beyond existence (out of lab scope)

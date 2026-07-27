@@ -88,8 +88,8 @@ func TestRDSCreateDescribeDelete(t *testing.T) {
 	}
 
 	if _, err := st.CreateRDSDBInstance(account, "us-east-1", store.CreateRDSDBInstanceInput{
-		DBInstanceIdentifier: "lab-mysql",
-		Engine:               "mysql",
+		DBInstanceIdentifier: "lab-oracle",
+		Engine:               "oracle-ee",
 	}); !errors.Is(err, store.ErrRDSBadRequest) {
 		t.Fatalf("expected bad engine, got %v", err)
 	}
@@ -100,6 +100,79 @@ func TestRDSCreateDescribeDelete(t *testing.T) {
 	}
 	if _, err := st.DescribeRDSDBInstance(account, "lab-pg-1"); !errors.Is(err, store.ErrRDSInstanceNotFound) {
 		t.Fatalf("expected not found, got %v", err)
+	}
+}
+
+func TestRDSCreateMySQLAndMariaDB(t *testing.T) {
+	st := openRDSTestStore(t)
+	account := "000000000001"
+
+	mysql, err := st.CreateRDSDBInstance(account, "us-east-1", store.CreateRDSDBInstanceInput{
+		DBInstanceIdentifier: "lab-mysql-1",
+		Engine:               "mysql",
+		MasterUsername:       "root",
+		MasterUserPassword:   "lab-mysql-pass",
+		DBName:               "appdb",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mysql.Engine != "mysql" || mysql.EndpointPort != 3306 {
+		t.Fatalf("mysql=%+v", mysql)
+	}
+	if mysql.EngineVersion != "8.0" {
+		t.Fatalf("mysql version=%q", mysql.EngineVersion)
+	}
+	if store.DefaultRDSImage("mysql") != store.DefaultRDSMySQLImage {
+		t.Fatalf("mysql image=%q", store.DefaultRDSImage("mysql"))
+	}
+
+	maria, err := st.CreateRDSDBInstance(account, "us-east-1", store.CreateRDSDBInstanceInput{
+		DBInstanceIdentifier: "lab-maria-1",
+		Engine:               "MariaDB",
+		MasterUserPassword:   "lab-maria-pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if maria.Engine != "mariadb" || maria.EndpointPort != 3306 {
+		t.Fatalf("mariadb=%+v", maria)
+	}
+	if maria.MasterUsername != "root" || maria.DBName != "appdb" {
+		t.Fatalf("mariadb defaults user=%q db=%q", maria.MasterUsername, maria.DBName)
+	}
+	if maria.EngineVersion != "11" {
+		t.Fatalf("mariadb version=%q", maria.EngineVersion)
+	}
+
+	if err := st.UpdateRDSDBInstanceRuntime(account, "lab-mysql-1", "available", "cid-m", "noctaxris-data-rds-lab-mysql-1", 3306); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.DescribeRDSDBInstance(account, "lab-mysql-1")
+	if err != nil || got.DBInstanceStatus != "available" || got.EndpointPort != 3306 {
+		t.Fatalf("mysql runtime=%+v err=%v", got, err)
+	}
+
+	if _, err := st.DeleteRDSDBInstance(account, "lab-mysql-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteRDSDBInstance(account, "lab-maria-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRDSEngineHelpers(t *testing.T) {
+	if !store.IsValidRDSEngine("postgres") || !store.IsValidRDSEngine("mysql") || !store.IsValidRDSEngine("mariadb") {
+		t.Fatal("expected postgres/mysql/mariadb valid")
+	}
+	if store.IsValidRDSEngine("aurora-mysql") || store.IsValidRDSEngine("oracle-ee") {
+		t.Fatal("expected aurora/oracle rejected")
+	}
+	if store.DefaultRDSPort("mysql") != 3306 || store.DefaultRDSPort("postgres") != 5432 {
+		t.Fatal("unexpected default ports")
+	}
+	if store.DefaultRDSImage("mariadb") != "mariadb:11" || store.DefaultRDSImage("mysql") != "mysql:8.0" {
+		t.Fatal("unexpected default images")
 	}
 }
 

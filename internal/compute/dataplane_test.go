@@ -1,11 +1,13 @@
 package compute
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestDataPlaneHostConfigNeverPublishesPorts(t *testing.T) {
-	hc := dataPlaneHostConfig()
+	t.Setenv(EnvNestedPortPublish, "")
+	hc := dataPlaneHostConfig(5432)
 	if hc.PublishAllPorts {
 		t.Fatal("PublishAllPorts must be false")
 	}
@@ -76,6 +78,13 @@ func TestValidateDataPlaneOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts memorydb", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindMemoryDB, Image: "valkey/valkey:8-alpine",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("accepts docdb", func(t *testing.T) {
 		if err := ValidateDataPlaneOpts(DataPlaneOpts{
 			Kind: DataKindDocDB, Image: "mongo:7",
@@ -93,6 +102,21 @@ func TestValidateDataPlaneOpts(t *testing.T) {
 	t.Run("accepts opensearch", func(t *testing.T) {
 		if err := ValidateDataPlaneOpts(DataPlaneOpts{
 			Kind: DataKindOpenSearch, Image: "opensearchproject/opensearch:2.11.1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("accepts neptune", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindNeptune, Image: "tinkerpop/gremlin-server:3.7.3",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("accepts msk", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindMSK, Image: "redpandadata/redpanda:v24.2.4",
+			Cmd:  RedpandaStartCmd("noctaxris-msk-lab"),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -128,8 +152,29 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	if DefaultDataPlaneImage(DataKindRDS) != "postgres:16-alpine" {
 		t.Fatalf("rds image=%q", DefaultDataPlaneImage(DataKindRDS))
 	}
+	if DefaultDataPlaneImageForRDS("mysql") != "mysql:8.0" {
+		t.Fatalf("mysql image=%q", DefaultDataPlaneImageForRDS("mysql"))
+	}
+	if DefaultDataPlaneImageForRDS("mariadb") != "mariadb:11" {
+		t.Fatalf("mariadb image=%q", DefaultDataPlaneImageForRDS("mariadb"))
+	}
+	if DefaultDataPlaneImageForRDS("postgres") != "postgres:16-alpine" {
+		t.Fatalf("postgres image=%q", DefaultDataPlaneImageForRDS("postgres"))
+	}
+	if DefaultDataPlanePortForRDS("mysql") != 3306 || DefaultDataPlanePortForRDS("mariadb") != 3306 {
+		t.Fatalf("mysql/mariadb port=%d/%d", DefaultDataPlanePortForRDS("mysql"), DefaultDataPlanePortForRDS("mariadb"))
+	}
+	if DefaultDataPlanePortForRDS("postgres") != 5432 {
+		t.Fatalf("postgres port=%d", DefaultDataPlanePortForRDS("postgres"))
+	}
 	if DefaultDataPlanePort(DataKindElastiCache) != 6379 {
 		t.Fatalf("redis port=%d", DefaultDataPlanePort(DataKindElastiCache))
+	}
+	if DefaultDataPlanePort(DataKindMemoryDB) != 6379 {
+		t.Fatalf("memorydb port=%d", DefaultDataPlanePort(DataKindMemoryDB))
+	}
+	if DefaultDataPlaneImage(DataKindMemoryDB) != "valkey/valkey:8-alpine" {
+		t.Fatalf("memorydb image=%q", DefaultDataPlaneImage(DataKindMemoryDB))
 	}
 	if DefaultDataPlanePort(DataKindDocDB) != 27017 {
 		t.Fatalf("mongo port=%d", DefaultDataPlanePort(DataKindDocDB))
@@ -145,6 +190,22 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	}
 	if DefaultDataPlaneImage(DataKindOpenSearch) != "opensearchproject/opensearch:2.11.1" {
 		t.Fatalf("opensearch image=%q", DefaultDataPlaneImage(DataKindOpenSearch))
+	}
+	if DefaultDataPlanePort(DataKindNeptune) != 8182 {
+		t.Fatalf("neptune port=%d", DefaultDataPlanePort(DataKindNeptune))
+	}
+	if DefaultDataPlaneImage(DataKindNeptune) != "tinkerpop/gremlin-server:3.7.3" {
+		t.Fatalf("neptune image=%q", DefaultDataPlaneImage(DataKindNeptune))
+	}
+	if DefaultDataPlanePort(DataKindMSK) != 9092 {
+		t.Fatalf("msk port=%d", DefaultDataPlanePort(DataKindMSK))
+	}
+	if DefaultDataPlaneImage(DataKindMSK) != "redpandadata/redpanda:v24.2.4" {
+		t.Fatalf("msk image=%q", DefaultDataPlaneImage(DataKindMSK))
+	}
+	cmd := RedpandaStartCmd("noctaxris-msk-x")
+	if len(cmd) < 3 || cmd[0] != "redpanda" || !strings.Contains(strings.Join(cmd, " "), "noctaxris-msk-x:9092") {
+		t.Fatalf("redpanda cmd=%v", cmd)
 	}
 }
 

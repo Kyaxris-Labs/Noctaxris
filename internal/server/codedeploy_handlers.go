@@ -104,7 +104,7 @@ func (s *Server) checkCodeDeployPassRole(verified *authn.Verified, roleARN strin
 	return nil
 }
 
-func jsonString(params map[string]any, keys ...string) string {
+func jsonParamString(params map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := params[k].(string); ok && v != "" {
 			return v
@@ -122,8 +122,8 @@ func (s *Server) cdCreateApplication(
 			"User is not authorized to perform codedeploy:CreateApplication.", readOnly, eventID, verified)
 		return
 	}
-	name := jsonString(params, "applicationName", "ApplicationName")
-	platform := jsonString(params, "computePlatform", "ComputePlatform")
+	name := jsonParamString(params, "applicationName", "ApplicationName")
+	platform := jsonParamString(params, "computePlatform", "ComputePlatform")
 	app, err := s.store.CreateCodeDeployApplication(verified.AccountID, name, platform)
 	if errors.Is(err, store.ErrCodeDeployExists) {
 		s.writeCodeDeployError(w, r, body, requestID, http.StatusBadRequest, "ApplicationAlreadyExistsException",
@@ -154,21 +154,21 @@ func (s *Server) cdCreateDeploymentGroup(
 			"User is not authorized to perform codedeploy:CreateDeploymentGroup.", readOnly, eventID, verified)
 		return
 	}
-	appName := jsonString(params, "applicationName", "ApplicationName")
-	dgName := jsonString(params, "deploymentGroupName", "DeploymentGroupName")
-	roleARN := jsonString(params, "serviceRoleArn", "ServiceRoleArn")
+	appName := jsonParamString(params, "applicationName", "ApplicationName")
+	dgName := jsonParamString(params, "deploymentGroupName", "DeploymentGroupName")
+	roleARN := jsonParamString(params, "serviceRoleArn", "ServiceRoleArn")
 	ecsService, ecsCluster, lambdaFn := "", "", ""
 	if ecsList, ok := params["ecsServices"].([]any); ok && len(ecsList) > 0 {
 		if m, ok := ecsList[0].(map[string]any); ok {
-			ecsService = jsonString(m, "serviceName", "ServiceName")
-			ecsCluster = jsonString(m, "clusterName", "ClusterName")
+			ecsService = jsonParamString(m, "serviceName", "ServiceName")
+			ecsCluster = jsonParamString(m, "clusterName", "ClusterName")
 		}
 	}
 	if cfg, ok := params["ecsServices"].(map[string]any); ok {
-		ecsService = jsonString(cfg, "serviceName", "ServiceName")
-		ecsCluster = jsonString(cfg, "clusterName", "ClusterName")
+		ecsService = jsonParamString(cfg, "serviceName", "ServiceName")
+		ecsCluster = jsonParamString(cfg, "clusterName", "ClusterName")
 	}
-	lambdaFn = jsonString(params, "lambdaFunctionName", "LambdaFunctionName")
+	lambdaFn = jsonParamString(params, "lambdaFunctionName", "LambdaFunctionName")
 	if roleARN != "" {
 		if err := s.checkCodeDeployPassRole(verified, roleARN); err != nil {
 			s.writeCodeDeployError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
@@ -211,9 +211,9 @@ func (s *Server) cdCreateDeployment(
 			"User is not authorized to perform codedeploy:CreateDeployment.", readOnly, eventID, verified)
 		return
 	}
-	appName := jsonString(params, "applicationName", "ApplicationName")
-	dgName := jsonString(params, "deploymentGroupName", "DeploymentGroupName")
-	description := jsonString(params, "description", "Description")
+	appName := jsonParamString(params, "applicationName", "ApplicationName")
+	dgName := jsonParamString(params, "deploymentGroupName", "DeploymentGroupName")
+	description := jsonParamString(params, "description", "Description")
 	dg, err := s.store.GetCodeDeployDeploymentGroup(verified.AccountID, appName, dgName)
 	if err != nil {
 		s.writeCodeDeployError(w, r, body, requestID, http.StatusBadRequest, "DeploymentGroupDoesNotExistException",
@@ -257,7 +257,7 @@ func (s *Server) cdGetDeployment(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	id := jsonString(params, "deploymentId", "DeploymentId")
+	id := jsonParamString(params, "deploymentId", "DeploymentId")
 	if !s.authorize(verified, catalog.ActionCodeDeployGetDeployment, "*") {
 		s.writeCodeDeployError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform codedeploy:GetDeployment.", readOnly, eventID, verified)
@@ -288,7 +288,7 @@ func (s *Server) cdListDeployments(
 			"User is not authorized to perform codedeploy:ListDeployments.", readOnly, eventID, verified)
 		return
 	}
-	appName := jsonString(params, "applicationName", "ApplicationName")
+	appName := jsonParamString(params, "applicationName", "ApplicationName")
 	deps, err := s.store.ListCodeDeployDeployments(verified.AccountID, appName)
 	if err != nil {
 		s.writeCodeDeployError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",

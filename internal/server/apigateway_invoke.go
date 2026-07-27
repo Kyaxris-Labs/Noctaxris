@@ -159,6 +159,37 @@ func (s *Server) handleHTTPAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 		http.Error(w, "integration not found", http.StatusNotFound)
 		return
 	}
+
+	switch in.IntegrationType {
+	case store.APIGatewayIntegrationHTTPProxy, store.APIGatewayIntegrationVPCLink:
+		status, respBody, respHeader, ferr := store.FetchAPIGatewayHTTPProxy(r.Context(), r.Method, in.IntegrationURI, body, r.Header)
+		if ferr != nil {
+			http.Error(w, "HTTP_PROXY fetch failed", http.StatusBadGateway)
+			return
+		}
+		for k, vals := range respHeader {
+			if isHTTPAPIStrippedResponseHeader(k, false) {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write(respBody)
+		applyHTTPAPICORSHeaders(w, r, api.CORS)
+		s.writeSuccessAudit(r, requestID, eventID, verified, apiGatewayEventSource, "Invoke", readOnly)
+		return
+	case store.APIGatewayIntegrationAWSProxy:
+		// continue below
+	default:
+		http.Error(w, "unsupported integration", http.StatusBadRequest)
+		return
+	}
+
 	fnAccount, fnName, ok := store.ParseLambdaARNFromSFNResource(in.IntegrationURI)
 	if !ok {
 		http.Error(w, "invalid integration", http.StatusBadRequest)

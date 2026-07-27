@@ -164,18 +164,17 @@ func (s *Server) rdsTryStartNested(
 		return inst
 	}
 	name := "noctaxris-data-rds-" + inst.DBInstanceIdentifier
+	port := store.DefaultRDSPort(inst.Engine)
+	image := store.DefaultRDSImage(inst.Engine)
+	env := rdsNestedEnv(inst, password)
 	startCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	dp, err := cli.StartDataPlane(startCtx, compute.DataPlaneOpts{
-		Kind:  compute.DataKindRDS,
-		Image: store.DefaultRDSPostgresImage,
-		Name:  name,
-		Env: map[string]string{
-			"POSTGRES_USER":     inst.MasterUsername,
-			"POSTGRES_PASSWORD": password,
-			"POSTGRES_DB":       inst.DBName,
-		},
-		ContainerPort: 5432,
+		Kind:          compute.DataKindRDS,
+		Image:         image,
+		Name:          name,
+		Env:           env,
+		ContainerPort: port,
 	})
 	if err != nil {
 		// DinD configured but start failed: surface failed status (not silent creating).
@@ -204,13 +203,53 @@ func (s *Server) rdsTryStartNested(
 	}
 	host := strings.Split(dp.Endpoint, ":")[0]
 	_ = s.store.UpdateRDSDBInstanceRuntime(
-		verified.AccountID, inst.DBInstanceIdentifier, "available", dp.ContainerID, host, 5432,
+		verified.AccountID, inst.DBInstanceIdentifier, "available", dp.ContainerID, host, port,
 	)
 	updated, err := s.store.DescribeRDSDBInstance(verified.AccountID, inst.DBInstanceIdentifier)
 	if err != nil {
 		return inst
 	}
 	return updated
+}
+
+// rdsNestedEnv builds engine-specific environment for the nested data-plane image.
+func rdsNestedEnv(inst store.RDSDBInstance, password string) map[string]string {
+	engine := store.NormalizeRDSEngine(inst.Engine)
+	user := strings.TrimSpace(inst.MasterUsername)
+	dbName := strings.TrimSpace(inst.DBName)
+	switch engine {
+	case "mysql", "mariadb":
+		if user == "" {
+			user = "root"
+		}
+		if dbName == "" {
+			dbName = "appdb"
+		}
+		env := map[string]string{
+			"MYSQL_DATABASE": dbName,
+		}
+		if user == "root" {
+			env["MYSQL_ROOT_PASSWORD"] = password
+		} else {
+			// Official mysql/mariadb images require a root password even when creating MYSQL_USER.
+			env["MYSQL_ROOT_PASSWORD"] = password
+			env["MYSQL_USER"] = user
+			env["MYSQL_PASSWORD"] = password
+		}
+		return env
+	default:
+		if user == "" {
+			user = "postgres"
+		}
+		if dbName == "" {
+			dbName = "postgres"
+		}
+		return map[string]string{
+			"POSTGRES_USER":     user,
+			"POSTGRES_PASSWORD": password,
+			"POSTGRES_DB":       dbName,
+		}
+	}
 }
 
 func (s *Server) rdsDescribeDBInstances(

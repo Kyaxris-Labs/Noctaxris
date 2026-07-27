@@ -51,6 +51,18 @@ func (s *Server) handleKinesis(
 		s.kinesisGetResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionKinesisDeleteResourcePolicy:
 		s.kinesisDeleteResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisRegisterStreamConsumer:
+		s.kinesisRegisterStreamConsumer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisDescribeStreamConsumer:
+		s.kinesisDescribeStreamConsumer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisListStreamConsumers:
+		s.kinesisListStreamConsumers(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisDeregisterStreamConsumer:
+		s.kinesisDeregisterStreamConsumer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisSubscribeToShard:
+		s.kinesisSubscribeToShard(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionKinesisUpdateShardCount:
+		s.kinesisUpdateShardCount(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeKinesisError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This Kinesis action is not implemented.", readOnly, eventID, verified)
@@ -84,6 +96,18 @@ func kinesisAction(action string) string {
 		return catalog.ActionKinesisGetResourcePolicy
 	case "DeleteResourcePolicy":
 		return catalog.ActionKinesisDeleteResourcePolicy
+	case "RegisterStreamConsumer":
+		return catalog.ActionKinesisRegisterStreamConsumer
+	case "DescribeStreamConsumer":
+		return catalog.ActionKinesisDescribeStreamConsumer
+	case "ListStreamConsumers":
+		return catalog.ActionKinesisListStreamConsumers
+	case "DeregisterStreamConsumer":
+		return catalog.ActionKinesisDeregisterStreamConsumer
+	case "SubscribeToShard":
+		return catalog.ActionKinesisSubscribeToShard
+	case "UpdateShardCount":
+		return catalog.ActionKinesisUpdateShardCount
 	default:
 		return action
 	}
@@ -523,6 +547,286 @@ func (s *Server) kinesisDeleteResourcePolicy(
 	}
 	s.writeKinesisOK(w, requestID, []byte(`{}`))
 	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "DeleteResourcePolicy", readOnly)
+}
+
+func (s *Server) kinesisStreamNameFromParams(verified *authn.Verified, params map[string]any) (name, arn string) {
+	name, _ = params["StreamName"].(string)
+	arn, _ = params["StreamARN"].(string)
+	if name == "" && arn != "" {
+		// arn:aws:kinesis:region:account:stream/NAME
+		if i := strings.LastIndex(arn, "stream/"); i >= 0 {
+			name = arn[i+len("stream/"):]
+			if j := strings.Index(name, "/"); j >= 0 {
+				name = name[:j]
+			}
+		}
+	}
+	if arn == "" && name != "" {
+		arn = store.KinesisStreamARN(s.kinesisRegion(verified), verified.AccountID, name)
+	}
+	return name, arn
+}
+
+func (s *Server) kinesisRegisterStreamConsumer(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, arn := s.kinesisStreamNameFromParams(verified, params)
+	consumerName, _ := params["ConsumerName"].(string)
+	if name == "" || strings.TrimSpace(consumerName) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"StreamARN/StreamName and ConsumerName are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionKinesisRegisterStreamConsumer, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:RegisterStreamConsumer.", readOnly, eventID, verified)
+		return
+	}
+	c, err := s.store.RegisterKinesisConsumer(verified.AccountID, s.kinesisRegion(verified), name, consumerName)
+	if errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Stream not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrKinesisConsumerExists) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
+			"Consumer already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrKinesisInvalidShard) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "LimitExceededException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to register consumer.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := kinesissvc.RegisterStreamConsumerJSON(c)
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "RegisterStreamConsumer", readOnly)
+}
+
+func (s *Server) kinesisDescribeStreamConsumer(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, arn := s.kinesisStreamNameFromParams(verified, params)
+	consumerName, _ := params["ConsumerName"].(string)
+	consumerARN, _ := params["ConsumerARN"].(string)
+	resource := consumerARN
+	if resource == "" {
+		resource = arn
+	}
+	if !s.authorize(verified, catalog.ActionKinesisDescribeStreamConsumer, resource) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:DescribeStreamConsumer.", readOnly, eventID, verified)
+		return
+	}
+	c, err := s.store.DescribeKinesisConsumer(verified.AccountID, name, consumerName, consumerARN)
+	if errors.Is(err, store.ErrKinesisConsumerNotFound) || errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Consumer not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, err := kinesissvc.DescribeStreamConsumerJSON(c)
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "DescribeStreamConsumer", readOnly)
+}
+
+func (s *Server) kinesisListStreamConsumers(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, arn := s.kinesisStreamNameFromParams(verified, params)
+	if name == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"StreamARN is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionKinesisListStreamConsumers, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:ListStreamConsumers.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.ListKinesisConsumers(verified.AccountID, name)
+	if errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Stream not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list consumers.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := kinesissvc.ListStreamConsumersJSON(list)
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "ListStreamConsumers", readOnly)
+}
+
+func (s *Server) kinesisDeregisterStreamConsumer(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, arn := s.kinesisStreamNameFromParams(verified, params)
+	consumerName, _ := params["ConsumerName"].(string)
+	consumerARN, _ := params["ConsumerARN"].(string)
+	resource := consumerARN
+	if resource == "" {
+		resource = arn
+	}
+	if !s.authorize(verified, catalog.ActionKinesisDeregisterStreamConsumer, resource) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:DeregisterStreamConsumer.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeregisterKinesisConsumer(verified.AccountID, name, consumerName, consumerARN)
+	if errors.Is(err, store.ErrKinesisConsumerNotFound) || errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Consumer not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := kinesissvc.EmptyConsumerOKJSON()
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "DeregisterStreamConsumer", readOnly)
+}
+
+func (s *Server) kinesisSubscribeToShard(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	consumerARN, _ := params["ConsumerARN"].(string)
+	shardID, _ := params["ShardId"].(string)
+	if strings.TrimSpace(consumerARN) == "" || strings.TrimSpace(shardID) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"ConsumerARN and ShardId are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionKinesisSubscribeToShard, consumerARN) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:SubscribeToShard.", readOnly, eventID, verified)
+		return
+	}
+	iteratorType := "TRIM_HORIZON"
+	startingSeq := ""
+	if start, ok := params["StartingPosition"].(map[string]any); ok {
+		if t, _ := start["Type"].(string); t != "" {
+			iteratorType = t
+		}
+		startingSeq, _ = start["SequenceNumber"].(string)
+	}
+	_, records, cont, err := s.store.SubscribeToShardLab(verified.AccountID, consumerARN, shardID, iteratorType, startingSeq, 1000)
+	if errors.Is(err, store.ErrKinesisConsumerNotFound) || errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Consumer or stream not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrKinesisInvalidShard) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"Invalid ShardId.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to subscribe to shard.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := kinesissvc.SubscribeToShardLabJSON(records, cont)
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "SubscribeToShard", readOnly)
+}
+
+func (s *Server) kinesisUpdateShardCount(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, arn := s.kinesisStreamNameFromParams(verified, params)
+	if name == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"StreamName is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionKinesisUpdateShardCount, arn) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:UpdateShardCount.", readOnly, eventID, verified)
+		return
+	}
+	target := 0
+	switch v := params["TargetShardCount"].(type) {
+	case float64:
+		target = int(v)
+	case int:
+		target = v
+	}
+	scalingType, _ := params["ScalingType"].(string)
+	if scalingType != "" && !strings.EqualFold(scalingType, "UNIFORM_SCALING") {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			"Only ScalingType UNIFORM_SCALING is supported.", readOnly, eventID, verified)
+		return
+	}
+	before, err := s.store.DescribeKinesisStream(verified.AccountID, name)
+	if errors.Is(err, store.ErrKinesisStreamNotFound) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Stream not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe stream.", readOnly, eventID, verified)
+		return
+	}
+	st, err := s.store.UpdateKinesisShardCount(verified.AccountID, name, target)
+	if errors.Is(err, store.ErrKinesisInvalidShard) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgumentException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update shard count.", readOnly, eventID, verified)
+		return
+	}
+	payload, err := kinesissvc.UpdateShardCountJSON(st, before.ShardCount)
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeKinesisOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, kinesisEventSource, "UpdateShardCount", readOnly)
 }
 
 func (s *Server) writeKinesisOK(w http.ResponseWriter, requestID string, payload []byte) {

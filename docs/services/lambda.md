@@ -286,7 +286,7 @@ aws lambda invoke \
 
 - Full Lambda SAR (provisioned concurrency, weighted alias routing, SnapStart, VPC ENI, recursive loop protection depth, tags, tracing, code signing) (out of lab scope; zip/Image/ESM/URLs cover marketed compute)
 - EventBridge or Lambda-to-Lambda failure destinations (out of lab scope; OnFailure to SQS and SNS is shipped)
-- Kinesis Enhanced Fan-Out (`RegisterStreamConsumer` / `SubscribeToShard`) / `ParallelizationFactor` (out of lab scope; sequential multi-shard ESM is the lab path)
+- Kinesis Enhanced Fan-Out Lambda ESM / `ParallelizationFactor` (out of lab scope; sequential multi-shard ESM is the lab path; stream EFO register/subscribe/update-shard-count live under [kinesis.md](kinesis.md))
 - FilterCriteria `$or` / `wildcard` / `cidr`, FilterCriteria KMS encryption (`KMSKeyArn`), and Kafka/MQ filter shapes (out of lab scope)
 - ActiveMQ AMQP 1.0/JMS consumer for MQ ESM (lab limit: allowlisted TCP dial then empty batch; RabbitMQ AMQP 0-9-1 `basic.get` is shipped when the nested broker is `RUNNING`)
 - Function URL CORS beyond AllowOrigins allowlist (methods/headers/MaxAge depth) (out of lab scope). Prefer API Gateway HTTP API for JWT labs. CloudFront is a config stub only (see [cloudfront.md](cloudfront.md))

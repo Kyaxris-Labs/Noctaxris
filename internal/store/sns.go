@@ -1260,12 +1260,18 @@ type SNSHTTPCatcherMessage struct {
 	ReceivedAt      string
 }
 
-// EnvSNSHTTPAllowlist extends the default SNS HTTP catcher allowlist (comma-separated exact URLs).
-// Allowlisted URLs still reject private, loopback, link-local, and metadata hosts.
+// EnvSNSHTTPEgress enables honor of NOCTAXRIS_SNS_HTTP_ALLOWLIST for non-catcher HTTP(S)
+// subscription endpoints. Unset/off: only the lab catcher is accepted (allowlist ignored).
+const EnvSNSHTTPEgress = "NOCTAXRIS_SNS_HTTP_EGRESS"
+
+// EnvSNSHTTPAllowlist is comma-separated exact HTTP(S) URLs allowed beyond the lab catcher
+// when NOCTAXRIS_SNS_HTTP_EGRESS=1. Allowlisted URLs still reject private, loopback,
+// link-local, and metadata hosts.
 const EnvSNSHTTPAllowlist = "NOCTAXRIS_SNS_HTTP_ALLOWLIST"
 
-// validateSNSHTTPEndpoint allows only the lab catcher on loopback :4566
-// (or exact URLs listed in NOCTAXRIS_SNS_HTTP_ALLOWLIST that pass host safety).
+// validateSNSHTTPEndpoint allows only the lab catcher on loopback :4566 by default.
+// Exact URLs in NOCTAXRIS_SNS_HTTP_ALLOWLIST are accepted only when
+// NOCTAXRIS_SNS_HTTP_EGRESS=1 and the host passes safety checks.
 // Arbitrary loopback ports are rejected to avoid open-proxy style delivery.
 func validateSNSHTTPEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
@@ -1279,7 +1285,7 @@ func validateSNSHTTPEndpoint(endpoint string) error {
 	if isSNSHTTPCatcherEndpoint(u, scheme) {
 		return nil
 	}
-	if !allowlistedSNSHTTPEndpoint(endpoint) {
+	if !snsHTTPEgressEnabled() || !allowlistedSNSHTTPEndpoint(endpoint) {
 		return ErrSNSEndpointNotAllowed
 	}
 	// Allowlist never short-circuits private/metadata/loopback host checks.
@@ -1287,6 +1293,11 @@ func validateSNSHTTPEndpoint(endpoint string) error {
 		return err
 	}
 	return nil
+}
+
+func snsHTTPEgressEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(EnvSNSHTTPEgress))
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 func isSNSHTTPCatcherEndpoint(u *url.URL, scheme string) bool {

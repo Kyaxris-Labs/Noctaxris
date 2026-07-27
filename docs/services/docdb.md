@@ -9,7 +9,7 @@ Create, describe, and delete DocumentDB clusters (`Engine=docdb`). Endpoint is a
 | Area | Actions |
 |------|---------|
 | CRUD | `CreateDBCluster`, `DescribeDBClusters`, `DeleteDBCluster` |
-| Engine | `docdb` only (Neptune rejected) |
+| Engine | `docdb` only (Neptune rejected; use [neptune.md](neptune.md)) |
 | Status | `creating` until nested Mongo-compatible container starts; `available` only after nested start; `failed` on DinD start/wait error |
 | Endpoint | `{id}.docdb.noctaxris.internal:27017` (nested network, not WAN or host published) |
 
@@ -38,7 +38,6 @@ The AWS CLI DocumentDB client typically signs as service `rds`. Describe returns
 
 ## Not yet / deferred
 
-- Neptune (deferred product line)
 - Change streams
 - Full TLS client auth matrix
 - Host or WAN publish of document DB ports (forbidden)

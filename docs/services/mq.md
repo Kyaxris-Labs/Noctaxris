@@ -65,5 +65,4 @@ Lambda ESM poll allowlists the nested host only. RabbitMQ ESM runs AMQP 0-9-1 `b
 ## Not yet / deferred
 
 - Full broker admin APIs and public endpoints
-- MSK / Kafka (out of lab scope)
 - ActiveMQ AMQP 1.0/JMS consumer for Lambda ESM (dial-only empty after allowlisted probe; RabbitMQ `basic.get` is shipped — see [lambda.md](lambda.md))

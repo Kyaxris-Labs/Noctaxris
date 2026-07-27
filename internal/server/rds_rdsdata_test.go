@@ -77,11 +77,12 @@ func TestRDSCreateDescribeDelete(t *testing.T) {
 	}
 }
 
-func TestRDSRejectsMySQL(t *testing.T) {
+func TestRDSAcceptsMySQLAndMariaDBRejectsUnknown(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
-	rec := mustRDSForm(t, handler, url.Values{
+
+	mysql := mustRDSForm(t, handler, url.Values{
 		"Action":               {"CreateDBInstance"},
 		"Version":              {"2014-10-31"},
 		"DBInstanceIdentifier": {"labmysql"},
@@ -90,8 +91,86 @@ func TestRDSRejectsMySQL(t *testing.T) {
 		"MasterUsername":       {"root"},
 		"MasterUserPassword":   {"lab-password-1"},
 	}, now)
-	if rec.Code == http.StatusOK {
-		t.Fatalf("expected rejection, got %s", rec.Body.String())
+	if mysql.Code != http.StatusOK {
+		t.Fatalf("expected mysql accept, got %d %s", mysql.Code, mysql.Body.String())
+	}
+	if !strings.Contains(mysql.Body.String(), "mysql") {
+		t.Fatalf("missing engine in %s", mysql.Body.String())
+	}
+
+	maria := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"labmaria"},
+		"Engine":               {"mariadb"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"root"},
+		"MasterUserPassword":   {"lab-password-1"},
+	}, now)
+	if maria.Code != http.StatusOK {
+		t.Fatalf("expected mariadb accept, got %d %s", maria.Code, maria.Body.String())
+	}
+
+	reject := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"laboracle"},
+		"Engine":               {"oracle-ee"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"admin"},
+		"MasterUserPassword":   {"lab-password-1"},
+	}, now)
+	if reject.Code == http.StatusOK {
+		t.Fatalf("expected rejection, got %s", reject.Body.String())
+	}
+
+	for _, id := range []string{"labmysql", "labmaria"} {
+		del := mustRDSForm(t, handler, url.Values{
+			"Action":               {"DeleteDBInstance"},
+			"Version":              {"2014-10-31"},
+			"DBInstanceIdentifier": {id},
+		}, now)
+		if del.Code != http.StatusOK {
+			t.Fatalf("DeleteDBInstance %s status=%d body=%q", id, del.Code, del.Body.String())
+		}
+	}
+}
+
+func TestRDSDataRejectsMySQLEngine(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"dataapi-mysql"},
+		"Engine":               {"mysql"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"root"},
+		"MasterUserPassword":   {"lab-password-1"},
+		"DBName":               {"appdb"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%q", create.Code, create.Body.String())
+	}
+	inst, err := st.DescribeRDSDBInstance(testAccountID, "dataapi-mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.UpdateRDSDBInstanceRuntime(testAccountID, "dataapi-mysql", "available", "cid-mysql", "noctaxris-data-rds-dataapi-mysql", 3306)
+
+	exec := mustJSONTarget(t, handler, "AmazonRDSDataService.ExecuteStatement", "rds-data", map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "appdb",
+		"sql":         "SELECT 1",
+	}, now)
+	if exec.Code == http.StatusOK {
+		t.Fatalf("expected Data API rejection for mysql, got %s", exec.Body.String())
+	}
+	if !strings.Contains(exec.Body.String(), "BadRequestException") && !strings.Contains(exec.Body.String(), "postgres") {
+		t.Fatalf("want BadRequest mentioning postgres-only, got %s", exec.Body.String())
 	}
 }
 

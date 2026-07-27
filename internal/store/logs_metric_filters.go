@@ -192,8 +192,8 @@ func parseMetricFilterValue(raw string) (float64, error) {
 	return v, err
 }
 
-// GetMetricData returns stored lab metric datapoints (CloudWatch Metrics lite stub).
-func (s *Store) GetMetricData(accountID, namespace, metricName string, startTime, endTime int64) ([]MetricDatapoint, error) {
+// GetLogsMetricDatapoints returns datapoints emitted by Logs metric filters.
+func (s *Store) GetLogsMetricDatapoints(accountID, namespace, metricName string, startTime, endTime int64) ([]MetricDatapoint, error) {
 	namespace = strings.TrimSpace(namespace)
 	metricName = strings.TrimSpace(metricName)
 	if namespace == "" || metricName == "" {

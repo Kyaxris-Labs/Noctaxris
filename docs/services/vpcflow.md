@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab seed)
 
-Opaque flow-log metadata and inject of AWS VPC Flow Logs custom format v2 lines. No real VPC/ENI control plane.
+Opaque flow-log metadata and inject of AWS VPC Flow Logs custom format v2 lines. No real VPC/ENI control plane. Instance APIs (`RunInstances`, …) live on the same `ec2` service; see [ec2.md](ec2.md).
 
 ## Implemented
 

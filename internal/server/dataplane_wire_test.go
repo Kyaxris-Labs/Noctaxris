@@ -27,6 +27,9 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 	if _, err := st.CreateElastiCacheCluster(account, "us-east-1", "wait-fail-cache", "redis", "", "", 1); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateMemoryDBCluster(account, "us-east-1", "wait-fail-mdb", "redis", "", "", "", 1); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.CreateDocDBCluster(account, "us-east-1", "wait-fail-docdb", "docdb", "", "labadmin", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +48,14 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 	ec, err := st.DescribeElastiCacheCluster(account, "wait-fail-cache")
 	if err != nil || ec.Status != "failed" {
 		t.Fatalf("elasticache after wait fail: %+v err=%v", ec, err)
+	}
+
+	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindMemoryDB, "wait-fail-mdb", "ctr-mdb", "host-mdb", waitErr); err == nil {
+		t.Fatal("expected wait error returned")
+	}
+	mdb, err := st.DescribeMemoryDBCluster(account, "us-east-1", "wait-fail-mdb")
+	if err != nil || mdb.Status != "failed" {
+		t.Fatalf("memorydb after wait fail: %+v err=%v", mdb, err)
 	}
 
 	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindDocDB, "wait-fail-docdb", "ctr-dd", "host-dd", waitErr); err == nil {
@@ -81,6 +92,14 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 	ecReady, err := st.DescribeElastiCacheCluster(account, "wait-fail-cache")
 	if err != nil || ecReady.Status != "available" || ecReady.ContainerID != "ctr-ec2" {
 		t.Fatalf("elasticache after wait ok: %+v err=%v", ecReady, err)
+	}
+
+	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindMemoryDB, "wait-fail-mdb", "ctr-mdb2", "host-mdb2", nil); err != nil {
+		t.Fatal(err)
+	}
+	mdbReady, err := st.DescribeMemoryDBCluster(account, "us-east-1", "wait-fail-mdb")
+	if err != nil || mdbReady.Status != "available" || mdbReady.ContainerID != "ctr-mdb2" {
+		t.Fatalf("memorydb after wait ok: %+v err=%v", mdbReady, err)
 	}
 
 	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindMQ, mq.BrokerID, "ctr-mq2", "host-mq2", nil); err != nil {

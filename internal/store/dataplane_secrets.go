@@ -12,6 +12,7 @@ type DataPlaneSecretKind string
 const (
 	DataPlaneSecretRDS         DataPlaneSecretKind = "rds"
 	DataPlaneSecretElastiCache DataPlaneSecretKind = "elasticache"
+	DataPlaneSecretMemoryDB    DataPlaneSecretKind = "memorydb"
 	DataPlaneSecretDocDB       DataPlaneSecretKind = "docdb"
 )
 

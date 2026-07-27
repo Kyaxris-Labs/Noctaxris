@@ -283,6 +283,8 @@ const (
 	ActionDynamoDBListTagsOfResource        = "dynamodb:ListTagsOfResource"
 	ActionDynamoDBTagResource               = "dynamodb:TagResource"
 	ActionDynamoDBUntagResource             = "dynamodb:UntagResource"
+	ActionDynamoDBExecuteStatement          = "dynamodb:ExecuteStatement"
+	ActionDynamoDBBatchExecuteStatement     = "dynamodb:BatchExecuteStatement"
 )
 
 // DynamoDB Streams lab actions.
@@ -332,11 +334,46 @@ const (
 	ActionElastiCacheDeleteCacheCluster    = "elasticache:DeleteCacheCluster"
 )
 
+// MemoryDB lab actions (JSON 1.1 AmazonMemoryDB.*).
+const (
+	ActionMemoryDBCreateCluster     = "memorydb:CreateCluster"
+	ActionMemoryDBDescribeClusters  = "memorydb:DescribeClusters"
+	ActionMemoryDBDeleteCluster     = "memorydb:DeleteCluster"
+	ActionMemoryDBDescribeUsers     = "memorydb:DescribeUsers"
+	ActionMemoryDBDescribeACLs      = "memorydb:DescribeACLs"
+)
+
 // DocumentDB lab actions. IAM action names use the rds: prefix (AWS DocumentDB shares RDS control-plane IAM).
 const (
 	ActionDocDBCreateDBCluster    = "rds:CreateDBCluster"
 	ActionDocDBDescribeDBClusters = "rds:DescribeDBClusters"
 	ActionDocDBDeleteDBCluster    = "rds:DeleteDBCluster"
+)
+
+// Neptune lab actions. Control-plane IAM uses the rds: prefix (AWS Neptune shares RDS cluster APIs).
+// Catalog strings use neptune: so they stay distinct from DocumentDB routing constants.
+const (
+	ActionNeptuneCreateDBCluster    = "neptune:CreateDBCluster"
+	ActionNeptuneDescribeDBClusters = "neptune:DescribeDBClusters"
+	ActionNeptuneDeleteDBCluster    = "neptune:DeleteDBCluster"
+)
+
+// Amazon MSK lab actions.
+const (
+	ActionMSKCreateCluster       = "kafka:CreateCluster"
+	ActionMSKDescribeCluster     = "kafka:DescribeCluster"
+	ActionMSKListClusters        = "kafka:ListClusters"
+	ActionMSKDeleteCluster       = "kafka:DeleteCluster"
+	ActionMSKGetBootstrapBrokers = "kafka:GetBootstrapBrokers"
+)
+
+// Amazon EKS lab actions (REST-JSON control plane; metadata-only ACTIVE).
+const (
+	ActionEKSCreateCluster   = "eks:CreateCluster"
+	ActionEKSDescribeCluster = "eks:DescribeCluster"
+	ActionEKSListClusters    = "eks:ListClusters"
+	ActionEKSDeleteCluster   = "eks:DeleteCluster"
+	ActionEKSListNodegroups  = "eks:ListNodegroups"
 )
 
 // Transfer Family lab actions.
@@ -545,9 +582,15 @@ const (
 	ActionMacieInjectFindings = "macie2:InjectFindings"
 )
 
-// EC2 VPC Flow Logs lab actions.
+// EC2 lab actions (nested container instances + VPC Flow Logs).
 const (
-	ActionEC2CreateFlowLogs = "ec2:CreateFlowLogs"
+	ActionEC2RunInstances       = "ec2:RunInstances"
+	ActionEC2DescribeInstances  = "ec2:DescribeInstances"
+	ActionEC2DescribeImages     = "ec2:DescribeImages"
+	ActionEC2TerminateInstances = "ec2:TerminateInstances"
+	ActionEC2StopInstances      = "ec2:StopInstances"
+	ActionEC2StartInstances     = "ec2:StartInstances"
+	ActionEC2CreateFlowLogs     = "ec2:CreateFlowLogs"
 	// ActionEC2InjectFlowLogs is a Noctaxris lab extension (not an AWS EC2 API).
 	// Gated by NOCTAXRIS_VPCFLOW_INJECT=1.
 	ActionEC2InjectFlowLogs = "ec2:InjectFlowLogs"
@@ -613,6 +656,12 @@ const (
 	ActionKinesisPutResourcePolicy    = "kinesis:PutResourcePolicy"
 	ActionKinesisGetResourcePolicy    = "kinesis:GetResourcePolicy"
 	ActionKinesisDeleteResourcePolicy = "kinesis:DeleteResourcePolicy"
+	ActionKinesisRegisterStreamConsumer   = "kinesis:RegisterStreamConsumer"
+	ActionKinesisDescribeStreamConsumer   = "kinesis:DescribeStreamConsumer"
+	ActionKinesisListStreamConsumers      = "kinesis:ListStreamConsumers"
+	ActionKinesisDeregisterStreamConsumer = "kinesis:DeregisterStreamConsumer"
+	ActionKinesisSubscribeToShard         = "kinesis:SubscribeToShard"
+	ActionKinesisUpdateShardCount         = "kinesis:UpdateShardCount"
 )
 
 // AppConfig lab actions.
@@ -799,6 +848,25 @@ const (
 	ActionAppSyncGraphQL             = "appsync:GraphQL"
 )
 
+// API Gateway REST API (v1) lab actions.
+const (
+	ActionAPIGatewayCreateRestApi     = "apigateway:CreateRestApi"
+	ActionAPIGatewayGetRestApi        = "apigateway:GetRestApi"
+	ActionAPIGatewayGetRestApis       = "apigateway:GetRestApis"
+	ActionAPIGatewayDeleteRestApi     = "apigateway:DeleteRestApi"
+	ActionAPIGatewayCreateResource    = "apigateway:CreateResource"
+	ActionAPIGatewayGetResources      = "apigateway:GetResources"
+	ActionAPIGatewayDeleteResource    = "apigateway:DeleteResource"
+	ActionAPIGatewayPutMethod         = "apigateway:PutMethod"
+	ActionAPIGatewayGetMethod         = "apigateway:GetMethod"
+	ActionAPIGatewayDeleteMethod      = "apigateway:DeleteMethod"
+	ActionAPIGatewayPutIntegration    = "apigateway:PutIntegration"
+	ActionAPIGatewayGetIntegration    = "apigateway:GetIntegration"
+	ActionAPIGatewayCreateDeployment  = "apigateway:CreateDeployment"
+	ActionAPIGatewayCreateStage       = "apigateway:CreateStage"
+	ActionAPIGatewayGetStage          = "apigateway:GetStage"
+)
+
 // API Gateway HTTP API (v2) lab actions.
 const (
 	ActionAPIGatewayV2CreateApi         = "apigatewayv2:CreateApi"
@@ -817,6 +885,9 @@ const (
 
 // execute-api invoke (HTTP API IAM authorizer). Not an HTTP API resource policy.
 const ActionExecuteAPIInvoke = "execute-api:Invoke"
+
+// execute-api ManageConnections for WebSocket @connections PostToConnection lab lite.
+const ActionExecuteAPIManageConnections = "execute-api:ManageConnections"
 
 // Cognito User Pools lab actions.
 const (
@@ -876,6 +947,107 @@ const (
 	ActionBudgetsDescribeBudget  = "budgets:DescribeBudget"
 	ActionBudgetsDescribeBudgets = "budgets:DescribeBudgets"
 	ActionBudgetsDeleteBudget    = "budgets:DeleteBudget"
+)
+
+// Cost and Usage Reports lab actions.
+const (
+	ActionCURPutReportDefinition       = "cur:PutReportDefinition"
+	ActionCURModifyReportDefinition    = "cur:ModifyReportDefinition"
+	ActionCURDescribeReportDefinitions = "cur:DescribeReportDefinitions"
+	ActionCURDeleteReportDefinition    = "cur:DeleteReportDefinition"
+	ActionCURTagResource               = "cur:TagResource"
+	ActionCURUntagResource             = "cur:UntagResource"
+	ActionCURListTagsForResource       = "cur:ListTagsForResource"
+)
+
+// IoT Core and IoT Data lab actions.
+const (
+	ActionIoTCreateThing               = "iot:CreateThing"
+	ActionIoTDescribeThing             = "iot:DescribeThing"
+	ActionIoTListThings                = "iot:ListThings"
+	ActionIoTUpdateThing               = "iot:UpdateThing"
+	ActionIoTDeleteThing               = "iot:DeleteThing"
+	ActionIoTCreateKeysAndCertificate  = "iot:CreateKeysAndCertificate"
+	ActionIoTDescribeCertificate       = "iot:DescribeCertificate"
+	ActionIoTListCertificates          = "iot:ListCertificates"
+	ActionIoTUpdateCertificate         = "iot:UpdateCertificate"
+	ActionIoTDeleteCertificate         = "iot:DeleteCertificate"
+	ActionIoTCreatePolicy              = "iot:CreatePolicy"
+	ActionIoTGetPolicy                 = "iot:GetPolicy"
+	ActionIoTListPolicies              = "iot:ListPolicies"
+	ActionIoTDeletePolicy              = "iot:DeletePolicy"
+	ActionIoTAttachPolicy              = "iot:AttachPolicy"
+	ActionIoTDetachPolicy              = "iot:DetachPolicy"
+	ActionIoTAttachThingPrincipal      = "iot:AttachThingPrincipal"
+	ActionIoTListThingPrincipals       = "iot:ListThingPrincipals"
+	ActionIoTDataUpdateThingShadow     = "iot-data:UpdateThingShadow"
+	ActionIoTDataGetThingShadow        = "iot-data:GetThingShadow"
+	ActionIoTDataDeleteThingShadow     = "iot-data:DeleteThingShadow"
+)
+
+// CloudWatch Metrics and Alarms lab actions.
+const (
+	ActionCloudWatchPutMetricData       = "cloudwatch:PutMetricData"
+	ActionCloudWatchListMetrics         = "cloudwatch:ListMetrics"
+	ActionCloudWatchGetMetricStatistics = "cloudwatch:GetMetricStatistics"
+	ActionCloudWatchGetMetricData       = "cloudwatch:GetMetricData"
+	ActionCloudWatchPutMetricAlarm      = "cloudwatch:PutMetricAlarm"
+	ActionCloudWatchDescribeAlarms      = "cloudwatch:DescribeAlarms"
+	ActionCloudWatchDeleteAlarms        = "cloudwatch:DeleteAlarms"
+	ActionCloudWatchSetAlarmState       = "cloudwatch:SetAlarmState"
+)
+
+// Lightsail lab actions.
+const (
+	ActionLightsailGetBlueprints   = "lightsail:GetBlueprints"
+	ActionLightsailGetBundles      = "lightsail:GetBundles"
+	ActionLightsailCreateInstances = "lightsail:CreateInstances"
+	ActionLightsailGetInstance     = "lightsail:GetInstance"
+	ActionLightsailGetInstances    = "lightsail:GetInstances"
+	ActionLightsailStartInstance   = "lightsail:StartInstance"
+	ActionLightsailStopInstance    = "lightsail:StopInstance"
+	ActionLightsailRebootInstance  = "lightsail:RebootInstance"
+	ActionLightsailDeleteInstance  = "lightsail:DeleteInstance"
+)
+
+// Auto Scaling lab actions.
+const (
+	ActionASGCreateLaunchConfiguration    = "autoscaling:CreateLaunchConfiguration"
+	ActionASGDescribeLaunchConfigurations = "autoscaling:DescribeLaunchConfigurations"
+	ActionASGDeleteLaunchConfiguration    = "autoscaling:DeleteLaunchConfiguration"
+	ActionASGCreateAutoScalingGroup       = "autoscaling:CreateAutoScalingGroup"
+	ActionASGDescribeAutoScalingGroups    = "autoscaling:DescribeAutoScalingGroups"
+	ActionASGUpdateAutoScalingGroup       = "autoscaling:UpdateAutoScalingGroup"
+	ActionASGDeleteAutoScalingGroup       = "autoscaling:DeleteAutoScalingGroup"
+	ActionASGSetDesiredCapacity           = "autoscaling:SetDesiredCapacity"
+)
+
+// Elastic Beanstalk lab actions.
+const (
+	ActionBeanstalkCreateApplication           = "elasticbeanstalk:CreateApplication"
+	ActionBeanstalkDescribeApplications        = "elasticbeanstalk:DescribeApplications"
+	ActionBeanstalkDeleteApplication           = "elasticbeanstalk:DeleteApplication"
+	ActionBeanstalkCreateApplicationVersion    = "elasticbeanstalk:CreateApplicationVersion"
+	ActionBeanstalkCreateEnvironment           = "elasticbeanstalk:CreateEnvironment"
+	ActionBeanstalkDescribeEnvironments        = "elasticbeanstalk:DescribeEnvironments"
+	ActionBeanstalkTerminateEnvironment        = "elasticbeanstalk:TerminateEnvironment"
+	ActionBeanstalkListAvailableSolutionStacks = "elasticbeanstalk:ListAvailableSolutionStacks"
+)
+
+// AWS Backup lab actions.
+const (
+	ActionBackupCreateBackupVault               = "backup:CreateBackupVault"
+	ActionBackupDescribeBackupVault             = "backup:DescribeBackupVault"
+	ActionBackupListBackupVaults                = "backup:ListBackupVaults"
+	ActionBackupDeleteBackupVault               = "backup:DeleteBackupVault"
+	ActionBackupCreateBackupPlan                = "backup:CreateBackupPlan"
+	ActionBackupGetBackupPlan                   = "backup:GetBackupPlan"
+	ActionBackupListBackupPlans                 = "backup:ListBackupPlans"
+	ActionBackupDeleteBackupPlan                = "backup:DeleteBackupPlan"
+	ActionBackupStartBackupJob                  = "backup:StartBackupJob"
+	ActionBackupDescribeBackupJob               = "backup:DescribeBackupJob"
+	ActionBackupDescribeRecoveryPoint           = "backup:DescribeRecoveryPoint"
+	ActionBackupListRecoveryPointsByBackupVault = "backup:ListRecoveryPointsByBackupVault"
 )
 
 // CodeDeploy lab actions.
@@ -1219,6 +1391,8 @@ func KnownAction(action string) bool {
 		ActionDynamoDBListTagsOfResource,
 		ActionDynamoDBTagResource,
 		ActionDynamoDBUntagResource,
+		ActionDynamoDBExecuteStatement,
+		ActionDynamoDBBatchExecuteStatement,
 		ActionDynamoDBStreamsListStreams,
 		ActionDynamoDBStreamsDescribeStream,
 		ActionDynamoDBStreamsGetShardIterator,
@@ -1242,9 +1416,27 @@ func KnownAction(action string) bool {
 		ActionElastiCacheCreateCacheCluster,
 		ActionElastiCacheDescribeCacheClusters,
 		ActionElastiCacheDeleteCacheCluster,
+		ActionMemoryDBCreateCluster,
+		ActionMemoryDBDescribeClusters,
+		ActionMemoryDBDeleteCluster,
+		ActionMemoryDBDescribeUsers,
+		ActionMemoryDBDescribeACLs,
 		ActionDocDBCreateDBCluster,
 		ActionDocDBDescribeDBClusters,
 		ActionDocDBDeleteDBCluster,
+		ActionNeptuneCreateDBCluster,
+		ActionNeptuneDescribeDBClusters,
+		ActionNeptuneDeleteDBCluster,
+		ActionMSKCreateCluster,
+		ActionMSKDescribeCluster,
+		ActionMSKListClusters,
+		ActionMSKDeleteCluster,
+		ActionMSKGetBootstrapBrokers,
+		ActionEKSCreateCluster,
+		ActionEKSDescribeCluster,
+		ActionEKSListClusters,
+		ActionEKSDeleteCluster,
+		ActionEKSListNodegroups,
 		ActionTransferCreateServer,
 		ActionTransferDescribeServer,
 		ActionTransferListServers,
@@ -1430,6 +1622,12 @@ func KnownAction(action string) bool {
 		ActionMacieListFindings,
 		ActionMacieGetFindings,
 		ActionMacieInjectFindings,
+		ActionEC2RunInstances,
+		ActionEC2DescribeInstances,
+		ActionEC2DescribeImages,
+		ActionEC2TerminateInstances,
+		ActionEC2StopInstances,
+		ActionEC2StartInstances,
 		ActionEC2CreateFlowLogs,
 		ActionEC2InjectFlowLogs,
 		ActionLabFreezeClock,
@@ -1473,6 +1671,12 @@ func KnownAction(action string) bool {
 		ActionKinesisPutResourcePolicy,
 		ActionKinesisGetResourcePolicy,
 		ActionKinesisDeleteResourcePolicy,
+		ActionKinesisRegisterStreamConsumer,
+		ActionKinesisDescribeStreamConsumer,
+		ActionKinesisListStreamConsumers,
+		ActionKinesisDeregisterStreamConsumer,
+		ActionKinesisSubscribeToShard,
+		ActionKinesisUpdateShardCount,
 		ActionAppConfigCreateApplication,
 		ActionAppConfigCreateEnvironment,
 		ActionAppConfigCreateConfigurationProfile,
@@ -1615,6 +1819,21 @@ func KnownAction(action string) bool {
 		ActionAppSyncCreateDataSource,
 		ActionAppSyncCreateResolver,
 		ActionAppSyncGraphQL,
+		ActionAPIGatewayCreateRestApi,
+		ActionAPIGatewayGetRestApi,
+		ActionAPIGatewayGetRestApis,
+		ActionAPIGatewayDeleteRestApi,
+		ActionAPIGatewayCreateResource,
+		ActionAPIGatewayGetResources,
+		ActionAPIGatewayDeleteResource,
+		ActionAPIGatewayPutMethod,
+		ActionAPIGatewayGetMethod,
+		ActionAPIGatewayDeleteMethod,
+		ActionAPIGatewayPutIntegration,
+		ActionAPIGatewayGetIntegration,
+		ActionAPIGatewayCreateDeployment,
+		ActionAPIGatewayCreateStage,
+		ActionAPIGatewayGetStage,
 		ActionAPIGatewayV2CreateApi,
 		ActionAPIGatewayV2GetApi,
 		ActionAPIGatewayV2UpdateApi,
@@ -1628,6 +1847,7 @@ func KnownAction(action string) bool {
 		ActionAPIGatewayV2GetRoutes,
 		ActionAPIGatewayV2CreateStage,
 		ActionExecuteAPIInvoke,
+		ActionExecuteAPIManageConnections,
 		ActionCognitoCreateUserPool,
 		ActionCognitoDescribeUserPool,
 		ActionCognitoUpdateUserPool,
@@ -1668,6 +1888,79 @@ func KnownAction(action string) bool {
 		ActionBudgetsDescribeBudget,
 		ActionBudgetsDescribeBudgets,
 		ActionBudgetsDeleteBudget,
+		ActionCURPutReportDefinition,
+		ActionCURModifyReportDefinition,
+		ActionCURDescribeReportDefinitions,
+		ActionCURDeleteReportDefinition,
+		ActionCURTagResource,
+		ActionCURUntagResource,
+		ActionCURListTagsForResource,
+		ActionIoTCreateThing,
+		ActionIoTDescribeThing,
+		ActionIoTListThings,
+		ActionIoTUpdateThing,
+		ActionIoTDeleteThing,
+		ActionIoTCreateKeysAndCertificate,
+		ActionIoTDescribeCertificate,
+		ActionIoTListCertificates,
+		ActionIoTUpdateCertificate,
+		ActionIoTDeleteCertificate,
+		ActionIoTCreatePolicy,
+		ActionIoTGetPolicy,
+		ActionIoTListPolicies,
+		ActionIoTDeletePolicy,
+		ActionIoTAttachPolicy,
+		ActionIoTDetachPolicy,
+		ActionIoTAttachThingPrincipal,
+		ActionIoTListThingPrincipals,
+		ActionIoTDataUpdateThingShadow,
+		ActionIoTDataGetThingShadow,
+		ActionIoTDataDeleteThingShadow,
+		ActionCloudWatchPutMetricData,
+		ActionCloudWatchListMetrics,
+		ActionCloudWatchGetMetricStatistics,
+		ActionCloudWatchGetMetricData,
+		ActionCloudWatchPutMetricAlarm,
+		ActionCloudWatchDescribeAlarms,
+		ActionCloudWatchDeleteAlarms,
+		ActionCloudWatchSetAlarmState,
+		ActionLightsailGetBlueprints,
+		ActionLightsailGetBundles,
+		ActionLightsailCreateInstances,
+		ActionLightsailGetInstance,
+		ActionLightsailGetInstances,
+		ActionLightsailStartInstance,
+		ActionLightsailStopInstance,
+		ActionLightsailRebootInstance,
+		ActionLightsailDeleteInstance,
+		ActionASGCreateLaunchConfiguration,
+		ActionASGDescribeLaunchConfigurations,
+		ActionASGDeleteLaunchConfiguration,
+		ActionASGCreateAutoScalingGroup,
+		ActionASGDescribeAutoScalingGroups,
+		ActionASGUpdateAutoScalingGroup,
+		ActionASGDeleteAutoScalingGroup,
+		ActionASGSetDesiredCapacity,
+		ActionBeanstalkCreateApplication,
+		ActionBeanstalkDescribeApplications,
+		ActionBeanstalkDeleteApplication,
+		ActionBeanstalkCreateApplicationVersion,
+		ActionBeanstalkCreateEnvironment,
+		ActionBeanstalkDescribeEnvironments,
+		ActionBeanstalkTerminateEnvironment,
+		ActionBeanstalkListAvailableSolutionStacks,
+		ActionBackupCreateBackupVault,
+		ActionBackupDescribeBackupVault,
+		ActionBackupListBackupVaults,
+		ActionBackupDeleteBackupVault,
+		ActionBackupCreateBackupPlan,
+		ActionBackupGetBackupPlan,
+		ActionBackupListBackupPlans,
+		ActionBackupDeleteBackupPlan,
+		ActionBackupStartBackupJob,
+		ActionBackupDescribeBackupJob,
+		ActionBackupDescribeRecoveryPoint,
+		ActionBackupListRecoveryPointsByBackupVault,
 		ActionCodeDeployCreateApplication,
 		ActionCodeDeployCreateDeploymentGroup,
 		ActionCodeDeployCreateDeployment,

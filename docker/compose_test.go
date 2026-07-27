@@ -141,6 +141,49 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 	if !strings.Contains(noctaxris, `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY: "${NOCTAXRIS_INJECT_ECS_HOST_GATEWAY:-0}"`) {
 		t.Fatal("default Compose must pass ECS host-gateway env defaulting to 0")
 	}
+	nestedPorts, err := os.ReadFile("compose.lab-nested-ports.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	np := string(nestedPorts)
+	if !strings.Contains(np, `NOCTAXRIS_NESTED_PORT_PUBLISH: "1"`) {
+		t.Fatal("compose.lab-nested-ports.yaml must opt in NOCTAXRIS_NESTED_PORT_PUBLISH=1")
+	}
+	if strings.Contains(noctaxris, `NOCTAXRIS_NESTED_PORT_PUBLISH: "1"`) {
+		t.Fatal("default Compose must not hardcode NOCTAXRIS_NESTED_PORT_PUBLISH=1")
+	}
+	if !strings.Contains(noctaxris, `NOCTAXRIS_NESTED_PORT_PUBLISH: "${NOCTAXRIS_NESTED_PORT_PUBLISH:-0}"`) {
+		t.Fatal("default Compose must pass nested port publish env defaulting to 0")
+	}
+	for _, needle := range []string{
+		`"127.0.0.1:5432:5432"`,
+		`"127.0.0.1:3306:3306"`,
+		`"127.0.0.1:6379:6379"`,
+		`"127.0.0.1:27017:27017"`,
+		`"127.0.0.1:8182:8182"`,
+		`"127.0.0.1:9092:9092"`,
+	} {
+		if !strings.Contains(np, needle) {
+			t.Fatalf("compose.lab-nested-ports.yaml missing loopback publish %s", needle)
+		}
+	}
+	if strings.Contains(np, "0.0.0.0:") {
+		t.Fatal("compose.lab-nested-ports.yaml must not publish nested ports on 0.0.0.0")
+	}
+	if hasDockerSockVolumeEntry(np) {
+		t.Fatal("compose.lab-nested-ports.yaml must not mount docker.sock")
+	}
+	engineOverlay := serviceBlock(np, "noctaxris-engine")
+	if engineOverlay == "" {
+		t.Fatal("compose.lab-nested-ports.yaml must override noctaxris-engine")
+	}
+	if !strings.Contains(engineOverlay, "ports:") {
+		t.Fatal("compose.lab-nested-ports.yaml must publish ports on noctaxris-engine (DinD hop)")
+	}
+	apiOverlay := serviceBlock(np, "noctaxris")
+	if strings.Contains(apiOverlay, "ports:") {
+		t.Fatal("compose.lab-nested-ports.yaml must not fake nested ports on the API service")
+	}
 }
 
 func TestComposeSetsDockerHost(t *testing.T) {

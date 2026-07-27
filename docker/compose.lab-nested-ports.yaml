@@ -1,0 +1,32 @@
+# Opt-in overlay for selected nested data TCP ports on operator loopback.
+# Code and default compose.yaml leave NOCTAXRIS_NESTED_PORT_PUBLISH off and do
+# not publish database/cache/broker ports on the host.
+#
+# Honesty: nested engines run inside DinD (noctaxris-engine). Mapping ports on
+# the noctaxris API service cannot reach those containers. This overlay:
+#   1) sets NOCTAXRIS_NESTED_PORT_PUBLISH=1 so StartDataPlane binds the engine
+#      listen port onto the DinD host (noctaxris-engine eth0)
+#   2) publishes selected ports from noctaxris-engine to 127.0.0.1 only
+#
+# Idle until a nested container with that port is running. Fixed host ports are
+# one-instance-per-port (second bind of the same port fails). Prefer :4566
+# facades (RDS Data API, OpenSearch lab query) when loopback TCP is not needed.
+#
+# Usage (from repo root):
+#   docker compose -f docker/compose.yaml -f docker/compose.lab-nested-ports.yaml --env-file docker/.env up --build
+#
+# Do not remap these to 0.0.0.0. No host docker.sock.
+services:
+  noctaxris:
+    environment:
+      NOCTAXRIS_NESTED_PORT_PUBLISH: "1"
+  noctaxris-engine:
+    ports:
+      # Existing nested engines (Postgres / Valkey-Redis / Mongo)
+      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:27017:27017"
+      # Nested MySQL/MariaDB, Neptune Gremlin, MSK/Kafka when those engines exist
+      - "127.0.0.1:3306:3306"
+      - "127.0.0.1:8182:8182"
+      - "127.0.0.1:9092:9092"

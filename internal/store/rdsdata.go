@@ -188,6 +188,9 @@ func (s *Store) ResolveRDSDataResource(accountID, resourceARN, secretARN string)
 		}
 		return RDSDBInstance{}, err
 	}
+	if NormalizeRDSEngine(inst.Engine) != "postgres" {
+		return RDSDBInstance{}, fmt.Errorf("%w: RDS Data API supports Engine=postgres only (mysql/mariadb use nested wire protocol, not Data API)", ErrRDSDataBadRequest)
+	}
 	if _, err := s.ResolveDataPlaneSecretARN(accountID, secretARN); err != nil {
 		if errors.Is(err, ErrSecretNotFound) || errors.Is(err, ErrSecretScheduledDeletion) {
 			return RDSDBInstance{}, ErrRDSDataSecretsError

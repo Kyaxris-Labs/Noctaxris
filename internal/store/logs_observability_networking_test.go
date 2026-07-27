@@ -160,7 +160,7 @@ func TestMetricFilterLiteEmitsDatapoints(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dps, err := st.GetMetricData(account, "Lab/Logs", "ErrorCount", 0, 0)
+	dps, err := st.GetLogsMetricDatapoints(account, "Lab/Logs", "ErrorCount", 0, 0)
 	if err != nil || len(dps) != 1 || dps[0].Value != 1 {
 		t.Fatalf("datapoints=%v err=%v", dps, err)
 	}

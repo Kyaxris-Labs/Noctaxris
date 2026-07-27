@@ -2,10 +2,11 @@
 # Run SDK, Terraform, and CloudFormation integration suites against Noctaxris.
 #
 # Optional env (default suite stays fast):
-#   NOCTAXRIS_ADVANCED=1  — SDK fullstack + Terraform lab-fullstack + Lambda runtime + MS stacks
+#   NOCTAXRIS_ADVANCED=1  — SDK fullstack + Terraform lab-fullstack + Lambda runtime + MS stacks + TF_PARITY stacks
 #   TF_LAMBDA_RUNTIMES=1  — Terraform lab-lambda-{python,nodejs,java} only (after lab-core)
 #   TF_MS=1               — Terraform lab-ms-serverless + lab-ms-ecs (live=false)
 #   TF_MS_LIVE=1          — Also lab-ms-ecs with live=true (needs DinD; soft-skip if docker down)
+#   TF_PARITY=1           — Terraform lab-parity-observe + lab-parity-compute when those stack dirs exist
 #   NOCTAXRIS_NESTED=1    — SDK Lambda Invoke (needs healthy noctaxris-engine)
 set -euo pipefail
 
@@ -62,6 +63,17 @@ fi
 if [[ "${TF_MS_LIVE:-}" == "1" ]]; then
   echo "==> Terraform (lab-ms-ecs live) [TF_MS_LIVE=1]"
   STACK=lab-ms-ecs TF_MS_LIVE=1 bash tests/terraform/run.sh
+fi
+
+if [[ "${TF_PARITY:-}" == "1" || "${NOCTAXRIS_ADVANCED:-}" == "1" ]]; then
+  echo "==> Terraform (parity stacks) [TF_PARITY=${TF_PARITY:-0} ADVANCED=${NOCTAXRIS_ADVANCED:-0}]"
+  for stack in lab-parity-observe lab-parity-compute; do
+    if [[ -d "tests/terraform/stacks/${stack}" ]]; then
+      STACK="$stack" bash tests/terraform/run.sh
+    else
+      echo "    skip ${stack} (directory not present yet)"
+    fi
+  done
 fi
 
 echo "==> CloudFormation"

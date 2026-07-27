@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- EC2 lab nested RunInstances: Query Run/Describe/Stop/Start/Terminate on DinD `noctaxris-ec2`; AMI→allowlisted image map; pending without engine; VPC Flow unchanged under `ec2`
+- EKS lite: Create/Describe/List/DeleteCluster REST; metadata-only ACTIVE (no nested k3s under restricted DinD)
+- Auto Scaling: DesiredCapacity reconciles to lab EC2 (`Pending` without engine; `InService` when running; ForceDelete terminates)
+- Nested data: RDS MySQL/MariaDB engines; MemoryDB; Neptune (Gremlin); MSK (Redpanda); opt-in `compose.lab-nested-ports.yaml` + `NOCTAXRIS_NESTED_PORT_PUBLISH`
+- Observe/govern: CloudWatch Metrics/Alarms; CUR definitions; IoT Core/Data HTTP shadows; Lightsail; Elastic Beanstalk; AWS Backup; DynamoDB LSI + PartiQL lite; Kinesis EFO + UpdateShardCount
+- API edge: API Gateway REST v1 + WebSocket lite; HTTP_PROXY allowlist opt-in; SNS HTTPS egress gate; ELBv2 Network Load Balancer
+
 ## 1.2.0
 
 Minor after 1.1.2: forensic lab depth (CloudTrail inject and siblings), Critical/High security hardening, CodeBuild/CodeCommit nested builds, Lambda LTS runtimes plus Terraform microservice stacks, and nested RDS smoke fixes. Docker Hub: `kyaxris/noctaxris` (`1.2.0`, `1.2`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

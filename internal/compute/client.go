@@ -17,6 +17,8 @@
 //     (not Internal). Functions can reach the Docker host gateway
 //     (host.docker.internal → published API) without SNAT to the public internet.
 //   - Data-plane networks stay Internal:true (see EnsureDataPlaneNetwork).
+//     Nested PortBindings stay off unless NOCTAXRIS_NESTED_PORT_PUBLISH=1
+//     (pair with docker/compose.lab-nested-ports.yaml for 127.0.0.1 publish).
 package compute
 
 import (

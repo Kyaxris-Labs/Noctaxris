@@ -49,6 +49,17 @@ func TestECSTaskHostConfigSecurity(t *testing.T) {
 	}
 }
 
+func TestEC2TaskHostConfigSecurity(t *testing.T) {
+	t.Setenv(EnvInjectECSHostGateway, "")
+	hc := ec2TaskHostConfig(256)
+	if !hostConfigSecurityOK(hc) {
+		t.Fatalf("ec2 HostConfig not hardened: Privileged=%v CapAdd=%#v CapDrop=%#v", hc.Privileged, hc.CapAdd, hc.CapDrop)
+	}
+	if string(hc.NetworkMode) != EC2NetworkName {
+		t.Fatalf("NetworkMode=%q", hc.NetworkMode)
+	}
+}
+
 func TestNestedTaskSecurityNoPrivilege(t *testing.T) {
 	hc := nestedTaskSecurity(64)
 	if hc.Privileged {

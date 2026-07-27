@@ -93,7 +93,7 @@ type ELBv2LoadBalancer struct {
 type ELBv2TargetGroup struct {
 	Name       string
 	ARN        string
-	TargetType string // lambda | ip
+	TargetType string // lambda | ip | instance
 	Protocol   string
 	Port       int
 	CreatedAt  int64
@@ -158,11 +158,15 @@ func (s *Store) EnsureELBv2Schema() error {
 	return EnsureELBv2Schema(s.db)
 }
 
-func elbv2LBARN(region, accountID, name, id string) string {
+func elbv2LBARN(region, accountID, name, id, lbType string) string {
 	if region == "" {
 		region = DefaultELBv2Region
 	}
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%s", region, accountID, name, id)
+	prefix := "app"
+	if lbType == "network" {
+		prefix = "net"
+	}
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/%s/%s/%s", region, accountID, prefix, name, id)
 }
 
 func elbv2TGARN(region, accountID, name, id string) string {
@@ -172,8 +176,21 @@ func elbv2TGARN(region, accountID, name, id string) string {
 	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:targetgroup/%s/%s", region, accountID, name, id)
 }
 
-// CreateELBv2LoadBalancer creates an application load balancer lite.
-func (s *Store) CreateELBv2LoadBalancer(accountID, region, name, scheme string) (ELBv2LoadBalancer, error) {
+func normalizeELBv2LoadBalancerType(lbType string) (string, error) {
+	lbType = strings.ToLower(strings.TrimSpace(lbType))
+	if lbType == "" {
+		return "application", nil
+	}
+	switch lbType {
+	case "application", "network":
+		return lbType, nil
+	default:
+		return "", fmt.Errorf("%w: Type must be application or network", ErrELBv2BadRequest)
+	}
+}
+
+// CreateELBv2LoadBalancer creates an application or network load balancer lite.
+func (s *Store) CreateELBv2LoadBalancer(accountID, region, name, scheme, lbType string) (ELBv2LoadBalancer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ELBv2LoadBalancer{}, fmt.Errorf("%w: Name required", ErrELBv2BadRequest)
@@ -181,14 +198,18 @@ func (s *Store) CreateELBv2LoadBalancer(accountID, region, name, scheme string) 
 	if scheme == "" {
 		scheme = "internet-facing"
 	}
+	normalizedType, err := normalizeELBv2LoadBalancerType(lbType)
+	if err != nil {
+		return ELBv2LoadBalancer{}, err
+	}
 	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
-	arn := elbv2LBARN(region, accountID, name, id)
+	arn := elbv2LBARN(region, accountID, name, id, normalizedType)
 	dns := fmt.Sprintf("%s-%s.%s.elb.lab.local", name, id[:8], regionOrELB(region))
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO elbv2_load_balancers (account_id, name, arn, dns_name, type, scheme, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		accountID, name, arn, dns, "application", scheme, now,
+		accountID, name, arn, dns, normalizedType, scheme, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -196,7 +217,7 @@ func (s *Store) CreateELBv2LoadBalancer(accountID, region, name, scheme string) 
 		}
 		return ELBv2LoadBalancer{}, fmt.Errorf("create load balancer: %w", err)
 	}
-	return ELBv2LoadBalancer{Name: name, ARN: arn, DNSName: dns, Type: "application", Scheme: scheme, CreatedAt: now}, nil
+	return ELBv2LoadBalancer{Name: name, ARN: arn, DNSName: dns, Type: normalizedType, Scheme: scheme, CreatedAt: now}, nil
 }
 
 func regionOrELB(region string) string {
@@ -258,7 +279,7 @@ func (s *Store) DeleteELBv2LoadBalancer(accountID, arn string) error {
 	return nil
 }
 
-// CreateELBv2TargetGroup creates a target group. TargetType must be lambda or ip.
+// CreateELBv2TargetGroup creates a target group. TargetType must be lambda, ip, or instance.
 func (s *Store) CreateELBv2TargetGroup(accountID, region, name, targetType, protocol string, port int) (ELBv2TargetGroup, error) {
 	name = strings.TrimSpace(name)
 	targetType = strings.ToLower(strings.TrimSpace(targetType))
@@ -266,15 +287,36 @@ func (s *Store) CreateELBv2TargetGroup(accountID, region, name, targetType, prot
 		return ELBv2TargetGroup{}, fmt.Errorf("%w: Name required", ErrELBv2BadRequest)
 	}
 	switch targetType {
-	case "lambda", "ip":
+	case "lambda", "ip", "instance":
 	default:
-		return ELBv2TargetGroup{}, fmt.Errorf("%w: TargetType must be lambda or ip (no instance/EC2)", ErrELBv2BadRequest)
+		return ELBv2TargetGroup{}, fmt.Errorf("%w: TargetType must be lambda, ip, or instance", ErrELBv2BadRequest)
 	}
+	protocol = strings.ToUpper(strings.TrimSpace(protocol))
 	if protocol == "" {
-		protocol = "HTTP"
+		if targetType == "lambda" {
+			protocol = "HTTP"
+		} else {
+			protocol = "TCP"
+		}
+	}
+	switch targetType {
+	case "lambda":
+		if protocol != "HTTP" && protocol != "HTTPS" {
+			return ELBv2TargetGroup{}, fmt.Errorf("%w: lambda target groups support HTTP or HTTPS only", ErrELBv2BadRequest)
+		}
+	case "ip", "instance":
+		switch protocol {
+		case "TCP", "TLS", "HTTP", "HTTPS":
+		default:
+			return ELBv2TargetGroup{}, fmt.Errorf("%w: ip/instance target groups support TCP, TLS, HTTP, or HTTPS", ErrELBv2BadRequest)
+		}
 	}
 	if port <= 0 {
-		port = 80
+		if protocol == "HTTPS" || protocol == "TLS" {
+			port = 443
+		} else {
+			port = 80
+		}
 	}
 	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	arn := elbv2TGARN(region, accountID, name, id)
@@ -342,6 +384,7 @@ func (s *Store) DeleteELBv2TargetGroup(accountID, arn string) error {
 }
 
 // CreateELBv2Listener creates a listener forwarding to a target group.
+// Application LBs accept HTTP/HTTPS; network LBs accept TCP/TLS (HTTP rejected).
 func (s *Store) CreateELBv2Listener(accountID, region, loadBalancerARN, targetGroupARN, protocol string, port int) (ELBv2Listener, error) {
 	loadBalancerARN = strings.TrimSpace(loadBalancerARN)
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
@@ -355,6 +398,7 @@ func (s *Store) CreateELBv2Listener(accountID, region, loadBalancerARN, targetGr
 	if len(lbs) == 0 {
 		return ELBv2Listener{}, ErrELBv2NotFound
 	}
+	lb := lbs[0]
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
 	if err != nil {
 		return ELBv2Listener{}, err
@@ -362,18 +406,54 @@ func (s *Store) CreateELBv2Listener(accountID, region, loadBalancerARN, targetGr
 	if len(tgs) == 0 {
 		return ELBv2Listener{}, ErrELBv2TGNotFound
 	}
-	if protocol == "" {
-		protocol = "HTTP"
-	}
-	if port <= 0 {
-		port = 80
+	tg := tgs[0]
+	protocol = strings.ToUpper(strings.TrimSpace(protocol))
+	switch lb.Type {
+	case "network":
+		if protocol == "" {
+			protocol = "TCP"
+		}
+		if protocol != "TCP" && protocol != "TLS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network load balancers support TCP or TLS listeners only", ErrELBv2BadRequest)
+		}
+		if tg.TargetType != "ip" && tg.TargetType != "instance" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network listeners require ip or instance target groups", ErrELBv2BadRequest)
+		}
+		if tg.Protocol != "TCP" && tg.Protocol != "TLS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network listeners require TCP or TLS target groups", ErrELBv2BadRequest)
+		}
+		if port <= 0 {
+			if protocol == "TLS" {
+				port = 443
+			} else {
+				port = 80
+			}
+		}
+	default:
+		if protocol == "" {
+			protocol = "HTTP"
+		}
+		if protocol != "HTTP" && protocol != "HTTPS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: application load balancers support HTTP or HTTPS listeners only", ErrELBv2BadRequest)
+		}
+		if port <= 0 {
+			if protocol == "HTTPS" {
+				port = 443
+			} else {
+				port = 80
+			}
+		}
 	}
 	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	if region == "" {
 		region = DefaultELBv2Region
 	}
-	listenerARN := fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/app/%s/%s",
-		region, accountID, lbs[0].Name, id)
+	arnPrefix := "app"
+	if lb.Type == "network" {
+		arnPrefix = "net"
+	}
+	listenerARN := fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s",
+		region, accountID, arnPrefix, lb.Name, id)
 	now := time.Now().UTC().UnixMilli()
 	_, err = s.db.Exec(
 		`INSERT INTO elbv2_listeners (account_id, listener_arn, load_balancer_arn, port, protocol, target_group_arn, created_at)
@@ -488,8 +568,9 @@ func (s *Store) ELBv2TargetGroupHasListener(accountID, targetGroupARN string) (b
 // DescribeELBv2TargetHealth returns health reflecting lab-listener usefulness.
 // Lambda targets are healthy when a listener forwards to the group, the function
 // still resolves, and elasticloadbalancing.amazonaws.com is Allowed. Otherwise
-// unused (no listener) or unhealthy (stale registration). IP targets stay unused
-// (no IP dataplane).
+// unused (no listener) or unhealthy (stale registration). IP and instance targets
+// are healthy when a listener or rule forwards (control-plane registration only;
+// no L4 dataplane).
 func (s *Store) DescribeELBv2TargetHealth(accountID, targetGroupARN string) ([]ELBv2TargetHealthDesc, error) {
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
@@ -551,10 +632,16 @@ func (s *Store) DescribeELBv2TargetHealth(accountID, targetGroupARN string) ([]E
 			desc.State = "healthy"
 			desc.Description = "Lab listener can invoke this Lambda target."
 			out = append(out, desc)
-		case "ip":
-			desc.State = "unused"
-			desc.Reason = "Target.NotInUse"
-			desc.Description = "IP targets have no lab dataplane."
+		case "ip", "instance":
+			if !inUse {
+				desc.State = "unused"
+				desc.Reason = "Target.NotInUse"
+				desc.Description = "No listener forwards to this target group."
+				out = append(out, desc)
+				continue
+			}
+			desc.State = "healthy"
+			desc.Description = "Lab control-plane registration only; no L4 dataplane."
 			out = append(out, desc)
 		default:
 			desc.State = "unused"
@@ -566,11 +653,13 @@ func (s *Store) DescribeELBv2TargetHealth(accountID, targetGroupARN string) ([]E
 	return out, nil
 }
 
-// RegisterELBv2Targets registers Lambda ARN or lab IP targets.
+// RegisterELBv2Targets registers Lambda ARN, lab IP, or lab instance-id targets.
 // Lambda targets must resolve to an existing function and Allow
 // elasticloadbalancing.amazonaws.com on the function resource policy
 // (SourceArn may be the target group ARN). DescribeTargetHealth reports
 // healthy when a lab listener forwards to the group and permission still Allows.
+// Instance Ids are lab-opaque i-* labels (no EC2 resolve). IP targets require a
+// parseable address (no L4 dataplane).
 func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets []ELBv2Target) error {
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
@@ -615,6 +704,10 @@ func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets [
 			parsed := net.ParseIP(ip)
 			if parsed == nil {
 				return fmt.Errorf("%w: ip target Id must be a lab IP address", ErrELBv2BadRequest)
+			}
+		case "instance":
+			if !strings.HasPrefix(id, "i-") || len(id) < 3 {
+				return fmt.Errorf("%w: instance target Id must be a lab instance id (i-...)", ErrELBv2BadRequest)
 			}
 		default:
 			return fmt.Errorf("%w: unsupported target type", ErrELBv2BadRequest)
@@ -816,8 +909,19 @@ func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN s
 	if err := validateELBv2HostHeaders(cleanedHosts); err != nil {
 		return ELBv2Rule{}, err
 	}
-	if _, err := getELBv2ListenerByARN(s, accountID, listenerARN); err != nil {
+	listener, err := getELBv2ListenerByARN(s, accountID, listenerARN)
+	if err != nil {
 		return ELBv2Rule{}, err
+	}
+	lbs, err := s.DescribeELBv2LoadBalancers(accountID, []string{listener.LoadBalancerARN})
+	if err != nil {
+		return ELBv2Rule{}, err
+	}
+	if len(lbs) == 0 {
+		return ELBv2Rule{}, ErrELBv2NotFound
+	}
+	if lbs[0].Type == "network" {
+		return ELBv2Rule{}, fmt.Errorf("%w: CreateRule is not supported on network load balancers", ErrELBv2BadRequest)
 	}
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
 	if err != nil {

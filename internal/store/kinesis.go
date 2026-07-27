@@ -92,6 +92,9 @@ func EnsureKinesisSchema(db *sql.DB) error {
 	); err != nil {
 		return fmt.Errorf("ensure kinesis schema: shard index: %w", err)
 	}
+	if err := EnsureKinesisConsumerSchema(db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -160,6 +163,12 @@ func (s *Store) DeleteKinesisStream(accountID, name string) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM kinesis_iterators WHERE account_id = ? AND stream_name = ?`, accountID, name); err != nil {
 		return fmt.Errorf("delete kinesis stream: iterators: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM kinesis_consumers WHERE account_id = ? AND stream_name = ?`, accountID, name); err != nil {
+		// table may not exist yet on older DBs before EnsureKinesisSchema
+		if !strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return fmt.Errorf("delete kinesis stream: consumers: %w", err)
+		}
 	}
 	if _, err := tx.Exec(`DELETE FROM kinesis_streams WHERE account_id = ? AND stream_name = ?`, accountID, name); err != nil {
 		return fmt.Errorf("delete kinesis stream: stream: %w", err)

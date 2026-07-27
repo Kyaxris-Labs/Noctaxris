@@ -82,6 +82,10 @@ func (s *Server) handleDynamoDB(
 		s.dynamoTagResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionDynamoDBUntagResource:
 		s.dynamoUntagResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBExecuteStatement:
+		s.dynamoExecuteStatement(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionDynamoDBBatchExecuteStatement:
+		s.dynamoBatchExecuteStatement(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		_ = accountID
 		s.writeDynamoError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
@@ -142,6 +146,10 @@ func dynamoAction(action string) string {
 		return catalog.ActionDynamoDBTagResource
 	case "UntagResource":
 		return catalog.ActionDynamoDBUntagResource
+	case "ExecuteStatement":
+		return catalog.ActionDynamoDBExecuteStatement
+	case "BatchExecuteStatement":
+		return catalog.ActionDynamoDBBatchExecuteStatement
 	default:
 		return action
 	}
@@ -368,10 +376,34 @@ func (s *Server) dynamoCreateTable(
 		}
 	}
 
-	table, err := s.store.CreateTableWithGSIs(
+	var lsis []store.DynamoLSI
+	if indexes, ok := params["LocalSecondaryIndexes"].([]any); ok && len(indexes) > 0 {
+		if len(indexes) > 2 {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Lab supports at most two LSIs per table.", readOnly, eventID, verified)
+			return
+		}
+		for _, rawIdx := range indexes {
+			raw, ok := rawIdx.(map[string]any)
+			if !ok {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					"Invalid LocalSecondaryIndexes entry.", readOnly, eventID, verified)
+				return
+			}
+			parsed, err := dynamoParseLSISpec(raw, attrTypes, hashKey)
+			if err != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					err.Error(), readOnly, eventID, verified)
+				return
+			}
+			lsis = append(lsis, parsed)
+		}
+	}
+
+	table, err := s.store.CreateTableWithIndexes(
 		verified.AccountID, region, tableName,
 		hashKey, hashType, rangeKey, rangeType, sseType, kmsKeyID,
-		gsis,
+		gsis, lsis,
 	)
 	if errors.Is(err, store.ErrTableAlreadyExists) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ResourceInUseException",
@@ -381,6 +413,11 @@ func (s *Server) dynamoCreateTable(
 	if errors.Is(err, store.ErrInvalidKeyType) {
 		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 			"Invalid key AttributeType.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrTooManyGSIs) || errors.Is(err, store.ErrTooManyLSIs) || errors.Is(err, store.ErrLSIRequiresRange) {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
 		return
 	}
 	if err != nil {
@@ -1136,16 +1173,23 @@ func (s *Server) dynamoQuery(
 	limit := dynamoLimit(params)
 	startSK := ""
 	gsiSlot := 0
+	lsiSlot := 0
 	rangeAttr := table.RangeKeyName
 	if indexName != "" {
-		gsi, slot, ok := table.GSIByName(indexName)
+		kind, gsi, lsi, slot, ok := table.IndexByName(indexName)
 		if !ok {
 			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				fmt.Sprintf("index %q not found", indexName), readOnly, eventID, verified)
 			return
 		}
-		gsiSlot = slot
-		rangeAttr = gsi.RangeKeyName
+		switch kind {
+		case "GSI":
+			gsiSlot = slot
+			rangeAttr = gsi.RangeKeyName
+		case "LSI":
+			lsiSlot = slot
+			rangeAttr = lsi.RangeKeyName
+		}
 	}
 	if esk, ok := params["ExclusiveStartKey"]; ok && esk != nil {
 		startKey, parseErr := ddb.ParseItemMap(esk)
@@ -1169,13 +1213,22 @@ func (s *Server) dynamoQuery(
 					"Unable to query items.", readOnly, eventID, verified)
 				return
 			}
+		} else if lsiSlot > 0 {
+			startSK, err = s.store.GetItemLSISlotKeys(table.AccountID, table.TableName, itemPK, itemSK, lsiSlot)
+			if errors.Is(err, store.ErrNoSuchItem) {
+				startSK = ""
+			} else if err != nil {
+				s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+					"Unable to query items.", readOnly, eventID, verified)
+				return
+			}
 		} else {
 			startSK = itemSK
 		}
 	}
 	items, lastKey, hasMore, err := s.dynamoQueryCollectLive(
 		w, r, body, requestID, eventID, verified, readOnly,
-		table, gsiSlot, queryPK, startSK, limit, keyCond.RangeOp, rangeAttr, keyCond.RangeValues,
+		table, gsiSlot, lsiSlot, queryPK, startSK, limit, keyCond.RangeOp, rangeAttr, keyCond.RangeValues,
 	)
 	if err != nil {
 		return
@@ -2141,7 +2194,19 @@ func (s *Server) dynamoStoreItem(
 			err.Error(), readOnly, eventID, verified)
 		return err
 	}
-	if err := s.store.PutItemBytesMultiGSI(table.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, data, sealed, sealedDEK); err != nil {
+	lsiSK, err := ddb.LSIKeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return err
+	}
+	lsi2SK, err := ddb.LSI2KeyStrings(table, item)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return err
+	}
+	if err := s.store.PutItemBytesIndexed(table.AccountID, table.TableName, itemPK, itemSK, gsiPK, gsiSK, gsi2PK, gsi2SK, lsiSK, lsi2SK, data, sealed, sealedDEK); err != nil {
 		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to put item.", readOnly, eventID, verified)
 		return err
@@ -2319,7 +2384,7 @@ func (s *Server) dynamoQueryCollectLive(
 	verified *authn.Verified,
 	readOnly bool,
 	table store.DynamoTable,
-	gsiSlot int,
+	gsiSlot, lsiSlot int,
 	queryPK, startSK string,
 	limit int,
 	rangeOp, rangeAttr string,
@@ -2343,9 +2408,12 @@ func (s *Server) dynamoQueryCollectLive(
 			}
 		}
 		var page store.ItemPage
-		if gsiSlot > 0 {
+		switch {
+		case gsiSlot > 0:
 			page, err = s.store.QueryGSISlotItems(table.AccountID, table.TableName, gsiSlot, queryPK, fetchLimit, curSK)
-		} else {
+		case lsiSlot > 0:
+			page, err = s.store.QueryLSISlotItems(table.AccountID, table.TableName, lsiSlot, queryPK, fetchLimit, curSK)
+		default:
 			page, err = s.store.QueryItems(table.AccountID, table.TableName, queryPK, fetchLimit, curSK)
 		}
 		if err != nil {
@@ -2638,4 +2706,186 @@ func (s *Server) writeDynamoError(
 		accountID = verified.AccountID
 	}
 	s.auditAPIError(r, requestID, eventID, code, message, readOnly, accessKeyID, accountID, verified != nil)
+}
+
+func (s *Server) dynamoExecuteStatement(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	statement, _ := params["Statement"].(string)
+	var rawParams []any
+	if p, ok := params["Parameters"].([]any); ok {
+		rawParams = p
+	}
+	op, err := ddb.ParsePartiQLStatement(statement, rawParams)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	items, ok := s.dynamoRunPartiQL(w, r, body, requestID, eventID, verified, readOnly, op)
+	if !ok {
+		return
+	}
+	payload, err := ddb.ExecuteStatementJSON(items)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "ExecuteStatement", readOnly)
+}
+
+func (s *Server) dynamoBatchExecuteStatement(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	rawStatements, ok := params["Statements"].([]any)
+	if !ok || len(rawStatements) == 0 {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Statements is required.", readOnly, eventID, verified)
+		return
+	}
+	if len(rawStatements) > dynamoBatchLimit {
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			fmt.Sprintf("Lab supports at most %d Statements.", dynamoBatchLimit), readOnly, eventID, verified)
+		return
+	}
+	responses := make([]map[string]any, 0, len(rawStatements))
+	for _, raw := range rawStatements {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Invalid Statements entry.", readOnly, eventID, verified)
+			return
+		}
+		statement, _ := entry["Statement"].(string)
+		var rawParams []any
+		if p, ok := entry["Parameters"].([]any); ok {
+			rawParams = p
+		}
+		op, err := ddb.ParsePartiQLStatement(statement, rawParams)
+		if err != nil {
+			responses = append(responses, map[string]any{
+				"Error": map[string]string{"Code": "ValidationException", "Message": err.Error()},
+			})
+			continue
+		}
+		items, ok := s.dynamoRunPartiQL(w, r, body, requestID, eventID, verified, readOnly, op)
+		if !ok {
+			return
+		}
+		resp := map[string]any{}
+		if len(items) > 0 {
+			resp["Item"] = items[0]
+		}
+		responses = append(responses, resp)
+	}
+	payload, err := ddb.BatchExecuteStatementJSON(responses)
+	if err != nil {
+		s.writeDynamoError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeDynamoOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, dynamoEventSource, "BatchExecuteStatement", readOnly)
+}
+
+func (s *Server) dynamoRunPartiQL(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	op ddb.PartiQLOp,
+) ([]ddb.ItemMap, bool) {
+	table, ok := s.dynamoTableOrErr(w, r, body, requestID, eventID, verified, readOnly, op.TableName)
+	if !ok {
+		return nil, false
+	}
+	switch op.Kind {
+	case "INSERT":
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBPutItem, table.TableARN, table.ResourcePolicy) &&
+			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
+			return nil, false
+		}
+		if err := s.dynamoStoreItem(w, r, body, requestID, eventID, verified, readOnly, table, op.Item); err != nil {
+			return nil, false
+		}
+		return []ddb.ItemMap{}, true
+	case "SELECT":
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBGetItem, table.TableARN, table.ResourcePolicy) &&
+			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
+			return nil, false
+		}
+		item, found, err := s.dynamoLoadItem(w, r, body, requestID, eventID, verified, readOnly, table, op.Key)
+		if err != nil {
+			return nil, false
+		}
+		if !found {
+			return []ddb.ItemMap{}, true
+		}
+		return []ddb.ItemMap{item}, true
+	case "DELETE":
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBDeleteItem, table.TableARN, table.ResourcePolicy) &&
+			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
+			return nil, false
+		}
+		itemPK, itemSK, err := ddb.PrimaryKeyStrings(table, op.Key)
+		if err != nil {
+			s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return nil, false
+		}
+		_ = s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK)
+		return []ddb.ItemMap{}, true
+	case "UPDATE":
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBUpdateItem, table.TableARN, table.ResourcePolicy) &&
+			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
+			return nil, false
+		}
+		existing, found, err := s.dynamoLoadItem(w, r, body, requestID, eventID, verified, readOnly, table, op.Key)
+		if err != nil {
+			return nil, false
+		}
+		if !found {
+			existing = ddb.ItemMap{}
+			for k, v := range op.Key {
+				existing[k] = v
+			}
+		}
+		for k, v := range op.SetAttrs {
+			if av, ok := v.(map[string]any); ok {
+				existing[k] = av
+			}
+		}
+		if err := s.dynamoStoreItem(w, r, body, requestID, eventID, verified, readOnly, table, existing); err != nil {
+			return nil, false
+		}
+		return []ddb.ItemMap{}, true
+	default:
+		s.writeDynamoError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"unsupported PartiQL statement", readOnly, eventID, verified)
+		return nil, false
+	}
 }

@@ -127,6 +127,30 @@ func GSI2KeyStrings(table store.DynamoTable, item ItemMap) (gsiPK, gsiSK string,
 	return gsiKeyStringsFor(table.GSI2HashKeyName, table.GSI2RangeKeyName, table.GSI2HasRangeKey(), item)
 }
 
+// LSIKeyStrings extracts the LSI range key for slot 1 (hash is the table hash).
+func LSIKeyStrings(table store.DynamoTable, item ItemMap) (lsiSK string, err error) {
+	if !table.HasLSI() {
+		return "", nil
+	}
+	return lsiRangeKeyString(table.LSIRangeKeyName, item)
+}
+
+// LSI2KeyStrings extracts the LSI range key for slot 2.
+func LSI2KeyStrings(table store.DynamoTable, item ItemMap) (lsiSK string, err error) {
+	if !table.HasLSI2() {
+		return "", nil
+	}
+	return lsiRangeKeyString(table.LSI2RangeKeyName, item)
+}
+
+func lsiRangeKeyString(rangeName string, item ItemMap) (string, error) {
+	rangeAV, ok := item[rangeName]
+	if !ok {
+		return "", nil
+	}
+	return CanonicalAV(rangeAV)
+}
+
 func gsiKeyStringsFor(hashName, rangeName string, hasRange bool, item ItemMap) (gsiPK, gsiSK string, err error) {
 	hashAV, ok := item[hashName]
 	if !ok {
@@ -188,17 +212,25 @@ type KeyCondition struct {
 }
 
 // KeyConditionFromQueryIndex parses KeyConditions or KeyConditionExpression for
-// the base table or a named GSI, including lab sort-key operators.
+// the base table or a named GSI/LSI, including lab sort-key operators.
 func KeyConditionFromQueryIndex(table store.DynamoTable, indexName string, params map[string]any) (KeyCondition, error) {
 	hashName := table.HashKeyName
 	rangeName := table.RangeKeyName
 	if indexName != "" {
-		gsi, _, ok := table.GSIByName(indexName)
+		kind, gsi, lsi, _, ok := table.IndexByName(indexName)
 		if !ok {
 			return KeyCondition{}, fmt.Errorf("index %q not found", indexName)
 		}
-		hashName = gsi.HashKeyName
-		rangeName = gsi.RangeKeyName
+		switch kind {
+		case "GSI":
+			hashName = gsi.HashKeyName
+			rangeName = gsi.RangeKeyName
+		case "LSI":
+			hashName = table.HashKeyName
+			rangeName = lsi.RangeKeyName
+		default:
+			return KeyCondition{}, fmt.Errorf("index %q not found", indexName)
+		}
 	}
 	return keyConditionFromQuery(hashName, rangeName, params)
 }

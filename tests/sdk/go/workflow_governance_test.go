@@ -486,6 +486,55 @@ func TestELBv2CreateRulePathPattern(t *testing.T) {
 	}
 }
 
+func TestELBv2NetworkLoadBalancerType(t *testing.T) {
+	requireReady(t)
+	prefix := uniquePrefix(t)
+	lbName := "nlb" + strings.ReplaceAll(prefix, "-", "")
+	if len(lbName) > 32 {
+		lbName = lbName[:32]
+	}
+
+	lbStatus, lbBody, lbParsed := signedJSONTarget(t, "elasticloadbalancing", "ElasticLoadBalancing_v2.CreateLoadBalancer", map[string]any{
+		"Name": lbName, "Type": "network",
+	})
+	if lbStatus != 200 {
+		t.Fatalf("CreateLoadBalancer network status=%d body=%s", lbStatus, lbBody)
+	}
+	lbs, _ := lbParsed["LoadBalancers"].([]any)
+	if len(lbs) == 0 {
+		t.Fatalf("missing LB: %s", lbBody)
+	}
+	lb0, _ := lbs[0].(map[string]any)
+	lbARN, _ := lb0["LoadBalancerArn"].(string)
+	lbType, _ := lb0["Type"].(string)
+	if lbType != "network" {
+		t.Fatalf("Type=%q want network body=%s", lbType, lbBody)
+	}
+	if !strings.Contains(lbARN, "loadbalancer/net/") {
+		t.Fatalf("ARN=%q want loadbalancer/net/", lbARN)
+	}
+	t.Cleanup(func() {
+		_, _, _ = signedJSONTarget(t, "elasticloadbalancing", "ElasticLoadBalancing_v2.DeleteLoadBalancer", map[string]any{
+			"LoadBalancerArn": lbARN,
+		})
+	})
+
+	descStatus, descBody, descParsed := signedJSONTarget(t, "elasticloadbalancing", "ElasticLoadBalancing_v2.DescribeLoadBalancers", map[string]any{
+		"LoadBalancerArns": []string{lbARN},
+	})
+	if descStatus != 200 {
+		t.Fatalf("DescribeLoadBalancers status=%d body=%s", descStatus, descBody)
+	}
+	descLBs, _ := descParsed["LoadBalancers"].([]any)
+	if len(descLBs) == 0 {
+		t.Fatalf("DescribeLoadBalancers empty: %s", descBody)
+	}
+	desc0, _ := descLBs[0].(map[string]any)
+	if typ, _ := desc0["Type"].(string); typ != "network" {
+		t.Fatalf("Describe Type=%v want network body=%s", desc0["Type"], descBody)
+	}
+}
+
 func TestAppSyncServiceRoleArnMultiResolver(t *testing.T) {
 	requireReady(t)
 	cfg := loadAWSConfig(t)

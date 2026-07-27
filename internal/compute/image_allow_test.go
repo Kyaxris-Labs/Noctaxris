@@ -33,11 +33,15 @@ func TestAllowImagePullLabAndPinned(t *testing.T) {
 		"public.ecr.aws/lambda/python@sha256:" + strings.Repeat("a", 64),
 		"alpine:3.20",
 		"postgres:16-alpine",
+		"mysql:8.0",
+		"mariadb:11",
 		"valkey/valkey:8-alpine",
 		"mongo:7",
 		"rabbitmq:3.13-alpine",
 		"apache/activemq-classic:5.18.3",
 		"opensearchproject/opensearch:2.11.1",
+		"tinkerpop/gremlin-server:3.7.3",
+		"redpandadata/redpanda:v24.2.4",
 	}
 	for _, ref := range ok {
 		if err := compute.AllowImagePull(ref, listen); err != nil {

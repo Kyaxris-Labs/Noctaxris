@@ -115,6 +115,7 @@ Default `docker/compose.yaml` stays loopback-published and host-gateway off. Use
 | `docker/compose.lab-host-gateway.yaml` | In-function SDK labs that call the published API via `host.docker.internal` (sets `NOCTAXRIS_INJECT_HOST_GATEWAY=1`). Keep code/default Compose off |
 | `docker/compose.lab-ecs-host-gateway.yaml` | Nested ECS / CodeBuild / Batch containers need `host.docker.internal` to call the published API (`NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1`). Default Compose stays off |
 | `docker/compose.lab-open.yaml` | Open data-plane labs that need `AuthType NONE` / HTTP API `NONE` on the Compose non-loopback bind |
+| `docker/compose.lab-nested-ports.yaml` | Opt-in loopback TCP to selected nested data ports (Postgres `5432`, MySQL `3306`, Redis/MemoryDB `6379`, Mongo/DocDB `27017`, Gremlin `8182`, Kafka `9092`). Sets `NOCTAXRIS_NESTED_PORT_PUBLISH=1` and publishes those ports on `noctaxris-engine` to `127.0.0.1` only. Nested engines live inside DinD; mapping ports on the API service cannot reach them. Prefer `:4566` facades when loopback TCP is not required |
 
 Forensic inject and lab-clock helpers (`NOCTAXRIS_CLOUDTRAIL_INJECT`, `NOCTAXRIS_GUARDDUTY_INJECT`, `NOCTAXRIS_MACIE_INJECT`, `NOCTAXRIS_VPCFLOW_INJECT`, `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT`, `NOCTAXRIS_LAB_FORENSICS`, plus `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF` / `NOCTAXRIS_CLOUDTRAIL_GZIP`) stay off unless set on the API process. See [configuration.md](configuration.md).
 
@@ -124,6 +125,8 @@ Desktop + nested DinD often cannot reach a loopback-only publish from function o
 docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
 # Nested ECS / CodeBuild / Batch task→API labs:
 # docker compose -f docker/compose.yaml -f docker/compose.lab-ecs-host-gateway.yaml --env-file docker/.env up --build
+# Nested data TCP on operator loopback (DinD engine hop; not API ports:):
+# docker compose -f docker/compose.yaml -f docker/compose.lab-nested-ports.yaml --env-file docker/.env up --build
 # Desktop DinD if connection refused from nested containers:
 # NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 docker compose -f docker/compose.yaml -f docker/compose.lab-host-gateway.yaml --env-file docker/.env up --build
 ```

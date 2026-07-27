@@ -63,6 +63,9 @@ TF_FULLSTACK=1 bash tests/run-all.sh
 # Terraform Lambda runtime stacks only (python3.14 / nodejs24.x / java21+java25)
 TF_LAMBDA_RUNTIMES=1 bash tests/run-all.sh
 
+# Terraform Floci-parity stacks (DDB LSI + ASG/EKS; after lab-core)
+TF_PARITY=1 bash tests/run-all.sh
+
 # Nested Lambda Invoke in SDK suites (Compose noctaxris-engine healthy)
 NOCTAXRIS_NESTED=1 bash tests/run-all.sh
 ```
@@ -93,6 +96,10 @@ STACK=lab-ms-serverless bash tests/terraform/run.sh
 STACK=lab-ms-ecs bash tests/terraform/run.sh
 STACK=lab-ms-ecs TF_MS_LIVE=1 bash tests/terraform/run.sh
 
+# Terraform Floci-parity stacks (DDB+LSI; launch config + ASG + EKS)
+STACK=lab-parity-observe bash tests/terraform/run.sh
+STACK=lab-parity-compute bash tests/terraform/run.sh
+
 # CloudFormation CreateStack / Describe / Delete (JSON or YAML lab subset)
 cd tests/cloudformation/go && go test ./... -count=1 -timeout 5m
 # or: bash tests/cloudformation/run.sh
@@ -115,7 +122,7 @@ Failures on assertions happen only when the endpoint is up.
 | `tests/sdk/go` | Create/list/get/delete round-trips with unique prefixes and cleanup; Lambda zip runtimes `python3.11`–`3.14`, `nodejs20.x`/`22.x`/`24.x`, `java21`/`java25` |
 | `tests/sdk/nodejs` | Same service set via AWS SDK for JavaScript v3 (`node:test`), including Lambda runtime matrix |
 | `tests/sdk/python` | Same service set via boto3 + pytest, including Lambda runtime matrix |
-| `tests/terraform` | Real HCL, custom `endpoints` to Noctaxris; `lab-core`, `lab-fullstack`, `lab-lambda-*`, `lab-ms-serverless`, `lab-ms-ecs` (`live` for ECS DesiredCount) |
+| `tests/terraform` | Real HCL, custom `endpoints` to Noctaxris; `lab-core`, `lab-fullstack`, `lab-lambda-*`, `lab-ms-serverless`, `lab-ms-ecs` (`live` for ECS DesiredCount), `lab-parity-observe`, `lab-parity-compute` (`TF_PARITY=1` or `NOCTAXRIS_ADVANCED=1`) |
 | `tests/cloudformation` | JSON/YAML lab templates for S3, IAM Role, SQS, DynamoDB, Lambda (Python ZipFile plus sample Node/Java YAML under `templates/`) |
 
 ## Honest limitations
@@ -131,7 +138,7 @@ Gaps and follow-ups: [HANDOFF.md](HANDOFF.md).
 
 ## Advanced suites
 
-Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. Lambda runtime Terraform projects (`lab-lambda-python`, `lab-lambda-nodejs`, `lab-lambda-java`) run with `TF_LAMBDA_RUNTIMES=1` or `NOCTAXRIS_ADVANCED=1`. Both fold into `run-all.sh` when `NOCTAXRIS_ADVANCED=1`.
+Multi-service **lab order pipeline** (IAM, KMS, S3, DynamoDB, SQS, SNS, Lambda CRUD, EventBridge → queue/topic, SSM, Secrets Manager). SDK suites are gated so default `npm test` / `pytest` / `go test` stay fast. Terraform fullstack is opt-in via `STACK=lab-fullstack`. Lambda runtime Terraform projects (`lab-lambda-python`, `lab-lambda-nodejs`, `lab-lambda-java`) run with `TF_LAMBDA_RUNTIMES=1` or `NOCTAXRIS_ADVANCED=1`. Floci-parity Terraform stacks (`lab-parity-observe`, `lab-parity-compute`) run with `TF_PARITY=1` or `NOCTAXRIS_ADVANCED=1`. Those gates fold into `run-all.sh` when set.
 
 ```bash
 export NOCTAXRIS_ADVANCED=1
@@ -145,6 +152,9 @@ TF_FULLSTACK=1 bash tests/run-all.sh
 # Terraform Lambda runtime stacks only
 TF_LAMBDA_RUNTIMES=1 bash tests/run-all.sh
 
+# Terraform Floci-parity stacks only
+TF_PARITY=1 bash tests/run-all.sh
+
 # Or individually:
 cd tests/sdk/nodejs && npm install && node --test --test-name-pattern=fullstack test/fullstack.test.mjs
 cd tests/sdk/python && pip install -r requirements.txt && pytest test_fullstack.py
@@ -153,6 +163,8 @@ STACK=lab-fullstack bash tests/terraform/run.sh
 STACK=lab-lambda-python bash tests/terraform/run.sh
 STACK=lab-lambda-nodejs bash tests/terraform/run.sh
 STACK=lab-lambda-java bash tests/terraform/run.sh
+STACK=lab-parity-observe bash tests/terraform/run.sh
+STACK=lab-parity-compute bash tests/terraform/run.sh
 ```
 
 | Suite | Path | Status |
@@ -163,6 +175,7 @@ STACK=lab-lambda-java bash tests/terraform/run.sh
 | Terraform | `tests/terraform/stacks/lab-fullstack/` | Implemented (`STACK=lab-fullstack` or `NOCTAXRIS_ADVANCED=1` in `run-all.sh`) |
 | Terraform Lambda runtimes | `tests/terraform/stacks/lab-lambda-{python,nodejs,java}/` | Implemented (`TF_LAMBDA_RUNTIMES=1` or `NOCTAXRIS_ADVANCED=1`) |
 | Terraform microservice | `tests/terraform/stacks/lab-ms-serverless/`, `lab-ms-ecs/` | Implemented (`TF_MS=1` / `TF_MS_LIVE=1` or `NOCTAXRIS_ADVANCED=1`) |
+| Terraform Floci-parity | `tests/terraform/stacks/lab-parity-observe/`, `lab-parity-compute/` | Implemented (`TF_PARITY=1` or `NOCTAXRIS_ADVANCED=1`) |
 | Nested Invoke | `*lambda*invoke*` per language | Implemented (gate `NOCTAXRIS_NESTED=1`) |
 
 Assertions cover EventBridge → SQS delivery (including SourceArn queue policy), SNS → SQS fan-out, data-plane reads (S3/DDB/SSM SecureString/Secrets), empty delivery without an events queue policy, and SecureString decrypt denied when the CMK policy omits `kms:Decrypt`.

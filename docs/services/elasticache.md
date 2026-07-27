@@ -41,5 +41,4 @@ Describe returns the nested endpoint. Create starts as `creating`. Status become
 - Redis AUTH / IAM auth token full matrix (nested lab image has no AUTH by default)
 - Cluster mode enabled / replication groups full matrix
 - Encryption at rest
-- MemoryDB
 - Host or WAN publish of cache ports (forbidden)

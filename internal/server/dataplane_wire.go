@@ -12,39 +12,55 @@ import (
 )
 
 // tryStartNestedDataEngine starts a nested data engine via compute.StartDataPlane when DinD is configured.
-// ElastiCache/DocDB: without DockerHost this is a no-op (control-plane may stay creating).
-// MQ/OpenSearch: without DockerHost or on start/wait failure, status is fail-closed (CREATION_FAILED / CreateFailed).
+// ElastiCache/MemoryDB/DocDB/Neptune: without DockerHost this is a no-op (control-plane may stay creating).
+// MQ/OpenSearch/MSK: without DockerHost or on start/wait failure, status is fail-closed.
 // env is optional engine bootstrap. Never log env values.
 // imageOverride, when non-empty, selects the container image (used for MQ EngineType RabbitMQ vs ActiveMQ).
 func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[string]string, imageOverride ...string) error {
+	image := ""
+	if len(imageOverride) > 0 {
+		image = imageOverride[0]
+	}
+	return tryStartNestedDataEngineWithOpts(s, accountID, kind, name, env, image, nil, "")
+}
+
+// tryStartNestedDataEngineWithOpts is like tryStartNestedDataEngine with optional Cmd and container name.
+func tryStartNestedDataEngineWithOpts(
+	s *Server, accountID, kind, name string, env map[string]string, image string, cmd []string, containerName string,
+) error {
 	if s == nil || strings.TrimSpace(accountID) == "" {
 		return nil
 	}
 	dk := compute.DataKind(strings.ToLower(kind))
 	switch dk {
-	case compute.DataKindElastiCache, compute.DataKindDocDB, compute.DataKindMQ, compute.DataKindOpenSearch:
+	case compute.DataKindElastiCache, compute.DataKindMemoryDB, compute.DataKindDocDB,
+		compute.DataKindMQ, compute.DataKindOpenSearch, compute.DataKindNeptune, compute.DataKindMSK:
 	default:
 		return nil
 	}
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
 		switch dk {
-		case compute.DataKindMQ, compute.DataKindOpenSearch:
+		case compute.DataKindMQ, compute.DataKindOpenSearch, compute.DataKindMSK:
 			_ = markNestedDataFailed(s, accountID, dk, name, "compute client unavailable")
 		}
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	image := compute.DefaultDataPlaneImage(dk)
-	if len(imageOverride) > 0 && strings.TrimSpace(imageOverride[0]) != "" {
-		image = strings.TrimSpace(imageOverride[0])
+	if strings.TrimSpace(image) == "" {
+		image = compute.DefaultDataPlaneImage(dk)
+	}
+	cname := strings.TrimSpace(containerName)
+	if cname == "" {
+		cname = "noctaxris-" + string(dk) + "-" + strings.ToLower(name)
 	}
 	inst, err := cli.StartDataPlane(ctx, compute.DataPlaneOpts{
 		Kind:  dk,
 		Image: image,
-		Name:  "noctaxris-" + string(dk) + "-" + strings.ToLower(name),
+		Name:  cname,
 		Env:   env,
+		Cmd:   cmd,
 	})
 	if err != nil {
 		_ = markNestedDataFailed(s, accountID, dk, name, err.Error())
@@ -89,14 +105,22 @@ func promoteNestedDataAfterWait(
 	switch dk {
 	case compute.DataKindElastiCache:
 		return s.store.SetElastiCacheContainerID(accountID, name, containerID, "available", host)
+	case compute.DataKindMemoryDB:
+		// Keep CreateCluster DNS-style Address (*.memorydb.noctaxris.internal); host is DinD-only.
+		return s.store.SetMemoryDBContainerID(accountID, name, containerID, "available", "")
 	case compute.DataKindDocDB:
 		return s.store.SetDocDBContainerID(accountID, name, containerID, "available", host)
+	case compute.DataKindNeptune:
+		return s.store.SetNeptuneContainerID(accountID, name, containerID, "available", host)
 	case compute.DataKindMQ:
 		ep := fmt.Sprintf("amqp://%s:%d", host, store.MQNestedPort)
 		return s.store.SetMQContainerID(accountID, name, containerID, store.MQBrokerStateRunning, ep)
 	case compute.DataKindOpenSearch:
 		ep := fmt.Sprintf("%s:%d", host, store.OpenSearchNestedPort)
 		return s.store.SetOpenSearchContainerID(accountID, name, containerID, store.OpenSearchDomainStatusActive, ep, "")
+	case compute.DataKindMSK:
+		ep := fmt.Sprintf("%s:%d", host, store.MSKNestedPort)
+		return s.store.SetMSKContainerID(accountID, name, containerID, store.MSKClusterStateActive, ep)
 	default:
 		return nil
 	}
@@ -106,14 +130,21 @@ func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name
 	switch dk {
 	case compute.DataKindElastiCache:
 		return s.store.SetElastiCacheContainerID(accountID, name, "", "failed", "")
+	case compute.DataKindMemoryDB:
+		return s.store.SetMemoryDBContainerID(accountID, name, "", "failed", "")
 	case compute.DataKindDocDB:
 		return s.store.SetDocDBContainerID(accountID, name, "", "failed", "")
+	case compute.DataKindNeptune:
+		return s.store.SetNeptuneContainerID(accountID, name, "", "failed", "")
 	case compute.DataKindMQ:
 		stub := fmt.Sprintf("stub://127.0.0.1/mq/%s", strings.TrimSpace(name))
 		return s.store.SetMQContainerID(accountID, name, "", store.MQBrokerStateCreationFailed, stub)
 	case compute.DataKindOpenSearch:
 		reason := ossvc.ClassifyOpenSearchNestedFailure(evidence)
 		return s.store.SetOpenSearchContainerID(accountID, name, "", store.OpenSearchDomainStatusCreateFailed, "", reason)
+	case compute.DataKindMSK:
+		stub := fmt.Sprintf("stub://127.0.0.1/msk/%s", strings.TrimSpace(name))
+		return s.store.SetMSKContainerID(accountID, name, "", store.MSKClusterStateFailed, stub)
 	default:
 		return nil
 	}

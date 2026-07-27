@@ -22,6 +22,7 @@ const DefaultAPIGatewayRegion = "us-east-1"
 
 const (
 	APIGatewayProtocolHTTP = "HTTP"
+	// APIGatewayProtocolWebSocket is defined in apigateway_websocket.go
 
 	APIGatewayAuthNone   = "NONE"
 	APIGatewayAuthJWT    = "JWT"
@@ -33,6 +34,7 @@ const (
 	APIGatewayAuthorizerTOKEN   = "TOKEN"
 
 	APIGatewayIntegrationAWSProxy = "AWS_PROXY"
+	// HTTP_PROXY / VPC_LINK constants live in apigateway_http_proxy.go
 
 	APIGatewayAuthorizerPayload20 = "2.0"
 	APIGatewayAuthorizerPayload10 = "1.0"
@@ -206,13 +208,18 @@ func (s *Store) CreateAPIGatewayAPIWithCORS(accountID, region, name, protocolTyp
 	if protocolType == "" {
 		protocolType = APIGatewayProtocolHTTP
 	}
-	if protocolType != APIGatewayProtocolHTTP {
-		return APIGatewayAPI{}, fmt.Errorf("%w: ProtocolType must be HTTP", ErrAPIGatewayBadRequest)
+	switch protocolType {
+	case APIGatewayProtocolHTTP, APIGatewayProtocolWebSocket:
+	default:
+		return APIGatewayAPI{}, fmt.Errorf("%w: ProtocolType must be HTTP or WEBSOCKET", ErrAPIGatewayBadRequest)
 	}
 	if region == "" {
 		region = DefaultAPIGatewayRegion
 	}
 	_ = region
+	if protocolType == APIGatewayProtocolWebSocket && cors.HasCORS() {
+		return APIGatewayAPI{}, fmt.Errorf("%w: CorsConfiguration is HTTP API only", ErrAPIGatewayBadRequest)
+	}
 	norm, err := NormalizeAPIGatewayCORS(cors)
 	if err != nil {
 		return APIGatewayAPI{}, err
@@ -223,6 +230,9 @@ func (s *Store) CreateAPIGatewayAPIWithCORS(accountID, region, name, protocolTyp
 	}
 	apiID := uuid.NewString()
 	endpoint := APIGatewayAPIEndpoint(apiID)
+	if protocolType == APIGatewayProtocolWebSocket {
+		endpoint = APIGatewayWebSocketAPIEndpoint(apiID)
+	}
 	now := time.Now().UTC().UnixMilli()
 	_, err = s.db.Exec(
 		`INSERT INTO apigwv2_apis (account_id, api_id, name, protocol_type, api_endpoint, created_at, cors_json)
@@ -357,7 +367,7 @@ func (s *Store) ListAPIGatewayAPIs(accountID string) ([]APIGatewayAPI, error) {
 	return out, rows.Err()
 }
 
-// CreateAPIGatewayIntegration creates an AWS_PROXY Lambda integration.
+// CreateAPIGatewayIntegration creates an AWS_PROXY Lambda or opt-in HTTP_PROXY / VPC_LINK integration.
 func (s *Store) CreateAPIGatewayIntegration(accountID, apiID, integrationType, integrationURI, payloadFormat, credentialsArn string) (APIGatewayIntegration, error) {
 	integrationType = strings.ToUpper(strings.TrimSpace(integrationType))
 	integrationURI = strings.TrimSpace(integrationURI)
@@ -366,17 +376,28 @@ func (s *Store) CreateAPIGatewayIntegration(accountID, apiID, integrationType, i
 	if integrationType == "" {
 		integrationType = APIGatewayIntegrationAWSProxy
 	}
-	if integrationType != APIGatewayIntegrationAWSProxy {
-		return APIGatewayIntegration{}, fmt.Errorf("%w: only AWS_PROXY integrations in lab core", ErrAPIGatewayBadRequest)
-	}
-	if integrationURI == "" {
-		return APIGatewayIntegration{}, fmt.Errorf("%w: IntegrationUri required", ErrAPIGatewayBadRequest)
-	}
-	if _, _, ok := ParseLambdaARNFromSFNResource(integrationURI); !ok {
-		return APIGatewayIntegration{}, fmt.Errorf("%w: IntegrationUri must be a Lambda ARN", ErrAPIGatewayBadRequest)
-	}
-	if payloadFormat == "" {
-		payloadFormat = "2.0"
+	switch integrationType {
+	case APIGatewayIntegrationAWSProxy:
+		if integrationURI == "" {
+			return APIGatewayIntegration{}, fmt.Errorf("%w: IntegrationUri required", ErrAPIGatewayBadRequest)
+		}
+		if _, _, ok := ParseLambdaARNFromSFNResource(integrationURI); !ok {
+			return APIGatewayIntegration{}, fmt.Errorf("%w: IntegrationUri must be a Lambda ARN", ErrAPIGatewayBadRequest)
+		}
+		if payloadFormat == "" {
+			payloadFormat = "2.0"
+		}
+	case APIGatewayIntegrationHTTPProxy, APIGatewayIntegrationVPCLink:
+		if err := ValidateAPIGatewayHTTPProxyURI(integrationURI); err != nil {
+			return APIGatewayIntegration{}, err
+		}
+		if credentialsArn != "" {
+			return APIGatewayIntegration{}, fmt.Errorf("%w: CredentialsArn is not supported for HTTP_PROXY / VPC_LINK", ErrAPIGatewayBadRequest)
+		}
+		payloadFormat = ""
+	default:
+		return APIGatewayIntegration{}, fmt.Errorf("%w: IntegrationType must be AWS_PROXY, or HTTP_PROXY / VPC_LINK when %s=1",
+			ErrAPIGatewayBadRequest, EnvAPIGatewayHTTPProxy)
 	}
 	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
 		return APIGatewayIntegration{}, err
@@ -694,49 +715,73 @@ func (s *Store) CreateAPIGatewayRoute(accountID, apiID, routeKey, target, authTy
 	if !strings.HasPrefix(target, "integrations/") {
 		return APIGatewayRoute{}, fmt.Errorf("%w: Target must be integrations/{integrationId}", ErrAPIGatewayBadRequest)
 	}
-	if authType == "" {
-		authType = APIGatewayAuthNone
+	api, err := s.GetAPIGatewayAPI(accountID, apiID)
+	if err != nil {
+		return APIGatewayRoute{}, err
 	}
-	switch authType {
-	case APIGatewayAuthNone, APIGatewayAuthJWT, APIGatewayAuthIAM, APIGatewayAuthCUSTOM:
-	default:
-		return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizationType must be NONE, JWT, AWS_IAM, or CUSTOM", ErrAPIGatewayBadRequest)
-	}
-	switch authType {
-	case APIGatewayAuthJWT:
-		if authorizerID == "" {
-			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for JWT", ErrAPIGatewayBadRequest)
+	if api.ProtocolType == APIGatewayProtocolWebSocket {
+		if !IsAPIGatewayWebSocketRouteKey(routeKey) {
+			return APIGatewayRoute{}, fmt.Errorf("%w: WebSocket lab RouteKey must be $connect, $disconnect, or $default", ErrAPIGatewayBadRequest)
 		}
-		authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
-		if err != nil {
-			return APIGatewayRoute{}, err
+		// Lab WebSocket auth is connect-time NONE/IAM only (JWT/CUSTOM deferred).
+		if authType == "" {
+			authType = APIGatewayAuthNone
 		}
-		if authz.AuthorizerType != APIGatewayAuthorizerJWT {
-			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a JWT authorizer", ErrAPIGatewayBadRequest)
+		switch authType {
+		case APIGatewayAuthNone, APIGatewayAuthIAM:
+			authorizerID = ""
+		default:
+			return APIGatewayRoute{}, fmt.Errorf("%w: WebSocket lab AuthorizationType must be NONE or AWS_IAM", ErrAPIGatewayBadRequest)
 		}
-	case APIGatewayAuthCUSTOM:
-		if authorizerID == "" {
-			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for CUSTOM", ErrAPIGatewayBadRequest)
+	} else {
+		if IsAPIGatewayWebSocketRouteKey(routeKey) && routeKey != "$default" {
+			return APIGatewayRoute{}, fmt.Errorf("%w: RouteKey %s is WebSocket-only", ErrAPIGatewayBadRequest, routeKey)
 		}
-		authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
-		if err != nil {
-			return APIGatewayRoute{}, err
+		if authType == "" {
+			authType = APIGatewayAuthNone
 		}
-		if authz.AuthorizerType != APIGatewayAuthorizerREQUEST {
-			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a REQUEST Lambda authorizer", ErrAPIGatewayBadRequest)
+		switch authType {
+		case APIGatewayAuthNone, APIGatewayAuthJWT, APIGatewayAuthIAM, APIGatewayAuthCUSTOM:
+		default:
+			return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizationType must be NONE, JWT, AWS_IAM, or CUSTOM", ErrAPIGatewayBadRequest)
 		}
-	default:
-		authorizerID = ""
+		switch authType {
+		case APIGatewayAuthJWT:
+			if authorizerID == "" {
+				return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for JWT", ErrAPIGatewayBadRequest)
+			}
+			authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
+			if err != nil {
+				return APIGatewayRoute{}, err
+			}
+			if authz.AuthorizerType != APIGatewayAuthorizerJWT {
+				return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a JWT authorizer", ErrAPIGatewayBadRequest)
+			}
+		case APIGatewayAuthCUSTOM:
+			if authorizerID == "" {
+				return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId required for CUSTOM", ErrAPIGatewayBadRequest)
+			}
+			authz, err := s.GetAPIGatewayAuthorizer(accountID, apiID, authorizerID)
+			if err != nil {
+				return APIGatewayRoute{}, err
+			}
+			if authz.AuthorizerType != APIGatewayAuthorizerREQUEST {
+				return APIGatewayRoute{}, fmt.Errorf("%w: AuthorizerId must reference a REQUEST Lambda authorizer", ErrAPIGatewayBadRequest)
+			}
+		default:
+			authorizerID = ""
+		}
 	}
 	integrationID := strings.TrimPrefix(target, "integrations/")
-	if _, err := s.GetAPIGatewayIntegration(accountID, apiID, integrationID); err != nil {
+	in, err := s.GetAPIGatewayIntegration(accountID, apiID, integrationID)
+	if err != nil {
 		return APIGatewayRoute{}, err
 	}
-	if _, err := s.GetAPIGatewayAPI(accountID, apiID); err != nil {
-		return APIGatewayRoute{}, err
+	if api.ProtocolType == APIGatewayProtocolWebSocket && in.IntegrationType != APIGatewayIntegrationAWSProxy {
+		return APIGatewayRoute{}, fmt.Errorf("%w: WebSocket lab routes require AWS_PROXY Lambda integrations", ErrAPIGatewayBadRequest)
 	}
 	id := uuid.NewString()
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO apigwv2_routes (account_id, api_id, route_id, route_key, target, authorization_type, authorizer_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		accountID, apiID, id, routeKey, target, authType, authorizerID,
@@ -855,11 +900,11 @@ func (s *Store) MatchAPIGatewayRoute(accountID, apiID, method, path string) (API
 	return APIGatewayRoute{}, ErrAPIGatewayNotFound
 }
 
-// ParseAPIGatewayRouteKey splits "GET /path" or "$default".
+// ParseAPIGatewayRouteKey splits "GET /path" or reserved "$default" / "$connect" / "$disconnect".
 func ParseAPIGatewayRouteKey(routeKey string) (method, path string, ok bool) {
 	routeKey = strings.TrimSpace(routeKey)
-	if routeKey == "$default" {
-		return "$default", "/", true
+	if IsAPIGatewayWebSocketRouteKey(routeKey) {
+		return routeKey, "/", true
 	}
 	parts := strings.SplitN(routeKey, " ", 2)
 	if len(parts) != 2 {

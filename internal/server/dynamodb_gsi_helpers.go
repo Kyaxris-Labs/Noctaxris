@@ -68,3 +68,44 @@ func dynamoParseGSISpec(raw map[string]any, attrTypes map[string]string) (store.
 		RangeKeyType: rangeType,
 	}, nil
 }
+
+func dynamoParseLSISpec(raw map[string]any, attrTypes map[string]string, tableHashKey string) (store.DynamoLSI, error) {
+	indexName, _ := raw["IndexName"].(string)
+	if strings.TrimSpace(indexName) == "" {
+		return store.DynamoLSI{}, fmt.Errorf("LSI IndexName is required")
+	}
+	if proj, ok := raw["Projection"].(map[string]any); ok {
+		projType, _ := proj["ProjectionType"].(string)
+		if projType != "" && !strings.EqualFold(projType, "ALL") {
+			return store.DynamoLSI{}, fmt.Errorf("only ALL projection is supported")
+		}
+	}
+	var hashKey, rangeKey, rangeType string
+	schema, _ := raw["KeySchema"].([]any)
+	for _, entry := range schema {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["AttributeName"].(string)
+		keyType, _ := m["KeyType"].(string)
+		switch strings.ToUpper(keyType) {
+		case "HASH":
+			hashKey = name
+		case "RANGE":
+			rangeKey = name
+			rangeType = attrTypes[name]
+		}
+	}
+	if hashKey == "" || hashKey != tableHashKey {
+		return store.DynamoLSI{}, fmt.Errorf("LSI HASH key must match the table HASH key")
+	}
+	if rangeKey == "" || rangeType == "" {
+		return store.DynamoLSI{}, fmt.Errorf("LSI KeySchema must include a RANGE key with AttributeDefinitions")
+	}
+	return store.DynamoLSI{
+		IndexName:    indexName,
+		RangeKeyName: rangeKey,
+		RangeKeyType: rangeType,
+	}, nil
+}

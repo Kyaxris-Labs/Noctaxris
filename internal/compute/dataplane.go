@@ -20,25 +20,32 @@ const (
 	// Containers on this network are not published to the operator host.
 	DataPlaneNetworkName = "noctaxris-data"
 
-	// LabelDataKind marks nested data containers (values: rds|elasticache|docdb|mq|opensearch).
+	// LabelDataKind marks nested data containers (values: rds|elasticache|memorydb|docdb|mq|opensearch|neptune|msk).
 	LabelDataKind = "noctaxris.data"
 
 	// LabelManaged marks Noctaxris-managed Docker objects.
 	LabelManaged = "noctaxris.managed"
 
 	defaultPostgresImage   = "postgres:16-alpine"
+	defaultMySQLImage      = "mysql:8.0"
+	defaultMariaDBImage    = "mariadb:11"
 	defaultValkeyImage     = "valkey/valkey:8-alpine"
 	defaultMongoImage      = "mongo:7"
 	defaultRabbitMQImage   = "rabbitmq:3.13-alpine"
 	// apache/activemq-classic exposes AMQP on 5672 (plus OpenWire 61616 nested-only).
 	defaultActiveMQImage   = "apache/activemq-classic:5.18.3"
 	defaultOpenSearchImage = "opensearchproject/opensearch:2.11.1"
+	defaultGremlinImage    = "tinkerpop/gremlin-server:3.7.3"
+	defaultRedpandaImage   = "redpandadata/redpanda:v24.2.4"
 
 	defaultPostgresPort   = 5432
+	defaultMySQLPort      = 3306
 	defaultRedisPort      = 6379
 	defaultMongoPort      = 27017
 	defaultAMQPPort       = 5672
 	defaultOpenSearchPort = 9200
+	defaultGremlinPort    = 8182
+	defaultKafkaPort      = 9092
 )
 
 // DataKind identifies which nested data engine family a container belongs to.
@@ -47,27 +54,34 @@ type DataKind string
 const (
 	DataKindRDS         DataKind = "rds"
 	DataKindElastiCache DataKind = "elasticache"
+	DataKindMemoryDB    DataKind = "memorydb"
 	DataKindDocDB       DataKind = "docdb"
 	DataKindMQ          DataKind = "mq"
 	DataKindOpenSearch  DataKind = "opensearch"
+	DataKindNeptune     DataKind = "neptune"
+	DataKindMSK         DataKind = "msk"
 )
 
 // DataPlaneOpts configures a nested data-engine container inside DinD.
 //
-// Host port publish is intentionally unsupported. There is no PortBindings /
-// PublishPorts field. Callers must reach engines via nested-network endpoints
-// or HTTP facades on :4566 (for example RDS Data API).
+// Host port publish is off by default (no PortBindings). Opt in with
+// NOCTAXRIS_NESTED_PORT_PUBLISH=1 so the container port is bound on the DinD
+// engine host; pair with docker/compose.lab-nested-ports.yaml for operator
+// loopback publish. Callers normally use nested-network endpoints or HTTP
+// facades on :4566 (for example RDS Data API).
 type DataPlaneOpts struct {
 	Kind  DataKind
 	Image string
 	// Name is an optional container name. Empty selects a generated name.
 	Name string
 	Env  map[string]string
+	// Cmd overrides the image CMD when non-empty (used for Redpanda start args).
+	Cmd []string
 	// Labels are merged onto the container (noctaxris.data and noctaxris.managed
 	// are always set and cannot be overridden away).
 	Labels map[string]string
 	// ContainerPort is the engine listen port inside the nested network.
-	// Zero selects the default for Kind (5432 / 6379 / 27017 / 5672 / 9200).
+	// Zero selects the default for Kind (5432 / 6379 / 27017 / 5672 / 9200 / 8182 / 9092).
 	ContainerPort int
 }
 
@@ -85,9 +99,9 @@ type DataPlaneInstance struct {
 // ValidateDataPlaneOpts checks required fields without talking to Docker.
 func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 	switch opts.Kind {
-	case DataKindRDS, DataKindElastiCache, DataKindDocDB, DataKindMQ, DataKindOpenSearch:
+	case DataKindRDS, DataKindElastiCache, DataKindMemoryDB, DataKindDocDB, DataKindMQ, DataKindOpenSearch, DataKindNeptune, DataKindMSK:
 	default:
-		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, docdb, mq, or opensearch")
+		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, memorydb, docdb, mq, opensearch, neptune, or msk")
 	}
 	if strings.TrimSpace(opts.Image) == "" {
 		return fmt.Errorf("compute: data-plane Image is required")
@@ -101,11 +115,12 @@ func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 // DefaultDataPlaneImage returns the pinned lab image for a kind when callers
 // omit Image. Empty kind returns empty. DataKindMQ defaults to RabbitMQ;
 // use DefaultDataPlaneImageForMQ for EngineType-specific pins.
+// DataKindRDS defaults to Postgres; use DefaultDataPlaneImageForRDS for Engine-specific pins.
 func DefaultDataPlaneImage(kind DataKind) string {
 	switch kind {
 	case DataKindRDS:
 		return defaultPostgresImage
-	case DataKindElastiCache:
+	case DataKindElastiCache, DataKindMemoryDB:
 		return defaultValkeyImage
 	case DataKindDocDB:
 		return defaultMongoImage
@@ -113,8 +128,35 @@ func DefaultDataPlaneImage(kind DataKind) string {
 		return defaultRabbitMQImage
 	case DataKindOpenSearch:
 		return defaultOpenSearchImage
+	case DataKindNeptune:
+		return defaultGremlinImage
+	case DataKindMSK:
+		return defaultRedpandaImage
 	default:
 		return ""
+	}
+}
+
+// DefaultDataPlaneImageForRDS returns the pinned nested image for RDS Engine.
+// mysql → mysql:8.0; mariadb → mariadb:11; anything else → postgres:16-alpine.
+func DefaultDataPlaneImageForRDS(engine string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "mysql":
+		return defaultMySQLImage
+	case "mariadb":
+		return defaultMariaDBImage
+	default:
+		return defaultPostgresImage
+	}
+}
+
+// DefaultDataPlanePortForRDS returns the nested listen port for an RDS Engine.
+func DefaultDataPlanePortForRDS(engine string) int {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "mysql", "mariadb":
+		return defaultMySQLPort
+	default:
+		return defaultPostgresPort
 	}
 }
 
@@ -134,7 +176,7 @@ func DefaultDataPlanePort(kind DataKind) int {
 	switch kind {
 	case DataKindRDS:
 		return defaultPostgresPort
-	case DataKindElastiCache:
+	case DataKindElastiCache, DataKindMemoryDB:
 		return defaultRedisPort
 	case DataKindDocDB:
 		return defaultMongoPort
@@ -142,8 +184,32 @@ func DefaultDataPlanePort(kind DataKind) int {
 		return defaultAMQPPort
 	case DataKindOpenSearch:
 		return defaultOpenSearchPort
+	case DataKindNeptune:
+		return defaultGremlinPort
+	case DataKindMSK:
+		return defaultKafkaPort
 	default:
 		return 0
+	}
+}
+
+// RedpandaStartCmd returns pinned Redpanda start args for nested MSK.
+// advertiseHost is the nested-network hostname clients use (container name).
+func RedpandaStartCmd(advertiseHost string) []string {
+	host := strings.TrimSpace(advertiseHost)
+	if host == "" {
+		host = "noctaxris-msk"
+	}
+	return []string{
+		"redpanda", "start",
+		"--overprovisioned",
+		"--smp", "1",
+		"--memory", "512M",
+		"--reserve-memory", "0M",
+		"--node-id", "0",
+		"--check=false",
+		"--kafka-addr", "internal://0.0.0.0:9092",
+		"--advertise-kafka-addr", "internal://" + host + ":9092",
 	}
 }
 
@@ -167,21 +233,23 @@ var dataPlaneBootstrapCaps = []string{
 	"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID",
 }
 
-// dataPlaneHostConfig returns HostConfig with no host port publish, CapDrop ALL,
-// and the minimal CapAdd set for nested data-engine bootstrap.
+// dataPlaneHostConfig returns HostConfig with CapDrop ALL and the minimal CapAdd
+// set for nested data-engine bootstrap. PortBindings stay empty unless
+// NOCTAXRIS_NESTED_PORT_PUBLISH is enabled (see applyDataPlanePortPublish).
 // Exported via tests in this package to lock the secure-default invariant.
-func dataPlaneHostConfig() *container.HostConfig {
+func dataPlaneHostConfig(containerPort int) *container.HostConfig {
 	sec := nestedTaskSecurity(0)
-	return &container.HostConfig{
+	hc := &container.HostConfig{
 		AutoRemove:      false,
 		NetworkMode:     container.NetworkMode(DataPlaneNetworkName),
 		PublishAllPorts: false,
-		// PortBindings intentionally nil/empty: never map DB ports to the host.
-		Privileged:  false,
-		CapDrop:     append([]string(nil), sec.CapDrop...),
-		CapAdd:      append([]string(nil), dataPlaneBootstrapCaps...),
-		SecurityOpt: append([]string(nil), sec.SecurityOpt...),
+		Privileged:      false,
+		CapDrop:         append([]string(nil), sec.CapDrop...),
+		CapAdd:          append([]string(nil), dataPlaneBootstrapCaps...),
+		SecurityOpt:     append([]string(nil), sec.SecurityOpt...),
 	}
+	applyDataPlanePortPublish(hc, containerPort)
+	return hc
 }
 
 // EnsureDataPlaneNetwork creates (or reuses) an Internal Docker network for
@@ -195,7 +263,8 @@ func (c *Client) EnsureDataPlaneNetwork(ctx context.Context) (string, error) {
 }
 
 // StartDataPlane pulls (once), creates, and starts a nested data container.
-// It never publishes host ports. Pull failure fails closed.
+// Host/engine port publish stays off unless NOCTAXRIS_NESTED_PORT_PUBLISH=1.
+// Pull failure fails closed.
 func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPlaneInstance, error) {
 	if c == nil || c.cli == nil {
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane client unavailable")
@@ -243,11 +312,15 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 	}
 
 	cfg := &container.Config{
-		Image:  opts.Image,
-		Env:    env,
-		Labels: labels,
+		Image:        opts.Image,
+		Env:          env,
+		Labels:       labels,
+		ExposedPorts: dataPlaneExposedPorts(port),
 	}
-	hostConfig := dataPlaneHostConfig()
+	if len(opts.Cmd) > 0 {
+		cfg.Cmd = append([]string(nil), opts.Cmd...)
+	}
+	hostConfig := dataPlaneHostConfig(port)
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			DataPlaneNetworkName: {},

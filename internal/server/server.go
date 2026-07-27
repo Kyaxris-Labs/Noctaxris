@@ -166,13 +166,14 @@ func (s *Server) ListenAndServeContext(ctx context.Context) error {
 	}
 }
 
-// StopBackgroundWorkers stops in-process Scheduler, ESM, Pipes, Secrets rotation, and ECS reconciler tickers.
+// StopBackgroundWorkers stops in-process Scheduler, ESM, Pipes, Secrets rotation, and ECS/ASG reconciler tickers.
 func (s *Server) StopBackgroundWorkers() {
 	s.StopSchedulerTicker()
 	s.StopESMPoller()
 	s.StopPipesTicker()
 	s.StopSecretsRotationTicker()
 	s.StopECSServiceReconciler()
+	s.StopASGReconciler()
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +240,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isRestAPIInvokePath(r.URL.Path) {
+		s.handleRestAPIInvoke(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
+	if isWebSocketAPILabPath(r.URL.Path) {
+		s.handleWebSocketAPILabInvoke(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
+	if isAPIGatewayConnectionsPath(r.URL.Path) {
+		s.handleAPIGatewayConnections(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
 	if isELBv2LabListenerPath(r.URL.Path) {
 		s.handleELBv2LabListener(w, r, body, requestID, eventID, readOnly)
 		return
@@ -300,6 +316,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if action == "" && isAPIGatewayRESTMgmtPath(r.URL.Path) &&
+		strings.EqualFold(verified.Service, "apigateway") {
+		restAction, body2 := resolveAPIGatewayREST(r, body)
+		if restAction != "" {
+			s.handleAPIGatewayREST(w, r, body2, requestID, eventID, restAction, verified, readOnly)
+			return
+		}
+	}
+
 	if action == "" && isAPIGatewayV2RESTPath(r.URL.Path) &&
 		(strings.EqualFold(verified.Service, "apigateway") ||
 			strings.EqualFold(verified.Service, "apigatewayv2")) {
@@ -317,6 +342,22 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if action == "" && (strings.EqualFold(verified.Service, "backup") || isBackupRESTPath(r.URL.Path)) {
+		if restAction, pathParams := resolveBackupREST(r); restAction != "" {
+			merged := backupMergeParams(pathParams, jsonBodyMap(body))
+			raw, _ := json.Marshal(merged)
+			s.handleBackup(w, r, raw, requestID, eventID, restAction, verified, readOnly)
+			return
+		}
+	}
+
+	if action == "" && (strings.EqualFold(verified.Service, "eks") || isEKSRESTPath(r.URL.Path)) {
+		if restAction := resolveEKSREST(r); restAction != "" {
+			s.handleEKS(w, r, body, requestID, eventID, restAction, verified, readOnly)
+			return
+		}
+	}
+
 	if action == "" && (strings.EqualFold(verified.Service, "bedrock") ||
 		strings.EqualFold(verified.Service, "bedrock-runtime") ||
 		isBedrockRuntimePath(r.URL.Path)) {
@@ -324,6 +365,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleBedrockRuntime(w, r, body, requestID, eventID, restAction, verified, readOnly, modelID)
 			return
 		}
+	}
+
+	if action == "" && (strings.EqualFold(verified.Service, "kafka") || strings.EqualFold(verified.Service, "msk")) {
+		s.handleMSK(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
 	}
 
 	if action == "" && (verified.Service == "s3" || isS3PathStyleRequest(r, body, action)) {
@@ -393,6 +439,24 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.EqualFold(verified.Service, "memorydb") || strings.HasPrefix(action, "memorydb:") {
+		s.handleMemoryDB(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "neptune") ||
+		strings.HasPrefix(action, "neptune:") ||
+		(strings.EqualFold(verified.Service, "neptune") && isNeptuneControlPlaneAction(action)) {
+		s.handleNeptune(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "kafka") || strings.EqualFold(verified.Service, "msk") ||
+		strings.HasPrefix(action, "kafka:") {
+		s.handleMSK(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
 	if strings.EqualFold(verified.Service, "docdb") ||
 		strings.HasPrefix(action, "docdb:") ||
 		(strings.EqualFold(verified.Service, "rds") && isDocDBControlPlaneAction(action)) {
@@ -412,6 +476,31 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.EqualFold(verified.Service, "transfer") || strings.HasPrefix(action, "transfer:") {
 		s.handleTransfer(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "elasticbeanstalk") || strings.HasPrefix(action, "elasticbeanstalk:") {
+		s.handleElasticBeanstalk(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "autoscaling") || strings.HasPrefix(action, "autoscaling:") {
+		s.handleAutoScaling(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "lightsail") || strings.HasPrefix(action, "lightsail:") {
+		s.handleLightsail(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "backup") || strings.HasPrefix(action, "backup:") {
+		s.handleBackup(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if strings.EqualFold(verified.Service, "eks") || strings.HasPrefix(action, "eks:") {
+		s.handleEKS(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -464,7 +553,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.EqualFold(verified.Service, "ec2") || strings.HasPrefix(action, "ec2:") {
-		s.handleVPCFlow(w, r, body, requestID, eventID, action, verified, readOnly)
+		s.handleEC2(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -495,7 +584,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "apigateway" ||
 		strings.EqualFold(verified.Service, "apigatewayv2") ||
-		strings.HasPrefix(action, "apigatewayv2:") {
+		strings.HasPrefix(action, "apigatewayv2:") ||
+		strings.HasPrefix(action, "apigateway:") {
+		if isAPIGatewayRESTAction(action) ||
+			(strings.HasPrefix(action, "apigateway:") && !strings.HasPrefix(action, "apigatewayv2:")) {
+			s.handleAPIGatewayREST(w, r, body, requestID, eventID, action, verified, readOnly)
+			return
+		}
 		s.handleAPIGatewayV2(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
@@ -524,6 +619,24 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if verified.Service == "budgets" || strings.HasPrefix(action, "budgets:") {
 		s.handleBudgets(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "cur" || strings.HasPrefix(action, "cur:") {
+		s.handleCUR(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "iot" || verified.Service == "iotdata" || verified.Service == "iot-data" ||
+		verified.Service == "data.iot" || strings.HasPrefix(action, "iot:") || strings.HasPrefix(action, "iot-data:") {
+		s.handleIoT(w, r, body, requestID, eventID, action, verified, readOnly)
+		return
+	}
+
+	if verified.Service == "monitoring" ||
+		verified.Service == "cloudwatch" ||
+		strings.HasPrefix(action, "cloudwatch:") {
+		s.handleCloudWatch(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
 
@@ -731,7 +844,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionDynamoDBDescribeContinuousBackups, "DescribeContinuousBackups",
 		catalog.ActionDynamoDBListTagsOfResource, "ListTagsOfResource",
 		catalog.ActionDynamoDBTagResource,
-		catalog.ActionDynamoDBUntagResource:
+		catalog.ActionDynamoDBUntagResource,
+		catalog.ActionDynamoDBExecuteStatement, "ExecuteStatement",
+		catalog.ActionDynamoDBBatchExecuteStatement, "BatchExecuteStatement":
 		s.handleDynamoDB(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSQSCreateQueue, "CreateQueue",
 		catalog.ActionSQSGetQueueUrl, "GetQueueUrl",
@@ -914,16 +1029,32 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKinesisGetRecords, "GetRecords",
 		catalog.ActionKinesisPutResourcePolicy,
 		catalog.ActionKinesisGetResourcePolicy,
-		catalog.ActionKinesisDeleteResourcePolicy:
+		catalog.ActionKinesisDeleteResourcePolicy,
+		catalog.ActionKinesisRegisterStreamConsumer, "RegisterStreamConsumer",
+		catalog.ActionKinesisDescribeStreamConsumer, "DescribeStreamConsumer",
+		catalog.ActionKinesisListStreamConsumers, "ListStreamConsumers",
+		catalog.ActionKinesisDeregisterStreamConsumer, "DeregisterStreamConsumer",
+		catalog.ActionKinesisSubscribeToShard, "SubscribeToShard",
+		catalog.ActionKinesisUpdateShardCount, "UpdateShardCount":
 		s.handleKinesis(w, r, body, requestID, eventID, action, verified, readOnly)
-	case catalog.ActionAppConfigCreateApplication, "CreateApplication",
-		catalog.ActionAppConfigCreateEnvironment, "CreateEnvironment",
+	case catalog.ActionAppConfigCreateApplication,
+		catalog.ActionAppConfigCreateEnvironment,
 		catalog.ActionAppConfigCreateConfigurationProfile, "CreateConfigurationProfile",
 		catalog.ActionAppConfigCreateHostedConfigurationVersion, "CreateHostedConfigurationVersion",
 		catalog.ActionAppConfigGetConfiguration, "GetConfiguration",
 		catalog.ActionAppConfigDataStartConfigurationSession, "StartConfigurationSession",
 		catalog.ActionAppConfigDataGetLatestConfiguration, "GetLatestConfiguration":
 		s.handleAppConfig(w, r, body, requestID, eventID, action, verified, readOnly)
+	case "CreateApplication", "CreateEnvironment":
+		// Ambiguous short Action names: prefer SigV4 credential scope.
+		switch strings.ToLower(verified.Service) {
+		case "elasticbeanstalk":
+			s.handleElasticBeanstalk(w, r, body, requestID, eventID, action, verified, readOnly)
+		case "codedeploy":
+			s.handleCodeDeploy(w, r, body, requestID, eventID, action, verified, readOnly)
+		default:
+			s.handleAppConfig(w, r, body, requestID, eventID, action, verified, readOnly)
+		}
 	case catalog.ActionSFNCreateStateMachine, "CreateStateMachine",
 		catalog.ActionSFNDeleteStateMachine, "DeleteStateMachine",
 		catalog.ActionSFNDescribeStateMachine, "DescribeStateMachine",
@@ -1033,10 +1164,26 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionElastiCacheDescribeCacheClusters, "DescribeCacheClusters",
 		catalog.ActionElastiCacheDeleteCacheCluster, "DeleteCacheCluster":
 		s.handleElastiCache(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionMemoryDBCreateCluster,
+		catalog.ActionMemoryDBDescribeClusters,
+		catalog.ActionMemoryDBDeleteCluster,
+		catalog.ActionMemoryDBDescribeUsers,
+		catalog.ActionMemoryDBDescribeACLs:
+		s.handleMemoryDB(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionDocDBCreateDBCluster,
 		catalog.ActionDocDBDescribeDBClusters,
 		catalog.ActionDocDBDeleteDBCluster:
 		s.handleDocDB(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionMSKCreateCluster,
+		catalog.ActionMSKDescribeCluster,
+		catalog.ActionMSKListClusters,
+		catalog.ActionMSKDeleteCluster,
+		catalog.ActionMSKGetBootstrapBrokers:
+		s.handleMSK(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionNeptuneCreateDBCluster,
+		catalog.ActionNeptuneDescribeDBClusters,
+		catalog.ActionNeptuneDeleteDBCluster:
+		s.handleNeptune(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionRDSCreateDBInstance, "CreateDBInstance",
 		catalog.ActionRDSDescribeDBInstances, "DescribeDBInstances",
 		catalog.ActionRDSDeleteDBInstance, "DeleteDBInstance":
@@ -1095,9 +1242,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionMacieGetFindings,
 		catalog.ActionMacieInjectFindings:
 		s.handleMacie(w, r, body, requestID, eventID, action, verified, readOnly)
-	case catalog.ActionEC2CreateFlowLogs, "CreateFlowLogs",
+	case catalog.ActionEC2RunInstances, "RunInstances",
+		catalog.ActionEC2DescribeInstances, "DescribeInstances",
+		catalog.ActionEC2DescribeImages, "DescribeImages",
+		catalog.ActionEC2TerminateInstances, "TerminateInstances",
+		catalog.ActionEC2StopInstances, "StopInstances",
+		catalog.ActionEC2StartInstances, "StartInstances",
+		catalog.ActionEC2CreateFlowLogs, "CreateFlowLogs",
 		catalog.ActionEC2InjectFlowLogs, "InjectFlowLogs":
-		s.handleVPCFlow(w, r, body, requestID, eventID, action, verified, readOnly)
+		s.handleEC2(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSecurityHubBatchImportFindings, "BatchImportFindings",
 		catalog.ActionSecurityHubGetFindings:
 		s.handleSecurityHub(w, r, body, requestID, eventID, action, verified, readOnly)
@@ -1173,6 +1326,88 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionBudgetsDescribeBudgets,
 		catalog.ActionBudgetsDeleteBudget:
 		s.handleBudgets(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCURPutReportDefinition,
+		catalog.ActionCURModifyReportDefinition,
+		catalog.ActionCURDescribeReportDefinitions,
+		catalog.ActionCURDeleteReportDefinition,
+		catalog.ActionCURTagResource,
+		catalog.ActionCURUntagResource,
+		catalog.ActionCURListTagsForResource:
+		s.handleCUR(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionIoTCreateThing,
+		catalog.ActionIoTDescribeThing,
+		catalog.ActionIoTListThings,
+		catalog.ActionIoTUpdateThing,
+		catalog.ActionIoTDeleteThing,
+		catalog.ActionIoTCreateKeysAndCertificate,
+		catalog.ActionIoTDescribeCertificate,
+		catalog.ActionIoTListCertificates,
+		catalog.ActionIoTUpdateCertificate,
+		catalog.ActionIoTDeleteCertificate,
+		catalog.ActionIoTCreatePolicy,
+		catalog.ActionIoTGetPolicy,
+		catalog.ActionIoTListPolicies,
+		catalog.ActionIoTDeletePolicy,
+		catalog.ActionIoTAttachPolicy,
+		catalog.ActionIoTDetachPolicy,
+		catalog.ActionIoTAttachThingPrincipal,
+		catalog.ActionIoTListThingPrincipals,
+		catalog.ActionIoTDataUpdateThingShadow,
+		catalog.ActionIoTDataGetThingShadow,
+		catalog.ActionIoTDataDeleteThingShadow:
+		s.handleIoT(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionCloudWatchPutMetricData,
+		catalog.ActionCloudWatchListMetrics,
+		catalog.ActionCloudWatchGetMetricStatistics,
+		catalog.ActionCloudWatchGetMetricData,
+		catalog.ActionCloudWatchPutMetricAlarm,
+		catalog.ActionCloudWatchDescribeAlarms,
+		catalog.ActionCloudWatchDeleteAlarms,
+		catalog.ActionCloudWatchSetAlarmState,
+		"PutMetricData", "ListMetrics", "GetMetricStatistics", "GetMetricData",
+		"PutMetricAlarm", "DescribeAlarms", "DeleteAlarms", "SetAlarmState":
+		s.handleCloudWatch(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionLightsailGetBlueprints,
+		catalog.ActionLightsailGetBundles,
+		catalog.ActionLightsailCreateInstances,
+		catalog.ActionLightsailGetInstance,
+		catalog.ActionLightsailGetInstances,
+		catalog.ActionLightsailStartInstance,
+		catalog.ActionLightsailStopInstance,
+		catalog.ActionLightsailRebootInstance,
+		catalog.ActionLightsailDeleteInstance:
+		s.handleLightsail(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionASGCreateLaunchConfiguration,
+		catalog.ActionASGDescribeLaunchConfigurations,
+		catalog.ActionASGDeleteLaunchConfiguration,
+		catalog.ActionASGCreateAutoScalingGroup,
+		catalog.ActionASGDescribeAutoScalingGroups,
+		catalog.ActionASGUpdateAutoScalingGroup,
+		catalog.ActionASGDeleteAutoScalingGroup,
+		catalog.ActionASGSetDesiredCapacity:
+		s.handleAutoScaling(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBeanstalkCreateApplication,
+		catalog.ActionBeanstalkDescribeApplications,
+		catalog.ActionBeanstalkDeleteApplication,
+		catalog.ActionBeanstalkCreateApplicationVersion,
+		catalog.ActionBeanstalkCreateEnvironment,
+		catalog.ActionBeanstalkDescribeEnvironments,
+		catalog.ActionBeanstalkTerminateEnvironment,
+		catalog.ActionBeanstalkListAvailableSolutionStacks:
+		s.handleElasticBeanstalk(w, r, body, requestID, eventID, action, verified, readOnly)
+	case catalog.ActionBackupCreateBackupVault,
+		catalog.ActionBackupDescribeBackupVault,
+		catalog.ActionBackupListBackupVaults,
+		catalog.ActionBackupDeleteBackupVault,
+		catalog.ActionBackupCreateBackupPlan,
+		catalog.ActionBackupGetBackupPlan,
+		catalog.ActionBackupListBackupPlans,
+		catalog.ActionBackupDeleteBackupPlan,
+		catalog.ActionBackupStartBackupJob,
+		catalog.ActionBackupDescribeBackupJob,
+		catalog.ActionBackupDescribeRecoveryPoint,
+		catalog.ActionBackupListRecoveryPointsByBackupVault:
+		s.handleBackup(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCodeDeployCreateApplication,
 		catalog.ActionCodeDeployCreateDeploymentGroup,
 		catalog.ActionCodeDeployCreateDeployment,
@@ -1286,6 +1521,12 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 		return false
 	}
 	if isBedrockRuntimePath(r.URL.Path) {
+		return false
+	}
+	if isMSKRESTPath(r.URL.Path) {
+		return false
+	}
+	if isEKSRESTPath(r.URL.Path) {
 		return false
 	}
 	return true
@@ -1625,7 +1866,7 @@ func resolveAction(r *http.Request, body []byte) string {
 			return detectiveAction(short)
 		case strings.EqualFold(prefix, "AmazonEC2"), strings.EqualFold(prefix, "AWSEC2"),
 			strings.EqualFold(prefix, "NoctaxrisEC2"):
-			return vpcFlowAction(short)
+			return ec2Action(short)
 		case strings.Contains(strings.ToLower(prefix), "securityhub"),
 			strings.EqualFold(prefix, "SecurityHub"),
 			strings.EqualFold(prefix, "AWSSecurityHub"):
@@ -1675,6 +1916,14 @@ func resolveAction(r *http.Request, body []byte) string {
 			strings.EqualFold(prefix, "AmazonMQ"),
 			strings.EqualFold(prefix, "mq"):
 			return mqAction(short)
+		case strings.EqualFold(prefix, "AmazonMemoryDB"),
+			strings.Contains(strings.ToLower(prefix), "memorydb"):
+			return memorydbAction(short)
+		case strings.EqualFold(prefix, "Kafka_1.0"),
+			strings.HasPrefix(strings.ToLower(prefix), "kafka"),
+			strings.EqualFold(prefix, "AmazonMSK"),
+			strings.EqualFold(prefix, "MSK"):
+			return mskAction(short)
 		case strings.Contains(strings.ToLower(prefix), "athena"),
 			strings.EqualFold(prefix, "AmazonAthena"):
 			return athenaAction(short)
@@ -1726,6 +1975,35 @@ func resolveAction(r *http.Request, body []byte) string {
 			return costExplorerAction(short)
 		case strings.Contains(strings.ToLower(prefix), "budget"):
 			return budgetsAction(short)
+		case strings.Contains(strings.ToLower(prefix), "origami"),
+			strings.EqualFold(prefix, "AWSOrigamiServiceGatewayService"),
+			strings.EqualFold(prefix, "cur"):
+			return curAction(short)
+		case strings.Contains(strings.ToLower(prefix), "iotdata"),
+			strings.Contains(strings.ToLower(prefix), "iot-data"),
+			strings.EqualFold(prefix, "AWSIotDataService"),
+			strings.EqualFold(prefix, "IotDataPlane"):
+			return iotAction(short)
+		case strings.Contains(strings.ToLower(prefix), "iot"),
+			strings.EqualFold(prefix, "AWSIotService"),
+			strings.EqualFold(prefix, "Iot"):
+			return iotAction(short)
+		case strings.Contains(strings.ToLower(prefix), "granite"),
+			strings.EqualFold(prefix, "GraniteServiceVersion20100801"),
+			strings.Contains(strings.ToLower(prefix), "monitoring"),
+			strings.EqualFold(prefix, "CloudWatch"):
+			return cloudWatchAction(short)
+		case strings.Contains(strings.ToLower(prefix), "lightsail"):
+			return lightsailAction(short)
+		case strings.Contains(strings.ToLower(prefix), "autoscaling"),
+			strings.EqualFold(prefix, "AutoScaling"):
+			return asgAction(short)
+		case strings.Contains(strings.ToLower(prefix), "elasticbeanstalk"),
+			strings.EqualFold(prefix, "ElasticBeanstalk"):
+			return beanstalkAction(short)
+		case strings.Contains(strings.ToLower(prefix), "backup"),
+			strings.EqualFold(prefix, "AWSBackup"):
+			return backupAction(short)
 		case strings.Contains(strings.ToLower(prefix), "codedeploy"):
 			return codeDeployAction(short)
 		case strings.Contains(strings.ToLower(prefix), "bedrock"):
@@ -2316,10 +2594,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionSESGetSendStatistics
 	case "SetIdentityNotificationTopic":
 		return catalog.ActionSESSetIdentityNotificationTopic
-	case "CreateApplication":
-		return catalog.ActionAppConfigCreateApplication
-	case "CreateEnvironment":
-		return catalog.ActionAppConfigCreateEnvironment
+	// CreateApplication / CreateEnvironment are ambiguous (AppConfig, Elastic Beanstalk,
+	// CodeDeploy). Leave short names; route via X-Amz-Target or SigV4 service.
 	case "CreateConfigurationProfile":
 		return catalog.ActionAppConfigCreateConfigurationProfile
 	case "CreateHostedConfigurationVersion":

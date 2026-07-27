@@ -26,7 +26,8 @@ func TestPostSNSHTTPRejectsRedirects(t *testing.T) {
 	t.Cleanup(redir.Close)
 
 	host := strings.TrimPrefix(redir.URL, "http://")
-	// httptest binds loopback; allowlist + host safety must reject before Do.
+	// httptest binds loopback; egress+allowlist + host safety must reject before Do.
+	t.Setenv(EnvSNSHTTPEgress, "1")
 	t.Setenv(EnvSNSHTTPAllowlist, redir.URL+"/hook")
 	err = st.postSNSHTTP(redir.URL+"/hook", "arn:sub", "arn:topic", "Notification", []byte(`{}`))
 	if err == nil {
