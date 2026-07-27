@@ -1,6 +1,6 @@
 FROM golang:1.26.5-bookworm AS build
 WORKDIR /src
-ARG VERSION=1.0.0
+ARG VERSION=1.2.0
 ARG GIT_SHA=unknown
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build \
 RUN mkdir -p /var/lib/noctaxris && chown 65532:65532 /var/lib/noctaxris
 
 FROM gcr.io/distroless/static-debian12:nonroot
-ARG VERSION=1.0.0
+ARG VERSION=1.2.0
 ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.title="Noctaxris" \
   org.opencontainers.image.description="AWS-shaped local security lab emulator" \

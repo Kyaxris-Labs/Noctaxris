@@ -2,35 +2,60 @@
 
 ## Unreleased
 
+## 1.2.0
+
+Minor after 1.1.2: forensic lab depth (CloudTrail inject and siblings), Critical/High security hardening, CodeBuild/CodeCommit nested builds, Lambda LTS runtimes plus Terraform microservice stacks, and nested RDS smoke fixes. Docker Hub: `kyaxris/noctaxris` (`1.2.0`, `1.2`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 ### Forensic depth
 
-- CloudTrail: lab `InjectEvents` (opt-in); richer live audit (`userName`, `sessionContext`, `eventCategory`/`managementEvent`, safer requestParameters, broader `resources[]`); service-correct error `eventSource`; sibling `kms:Decrypt` audit on Secrets/SSM/S3 SSE-KMS/DDB reads; AWSLogs hive S3 keys + optional `NOCTAXRIS_CLOUDTRAIL_GZIP`; Logs delivery timestamps from `eventTime`
+- CloudTrail: lab `InjectEvents` / `InjectInsightsEvents` (opt-in `NOCTAXRIS_CLOUDTRAIL_INJECT`); richer live audit (`userName`, `sessionContext`, `eventCategory`/`managementEvent`, safer requestParameters, broader `resources[]`); service-correct error `eventSource`; sibling `kms:Decrypt` audit on Secrets/SSM/S3 SSE-KMS/DDB reads; AWSLogs hive S3 keys + optional `NOCTAXRIS_CLOUDTRAIL_GZIP`; Logs delivery timestamps from `eventTime`; `PutEventSelectors` / `GetEventSelectors` lite; digest sidecar + lab `ValidateLogs`; org trail flag (`IsOrganizationTrail`); LookupEvents lab attribute `SourceIPAddress`; Insights lite via `EventCategory=insight` (no ML)
 - Athena: unwrap CloudTrail `Records[]`, gzip object read, `WHERE` `LIKE` and `json_extract` lite
 - Lambda: Invoke ships `/aws/lambda/*` START/END/REPORT (+ stdout when available); richer Invoke CT; ESM poll Invoke audit
 - Logs: JSON field-equality `filterPattern` subset for CT-shaped messages
-- S3: delete markers + version-aware delete; Get/Delete CT enrichment
+- S3: delete markers + version-aware delete; Object Lock lite; server access logging; Get/Delete CT enrichment
 - GuardDuty: Create/ListDetectors, List/GetFindings, lab `InjectFindings` (`NOCTAXRIS_GUARDDUTY_INJECT`)
 - Security Hub: `BatchImportFindings` + `GetFindings` lite (ASFF-lite)
+- Macie lite: EnableMacie/GetMacieSession; Create/Describe/ListClassificationJobs (sync COMPLETE); List/GetFindings; lab `InjectFindings` (`NOCTAXRIS_MACIE_INJECT`)
 - ELBv2 / CloudFront: access logs to in-account S3 when enabled
 - VPC Flow Logs lab seed: opaque IDs, CreateFlowLogs lite, inject (`NOCTAXRIS_VPCFLOW_INJECT`) → S3/Logs v2 ACCEPT/REJECT
 - Config: continuous history while recording + `GetResourceConfigHistory` (S3 bucket create/delete hooks)
 - IAM: AssumeRole CT enrichment; `GetAccessKeyLastUsed`; `GenerateCredentialReport` / `GetCredentialReport`
-- CloudTrail: `PutEventSelectors` / `GetEventSelectors` lite; digest sidecar + lab `ValidateLogs`
 - Detective lite: CreateGraph/ListGraphs/AcceptInvitation; lab SearchGraph over CT + GuardDuty
 - Lab forensics APIs (`NOCTAXRIS_LAB_FORENSICS`): FreezeClock/UnfreezeClock/SetClock/BulkSeed
 - Messaging: SNS RedrivePolicy DLQ; EventBridge target DLQ + delivery history; Pipes DLQ
-- S3: Object Lock lite; server access logging
-- Orgs: ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent; account-scoped Lookup; org trail flag (`IsOrganizationTrail`)
-- Optionals: Route53 query log inject; Firehose VPC Flow dest; SQS DLQ provenance; Control Tower honest stub (ListLandingZones empty / GetLandingZone not found)
-- Macie lite: EnableMacie/GetMacieSession; Create/Describe/ListClassificationJobs (sync COMPLETE); List/GetFindings; lab `InjectFindings` (`NOCTAXRIS_MACIE_INJECT`) with Finding lite or canned S3 matches
-- CloudTrail Insights lite: `LookupEvents` honors `EventCategory=insight`; lab `InjectInsightsEvents` seeds `AwsCloudTrailInsight` JSONL (no ML engine; same `NOCTAXRIS_CLOUDTRAIL_INJECT` gate)
-- Fix: `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` now loaded into config (was documented but unwired)
+- Orgs: ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent; account-scoped Lookup
+- Optionals: Route53 query log inject (config wiring fix); Firehose VPC Flow dest; SQS DLQ provenance; Control Tower honest stub
 
-### CloudTrail inject and richer audit
+### Security hardening
 
-- Lab `cloudtrail:InjectEvents` (`NoctaxrisCloudTrail.InjectEvents`): opt-in via `NOCTAXRIS_CLOUDTRAIL_INJECT=1` (default AccessDenied); writes AWS-shaped JSONL into `$DATAROOT/cloudtrail/events.jsonl` (single or batch, cap 50) for LookupEvents and trail delivery
-- Live audit: `userIdentity.userName`; safer requestParameters (`httpMethod`/`path`/`xAmzTarget`/`action` plus handler opts); `resources[]` on S3 CreateBucket/PutObject and Lambda CreateFunction; audit `sourceIPAddress` XFF via `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1` only (authz SourceIp stays TCP peer)
-- LookupEvents lab attribute `SourceIPAddress`
+- Organizations: management-account gate on mutate/list, CreateAccount, and AssumeRoot (closes shared org control-plane escalation)
+- Compose / listen: refuse shipped example root key pair on non-loopback binds; smoke regenerates roots when `.env` still has the example pair; master key on sibling volume (`NOCTAXRIS_MASTER_KEY_FILE`, Compose `noctaxris-secrets`)
+- Cognito: high-entropy single-use confirmation / forgot-password codes by default; `NOCTAXRIS_COGNITO_INSECURE_CODES=1` restores fixed `123456` / any-non-empty ConfirmSignUp for intentional insecure labs
+- IAM: mutation authz uses request resource ARNs (not `Resource="*"` for most writes)
+- CloudFormation / Cloud Control: provision-time PassRole and underlying-action authz
+- Image pull: lab registry + pinned bases only; DinD `host.docker.internal` refs pinned to listen address (no silent `:4566`)
+- OpenSearch: nested query host allowlist (SSRF fail-closed)
+- Messaging DLQ: honor SQS Policy / RedriveAllowPolicy on lab redrive
+- S3: reject Windows `\` key escape of data root; CloudTrail inject redaction / audit scrubbing for secrets
+- Nested data plane: CapDrop ALL plus bootstrap CapAdd (`CHOWN` / `DAC_OVERRIDE` / `FOWNER` / `SETGID` / `SETUID`) so Postgres entrypoints start under DinD
+
+### CodeBuild and CodeCommit
+
+- CodeBuild: project CRUD (Create/Update/Delete/List/BatchGet); StartBuild / StartBuildBatch on nested DinD; webhooks Create/Delete/List + receive path; lab artifact/log handling; optional lab image under `docker/codebuild-lab/`
+- CodeCommit: Create/Get/List/DeleteRepository; PutFile / GetFile lab store for nested build sources
+- Nested ECS/CodeBuild IMDS sidecar for task/container credentials on Internal `noctaxris-ecs`
+
+### Lambda runtimes and Terraform
+
+- Zip CreateFunction allowlist: `python3.11`–`3.14`, `nodejs20.x` / `22.x` / `24.x`, `java21` / `java25` (SDK matrices + docs CLI smoke)
+- Terraform: `lab-lambda-python` / `lab-lambda-nodejs` / `lab-lambda-java`; `lab-ms-serverless` (Lambda pipeline, provider `~> 5.0`); `lab-ms-ecs` (ECR + task/service, `live` DesiredCount); gates `TF_LAMBDA_RUNTIMES` / `TF_MS` / `TF_MS_LIVE`
+- ECR/ECS: ListTags/Tag/Untag stubs; CreateService completed PRIMARY deployment; DescribeServices accepts service ARNs (Terraform waiters)
+- CloudFormation sample YAML for Node 24 and Java 21 ZipFile
+
+### Nested RDS Data API
+
+- Smithy RPC-v2 paths (`POST /Execute`, `/BatchExecute`, transaction paths) accepted alongside `X-Amz-Target: AmazonRDSDataService.*` for current AWS CLI v2 / boto3
+- Nested smoke logs API output when RDS never reaches `available`
 
 ## 1.1.2
 
