@@ -413,11 +413,11 @@ func TestLambdaCreateFunctionImageWithoutCompute(t *testing.T) {
 	roleARN := "arn:aws:iam::" + testAccountID + ":role/lambda-exec-img"
 	imageURI := "public.ecr.aws/lambda/python:3.12"
 
+	// Image CreateFunction must succeed without Handler/Runtime (AWS + CLI smoke path).
 	createRec := mustLambdaJSON(t, handler, "CreateFunction", map[string]any{
 		"FunctionName": "img-lab",
 		"PackageType":  "Image",
 		"Role":         roleARN,
-		"Handler":      "app.handler",
 		"Code": map[string]any{
 			"ImageUri": imageURI,
 		},

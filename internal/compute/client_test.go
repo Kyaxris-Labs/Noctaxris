@@ -120,14 +120,31 @@ func TestValidateImageRunOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	t.Run("accepts layer host paths", func(t *testing.T) {
+	t.Run("accepts empty Handler for pinned Image base", func(t *testing.T) {
 		err := compute.ValidateImageRunOpts(compute.ImageRunOpts{
 			ImageURI:      "public.ecr.aws/lambda/python:3.12",
 			EventHostPath: "/var/lib/noctaxris/events",
-			Handler:       "main.handler",
-			LayerHostPaths: []string{
-				"/var/lib/noctaxris/lambda/000000000001/layers/l/versions/1/code",
-			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("rejects empty Handler without one-shot or default entrypoint", func(t *testing.T) {
+		err := compute.ValidateImageRunOpts(compute.ImageRunOpts{
+			ImageURI:      "host.docker.internal:4566/000000000001/repo:tag",
+			EventHostPath: "/var/lib/noctaxris/events",
+			ListenAddr:    "127.0.0.1:4566",
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	t.Run("accepts empty Handler with AllowDefaultEntrypoint", func(t *testing.T) {
+		err := compute.ValidateImageRunOpts(compute.ImageRunOpts{
+			ImageURI:               "host.docker.internal:4566/000000000001/repo:tag",
+			EventHostPath:          "/var/lib/noctaxris/events",
+			ListenAddr:             "127.0.0.1:4566",
+			AllowDefaultEntrypoint: true,
 		})
 		if err != nil {
 			t.Fatal(err)

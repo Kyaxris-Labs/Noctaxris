@@ -184,7 +184,7 @@ aws lambda invoke \
 cat /tmp/noctaxris-async-out.json
 ```
 
-Image CreateFunction (`PackageType=Image`). Lab one-shot Invoke supports AWS Lambda Python base images such as `public.ecr.aws/lambda/python:3.12`. Pull happens inside DinD.
+Image CreateFunction (`PackageType=Image`). Handler and Runtime are optional (AWS). Lab one-shot Invoke supports AWS Lambda Python base images such as `public.ecr.aws/lambda/python:3.12`. When Handler is omitted on a pinned public base, Invoke uses a lab echo one-shot (`{"ok":true,"echo":...}`) because those bases have no `/var/task` app code. Pull happens inside DinD.
 
 ```bash
 IMG_FN="noctaxris-img-$RANDOM"

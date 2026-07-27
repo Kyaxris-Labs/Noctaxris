@@ -521,12 +521,18 @@ func (s *Server) lambdaCreateFunction(
 	handler, _ := params["Handler"].(string)
 	desc, _ := params["Description"].(string)
 	packageType := lambdaPackageTypeFromParams(params)
-	if name == "" || roleARN == "" || handler == "" {
+	// AWS: Image packages do not require Handler or Runtime; Zip requires both.
+	if name == "" || roleARN == "" {
 		s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
-			"FunctionName, Role, and Handler are required.", readOnly, eventID, verified)
+			"FunctionName and Role are required.", readOnly, eventID, verified)
 		return
 	}
 	if packageType == store.LambdaPackageTypeZip {
+		if handler == "" {
+			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"FunctionName, Role, and Handler are required.", readOnly, eventID, verified)
+			return
+		}
 		if err := store.ValidateLambdaRuntime(runtime); err != nil {
 			s.writeLambdaError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				store.LambdaRuntimeValidationMessage(), readOnly, eventID, verified)

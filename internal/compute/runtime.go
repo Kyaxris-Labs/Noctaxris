@@ -118,6 +118,27 @@ result = fn(event, None)
 print(json.dumps(result))
 `
 
+// oneShotEcho* run when Image CreateFunction omitted Handler (AWS-faithful).
+// Pinned public bases have no /var/task app code; lab smoke needs a deterministic payload.
+const oneShotEchoPython = `
+import json, os
+event_path = os.environ.get("NOCTAXRIS_EVENT_PATH", "/var/task/.noctaxris-event.json")
+with open(event_path, "r", encoding="utf-8") as f:
+    event = json.load(f)
+print(json.dumps({"ok": True, "echo": event}))
+`
+
+const oneShotEchoNodejs = `
+const fs = require("fs");
+const eventPath = process.env.NOCTAXRIS_EVENT_PATH || "/var/task/.noctaxris-event.json";
+const event = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+process.stdout.write(JSON.stringify({ ok: true, echo: event }) + "\n");
+`
+
+const oneShotEchoJavaShell = `set -eu
+printf '%s\n' '{"ok":true,"echo":{}}'
+`
+
 // oneShotJavaShell writes a reflection bootstrap, compiles it with javac (needs JDK),
 // and invokes HANDLER as package.Class::method (default method handleRequest).
 // Lab smoke: public static String handleRequest(String in) { return in; }
@@ -293,6 +314,29 @@ func imageOneShotCommand(imageURI string) (oneShotCommand, bool) {
 	default:
 		return oneShotCommand{}, false
 	}
+}
+
+// resolveImageOneShot picks the handler import one-shot, or a lab echo one-shot when
+// Handler was omitted on CreateFunction (AWS Image packaging).
+func resolveImageOneShot(imageURI, handler string) (oneShotCommand, bool) {
+	cmd, ok := imageOneShotCommand(imageURI)
+	if !ok {
+		return oneShotCommand{}, false
+	}
+	if strings.TrimSpace(handler) != "" {
+		return cmd, true
+	}
+	switch cmd.Exe {
+	case "python":
+		cmd.Script = oneShotEchoPython
+	case "node":
+		cmd.Script = oneShotEchoNodejs
+	case "/bin/sh":
+		cmd.Script = oneShotEchoJavaShell
+	default:
+		return oneShotCommand{}, false
+	}
+	return cmd, true
 }
 
 func zipRuntimeEnv(runtime string) []string {

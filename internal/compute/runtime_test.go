@@ -165,4 +165,12 @@ func TestImageOneShotCommand(t *testing.T) {
 	if ok {
 		t.Fatal("expected no one-shot override for generic image")
 	}
+	echo, ok := resolveImageOneShot("public.ecr.aws/lambda/python:3.12", "")
+	if !ok || echo.Exe != "python" || !strings.Contains(echo.Script, `"ok"`) {
+		t.Fatalf("empty-handler echo: ok=%v cmd=%+v", ok, echo)
+	}
+	withH, ok := resolveImageOneShot("public.ecr.aws/lambda/python:3.12", "app.handler")
+	if !ok || !strings.Contains(withH.Script, "importlib") {
+		t.Fatalf("handler one-shot: ok=%v cmd=%+v", ok, withH)
+	}
 }

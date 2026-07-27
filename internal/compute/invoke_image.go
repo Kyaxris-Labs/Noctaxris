@@ -62,7 +62,15 @@ func ValidateImageRunOpts(opts ImageRunOpts) error {
 		return fmt.Errorf("compute: EventHostPath must be absolute (DinD path)")
 	}
 	h := strings.TrimSpace(opts.Handler)
-	if h == "" || !strings.Contains(h, ".") || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
+	if h == "" {
+		// AWS Image packages omit Handler. Lab ECR uses image ENTRYPOINT/CMD;
+		// pinned public bases use a lab echo one-shot (see resolveImageOneShot).
+		if !opts.AllowDefaultEntrypoint {
+			if _, ok := imageOneShotCommand(opts.ImageURI); !ok {
+				return fmt.Errorf("compute: Handler must be module.function")
+			}
+		}
+	} else if !strings.Contains(h, ".") || strings.HasPrefix(h, ".") || strings.HasSuffix(h, ".") {
 		return fmt.Errorf("compute: Handler must be module.function")
 	}
 	if opts.TimeoutSec < 0 {
@@ -164,7 +172,7 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 		Env:        env,
 		WorkingDir: "/var/task",
 	}
-	if cmd, ok := imageOneShotCommand(opts.ImageURI); ok {
+	if cmd, ok := resolveImageOneShot(opts.ImageURI, opts.Handler); ok {
 		cfg.Entrypoint = []string{cmd.Exe, cmd.Flag, cmd.Script}
 		cfg.Cmd = nil
 	} else if !opts.AllowDefaultEntrypoint {
