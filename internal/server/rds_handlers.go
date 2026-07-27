@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -178,6 +179,7 @@ func (s *Server) rdsTryStartNested(
 	})
 	if err != nil {
 		// DinD configured but start failed: surface failed status (not silent creating).
+		log.Printf("rds nested start failed id=%s: %v", inst.DBInstanceIdentifier, err)
 		_ = s.store.UpdateRDSDBInstanceRuntime(
 			verified.AccountID, inst.DBInstanceIdentifier, "failed", "", "", 0,
 		)
@@ -187,6 +189,11 @@ func (s *Server) rdsTryStartNested(
 		return inst
 	}
 	if waitErr := cli.WaitDataPlaneHealthy(startCtx, dp.ContainerID); waitErr != nil {
+		evidence := waitErr.Error()
+		if logs, logErr := cli.DataPlaneLogs(startCtx, dp.ContainerID); logErr == nil && strings.TrimSpace(logs) != "" {
+			evidence = evidence + "\n" + logs
+		}
+		log.Printf("rds nested healthy wait failed id=%s: %s", inst.DBInstanceIdentifier, evidence)
 		_ = s.store.UpdateRDSDBInstanceRuntime(
 			verified.AccountID, inst.DBInstanceIdentifier, "failed", "", "", 0,
 		)

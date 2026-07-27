@@ -1753,6 +1753,13 @@ func resolveAction(r *http.Request, body []byte) string {
 			}
 		}
 	}
+	// Smithy RPC-v2 for rds-data: POST /Execute (no X-Amz-Target). Prefer JSON body
+	// content types so path-style S3 object keys are not remapped.
+	if ct := strings.ToLower(r.Header.Get("Content-Type")); strings.Contains(ct, "json") {
+		if action := rdsDataActionFromPath(r.URL.Path); strings.HasPrefix(action, "rds-data:") {
+			return action
+		}
+	}
 	return ""
 }
 

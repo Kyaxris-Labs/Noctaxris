@@ -72,9 +72,9 @@ func rdsDataAction(action string) string {
 		return action
 	}
 	switch action {
-	case "ExecuteStatement":
+	case "ExecuteStatement", "Execute":
 		return catalog.ActionRDSDataExecuteStatement
-	case "BatchExecuteStatement":
+	case "BatchExecuteStatement", "BatchExecute":
 		return catalog.ActionRDSDataBatchExecuteStatement
 	case "BeginTransaction":
 		return catalog.ActionRDSDataBeginTransaction
@@ -85,6 +85,19 @@ func rdsDataAction(action string) string {
 	default:
 		return action
 	}
+}
+
+// rdsDataActionFromPath maps Smithy RPC-v2 HTTP bindings used by current AWS CLI v2 / boto3
+// (POST /Execute with application/json, no X-Amz-Target) to catalog actions.
+func rdsDataActionFromPath(path string) string {
+	path = strings.Trim(strings.TrimSpace(path), "/")
+	if path == "" {
+		return ""
+	}
+	if i := strings.IndexByte(path, '/'); i >= 0 {
+		path = path[:i]
+	}
+	return rdsDataAction(path)
 }
 
 func (s *Server) rdsDataExecute(

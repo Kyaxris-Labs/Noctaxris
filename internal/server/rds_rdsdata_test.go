@@ -304,3 +304,49 @@ func TestRDSDataBatchExecuteUnavailable(t *testing.T) {
 		t.Fatalf("empty parameterSets status=%d body=%q", empty.Code, empty.Body.String())
 	}
 }
+
+func TestRDSDataExecuteStatementRPCPath(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustRDSForm(t, handler, url.Values{
+		"Action":               {"CreateDBInstance"},
+		"Version":              {"2014-10-31"},
+		"DBInstanceIdentifier": {"dataapi-rpc"},
+		"Engine":               {"postgres"},
+		"DBInstanceClass":      {"db.t3.micro"},
+		"MasterUsername":       {"postgres"},
+		"MasterUserPassword":   {"lab-password-1"},
+		"DBName":               {"postgres"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%q", create.Code, create.Body.String())
+	}
+	inst, err := st.DescribeRDSDBInstance(testAccountID, "dataapi-rpc")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "postgres",
+		"sql":         "SELECT 1",
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/Execute", raw)
+	req.Header.Set("Content-Type", "application/json")
+	signHeader(t, req, raw, testAccessKey, testSecret, testRegion, "rds-data", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusNotImplemented || strings.Contains(rec.Body.String(), "not implemented") {
+		t.Fatalf("RPC /Execute must resolve ExecuteStatement, got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "DatabaseUnavailableException") {
+		t.Fatalf("want DatabaseUnavailableException, got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}

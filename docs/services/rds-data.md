@@ -38,6 +38,8 @@ Supported parameter value shapes: `stringValue`, `longValue`, `doubleValue`, `bo
 
 Shared Compose and env setup: [index.md](index.md#shared-verification). Create an RDS instance first (see [rds.md](rds.md)), wait until status is `available`, then:
 
+Current AWS CLI v2 / boto3 may call Smithy RPC-v2 paths (`POST /Execute`, `POST /BatchExecute`, … with `Content-Type: application/json`) instead of `X-Amz-Target: AmazonRDSDataService.*`. Both shapes are accepted.
+
 ```bash
 # Replace ARNs from create-db-instance / describe output
 aws rds-data execute-statement \

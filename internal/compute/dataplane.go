@@ -159,7 +159,16 @@ func NestedDataEndpoint(containerName string, port int) string {
 	return fmt.Sprintf("%s:%d", containerName, port)
 }
 
-// dataPlaneHostConfig returns HostConfig with no host port publish and CapDrop ALL.
+// dataPlaneBootstrapCaps are CapAdd entries required for official engine images
+// (postgres/mongo/…) that bootstrap as root then drop to an unprivileged user.
+// CapDrop remains ALL; without these CapAdds, entrypoints fail with
+// "Operation not permitted" on chmod/chown/setuid (nested DinD smoke).
+var dataPlaneBootstrapCaps = []string{
+	"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID",
+}
+
+// dataPlaneHostConfig returns HostConfig with no host port publish, CapDrop ALL,
+// and the minimal CapAdd set for nested data-engine bootstrap.
 // Exported via tests in this package to lock the secure-default invariant.
 func dataPlaneHostConfig() *container.HostConfig {
 	sec := nestedTaskSecurity(0)
@@ -170,6 +179,7 @@ func dataPlaneHostConfig() *container.HostConfig {
 		// PortBindings intentionally nil/empty: never map DB ports to the host.
 		Privileged:  false,
 		CapDrop:     append([]string(nil), sec.CapDrop...),
+		CapAdd:      append([]string(nil), dataPlaneBootstrapCaps...),
 		SecurityOpt: append([]string(nil), sec.SecurityOpt...),
 	}
 }

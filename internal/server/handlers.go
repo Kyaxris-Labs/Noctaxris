@@ -1029,6 +1029,9 @@ func auditEventSourceForRequest(r *http.Request, fallback string) string {
 	}
 	path := strings.TrimSpace(r.URL.Path)
 	if path != "" && path != "/" && r.Header.Get("X-Amz-Target") == "" && r.URL.Query().Get("Action") == "" {
+		if action := rdsDataActionFromPath(path); strings.HasPrefix(action, "rds-data:") {
+			return "rds-data.amazonaws.com"
+		}
 		if !isLambdaRESTPath(path) && !isBedrockRuntimePath(path) {
 			return "s3.amazonaws.com"
 		}

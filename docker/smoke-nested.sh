@@ -40,7 +40,8 @@ fi
 
 # shellcheck disable=SC1091
 set -a
-source "$ROOT/docker/.env"
+# Strip CR so Windows-checkout .env files source cleanly under WSL/bash.
+source <(tr -d '\r' < "$ROOT/docker/.env")
 set +a
 
 # Rewrite when .env still has the example pair (cp alone leaves refused roots).
@@ -56,7 +57,7 @@ if [[ "${NOCTAXRIS_ROOT_ACCESS_KEY_ID:-}" == "$EXAMPLE_ROOT_AKID" && \
   mv "$ROOT/docker/.env.tmp" "$ROOT/docker/.env"
   # shellcheck disable=SC1091
   set -a
-  source "$ROOT/docker/.env"
+  source <(tr -d '\r' < "$ROOT/docker/.env")
   set +a
 fi
 
@@ -131,6 +132,7 @@ for _ in $(seq 1 45); do
 done
 if [[ "$STATUS" != "available" ]]; then
   echo "RDS instance never became available (status=$STATUS)" >&2
+  "${COMPOSE[@]}" logs --no-color --tail=120 noctaxris >&2 || true
   exit 1
 fi
 

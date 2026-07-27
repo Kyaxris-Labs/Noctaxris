@@ -127,6 +127,9 @@ func isPinnedLabImage(ref string) bool {
 		"postgres:16-alpine":                        {},
 		"valkey/valkey:8-alpine":                    {},
 		"mongo:7":                                   {},
+		"rabbitmq:3.13-alpine":                      {},
+		"apache/activemq-classic:5.18.3":            {},
+		"opensearchproject/opensearch:2.11.1":       {},
 	}
 	_, ok := pinnedExact[lower]
 	return ok
