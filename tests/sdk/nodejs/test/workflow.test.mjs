@@ -237,6 +237,132 @@ test("CloudTrail CreateTrail StartLogging S3 delivery list", async (t) => {
   );
 });
 
+test("CloudTrail PutEventSelectors GetEventSelectors round-trip", async (t) => {
+  if (!(await requireReady(t))) return;
+  const s3 = newS3();
+  const ct = newCloudTrail();
+  const prefix = uniquePrefix();
+  const bucket = `${prefix}-ctsel`.toLowerCase();
+  const trailName = `${prefix}-sel`.slice(0, 64);
+
+  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+  t.after(async () => {
+    try {
+      await ct.send(new DeleteTrailCommand({ Name: trailName }));
+    } catch {
+      /* ignore */
+    }
+    try {
+      const listed = await s3.send(
+        new ListObjectsV2Command({ Bucket: bucket }),
+      );
+      for (const obj of listed.Contents || []) {
+        if (!obj.Key) continue;
+        try {
+          await s3.send(
+            new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }),
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      await s3.send(new DeleteBucketCommand({ Bucket: bucket }));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  await ct.send(
+    new CreateTrailCommand({
+      Name: trailName,
+      S3BucketName: bucket,
+    }),
+  );
+
+  const put = await signedJsonTarget(
+    "cloudtrail",
+    "CloudTrail_20131101.PutEventSelectors",
+    {
+      TrailName: trailName,
+      EventSelectors: [
+        {
+          ReadWriteType: "All",
+          IncludeManagementEvents: true,
+          DataResources: [
+            { Type: "AWS::S3::Object", Values: ["arn:aws:s3:::"] },
+          ],
+        },
+      ],
+    },
+  );
+  assert.equal(put.status, 200, put.body);
+
+  const got = await signedJsonTarget(
+    "cloudtrail",
+    "CloudTrail_20131101.GetEventSelectors",
+    { TrailName: trailName },
+  );
+  assert.equal(got.status, 200, got.body);
+  const selectors = got.json?.EventSelectors || [];
+  assert.equal(selectors.length, 1, got.body);
+  const resources = selectors[0]?.DataResources || [];
+  assert.ok(resources.length > 0, `expected S3 DataResources in ${JSON.stringify(selectors[0])}`);
+});
+
+test("CloudTrail InjectInsightsEvents LookupEvents EventCategory=insight", async (t) => {
+  if (!(await requireReady(t))) return;
+  if (process.env.NOCTAXRIS_CLOUDTRAIL_INJECT !== "1") {
+    t.skip(
+      "set NOCTAXRIS_CLOUDTRAIL_INJECT=1 on the API process for lab InjectInsightsEvents",
+    );
+    return;
+  }
+  const prefix = uniquePrefix();
+  const eventID = `sdk-insight-${prefix}`;
+
+  const inj = await signedJsonTarget(
+    "cloudtrail",
+    "NoctaxrisCloudTrail.InjectInsightsEvents",
+    {
+      Event: {
+        eventTime: "2026-07-20T12:05:00Z",
+        eventID,
+        insightDetails: {
+          state: "Start",
+          eventSource: "sts.amazonaws.com",
+          eventName: "AssumeRole",
+          insightType: "ApiCallRateInsight",
+          sourceEventCategory: "Management",
+          insightContext: {
+            statistics: {
+              baseline: { average: 0.1 },
+              insight: { average: 12.0 },
+              insightDuration: 5,
+              baselineDuration: 1000,
+            },
+          },
+        },
+      },
+    },
+  );
+  assert.equal(inj.status, 200, inj.body);
+
+  const looked = await signedJsonTarget(
+    "cloudtrail",
+    "CloudTrail_20131101.LookupEvents",
+    { EventCategory: "insight", MaxResults: 50 },
+  );
+  assert.equal(looked.status, 200, looked.body);
+  assert.ok(
+    (looked.body || "").includes(eventID),
+    `insight LookupEvents missing ${eventID}: ${looked.body}`,
+  );
+});
+
 test("CloudTrail InjectEvents LookupEvents SourceIP/EventName + ValidateLogs", async (t) => {
   if (!(await requireReady(t))) return;
   if (process.env.NOCTAXRIS_CLOUDTRAIL_INJECT !== "1") {

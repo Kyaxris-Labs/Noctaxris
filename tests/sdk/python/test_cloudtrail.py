@@ -1,4 +1,4 @@
-"""CloudTrail CreateTrail + StartLogging S3 delivery; lab InjectEvents + ValidateLogs."""
+"""CloudTrail CreateTrail + selectors; lab InjectEvents / InjectInsightsEvents."""
 
 from __future__ import annotations
 
@@ -51,6 +51,100 @@ def test_cloudtrail_create_start_s3_delivery(
             s3_client.delete_bucket(Bucket=bucket)
         except Exception:
             pass
+
+
+def test_cloudtrail_put_get_event_selectors(
+    s3_client, cloudtrail_client, unique_prefix
+):
+    bucket = f"{unique_prefix}-ctsel".lower()
+    trail = f"{unique_prefix}-sel"
+
+    s3_client.create_bucket(Bucket=bucket)
+    try:
+        cloudtrail_client.create_trail(Name=trail, S3BucketName=bucket)
+        json_target(
+            "CloudTrail_20131101.PutEventSelectors",
+            "cloudtrail",
+            {
+                "TrailName": trail,
+                "EventSelectors": [
+                    {
+                        "ReadWriteType": "All",
+                        "IncludeManagementEvents": True,
+                        "DataResources": [
+                            {
+                                "Type": "AWS::S3::Object",
+                                "Values": ["arn:aws:s3:::"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        got = json_target(
+            "CloudTrail_20131101.GetEventSelectors",
+            "cloudtrail",
+            {"TrailName": trail},
+        )
+        selectors = got.get("EventSelectors") or []
+        assert len(selectors) == 1, got
+        resources = selectors[0].get("DataResources") or []
+        assert resources, f"expected S3 DataResources in {selectors[0]}"
+    finally:
+        try:
+            cloudtrail_client.delete_trail(Name=trail)
+        except Exception:
+            pass
+        try:
+            listed = s3_client.list_objects_v2(Bucket=bucket)
+            for obj in listed.get("Contents") or []:
+                s3_client.delete_object(Bucket=bucket, Key=obj["Key"])
+        except Exception:
+            pass
+        try:
+            s3_client.delete_bucket(Bucket=bucket)
+        except Exception:
+            pass
+
+
+@pytest.mark.skipif(
+    os.environ.get("NOCTAXRIS_CLOUDTRAIL_INJECT") != "1",
+    reason="set NOCTAXRIS_CLOUDTRAIL_INJECT=1 on the API process for lab InjectInsightsEvents",
+)
+def test_cloudtrail_inject_insights_lookup(unique_prefix):
+    event_id = f"sdk-insight-{unique_prefix}"
+    json_target(
+        "NoctaxrisCloudTrail.InjectInsightsEvents",
+        "cloudtrail",
+        {
+            "Event": {
+                "eventTime": "2026-07-20T12:05:00Z",
+                "eventID": event_id,
+                "insightDetails": {
+                    "state": "Start",
+                    "eventSource": "sts.amazonaws.com",
+                    "eventName": "AssumeRole",
+                    "insightType": "ApiCallRateInsight",
+                    "sourceEventCategory": "Management",
+                    "insightContext": {
+                        "statistics": {
+                            "baseline": {"average": 0.1},
+                            "insight": {"average": 12.0},
+                            "insightDuration": 5,
+                            "baselineDuration": 1000,
+                        }
+                    },
+                },
+            }
+        },
+    )
+    looked = json_target(
+        "CloudTrail_20131101.LookupEvents",
+        "cloudtrail",
+        {"EventCategory": "insight", "MaxResults": 50},
+    )
+    blob = str(looked)
+    assert event_id in blob, f"insight LookupEvents missing {event_id}: {looked}"
 
 
 @pytest.mark.skipif(

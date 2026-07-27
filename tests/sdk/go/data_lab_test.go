@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -243,5 +245,40 @@ func TestConfigHistorySnapshotGetObject(t *testing.T) {
 	var parsed any
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("snapshot JSON: %v body=%s", err, raw)
+	}
+
+	tracked := strings.ToLower(prefix + "-tracked")
+	if _, err := s3c.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(tracked)}); err != nil {
+		t.Fatalf("CreateBucket tracked: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s3c.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(tracked)})
+	})
+
+	// Lab Config history is query/XML (see internal/server config handlers), not AWS JSON.
+	histBody := url.Values{
+		"Action":       {"GetResourceConfigHistory"},
+		"Version":      {"2014-11-12"},
+		"resourceType": {"AWS::S3::Bucket"},
+		"resourceId":   {tracked},
+	}.Encode()
+	status, histXML := signedHTTP(t, "config", http.MethodPost, "/", []byte(histBody), "application/x-www-form-urlencoded")
+	if status != http.StatusOK {
+		t.Fatalf("GetResourceConfigHistory after create: status=%d body=%s", status, histXML)
+	}
+	if !strings.Contains(string(histXML), tracked) || !strings.Contains(string(histXML), "<configurationItemStatus>OK</configurationItemStatus>") {
+		t.Fatalf("history after create: %s", histXML)
+	}
+
+	if _, err := s3c.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(tracked)}); err != nil {
+		t.Fatalf("DeleteBucket tracked: %v", err)
+	}
+
+	status, histXML = signedHTTP(t, "config", http.MethodPost, "/", []byte(histBody), "application/x-www-form-urlencoded")
+	if status != http.StatusOK {
+		t.Fatalf("GetResourceConfigHistory after delete: status=%d body=%s", status, histXML)
+	}
+	if !strings.Contains(string(histXML), "<configurationItemStatus>ResourceDeleted</configurationItemStatus>") {
+		t.Fatalf("history after delete: %s", histXML)
 	}
 }

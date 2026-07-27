@@ -34,6 +34,7 @@ import {
   newGlue,
   newS3,
   requireReady,
+  signedFetch,
   uniquePrefix,
 } from "../lib/helpers.mjs";
 
@@ -232,4 +233,54 @@ test("Config StartConfigurationRecorder + S3 snapshot GetObject", async (t) => {
   );
   assert.ok(body.length > 0, "empty snapshot");
   JSON.parse(body);
+
+  const tracked = `${prefix}-tracked`.toLowerCase();
+  await s3.send(new CreateBucketCommand({ Bucket: tracked }));
+  t.after(async () => {
+    try {
+      await s3.send(new DeleteBucketCommand({ Bucket: tracked }));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // Lab Config history is query/XML (see server config handlers), not AWS JSON.
+  const histParams = new URLSearchParams({
+    Action: "GetResourceConfigHistory",
+    Version: "2014-11-12",
+    resourceType: "AWS::S3::Bucket",
+    resourceId: tracked,
+  });
+  let histResp = await signedFetch(
+    "config",
+    "POST",
+    "/",
+    histParams.toString(),
+    "application/x-www-form-urlencoded",
+  );
+  let histXML = await histResp.text();
+  assert.equal(histResp.status, 200, histXML);
+  assert.ok(histXML.includes(tracked), histXML);
+  assert.ok(
+    histXML.includes("<configurationItemStatus>OK</configurationItemStatus>"),
+    histXML,
+  );
+
+  await s3.send(new DeleteBucketCommand({ Bucket: tracked }));
+
+  histResp = await signedFetch(
+    "config",
+    "POST",
+    "/",
+    histParams.toString(),
+    "application/x-www-form-urlencoded",
+  );
+  histXML = await histResp.text();
+  assert.equal(histResp.status, 200, histXML);
+  assert.ok(
+    histXML.includes(
+      "<configurationItemStatus>ResourceDeleted</configurationItemStatus>",
+    ),
+    histXML,
+  );
 });

@@ -50,6 +50,43 @@ def test_config_history_s3_snapshot(s3_client, account_id, unique_prefix):
         assert snap_keys, f"missing config snapshot under AWSLogs: {contents}"
         body = s3_client.get_object(Bucket=bucket, Key=snap_keys[0])["Body"].read()
         assert body
+
+        tracked = f"{unique_prefix}-tracked".lower()
+        s3_client.create_bucket(Bucket=tracked)
+        try:
+            hist_xml = form_action(
+                "config",
+                {
+                    "Action": "GetResourceConfigHistory",
+                    "Version": "2014-11-12",
+                    "resourceType": "AWS::S3::Bucket",
+                    "resourceId": tracked,
+                },
+            ).decode("utf-8")
+            assert tracked in hist_xml
+            assert "<configurationItemStatus>OK</configurationItemStatus>" in hist_xml
+
+            s3_client.delete_bucket(Bucket=tracked)
+
+            hist_xml = form_action(
+                "config",
+                {
+                    "Action": "GetResourceConfigHistory",
+                    "Version": "2014-11-12",
+                    "resourceType": "AWS::S3::Bucket",
+                    "resourceId": tracked,
+                },
+            ).decode("utf-8")
+            assert tracked in hist_xml
+            assert (
+                "<configurationItemStatus>ResourceDeleted</configurationItemStatus>"
+                in hist_xml
+            )
+        finally:
+            try:
+                s3_client.delete_bucket(Bucket=tracked)
+            except Exception:
+                pass
     finally:
         try:
             listed = s3_client.list_objects_v2(Bucket=bucket)

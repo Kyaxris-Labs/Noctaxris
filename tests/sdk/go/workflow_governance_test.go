@@ -141,6 +141,118 @@ func TestCloudTrailCreateTrailStartLoggingS3(t *testing.T) {
 	}
 }
 
+func TestCloudTrailPutGetEventSelectors(t *testing.T) {
+	requireReady(t)
+	cfg := loadAWSConfig(t)
+	s3c := newS3(t, cfg)
+	ct := newCloudTrail(t, cfg)
+	ctx := context.Background()
+	prefix := uniquePrefix(t)
+	bucket := strings.ToLower(prefix + "-ctsel")
+	trail := prefix + "-sel"
+	if len(trail) > 64 {
+		trail = trail[:64]
+	}
+
+	if _, err := s3c.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	t.Cleanup(func() {
+		listed, _ := s3c.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+		if listed != nil {
+			for _, obj := range listed.Contents {
+				_, _ = s3c.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: obj.Key})
+			}
+		}
+		_, _ = s3c.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+		_, _ = ct.DeleteTrail(ctx, &cloudtrail.DeleteTrailInput{Name: aws.String(trail)})
+	})
+
+	if _, err := ct.CreateTrail(ctx, &cloudtrail.CreateTrailInput{
+		Name: aws.String(trail), S3BucketName: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("CreateTrail: %v", err)
+	}
+
+	putStatus, putBody, _ := signedJSONTarget(t, "cloudtrail", "CloudTrail_20131101.PutEventSelectors", map[string]any{
+		"TrailName": trail,
+		"EventSelectors": []map[string]any{
+			{
+				"ReadWriteType":           "All",
+				"IncludeManagementEvents": true,
+				"DataResources": []map[string]any{
+					{"Type": "AWS::S3::Object", "Values": []string{"arn:aws:s3:::"}},
+				},
+			},
+		},
+	})
+	if putStatus != 200 {
+		t.Fatalf("PutEventSelectors status=%d body=%s", putStatus, putBody)
+	}
+
+	getStatus, getBody, getParsed := signedJSONTarget(t, "cloudtrail", "CloudTrail_20131101.GetEventSelectors", map[string]any{
+		"TrailName": trail,
+	})
+	if getStatus != 200 {
+		t.Fatalf("GetEventSelectors status=%d body=%s", getStatus, getBody)
+	}
+	selectors, _ := getParsed["EventSelectors"].([]any)
+	if len(selectors) != 1 {
+		t.Fatalf("EventSelectors=%v body=%s", getParsed["EventSelectors"], getBody)
+	}
+	first, _ := selectors[0].(map[string]any)
+	resources, _ := first["DataResources"].([]any)
+	if len(resources) == 0 {
+		t.Fatalf("expected S3 DataResources in %+v", first)
+	}
+}
+
+func TestCloudTrailInjectInsightsEventsLookup(t *testing.T) {
+	requireReady(t)
+	if os.Getenv("NOCTAXRIS_CLOUDTRAIL_INJECT") != "1" {
+		t.Skip("set NOCTAXRIS_CLOUDTRAIL_INJECT=1 on the API process for lab InjectInsightsEvents")
+	}
+	prefix := uniquePrefix(t)
+	eventID := "sdk-insight-" + prefix
+
+	injStatus, injBody, _ := signedJSONTarget(t, "cloudtrail", "NoctaxrisCloudTrail.InjectInsightsEvents", map[string]any{
+		"Event": map[string]any{
+			"eventTime": "2026-07-20T12:05:00Z",
+			"eventID":   eventID,
+			"insightDetails": map[string]any{
+				"state":               "Start",
+				"eventSource":         "sts.amazonaws.com",
+				"eventName":           "AssumeRole",
+				"insightType":         "ApiCallRateInsight",
+				"sourceEventCategory": "Management",
+				"insightContext": map[string]any{
+					"statistics": map[string]any{
+						"baseline":         map[string]any{"average": 0.1},
+						"insight":          map[string]any{"average": 12.0},
+						"insightDuration":  5,
+						"baselineDuration": 1000,
+					},
+				},
+			},
+		},
+	})
+	if injStatus != 200 {
+		t.Fatalf("InjectInsightsEvents status=%d body=%s", injStatus, injBody)
+	}
+
+	lookupStatus, lookupBody, lookupParsed := signedJSONTarget(t, "cloudtrail", "CloudTrail_20131101.LookupEvents", map[string]any{
+		"EventCategory": "insight",
+		"MaxResults":    50,
+	})
+	if lookupStatus != 200 {
+		t.Fatalf("LookupEvents insight status=%d body=%s", lookupStatus, lookupBody)
+	}
+	raw := string(lookupBody)
+	if !strings.Contains(raw, eventID) {
+		t.Fatalf("insight LookupEvents missing %s: %s parsed=%v", eventID, lookupBody, lookupParsed)
+	}
+}
+
 func TestCloudTrailInjectEventsLookupAndValidateLogs(t *testing.T) {
 	requireReady(t)
 	if os.Getenv("NOCTAXRIS_CLOUDTRAIL_INJECT") != "1" {
