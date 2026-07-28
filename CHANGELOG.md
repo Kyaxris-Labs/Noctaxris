@@ -48,6 +48,7 @@ Minor after 1.2.0: Floci-parity nested compute and data labs (EC2/ASG/EKS, RDS M
 - Verified plumbing carries SessionPolicy, MFA time, and federated caller fields so authorize paths avoid re-LookupAccessKeyRecord
 - Fail-closed identity policy load errors; batched `IdentityPolicyDocsForUser`; shared OU path for SCP/RCP via `OrgFilterDocsForAccount`
 - S3 notification emit after object lock release; SQS `SendMessage` prep outside `sqsMu` (re-GetQueue under lock)
+- SQLite: retry multi-connection `SQLITE_BUSY` deadlock victims on PutObject meta writes and SQS begin (busy_timeout does not wait on those)
 - Does not cache Allow/Deny decisions or authz policy document sets
 
 ## 1.2.0

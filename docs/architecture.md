@@ -81,7 +81,7 @@ HTTP request
 
 Authz still loads identity/session/org policy documents on each authorize; Allow/Deny decisions are not cached.
 
-Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume. Compose keeps sealed API state on `noctaxris-data` (`state.db`, S3 bytes) and `master.key` on `noctaxris-secrets` (neither volume mounts on the engine; the engine mounts compute `:ro`). Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite. Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
+Object bytes live under `$DATAROOT/s3/{account}/{bucket}/...`. Lambda zip contents live under `$DATAROOT/lambda/...` and are shared with DinD through the Compose `noctaxris-compute` volume. Compose keeps sealed API state on `noctaxris-data` (`state.db`, S3 bytes) and `master.key` on `noctaxris-secrets` (neither volume mounts on the engine; the engine mounts compute `:ro`). Bucket metadata, object metadata (etag, SSE), DynamoDB tables/items, SQS queues/messages, and Lambda function metadata live in SQLite (`busy_timeout` plus retries on multi-connection `SQLITE_BUSY` deadlock victims for racing writers such as PutObject meta and SQS Receive). Cognito signing keys are sealed under the store master key. BCM export samples land under `$DATAROOT/bcm-exports/...`.
 
 ## Compute path
 

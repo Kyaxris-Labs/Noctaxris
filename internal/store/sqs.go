@@ -727,7 +727,13 @@ func (s *Store) SendMessageBatch(accountID, queueName string, bodies [][]byte) (
 func (s *Store) beginImmediate() (*sql.Tx, error) {
 	// Caller must hold sqsMu. Begin is deferred; sqsMu + CAS on visibility updates
 	// keep concurrent receivers from double-delivering without global _txlock.
-	return s.db.Begin()
+	var tx *sql.Tx
+	err := withSQLiteBusyRetry(func() error {
+		var beginErr error
+		tx, beginErr = s.db.Begin()
+		return beginErr
+	})
+	return tx, err
 }
 
 func (s *Store) fifoBlockedGroupsTx(tx *sql.Tx, accountID, queueName, nowStr string) (map[string]struct{}, error) {
@@ -888,7 +894,31 @@ func (s *Store) ReceiveMessages(accountID, queueName string, max int) ([]Message
 	fifo := queueIsFIFO(q.Attributes)
 	policy, hasRedrive := parseRedrivePolicy(q.Attributes)
 
-	tx, err := s.beginImmediate()
+	var out []Message
+	err = withSQLiteBusyRetry(func() error {
+		msgs, recvErr := s.receiveMessagesTx(q, accountID, queueName, max, now, nowStr, fifo, hasRedrive, policy)
+		if recvErr != nil {
+			return recvErr
+		}
+		out = msgs
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) receiveMessagesTx(
+	q Queue,
+	accountID, queueName string,
+	max int,
+	now time.Time,
+	nowStr string,
+	fifo, hasRedrive bool,
+	policy redrivePolicy,
+) ([]Message, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("receive messages: %w", err)
 	}

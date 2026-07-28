@@ -426,6 +426,11 @@ func openStore(dataRoot string, master MasterKey, useEmptyTemplate bool) (*Store
 	// Apply busy_timeout on every pooled connection (DSN pragma, not a one-shot Exec).
 	// Do not set global _txlock=immediate: nested writers (e.g. CFN → CreateBucket)
 	// would busy-wait against an open outer transaction.
+	// Do not set journal_mode=WAL here: empty-state template materialization copies
+	// only state.db bytes (no -wal/-shm), and MaxOpenConns(1) can self-deadlock if a
+	// goroutine holds a Tx and calls s.db again. Concurrent writers may still see
+	// SQLITE_BUSY deadlock victims (busy_timeout does not wait on those); callers
+	// that race writers use withSQLiteBusyRetry.
 	dsn := "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

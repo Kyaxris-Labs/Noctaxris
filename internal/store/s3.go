@@ -537,8 +537,9 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 	acl := normalizeCannedACL(meta.CannedACL)
 	modified := nowRFC3339()
 
-	_, err = s.db.Exec(
-		`INSERT INTO s3_objects
+	err = withSQLiteBusyRetry(func() error {
+		_, execErr := s.db.Exec(
+			`INSERT INTO s3_objects
 		 (account_id, bucket, key, etag, size, content_type, sse_algorithm, kms_key_id, sealed_dek, sse_kms_context, canned_acl, storage_path, last_modified,
 		  object_lock_mode, object_lock_retain_until)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -555,9 +556,11 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 		   last_modified = excluded.last_modified,
 		   object_lock_mode = excluded.object_lock_mode,
 		   object_lock_retain_until = excluded.object_lock_retain_until`,
-		accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
-		meta.ObjectLockMode, meta.ObjectLockRetainUntil,
-	)
+			accountID, bucket, key, etag, size, ct, meta.SSEAlgorithm, meta.KMSKeyID, meta.SealedDEK, meta.SSEKMSContextJSON, acl, rel, modified,
+			meta.ObjectLockMode, meta.ObjectLockRetainUntil,
+		)
+		return execErr
+	})
 	if err != nil {
 		_ = os.Remove(tmp)
 		return ObjectMeta{}, fmt.Errorf("put object meta: %w", err)
