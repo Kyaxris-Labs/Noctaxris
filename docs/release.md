@@ -24,7 +24,7 @@ Forks skip publish with a log line. Missing secrets fail closed on schedule and 
 
 ```bash
 # On the commit you intend to ship (main tip after merge):
-git tag -a v1.3.0 -m "Noctaxris 1.3.0"
+git tag -a v1.3.0 -m "Release Noctaxris 1.3.0"
 git push origin v1.3.0
 ```
 
