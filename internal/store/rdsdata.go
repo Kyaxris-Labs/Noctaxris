@@ -125,7 +125,7 @@ type RDSDataExecutor interface {
 
 // StubRDSDataExecutor records statements and returns canned SELECT-shaped results.
 // Only used when tests inject SetRDSDataExecutor. Production ExecuteStatement fails
-// closed with DatabaseUnavailableException when no nested Postgres container exists.
+// closed with DatabaseUnavailableException when no nested SQL engine container exists.
 // Live SQL prefers pgx against the nested data-plane DSN, else DinD exec + psql.
 type StubRDSDataExecutor struct {
 	mu         sync.Mutex
@@ -174,6 +174,16 @@ func (s *Store) EnsureRDSDataSchema() error {
 	return EnsureRDSDataSchema(s.db)
 }
 
+// IsRDSDataSupportedEngine reports whether the RDS engine may use the Data API SQL path.
+func IsRDSDataSupportedEngine(engine string) bool {
+	switch NormalizeRDSEngine(engine) {
+	case "postgres", "mysql", "mariadb":
+		return true
+	default:
+		return false
+	}
+}
+
 // ResolveRDSDataResource validates resourceArn + secretArn against the RDS instance.
 func (s *Store) ResolveRDSDataResource(accountID, resourceARN, secretARN string) (RDSDBInstance, error) {
 	resourceARN = strings.TrimSpace(resourceARN)
@@ -188,8 +198,8 @@ func (s *Store) ResolveRDSDataResource(accountID, resourceARN, secretARN string)
 		}
 		return RDSDBInstance{}, err
 	}
-	if NormalizeRDSEngine(inst.Engine) != "postgres" {
-		return RDSDBInstance{}, fmt.Errorf("%w: RDS Data API supports Engine=postgres only (mysql/mariadb use nested wire protocol, not Data API)", ErrRDSDataBadRequest)
+	if !IsRDSDataSupportedEngine(inst.Engine) {
+		return RDSDBInstance{}, fmt.Errorf("%w: RDS Data API supports Engine=postgres, mysql, or mariadb", ErrRDSDataBadRequest)
 	}
 	if _, err := s.ResolveDataPlaneSecretARN(accountID, secretARN); err != nil {
 		if errors.Is(err, ErrSecretNotFound) || errors.Is(err, ErrSecretScheduledDeletion) {

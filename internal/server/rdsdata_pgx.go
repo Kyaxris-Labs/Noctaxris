@@ -32,7 +32,8 @@ var rdsDataPgxConnect = func(ctx context.Context, dsn string) (*pgx.Conn, error)
 }
 
 // rdsDataPgxEnabled reports whether the wire-protocol executor may be preferred.
-// Buy-in is granted: default on. Set NOCTAXRIS_RDS_DATA_PGX=0 to force nested-psql only.
+// Buy-in is granted: default on. Set NOCTAXRIS_RDS_DATA_PGX=0 to skip wire dial
+// (Postgres nested psql / MySQL nested mysql CLI only).
 func rdsDataPgxEnabled() bool {
 	v := strings.TrimSpace(os.Getenv(EnvRDSDataPgx))
 	if v == "0" || strings.EqualFold(v, "false") || strings.EqualFold(v, "off") {
@@ -116,7 +117,7 @@ func executeRDSDataPgxWithConn(
 
 func buildNestedPostgresDSN(inst store.RDSDBInstance, user, password, database string) (string, error) {
 	host := strings.TrimSpace(inst.EndpointAddress)
-	if err := validateNestedPostgresHost(host); err != nil {
+	if err := validateNestedRDSDataHost(host); err != nil {
 		return "", err
 	}
 	port := inst.EndpointPort
@@ -147,29 +148,9 @@ func buildNestedPostgresDSN(inst store.RDSDBInstance, user, password, database s
 	return u.String(), nil
 }
 
-// validateNestedPostgresHost allows only DinD nested data-plane hostnames.
-// Loopback, wildcards, and raw IPs are rejected so the Data API never dials an
-// operator-published or open network endpoint.
+// validateNestedPostgresHost is an alias for validateNestedRDSDataHost (Postgres Data API).
 func validateNestedPostgresHost(host string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return fmt.Errorf("%w: nested postgres endpoint is empty", store.ErrRDSDataUnavailable)
-	}
-	lower := strings.ToLower(host)
-	switch lower {
-	case "localhost", "127.0.0.1", "::1", "0.0.0.0", "*", "host.docker.internal":
-		return fmt.Errorf("%w: refusing non-nested postgres host %q", store.ErrRDSDataBadRequest, host)
-	}
-	if strings.Contains(host, "/") || strings.Contains(host, "\\") {
-		return fmt.Errorf("%w: invalid nested postgres host", store.ErrRDSDataBadRequest)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return fmt.Errorf("%w: refusing IP postgres host %q (nested container DNS name required)", store.ErrRDSDataBadRequest, host)
-	}
-	if !strings.HasPrefix(lower, "noctaxris-data-rds-") {
-		return fmt.Errorf("%w: nested postgres host %q is not a data-plane endpoint", store.ErrRDSDataBadRequest, host)
-	}
-	return nil
+	return validateNestedRDSDataHost(host)
 }
 
 func rewriteDataAPINamedParams(sqlText string) string {

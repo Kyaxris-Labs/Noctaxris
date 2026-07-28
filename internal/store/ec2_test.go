@@ -111,12 +111,18 @@ func TestRunDescribeStopStartTerminateInstances(t *testing.T) {
 	if err := st.SetEC2ContainerID(account, region, list[0].InstanceID, "cid-1", store.EC2StateRunning); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SetEC2PrivateIP(account, region, list[0].InstanceID, "10.0.9.9"); err != nil {
+		t.Fatal(err)
+	}
 	got, err := st.GetEC2Instance(account, region, list[0].InstanceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.StateName != store.EC2StateRunning || got.ContainerID != "cid-1" {
 		t.Fatalf("got=%+v", got)
+	}
+	if got.PrivateIP != "10.0.9.9" {
+		t.Fatalf("PrivateIP=%q want 10.0.9.9", got.PrivateIP)
 	}
 
 	if err := st.SetEC2InstanceState(account, region, list[0].InstanceID, store.EC2StateStopped); err != nil {

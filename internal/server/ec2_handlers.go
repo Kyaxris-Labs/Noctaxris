@@ -43,6 +43,9 @@ func (s *Server) handleEC2(
 	case catalog.ActionEC2StartInstances:
 		s.ec2StartInstances(w, r, body, requestID, eventID, verified, readOnly)
 	default:
+		if s.handleEC2Network(w, r, body, requestID, eventID, action, verified, readOnly) {
+			return
+		}
 		s.writeEC2Error(w, r, requestID, http.StatusBadRequest, "InvalidAction",
 			"This EC2 action is not implemented.", readOnly, eventID, verified)
 	}
@@ -65,6 +68,36 @@ func ec2Action(action string) string {
 		return catalog.ActionEC2StopInstances
 	case "StartInstances":
 		return catalog.ActionEC2StartInstances
+	case "CreateVpc":
+		return catalog.ActionEC2CreateVpc
+	case "DeleteVpc":
+		return catalog.ActionEC2DeleteVpc
+	case "DescribeVpcs":
+		return catalog.ActionEC2DescribeVpcs
+	case "CreateSubnet":
+		return catalog.ActionEC2CreateSubnet
+	case "DeleteSubnet":
+		return catalog.ActionEC2DeleteSubnet
+	case "DescribeSubnets":
+		return catalog.ActionEC2DescribeSubnets
+	case "CreateSecurityGroup":
+		return catalog.ActionEC2CreateSecurityGroup
+	case "DeleteSecurityGroup":
+		return catalog.ActionEC2DeleteSecurityGroup
+	case "DescribeSecurityGroups":
+		return catalog.ActionEC2DescribeSecurityGroups
+	case "AuthorizeSecurityGroupIngress":
+		return catalog.ActionEC2AuthorizeSecurityGroupIngress
+	case "AuthorizeSecurityGroupEgress":
+		return catalog.ActionEC2AuthorizeSecurityGroupEgress
+	case "RevokeSecurityGroupIngress":
+		return catalog.ActionEC2RevokeSecurityGroupIngress
+	case "RevokeSecurityGroupEgress":
+		return catalog.ActionEC2RevokeSecurityGroupEgress
+	case "DescribeNetworkInterfaces":
+		return catalog.ActionEC2DescribeNetworkInterfaces
+	case "CreateNetworkInterface":
+		return catalog.ActionEC2CreateNetworkInterface
 	case "CreateFlowLogs":
 		return catalog.ActionEC2CreateFlowLogs
 	case "InjectFlowLogs":
@@ -94,14 +127,16 @@ func (s *Server) ec2RunInstances(
 	minCount, _ := strconv.Atoi(strings.TrimSpace(params.Get("MinCount")))
 	maxCount, _ := strconv.Atoi(strings.TrimSpace(params.Get("MaxCount")))
 	region := s.ec2Region(verified)
+	iamProfile := ec2IamInstanceProfile(params)
 	instances, err := s.store.RunInstances(verified.AccountID, region, store.RunInstancesInput{
-		ImageID:          params.Get("ImageId"),
-		InstanceType:     params.Get("InstanceType"),
-		MinCount:         minCount,
-		MaxCount:         maxCount,
-		KeyName:          params.Get("KeyName"),
-		UserData:         params.Get("UserData"),
-		AvailabilityZone: params.Get("Placement.AvailabilityZone"),
+		ImageID:            params.Get("ImageId"),
+		InstanceType:       params.Get("InstanceType"),
+		MinCount:           minCount,
+		MaxCount:           maxCount,
+		KeyName:            params.Get("KeyName"),
+		UserData:           params.Get("UserData"),
+		IamInstanceProfile: iamProfile,
+		AvailabilityZone:   params.Get("Placement.AvailabilityZone"),
 	})
 	if errors.Is(err, store.ErrEC2BadRequest) {
 		s.writeEC2Error(w, r, requestID, http.StatusBadRequest, "InvalidParameterValue",
@@ -115,9 +150,10 @@ func (s *Server) ec2RunInstances(
 	}
 
 	// Nested DinD: promote pending → running. Without engine, leave pending (documented).
+	// UserData/IMDS failures inside start are logged and do not roll back the instance.
 	if strings.TrimSpace(s.cfg.DockerHost) != "" {
 		for i := range instances {
-			if err := s.startEC2Container(r.Context(), verified.AccountID, region, &instances[i]); err != nil {
+			if err := s.startEC2ContainerWithProfile(r.Context(), verified.AccountID, region, &instances[i], iamProfile); err != nil {
 				log.Printf("ec2: start container %s: %v (left pending)", instances[i].InstanceID, err)
 				continue
 			}
@@ -135,6 +171,12 @@ func (s *Server) ec2RunInstances(
 }
 
 func (s *Server) startEC2Container(ctx context.Context, accountID, region string, inst *store.EC2Instance) error {
+	return s.startEC2ContainerWithProfile(ctx, accountID, region, inst, inst.IamInstanceProfile)
+}
+
+func (s *Server) startEC2ContainerWithProfile(
+	ctx context.Context, accountID, region string, inst *store.EC2Instance, iamProfile string,
+) error {
 	cli, err := s.computeClient()
 	if err != nil || cli == nil {
 		return errors.New("compute unavailable")
@@ -151,26 +193,61 @@ func (s *Server) startEC2Container(ctx context.Context, accountID, region string
 	if err != nil {
 		return err
 	}
-	cid, err := cli.StartEC2Instance(ctx, compute.EC2RunOpts{
-		ImageURI:         pullRef,
-		Env:              env,
-		EndpointURL:      endpoint,
-		ListenAddr:       s.cfg.ListenAddr,
-		LabRegistryPull:  useAuth,
-		RegistryUsername: username,
-		RegistryPassword: password,
+	profile := strings.TrimSpace(iamProfile)
+	if profile == "" {
+		profile = strings.TrimSpace(inst.IamInstanceProfile)
+	}
+	started, err := cli.StartEC2Instance(ctx, compute.EC2RunOpts{
+		ImageURI:           pullRef,
+		Env:                env,
+		EndpointURL:        endpoint,
+		ListenAddr:         s.cfg.ListenAddr,
+		LabRegistryPull:    useAuth,
+		RegistryUsername:   username,
+		RegistryPassword:   password,
+		InstanceID:         inst.InstanceID,
+		AMIID:              inst.ImageID,
+		IamInstanceProfile: profile,
+		UserData:           inst.UserData,
 	})
 	if err != nil {
 		return err
 	}
+	if started.UserDataErr != nil {
+		log.Printf("ec2: UserData for %s: %v (instance still running)", inst.InstanceID, started.UserDataErr)
+	}
+	if started.IMDSErr != nil {
+		log.Printf("ec2: IMDS for %s: %v (instance still running)", inst.InstanceID, started.IMDSErr)
+	}
+	cid := started.ContainerID
 	if err := s.store.SetEC2ContainerID(accountID, region, inst.InstanceID, cid, store.EC2StateRunning); err != nil {
 		_ = cli.TerminateEC2Instance(ctx, cid)
 		return err
+	}
+	if ip := strings.TrimSpace(started.PrivateIP); ip != "" {
+		if err := s.store.SetEC2PrivateIP(accountID, region, inst.InstanceID, ip); err != nil {
+			log.Printf("ec2: set private IP for %s: %v", inst.InstanceID, err)
+		} else {
+			inst.PrivateIP = ip
+		}
 	}
 	inst.ContainerID = cid
 	inst.StateName = store.EC2StateRunning
 	inst.StateCode = store.EC2StateCodeRunning
 	return nil
+}
+
+func ec2IamInstanceProfile(params interface{ Get(string) string }) string {
+	if name := strings.TrimSpace(params.Get("IamInstanceProfile.Name")); name != "" {
+		return name
+	}
+	if arn := strings.TrimSpace(params.Get("IamInstanceProfile.Arn")); arn != "" {
+		if i := strings.LastIndex(arn, "/"); i >= 0 && i+1 < len(arn) {
+			return arn[i+1:]
+		}
+		return arn
+	}
+	return strings.TrimSpace(params.Get("IamInstanceProfile"))
 }
 
 func (s *Server) ec2DescribeInstances(

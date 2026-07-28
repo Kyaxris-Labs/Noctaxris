@@ -2,22 +2,41 @@
 
 **Status:** shipped (lab core)
 
-In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON objects. Identity authz. No nested Trino or Presto.
+SELECT over Glue Data Catalog tables and lab S3 objects. Default path is the in-process SQL subset. Optional DuckDB HTTP sidecar on DinD-internal `noctaxris-data` (no host port publish) for broader SQL and Parquet. Identity authz.
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
-| SQL subset | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col != 'literal' \| col <> 'literal' \| col IN ('a','b') \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
-| Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON) |
+| SQL subset (in-process) | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col != 'literal' \| col <> 'literal' \| col <\|<=\|>\|>= 'literal' \| col BETWEEN 'a' AND 'b' \| col IN ('a','b') \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
+| DuckDB engine | When selected or available: Glue tables become `CREATE VIEW` over `read_csv_auto` / `read_json_auto` / `read_parquet`; user SQL runs via nested `floci/floci-duck`-compatible `/query` (DinD exec to sidecar) or `NOCTAXRIS_DUCKDB_URL` |
+| Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON vs Parquet) |
 | Trail-shaped JSON | Top-level `{"Records":[...]}` objects expand one row per record; `.gz` objects decompress before parse |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
 | WorkGroup | Optional. Defaults to `primary` |
 
-Unsupported SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED). If a listed object under the table prefix fails `GetObject`, the query is `FAILED` (no silent skip). An empty prefix listing that succeeds may return header-only `SUCCEEDED` (intentional when no objects match).
+Unsupported in-process SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED). If a listed object under the table prefix fails `GetObject`, the query is `FAILED` (no silent skip). An empty prefix listing that succeeds may return header-only `SUCCEEDED` (intentional when no objects match).
 
-Lab JOIN is INNER only (aliases required on both sides; `ON` equality of `alias.col = alias.col`). `GROUP BY` supports a single column with `COUNT(*)` (optional group key in the SELECT list). `ORDER BY` supports a single column with optional `ASC`/`DESC`.
+Lab JOIN is INNER only (aliases required on both sides; `ON` equality of `alias.col = alias.col`). `GROUP BY` supports a single column with `COUNT(*)` (optional group key in the SELECT list). `ORDER BY` supports a single column with optional `ASC`/`DESC`. Range/`BETWEEN` comparisons prefer numeric parse when both sides are numbers; otherwise lexicographic.
+
+Parquet Glue tables (`InputFormat` / SerDe containing `parquet`) require the DuckDB engine. In-process queries against Parquet fail closed with a clear `FAILED` reason.
+
+### Engine selection
+
+| `NOCTAXRIS_ATHENA_ENGINE` | Behavior |
+|---------------------------|----------|
+| `auto` (default) | Prefer DuckDB when `NOCTAXRIS_DUCKDB_URL` is healthy or nested DinD can ensure `noctaxris-lab-duck`; otherwise in-process |
+| `duckdb` | DuckDB only; fail closed (`FAILED`) if the sidecar/URL is unavailable |
+| `inprocess` | Always in-process (never starts DuckDB) |
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `NOCTAXRIS_DUCKDB_URL` | empty | Pre-configured DuckDB HTTP base URL (skips nested ensure) |
+| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:latest` | Nested sidecar image (allowlisted) |
+| `NOCTAXRIS_DUCKDB_S3_ENDPOINT` | `http://host.docker.internal:4566` | Lab S3 endpoint as seen from the DuckDB container |
+
+Nested DuckDB stays on `noctaxris-data` with no host port publish. The API reaches `/query` via DinD exec (the API process is not on that network). Sidecar ExtraHosts include `host.docker.internal:host-gateway` for lab S3 reads.
 
 ### Authz notes
 
@@ -66,6 +85,13 @@ QID=$(aws athena start-query-execution \
   --endpoint-url "$EP" --query QueryExecutionId --output text)
 aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
 
+# WHERE BETWEEN / range (in-process)
+QID=$(aws athena start-query-execution \
+  --query-string "SELECT id, name FROM labdb.people WHERE id BETWEEN '1' AND '2'" \
+  --query-execution-context Database=labdb \
+  --endpoint-url "$EP" --query QueryExecutionId --output text)
+aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
 # WHERE IN
 QID=$(aws athena start-query-execution \
   --query-string "SELECT id, name FROM labdb.people WHERE name IN ('alice', 'bob')" \
@@ -109,11 +135,12 @@ QID=$(aws athena start-query-execution \
 aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
 ```
 
-Skip live Compose smoke when Docker is unavailable. Store and server unit tests cover the lab path without DinD.
+Skip live Compose smoke when Docker is unavailable. Store and server unit tests cover the in-process path and DuckDB fail-closed wiring without DinD. Soft-skip live nested DuckDB when the engine or `floci/floci-duck` image is unavailable.
 
 ## Not yet / deferred
 
-- Broader SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, range inequalities (`<`/`>`/`BETWEEN`), `NOT IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
+- Broader in-process SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, `NOT IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
 - WorkGroup configuration matrix and result reuse
 - Nested Trino / Presto / Spark engines
 - Managed query results encryption options
+- In-process Parquet decode (Parquet requires DuckDB today)

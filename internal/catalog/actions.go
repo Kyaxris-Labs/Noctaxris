@@ -63,7 +63,7 @@ const (
 // Control Tower honest stubs (no landing zones in lab).
 const (
 	ActionControlTowerListLandingZones = "controltower:ListLandingZones"
-	ActionControlTowerGetLandingZone     = "controltower:GetLandingZone"
+	ActionControlTowerGetLandingZone   = "controltower:GetLandingZone"
 )
 
 // IAM lab actions.
@@ -78,13 +78,13 @@ const (
 
 // Access keys
 const (
-	ActionIAMCreateAccessKey = "iam:CreateAccessKey"
-	ActionIAMDeleteAccessKey = "iam:DeleteAccessKey"
-	ActionIAMListAccessKeys  = "iam:ListAccessKeys"
-	ActionIAMUpdateAccessKey = "iam:UpdateAccessKey"
-	ActionIAMGetAccessKeyLastUsed        = "iam:GetAccessKeyLastUsed"
-	ActionIAMGenerateCredentialReport    = "iam:GenerateCredentialReport"
-	ActionIAMGetCredentialReport         = "iam:GetCredentialReport"
+	ActionIAMCreateAccessKey          = "iam:CreateAccessKey"
+	ActionIAMDeleteAccessKey          = "iam:DeleteAccessKey"
+	ActionIAMListAccessKeys           = "iam:ListAccessKeys"
+	ActionIAMUpdateAccessKey          = "iam:UpdateAccessKey"
+	ActionIAMGetAccessKeyLastUsed     = "iam:GetAccessKeyLastUsed"
+	ActionIAMGenerateCredentialReport = "iam:GenerateCredentialReport"
+	ActionIAMGetCredentialReport      = "iam:GetCredentialReport"
 )
 
 // Managed policies
@@ -336,11 +336,11 @@ const (
 
 // MemoryDB lab actions (JSON 1.1 AmazonMemoryDB.*).
 const (
-	ActionMemoryDBCreateCluster     = "memorydb:CreateCluster"
-	ActionMemoryDBDescribeClusters  = "memorydb:DescribeClusters"
-	ActionMemoryDBDeleteCluster     = "memorydb:DeleteCluster"
-	ActionMemoryDBDescribeUsers     = "memorydb:DescribeUsers"
-	ActionMemoryDBDescribeACLs      = "memorydb:DescribeACLs"
+	ActionMemoryDBCreateCluster    = "memorydb:CreateCluster"
+	ActionMemoryDBDescribeClusters = "memorydb:DescribeClusters"
+	ActionMemoryDBDeleteCluster    = "memorydb:DeleteCluster"
+	ActionMemoryDBDescribeUsers    = "memorydb:DescribeUsers"
+	ActionMemoryDBDescribeACLs     = "memorydb:DescribeACLs"
 )
 
 // DocumentDB lab actions. IAM action names use the rds: prefix (AWS DocumentDB shares RDS control-plane IAM).
@@ -378,15 +378,19 @@ const (
 
 // Transfer Family lab actions.
 const (
-	ActionTransferCreateServer   = "transfer:CreateServer"
-	ActionTransferDescribeServer = "transfer:DescribeServer"
-	ActionTransferListServers    = "transfer:ListServers"
-	ActionTransferDeleteServer   = "transfer:DeleteServer"
-	ActionTransferCreateUser     = "transfer:CreateUser"
-	ActionTransferDeleteUser     = "transfer:DeleteUser"
-	ActionTransferPutFile        = "transfer:PutFile"
-	ActionTransferGetFile        = "transfer:GetFile"
-	ActionTransferListDirectory  = "transfer:ListDirectory"
+	ActionTransferCreateServer       = "transfer:CreateServer"
+	ActionTransferDescribeServer     = "transfer:DescribeServer"
+	ActionTransferListServers        = "transfer:ListServers"
+	ActionTransferDeleteServer       = "transfer:DeleteServer"
+	ActionTransferCreateUser         = "transfer:CreateUser"
+	ActionTransferDescribeUser       = "transfer:DescribeUser"
+	ActionTransferListUsers          = "transfer:ListUsers"
+	ActionTransferDeleteUser         = "transfer:DeleteUser"
+	ActionTransferImportSshPublicKey = "transfer:ImportSshPublicKey"
+	ActionTransferDeleteSshPublicKey = "transfer:DeleteSshPublicKey"
+	ActionTransferPutFile            = "transfer:PutFile"
+	ActionTransferGetFile            = "transfer:GetFile"
+	ActionTransferListDirectory      = "transfer:ListDirectory"
 )
 
 // SQS lab actions.
@@ -420,6 +424,9 @@ const (
 	ActionSSMListTagsForResource    = "ssm:ListTagsForResource"
 	ActionSSMAddTagsToResource      = "ssm:AddTagsToResource"
 	ActionSSMRemoveTagsFromResource = "ssm:RemoveTagsFromResource"
+	ActionSSMSendCommand            = "ssm:SendCommand"
+	ActionSSMGetCommandInvocation   = "ssm:GetCommandInvocation"
+	ActionSSMListCommandInvocations = "ssm:ListCommandInvocations"
 )
 
 // SNS lab actions.
@@ -543,18 +550,18 @@ const (
 	// ActionCloudTrailInjectInsightsEvents seeds insight-shaped JSONL records (no ML engine).
 	// Gated by NOCTAXRIS_CLOUDTRAIL_INJECT=1.
 	ActionCloudTrailInjectInsightsEvents = "cloudtrail:InjectInsightsEvents"
-	ActionCloudTrailPutEventSelectors = "cloudtrail:PutEventSelectors"
-	ActionCloudTrailGetEventSelectors = "cloudtrail:GetEventSelectors"
+	ActionCloudTrailPutEventSelectors    = "cloudtrail:PutEventSelectors"
+	ActionCloudTrailGetEventSelectors    = "cloudtrail:GetEventSelectors"
 	// ActionCloudTrailValidateLogs is a Noctaxris lab helper (digest sidecar check; not full AWS ValidateLogs).
 	ActionCloudTrailValidateLogs = "cloudtrail:ValidateLogs"
 )
 
 // GuardDuty lab actions.
 const (
-	ActionGuardDutyCreateDetector  = "guardduty:CreateDetector"
-	ActionGuardDutyListDetectors   = "guardduty:ListDetectors"
-	ActionGuardDutyListFindings    = "guardduty:ListFindings"
-	ActionGuardDutyGetFindings     = "guardduty:GetFindings"
+	ActionGuardDutyCreateDetector = "guardduty:CreateDetector"
+	ActionGuardDutyListDetectors  = "guardduty:ListDetectors"
+	ActionGuardDutyListFindings   = "guardduty:ListFindings"
+	ActionGuardDutyGetFindings    = "guardduty:GetFindings"
 	// ActionGuardDutyInjectFindings is a Noctaxris lab extension (not an AWS GuardDuty API).
 	// Gated by NOCTAXRIS_GUARDDUTY_INJECT=1.
 	ActionGuardDutyInjectFindings = "guardduty:InjectFindings"
@@ -562,35 +569,50 @@ const (
 
 // Detective lab actions (CreateGraph/ListGraphs/AcceptInvitation per AWS Detective API; SearchGraph is lab).
 const (
-	ActionDetectiveCreateGraph       = "detective:CreateGraph"
-	ActionDetectiveListGraphs        = "detective:ListGraphs"
-	ActionDetectiveAcceptInvitation  = "detective:AcceptInvitation"
-	ActionDetectiveSearchGraph       = "detective:SearchGraph"
+	ActionDetectiveCreateGraph      = "detective:CreateGraph"
+	ActionDetectiveListGraphs       = "detective:ListGraphs"
+	ActionDetectiveAcceptInvitation = "detective:AcceptInvitation"
+	ActionDetectiveSearchGraph      = "detective:SearchGraph"
 )
 
 // Macie2 lab actions.
 const (
-	ActionMacieEnableMacie             = "macie2:EnableMacie"
-	ActionMacieGetMacieSession         = "macie2:GetMacieSession"
-	ActionMacieCreateClassificationJob = "macie2:CreateClassificationJob"
+	ActionMacieEnableMacie               = "macie2:EnableMacie"
+	ActionMacieGetMacieSession           = "macie2:GetMacieSession"
+	ActionMacieCreateClassificationJob   = "macie2:CreateClassificationJob"
 	ActionMacieDescribeClassificationJob = "macie2:DescribeClassificationJob"
-	ActionMacieListClassificationJobs  = "macie2:ListClassificationJobs"
-	ActionMacieListFindings            = "macie2:ListFindings"
-	ActionMacieGetFindings             = "macie2:GetFindings"
+	ActionMacieListClassificationJobs    = "macie2:ListClassificationJobs"
+	ActionMacieListFindings              = "macie2:ListFindings"
+	ActionMacieGetFindings               = "macie2:GetFindings"
 	// ActionMacieInjectFindings is a Noctaxris lab extension (not an AWS Macie API).
 	// Gated by NOCTAXRIS_MACIE_INJECT=1. Seeds sensitive-data findings (canned S3 matches OK).
 	ActionMacieInjectFindings = "macie2:InjectFindings"
 )
 
-// EC2 lab actions (nested container instances + VPC Flow Logs).
+// EC2 lab actions (nested container instances + VPC/SG/ENI metadata + VPC Flow Logs).
 const (
-	ActionEC2RunInstances       = "ec2:RunInstances"
-	ActionEC2DescribeInstances  = "ec2:DescribeInstances"
-	ActionEC2DescribeImages     = "ec2:DescribeImages"
-	ActionEC2TerminateInstances = "ec2:TerminateInstances"
-	ActionEC2StopInstances      = "ec2:StopInstances"
-	ActionEC2StartInstances     = "ec2:StartInstances"
-	ActionEC2CreateFlowLogs     = "ec2:CreateFlowLogs"
+	ActionEC2RunInstances                  = "ec2:RunInstances"
+	ActionEC2DescribeInstances             = "ec2:DescribeInstances"
+	ActionEC2DescribeImages                = "ec2:DescribeImages"
+	ActionEC2TerminateInstances            = "ec2:TerminateInstances"
+	ActionEC2StopInstances                 = "ec2:StopInstances"
+	ActionEC2StartInstances                = "ec2:StartInstances"
+	ActionEC2CreateVpc                     = "ec2:CreateVpc"
+	ActionEC2DeleteVpc                     = "ec2:DeleteVpc"
+	ActionEC2DescribeVpcs                  = "ec2:DescribeVpcs"
+	ActionEC2CreateSubnet                  = "ec2:CreateSubnet"
+	ActionEC2DeleteSubnet                  = "ec2:DeleteSubnet"
+	ActionEC2DescribeSubnets               = "ec2:DescribeSubnets"
+	ActionEC2CreateSecurityGroup           = "ec2:CreateSecurityGroup"
+	ActionEC2DeleteSecurityGroup           = "ec2:DeleteSecurityGroup"
+	ActionEC2DescribeSecurityGroups        = "ec2:DescribeSecurityGroups"
+	ActionEC2AuthorizeSecurityGroupIngress = "ec2:AuthorizeSecurityGroupIngress"
+	ActionEC2AuthorizeSecurityGroupEgress  = "ec2:AuthorizeSecurityGroupEgress"
+	ActionEC2RevokeSecurityGroupIngress    = "ec2:RevokeSecurityGroupIngress"
+	ActionEC2RevokeSecurityGroupEgress     = "ec2:RevokeSecurityGroupEgress"
+	ActionEC2DescribeNetworkInterfaces     = "ec2:DescribeNetworkInterfaces"
+	ActionEC2CreateNetworkInterface        = "ec2:CreateNetworkInterface"
+	ActionEC2CreateFlowLogs                = "ec2:CreateFlowLogs"
 	// ActionEC2InjectFlowLogs is a Noctaxris lab extension (not an AWS EC2 API).
 	// Gated by NOCTAXRIS_VPCFLOW_INJECT=1.
 	ActionEC2InjectFlowLogs = "ec2:InjectFlowLogs"
@@ -645,17 +667,17 @@ const (
 
 // Kinesis lab actions.
 const (
-	ActionKinesisCreateStream         = "kinesis:CreateStream"
-	ActionKinesisDeleteStream         = "kinesis:DeleteStream"
-	ActionKinesisDescribeStream       = "kinesis:DescribeStream"
-	ActionKinesisListStreams          = "kinesis:ListStreams"
-	ActionKinesisPutRecord            = "kinesis:PutRecord"
-	ActionKinesisPutRecords           = "kinesis:PutRecords"
-	ActionKinesisGetShardIterator     = "kinesis:GetShardIterator"
-	ActionKinesisGetRecords           = "kinesis:GetRecords"
-	ActionKinesisPutResourcePolicy    = "kinesis:PutResourcePolicy"
-	ActionKinesisGetResourcePolicy    = "kinesis:GetResourcePolicy"
-	ActionKinesisDeleteResourcePolicy = "kinesis:DeleteResourcePolicy"
+	ActionKinesisCreateStream             = "kinesis:CreateStream"
+	ActionKinesisDeleteStream             = "kinesis:DeleteStream"
+	ActionKinesisDescribeStream           = "kinesis:DescribeStream"
+	ActionKinesisListStreams              = "kinesis:ListStreams"
+	ActionKinesisPutRecord                = "kinesis:PutRecord"
+	ActionKinesisPutRecords               = "kinesis:PutRecords"
+	ActionKinesisGetShardIterator         = "kinesis:GetShardIterator"
+	ActionKinesisGetRecords               = "kinesis:GetRecords"
+	ActionKinesisPutResourcePolicy        = "kinesis:PutResourcePolicy"
+	ActionKinesisGetResourcePolicy        = "kinesis:GetResourcePolicy"
+	ActionKinesisDeleteResourcePolicy     = "kinesis:DeleteResourcePolicy"
 	ActionKinesisRegisterStreamConsumer   = "kinesis:RegisterStreamConsumer"
 	ActionKinesisDescribeStreamConsumer   = "kinesis:DescribeStreamConsumer"
 	ActionKinesisListStreamConsumers      = "kinesis:ListStreamConsumers"
@@ -681,6 +703,11 @@ const (
 // SES lab actions.
 const (
 	ActionSESVerifyEmailIdentity          = "ses:VerifyEmailIdentity"
+	ActionSESCreateEmailIdentity          = "ses:CreateEmailIdentity"
+	ActionSESGetEmailIdentity             = "ses:GetEmailIdentity"
+	ActionSESDeleteEmailIdentity          = "ses:DeleteEmailIdentity"
+	ActionSESListEmailIdentities          = "ses:ListEmailIdentities"
+	ActionSESGetAccount                   = "ses:GetAccount"
 	ActionSESListIdentities               = "ses:ListIdentities"
 	ActionSESSendEmail                    = "ses:SendEmail"
 	ActionSESSendRawEmail                 = "ses:SendRawEmail"
@@ -850,21 +877,21 @@ const (
 
 // API Gateway REST API (v1) lab actions.
 const (
-	ActionAPIGatewayCreateRestApi     = "apigateway:CreateRestApi"
-	ActionAPIGatewayGetRestApi        = "apigateway:GetRestApi"
-	ActionAPIGatewayGetRestApis       = "apigateway:GetRestApis"
-	ActionAPIGatewayDeleteRestApi     = "apigateway:DeleteRestApi"
-	ActionAPIGatewayCreateResource    = "apigateway:CreateResource"
-	ActionAPIGatewayGetResources      = "apigateway:GetResources"
-	ActionAPIGatewayDeleteResource    = "apigateway:DeleteResource"
-	ActionAPIGatewayPutMethod         = "apigateway:PutMethod"
-	ActionAPIGatewayGetMethod         = "apigateway:GetMethod"
-	ActionAPIGatewayDeleteMethod      = "apigateway:DeleteMethod"
-	ActionAPIGatewayPutIntegration    = "apigateway:PutIntegration"
-	ActionAPIGatewayGetIntegration    = "apigateway:GetIntegration"
-	ActionAPIGatewayCreateDeployment  = "apigateway:CreateDeployment"
-	ActionAPIGatewayCreateStage       = "apigateway:CreateStage"
-	ActionAPIGatewayGetStage          = "apigateway:GetStage"
+	ActionAPIGatewayCreateRestApi    = "apigateway:CreateRestApi"
+	ActionAPIGatewayGetRestApi       = "apigateway:GetRestApi"
+	ActionAPIGatewayGetRestApis      = "apigateway:GetRestApis"
+	ActionAPIGatewayDeleteRestApi    = "apigateway:DeleteRestApi"
+	ActionAPIGatewayCreateResource   = "apigateway:CreateResource"
+	ActionAPIGatewayGetResources     = "apigateway:GetResources"
+	ActionAPIGatewayDeleteResource   = "apigateway:DeleteResource"
+	ActionAPIGatewayPutMethod        = "apigateway:PutMethod"
+	ActionAPIGatewayGetMethod        = "apigateway:GetMethod"
+	ActionAPIGatewayDeleteMethod     = "apigateway:DeleteMethod"
+	ActionAPIGatewayPutIntegration   = "apigateway:PutIntegration"
+	ActionAPIGatewayGetIntegration   = "apigateway:GetIntegration"
+	ActionAPIGatewayCreateDeployment = "apigateway:CreateDeployment"
+	ActionAPIGatewayCreateStage      = "apigateway:CreateStage"
+	ActionAPIGatewayGetStage         = "apigateway:GetStage"
 )
 
 // API Gateway HTTP API (v2) lab actions.
@@ -891,18 +918,18 @@ const ActionExecuteAPIManageConnections = "execute-api:ManageConnections"
 
 // Cognito User Pools lab actions.
 const (
-	ActionCognitoCreateUserPool         = "cognito-idp:CreateUserPool"
-	ActionCognitoDescribeUserPool       = "cognito-idp:DescribeUserPool"
-	ActionCognitoUpdateUserPool         = "cognito-idp:UpdateUserPool"
-	ActionCognitoListUserPools          = "cognito-idp:ListUserPools"
-	ActionCognitoDeleteUserPool         = "cognito-idp:DeleteUserPool"
-	ActionCognitoCreateUserPoolClient   = "cognito-idp:CreateUserPoolClient"
-	ActionCognitoDescribeUserPoolClient = "cognito-idp:DescribeUserPoolClient"
-	ActionCognitoListUserPoolClients    = "cognito-idp:ListUserPoolClients"
-	ActionCognitoDeleteUserPoolClient   = "cognito-idp:DeleteUserPoolClient"
-	ActionCognitoAdminCreateUser        = "cognito-idp:AdminCreateUser"
-	ActionCognitoSignUp                 = "cognito-idp:SignUp"
-	ActionCognitoConfirmSignUp          = "cognito-idp:ConfirmSignUp"
+	ActionCognitoCreateUserPool                   = "cognito-idp:CreateUserPool"
+	ActionCognitoDescribeUserPool                 = "cognito-idp:DescribeUserPool"
+	ActionCognitoUpdateUserPool                   = "cognito-idp:UpdateUserPool"
+	ActionCognitoListUserPools                    = "cognito-idp:ListUserPools"
+	ActionCognitoDeleteUserPool                   = "cognito-idp:DeleteUserPool"
+	ActionCognitoCreateUserPoolClient             = "cognito-idp:CreateUserPoolClient"
+	ActionCognitoDescribeUserPoolClient           = "cognito-idp:DescribeUserPoolClient"
+	ActionCognitoListUserPoolClients              = "cognito-idp:ListUserPoolClients"
+	ActionCognitoDeleteUserPoolClient             = "cognito-idp:DeleteUserPoolClient"
+	ActionCognitoAdminCreateUser                  = "cognito-idp:AdminCreateUser"
+	ActionCognitoSignUp                           = "cognito-idp:SignUp"
+	ActionCognitoConfirmSignUp                    = "cognito-idp:ConfirmSignUp"
 	ActionCognitoForgotPassword                   = "cognito-idp:ForgotPassword"
 	ActionCognitoConfirmForgotPassword            = "cognito-idp:ConfirmForgotPassword"
 	ActionCognitoResendConfirmationCode           = "cognito-idp:ResendConfirmationCode"
@@ -962,27 +989,27 @@ const (
 
 // IoT Core and IoT Data lab actions.
 const (
-	ActionIoTCreateThing               = "iot:CreateThing"
-	ActionIoTDescribeThing             = "iot:DescribeThing"
-	ActionIoTListThings                = "iot:ListThings"
-	ActionIoTUpdateThing               = "iot:UpdateThing"
-	ActionIoTDeleteThing               = "iot:DeleteThing"
-	ActionIoTCreateKeysAndCertificate  = "iot:CreateKeysAndCertificate"
-	ActionIoTDescribeCertificate       = "iot:DescribeCertificate"
-	ActionIoTListCertificates          = "iot:ListCertificates"
-	ActionIoTUpdateCertificate         = "iot:UpdateCertificate"
-	ActionIoTDeleteCertificate         = "iot:DeleteCertificate"
-	ActionIoTCreatePolicy              = "iot:CreatePolicy"
-	ActionIoTGetPolicy                 = "iot:GetPolicy"
-	ActionIoTListPolicies              = "iot:ListPolicies"
-	ActionIoTDeletePolicy              = "iot:DeletePolicy"
-	ActionIoTAttachPolicy              = "iot:AttachPolicy"
-	ActionIoTDetachPolicy              = "iot:DetachPolicy"
-	ActionIoTAttachThingPrincipal      = "iot:AttachThingPrincipal"
-	ActionIoTListThingPrincipals       = "iot:ListThingPrincipals"
-	ActionIoTDataUpdateThingShadow     = "iot-data:UpdateThingShadow"
-	ActionIoTDataGetThingShadow        = "iot-data:GetThingShadow"
-	ActionIoTDataDeleteThingShadow     = "iot-data:DeleteThingShadow"
+	ActionIoTCreateThing              = "iot:CreateThing"
+	ActionIoTDescribeThing            = "iot:DescribeThing"
+	ActionIoTListThings               = "iot:ListThings"
+	ActionIoTUpdateThing              = "iot:UpdateThing"
+	ActionIoTDeleteThing              = "iot:DeleteThing"
+	ActionIoTCreateKeysAndCertificate = "iot:CreateKeysAndCertificate"
+	ActionIoTDescribeCertificate      = "iot:DescribeCertificate"
+	ActionIoTListCertificates         = "iot:ListCertificates"
+	ActionIoTUpdateCertificate        = "iot:UpdateCertificate"
+	ActionIoTDeleteCertificate        = "iot:DeleteCertificate"
+	ActionIoTCreatePolicy             = "iot:CreatePolicy"
+	ActionIoTGetPolicy                = "iot:GetPolicy"
+	ActionIoTListPolicies             = "iot:ListPolicies"
+	ActionIoTDeletePolicy             = "iot:DeletePolicy"
+	ActionIoTAttachPolicy             = "iot:AttachPolicy"
+	ActionIoTDetachPolicy             = "iot:DetachPolicy"
+	ActionIoTAttachThingPrincipal     = "iot:AttachThingPrincipal"
+	ActionIoTListThingPrincipals      = "iot:ListThingPrincipals"
+	ActionIoTDataUpdateThingShadow    = "iot-data:UpdateThingShadow"
+	ActionIoTDataGetThingShadow       = "iot-data:GetThingShadow"
+	ActionIoTDataDeleteThingShadow    = "iot-data:DeleteThingShadow"
 )
 
 // CloudWatch Metrics and Alarms lab actions.
@@ -1100,6 +1127,7 @@ const (
 // Bedrock Runtime lab actions. IAM action prefix is bedrock:.
 const (
 	ActionBedrockInvokeModel = "bedrock:InvokeModel"
+	ActionBedrockConverse    = "bedrock:Converse"
 )
 
 // Textract lab actions.
@@ -1121,23 +1149,26 @@ const (
 	ActionEMRDescribeCluster   = "elasticmapreduce:DescribeCluster"
 	ActionEMRListClusters      = "elasticmapreduce:ListClusters"
 	ActionEMRTerminateJobFlows = "elasticmapreduce:TerminateJobFlows"
+	ActionEMRAddJobFlowSteps   = "elasticmapreduce:AddJobFlowSteps"
+	ActionEMRDescribeStep      = "elasticmapreduce:DescribeStep"
+	ActionEMRListSteps         = "elasticmapreduce:ListSteps"
 )
 
 // CodeBuild lab actions.
 const (
-	ActionCodeBuildCreateProject     = "codebuild:CreateProject"
-	ActionCodeBuildUpdateProject     = "codebuild:UpdateProject"
-	ActionCodeBuildDeleteProject     = "codebuild:DeleteProject"
-	ActionCodeBuildListProjects      = "codebuild:ListProjects"
-	ActionCodeBuildBatchGetProjects  = "codebuild:BatchGetProjects"
-	ActionCodeBuildStartBuild        = "codebuild:StartBuild"
-	ActionCodeBuildStartBuildBatch   = "codebuild:StartBuildBatch"
-	ActionCodeBuildStopBuild         = "codebuild:StopBuild"
-	ActionCodeBuildBatchGetBuilds    = "codebuild:BatchGetBuilds"
-	ActionCodeBuildListBuilds        = "codebuild:ListBuilds"
-	ActionCodeBuildCreateWebhook     = "codebuild:CreateWebhook"
-	ActionCodeBuildDeleteWebhook     = "codebuild:DeleteWebhook"
-	ActionCodeBuildListWebhooks      = "codebuild:ListWebhooks"
+	ActionCodeBuildCreateProject    = "codebuild:CreateProject"
+	ActionCodeBuildUpdateProject    = "codebuild:UpdateProject"
+	ActionCodeBuildDeleteProject    = "codebuild:DeleteProject"
+	ActionCodeBuildListProjects     = "codebuild:ListProjects"
+	ActionCodeBuildBatchGetProjects = "codebuild:BatchGetProjects"
+	ActionCodeBuildStartBuild       = "codebuild:StartBuild"
+	ActionCodeBuildStartBuildBatch  = "codebuild:StartBuildBatch"
+	ActionCodeBuildStopBuild        = "codebuild:StopBuild"
+	ActionCodeBuildBatchGetBuilds   = "codebuild:BatchGetBuilds"
+	ActionCodeBuildListBuilds       = "codebuild:ListBuilds"
+	ActionCodeBuildCreateWebhook    = "codebuild:CreateWebhook"
+	ActionCodeBuildDeleteWebhook    = "codebuild:DeleteWebhook"
+	ActionCodeBuildListWebhooks     = "codebuild:ListWebhooks"
 )
 
 // CodeCommit lab actions (filesystem-backed store; not git smart-HTTP).
@@ -1442,7 +1473,11 @@ func KnownAction(action string) bool {
 		ActionTransferListServers,
 		ActionTransferDeleteServer,
 		ActionTransferCreateUser,
+		ActionTransferDescribeUser,
+		ActionTransferListUsers,
 		ActionTransferDeleteUser,
+		ActionTransferImportSshPublicKey,
+		ActionTransferDeleteSshPublicKey,
 		ActionTransferPutFile,
 		ActionTransferGetFile,
 		ActionTransferListDirectory,
@@ -1507,6 +1542,9 @@ func KnownAction(action string) bool {
 		ActionSSMListTagsForResource,
 		ActionSSMAddTagsToResource,
 		ActionSSMRemoveTagsFromResource,
+		ActionSSMSendCommand,
+		ActionSSMGetCommandInvocation,
+		ActionSSMListCommandInvocations,
 		ActionSecretsCreateSecret,
 		ActionSecretsGetSecretValue,
 		ActionSecretsPutSecretValue,
@@ -1628,6 +1666,21 @@ func KnownAction(action string) bool {
 		ActionEC2TerminateInstances,
 		ActionEC2StopInstances,
 		ActionEC2StartInstances,
+		ActionEC2CreateVpc,
+		ActionEC2DeleteVpc,
+		ActionEC2DescribeVpcs,
+		ActionEC2CreateSubnet,
+		ActionEC2DeleteSubnet,
+		ActionEC2DescribeSubnets,
+		ActionEC2CreateSecurityGroup,
+		ActionEC2DeleteSecurityGroup,
+		ActionEC2DescribeSecurityGroups,
+		ActionEC2AuthorizeSecurityGroupIngress,
+		ActionEC2AuthorizeSecurityGroupEgress,
+		ActionEC2RevokeSecurityGroupIngress,
+		ActionEC2RevokeSecurityGroupEgress,
+		ActionEC2DescribeNetworkInterfaces,
+		ActionEC2CreateNetworkInterface,
 		ActionEC2CreateFlowLogs,
 		ActionEC2InjectFlowLogs,
 		ActionLabFreezeClock,
@@ -1688,6 +1741,11 @@ func KnownAction(action string) bool {
 		ActionAppConfigDataStartConfigurationSession,
 		ActionAppConfigDataGetLatestConfiguration,
 		ActionSESVerifyEmailIdentity,
+		ActionSESCreateEmailIdentity,
+		ActionSESGetEmailIdentity,
+		ActionSESDeleteEmailIdentity,
+		ActionSESListEmailIdentities,
+		ActionSESGetAccount,
 		ActionSESListIdentities,
 		ActionSESSendEmail,
 		ActionSESSendRawEmail,
@@ -1993,6 +2051,7 @@ func KnownAction(action string) bool {
 		ActionS3VectorsPutVectors,
 		ActionS3VectorsQueryVectors,
 		ActionBedrockInvokeModel,
+		ActionBedrockConverse,
 		ActionTextractDetectDocumentText,
 		ActionTextractAnalyzeDocument,
 		ActionTranscribeStartTranscriptionJob,
@@ -2001,7 +2060,10 @@ func KnownAction(action string) bool {
 		ActionEMRRunJobFlow,
 		ActionEMRDescribeCluster,
 		ActionEMRListClusters,
-		ActionEMRTerminateJobFlows:
+		ActionEMRTerminateJobFlows,
+		ActionEMRAddJobFlowSteps,
+		ActionEMRDescribeStep,
+		ActionEMRListSteps:
 		return true
 	default:
 		return false

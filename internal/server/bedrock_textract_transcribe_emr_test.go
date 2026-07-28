@@ -12,6 +12,57 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func TestBedrockConverseREST(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	body := []byte(`{"messages":[{"role":"user","content":[{"text":"hello"}]}]}`)
+	model := "anthropic.claude-3-haiku-20240307-v1:0"
+	path := "/model/" + url.PathEscape(model) + "/converse"
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566"+path, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	signHeader(t, req, body, testAccessKey, testSecret, testRegion, "bedrock", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Converse status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	output, _ := out["output"].(map[string]any)
+	message, _ := output["message"].(map[string]any)
+	if message["role"] != "assistant" {
+		t.Fatalf("output=%#v", out)
+	}
+	if out["stopReason"] != "end_turn" {
+		t.Fatalf("stopReason=%v", out["stopReason"])
+	}
+
+	emptyBody := []byte(`{"messages":[]}`)
+	emptyReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566"+path, emptyBody)
+	emptyReq.Header.Set("Content-Type", "application/json")
+	signHeader(t, emptyReq, emptyBody, testAccessKey, testSecret, testRegion, "bedrock", now)
+	emptyRec := httptest.NewRecorder()
+	handler.ServeHTTP(emptyRec, emptyReq)
+	if emptyRec.Code != http.StatusBadRequest {
+		t.Fatalf("empty messages status=%d body=%q", emptyRec.Code, emptyRec.Body.String())
+	}
+
+	streamPath := "/model/" + url.PathEscape(model) + "/converse-stream"
+	streamReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566"+streamPath, body)
+	streamReq.Header.Set("Content-Type", "application/json")
+	signHeader(t, streamReq, body, testAccessKey, testSecret, testRegion, "bedrock", now)
+	streamRec := httptest.NewRecorder()
+	handler.ServeHTTP(streamRec, streamReq)
+	if streamRec.Code != http.StatusNotImplemented {
+		t.Fatalf("converse-stream status=%d body=%q", streamRec.Code, streamRec.Body.String())
+	}
+}
+
 func TestBedrockInvokeModelREST(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
@@ -143,6 +194,50 @@ func TestEMRRunDescribeListTerminate(t *testing.T) {
 	list := mustJSONTarget(t, handler, "ElasticMapReduce.ListClusters", "elasticmapreduce", map[string]any{}, now)
 	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), id) {
 		t.Fatalf("ListClusters status=%d body=%q", list.Code, list.Body.String())
+	}
+
+	add := mustJSONTarget(t, handler, "ElasticMapReduce.AddJobFlowSteps", "elasticmapreduce", map[string]any{
+		"JobFlowId": id,
+		"Steps": []map[string]any{
+			{
+				"Name":            "smoke",
+				"ActionOnFailure": "CONTINUE",
+				"HadoopJarStep": map[string]any{
+					"Jar":  "command-runner.jar",
+					"Args": []string{"echo", "ok"},
+				},
+			},
+		},
+	}, now)
+	if add.Code != http.StatusOK {
+		t.Fatalf("AddJobFlowSteps status=%d body=%q", add.Code, add.Body.String())
+	}
+	var added map[string]any
+	if err := json.Unmarshal(add.Body.Bytes(), &added); err != nil {
+		t.Fatal(err)
+	}
+	stepIDs, _ := added["StepIds"].([]any)
+	if len(stepIDs) != 1 {
+		t.Fatalf("StepIds=%v body=%q", stepIDs, add.Body.String())
+	}
+	stepID, _ := stepIDs[0].(string)
+	if !strings.HasPrefix(stepID, "s-") {
+		t.Fatalf("StepId=%q", stepID)
+	}
+
+	descStep := mustJSONTarget(t, handler, "ElasticMapReduce.DescribeStep", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+		"StepId":    stepID,
+	}, now)
+	if descStep.Code != http.StatusOK || !strings.Contains(descStep.Body.String(), "COMPLETED") {
+		t.Fatalf("DescribeStep status=%d body=%q", descStep.Code, descStep.Body.String())
+	}
+
+	listSteps := mustJSONTarget(t, handler, "ElasticMapReduce.ListSteps", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+	}, now)
+	if listSteps.Code != http.StatusOK || !strings.Contains(listSteps.Body.String(), stepID) {
+		t.Fatalf("ListSteps status=%d body=%q", listSteps.Code, listSteps.Body.String())
 	}
 
 	term := mustJSONTarget(t, handler, "ElasticMapReduce.TerminateJobFlows", "elasticmapreduce", map[string]any{

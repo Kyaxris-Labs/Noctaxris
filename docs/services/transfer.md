@@ -9,7 +9,8 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 | Area | Actions / paths |
 |------|-----------------|
 | Server | `CreateServer`, `DescribeServer`, `ListServers`, `DeleteServer` (`State=ONLINE`) |
-| User | `CreateUser`, `DeleteUser` |
+| User | `CreateUser`, `DescribeUser`, `ListUsers`, `DeleteUser` |
+| SSH keys | `ImportSshPublicKey`, `DeleteSshPublicKey` (SQLite metadata; echoed on `DescribeUser`; `SshPublicKeyCount` on `ListUsers`) |
 | Protocol | SFTP only (label; not a live SFTP daemon) |
 | Storage | Per-user sandbox directory under data root |
 | Lab files | `PutFile` / `GetFile` / `ListDirectory` (JSON `X-Amz-Target` on `:4566`) and `PUT|GET /transfer/{serverId}/home/{user}/{path...}` on `:4566` |
@@ -26,6 +27,10 @@ Shared Compose and env setup: [index.md](index.md#shared-verification).
 SID=$(aws transfer create-server --protocols SFTP --endpoint-url "$EP" --query ServerId --output text)
 aws transfer describe-server --server-id "$SID" --endpoint-url "$EP"
 aws transfer create-user --server-id "$SID" --user-name alice --endpoint-url "$EP"
+aws transfer describe-user --server-id "$SID" --user-name alice --endpoint-url "$EP"
+aws transfer list-users --server-id "$SID" --endpoint-url "$EP"
+KEY=$(aws transfer import-ssh-public-key --server-id "$SID" --user-name alice --ssh-public-key-body "ssh-rsa AAAA..." --endpoint-url "$EP" --query SshPublicKeyId --output text)
+aws transfer delete-ssh-public-key --server-id "$SID" --user-name alice --ssh-public-key-id "$KEY" --endpoint-url "$EP"
 aws transfer list-servers --endpoint-url "$EP"
 ```
 
@@ -43,5 +48,5 @@ No live SFTP port is published. Unit tests assert ONLINE create, JSON PutFile/Ge
 ## Not yet / deferred
 
 - Real SFTP listener (even on loopback); lab files stay HTTP on `:4566`
-- AS2, FTPS, IdP integration
+- `UpdateUser`, server `StartServer`/`StopServer`/`UpdateServer`, tagging
 - WAN expose

@@ -23,7 +23,7 @@ const (
 	// Containers on this network are not published to the operator host.
 	DataPlaneNetworkName = "noctaxris-data"
 
-	// LabelDataKind marks nested data containers (values: rds|elasticache|memorydb|docdb|mq|opensearch|neptune|msk|mqtt).
+	// LabelDataKind marks nested data containers (values: rds|elasticache|memorydb|docdb|mq|opensearch|neptune|msk|mqtt|duckdb).
 	LabelDataKind = "noctaxris.data"
 
 	// LabKafkaContainerName is the shared DinD Redpanda singleton when shared Kafka is on.
@@ -47,6 +47,7 @@ const (
 	defaultActiveMQImage   = "apache/activemq-classic:5.18.3"
 	defaultOpenSearchImage = "opensearchproject/opensearch:2.11.1"
 	defaultGremlinImage    = "tinkerpop/gremlin-server:3.7.3"
+	defaultNeo4jImage      = "neo4j:5-community"
 	defaultRedpandaImage   = "redpandadata/redpanda:v24.2.4"
 	defaultMosquittoImage  = "eclipse-mosquitto:2.0.20"
 
@@ -57,6 +58,7 @@ const (
 	defaultAMQPPort       = 5672
 	defaultOpenSearchPort = 9200
 	defaultGremlinPort    = 8182
+	defaultNeo4jBoltPort  = 7687
 	defaultKafkaPort      = 9092
 	defaultMQTTPort       = 1883
 )
@@ -74,6 +76,7 @@ const (
 	DataKindNeptune     DataKind = "neptune"
 	DataKindMSK         DataKind = "msk"
 	DataKindMQTT        DataKind = "mqtt"
+	DataKindDuckDB      DataKind = "duckdb"
 )
 
 // DataPlaneOpts configures a nested data-engine container inside DinD.
@@ -99,6 +102,8 @@ type DataPlaneOpts struct {
 	ContainerPort int
 	// Binds are optional host bind mounts (host:container:mode).
 	Binds []string
+	// ExtraHosts are optional container ExtraHosts entries (e.g. host.docker.internal:host-gateway).
+	ExtraHosts []string
 }
 
 // DataPlaneInstance describes a started (or inspected) nested data container.
@@ -115,9 +120,9 @@ type DataPlaneInstance struct {
 // ValidateDataPlaneOpts checks required fields without talking to Docker.
 func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 	switch opts.Kind {
-	case DataKindRDS, DataKindElastiCache, DataKindMemoryDB, DataKindDocDB, DataKindMQ, DataKindOpenSearch, DataKindNeptune, DataKindMSK, DataKindMQTT:
+	case DataKindRDS, DataKindElastiCache, DataKindMemoryDB, DataKindDocDB, DataKindMQ, DataKindOpenSearch, DataKindNeptune, DataKindMSK, DataKindMQTT, DataKindDuckDB:
 	default:
-		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, memorydb, docdb, mq, opensearch, neptune, msk, or mqtt")
+		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, memorydb, docdb, mq, opensearch, neptune, msk, mqtt, or duckdb")
 	}
 	if strings.TrimSpace(opts.Image) == "" {
 		return fmt.Errorf("compute: data-plane Image is required")
@@ -150,6 +155,8 @@ func DefaultDataPlaneImage(kind DataKind) string {
 		return defaultRedpandaImage
 	case DataKindMQTT:
 		return defaultMosquittoImage
+	case DataKindDuckDB:
+		return DefaultDuckImage
 	default:
 		return ""
 	}
@@ -189,6 +196,40 @@ func DefaultDataPlaneImageForMQ(engineType string) string {
 	}
 }
 
+// DefaultDataPlaneImageForNeptune returns the pinned nested image for a Neptune graph backend.
+// neo4j → neo4j:5-community; anything else → tinkerpop/gremlin-server.
+func DefaultDataPlaneImageForNeptune(graphEngine string) string {
+	switch strings.ToLower(strings.TrimSpace(graphEngine)) {
+	case "neo4j", "opencypher", "cypher", "bolt":
+		return defaultNeo4jImage
+	default:
+		return defaultGremlinImage
+	}
+}
+
+// DefaultDataPlanePortForNeptune returns the nested listen port for a Neptune graph backend.
+// neo4j → Bolt 7687; gremlin (default) → 8182.
+func DefaultDataPlanePortForNeptune(graphEngine string) int {
+	switch strings.ToLower(strings.TrimSpace(graphEngine)) {
+	case "neo4j", "opencypher", "cypher", "bolt":
+		return defaultNeo4jBoltPort
+	default:
+		return defaultGremlinPort
+	}
+}
+
+// NeptuneNestedBootstrapEnv returns env for nested Neptune backends.
+// Neo4j disables auth (NEO4J_AUTH=none) so nested peers can use Bolt without brokered credentials,
+// matching Neptune's edge IAM auth model. Never log returned values.
+func NeptuneNestedBootstrapEnv(graphEngine string) map[string]string {
+	switch strings.ToLower(strings.TrimSpace(graphEngine)) {
+	case "neo4j", "opencypher", "cypher", "bolt":
+		return map[string]string{"NEO4J_AUTH": "none"}
+	default:
+		return nil
+	}
+}
+
 // DefaultDataPlanePort returns the nested listen port for a kind.
 func DefaultDataPlanePort(kind DataKind) int {
 	switch kind {
@@ -208,6 +249,8 @@ func DefaultDataPlanePort(kind DataKind) int {
 		return defaultKafkaPort
 	case DataKindMQTT:
 		return defaultMQTTPort
+	case DataKindDuckDB:
+		return DefaultDuckPort
 	default:
 		return 0
 	}
@@ -353,6 +396,9 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 	hostConfig := dataPlaneHostConfig(port, opts.Kind)
 	if len(opts.Binds) > 0 {
 		hostConfig.Binds = append([]string(nil), opts.Binds...)
+	}
+	if len(opts.ExtraHosts) > 0 {
+		hostConfig.ExtraHosts = append([]string(nil), opts.ExtraHosts...)
 	}
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{

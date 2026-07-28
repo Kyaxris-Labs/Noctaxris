@@ -41,8 +41,10 @@ func TestAllowImagePullLabAndPinned(t *testing.T) {
 		"apache/activemq-classic:5.18.3",
 		"opensearchproject/opensearch:2.11.1",
 		"tinkerpop/gremlin-server:3.7.3",
+		"neo4j:5-community",
 		"redpandadata/redpanda:v24.2.4",
 		"eclipse-mosquitto:2.0.20",
+		"floci/floci-duck:latest",
 	}
 	for _, ref := range ok {
 		if err := compute.AllowImagePull(ref, listen); err != nil {

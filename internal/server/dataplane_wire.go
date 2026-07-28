@@ -24,12 +24,13 @@ func tryStartNestedDataEngine(s *Server, accountID, kind, name string, env map[s
 	if len(imageOverride) > 0 {
 		image = imageOverride[0]
 	}
-	return tryStartNestedDataEngineWithOpts(s, accountID, kind, name, env, image, nil, "")
+	return tryStartNestedDataEngineWithOpts(s, accountID, kind, name, env, image, nil, "", 0)
 }
 
-// tryStartNestedDataEngineWithOpts is like tryStartNestedDataEngine with optional Cmd and container name.
+// tryStartNestedDataEngineWithOpts is like tryStartNestedDataEngine with optional Cmd, container name, and port.
+// containerPort zero selects the default for Kind.
 func tryStartNestedDataEngineWithOpts(
-	s *Server, accountID, kind, name string, env map[string]string, image string, cmd []string, containerName string,
+	s *Server, accountID, kind, name string, env map[string]string, image string, cmd []string, containerName string, containerPort int,
 ) error {
 	if s == nil || strings.TrimSpace(accountID) == "" {
 		return nil
@@ -59,11 +60,12 @@ func tryStartNestedDataEngineWithOpts(
 		cname = "noctaxris-" + string(dk) + "-" + strings.ToLower(name)
 	}
 	inst, err := cli.StartDataPlane(ctx, compute.DataPlaneOpts{
-		Kind:  dk,
-		Image: image,
-		Name:  cname,
-		Env:   env,
-		Cmd:   cmd,
+		Kind:          dk,
+		Image:         image,
+		Name:          cname,
+		Env:           env,
+		Cmd:           cmd,
+		ContainerPort: containerPort,
 	})
 	if err != nil {
 		_ = markNestedDataFailed(s, accountID, dk, name, err.Error())
@@ -96,6 +98,17 @@ func tryStartNestedMQ(s *Server, accountID, brokerID, engineType string) error {
 	)
 }
 
+// tryStartNestedNeptune starts nested Gremlin Server or Neo4j for a Neptune cluster.
+func tryStartNestedNeptune(s *Server, accountID, clusterID, graphEngine string) error {
+	return tryStartNestedDataEngineWithOpts(
+		s, accountID, "neptune", clusterID,
+		compute.NeptuneNestedBootstrapEnv(graphEngine),
+		compute.DefaultDataPlaneImageForNeptune(graphEngine),
+		nil, "",
+		compute.DefaultDataPlanePortForNeptune(graphEngine),
+	)
+}
+
 // promoteNestedDataAfterWait promotes nested data to ready only when wait succeeded.
 // Wait errors mark failed (do not claim available/RUNNING/Active).
 func promoteNestedDataAfterWait(
@@ -114,7 +127,8 @@ func promoteNestedDataAfterWait(
 	case compute.DataKindDocDB:
 		return s.store.SetDocDBContainerID(accountID, name, containerID, "available", host)
 	case compute.DataKindNeptune:
-		return s.store.SetNeptuneContainerID(accountID, name, containerID, "available", host)
+		// Keep CreateDBCluster DNS-style Address (*.neptune.noctaxris.internal); host is DinD-only.
+		return s.store.SetNeptuneContainerID(accountID, name, containerID, "available", "")
 	case compute.DataKindMQ:
 		ep := fmt.Sprintf("amqp://%s:%d", host, store.MQNestedPort)
 		return s.store.SetMQContainerID(accountID, name, containerID, store.MQBrokerStateRunning, ep)

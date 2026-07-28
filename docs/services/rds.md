@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Create, describe, and delete DB instances for engines `postgres`, `mysql`, and `mariadb`. Nested engines run inside DinD via the shared data-plane helper when `NOCTAXRIS_DOCKER_HOST` is set. The endpoint string is nested-network only. Compose does not publish DB ports on the host. Prefer RDS Data API on `:4566` for Postgres SQL; MySQL/MariaDB use the nested wire protocol only (no Data API).
+Create, describe, and delete DB instances for engines `postgres`, `mysql`, and `mariadb`. Nested engines run inside DinD via the shared data-plane helper when `NOCTAXRIS_DOCKER_HOST` is set. The endpoint string is nested-network only. Compose does not publish DB ports on the host. Use RDS Data API on `:4566` for SQL against any supported engine when the nested instance is `available` (see [rds-data.md](rds-data.md)).
 
 ## Implemented
 

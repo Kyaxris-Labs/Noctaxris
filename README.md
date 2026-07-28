@@ -92,7 +92,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 | Devices | IoT Core / IoT Data (HTTP shadows) |
 | Control plane labs | Lightsail, Auto Scaling, Elastic Beanstalk, AWS Backup |
 
-Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
+Open the service matrix for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
 
 <details>
 <summary><b>Service matrix</b> (detailed actions / not implemented)</summary>
@@ -156,9 +156,9 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
       <td>Out of lab scope: high-throughput FIFO quotas, StartMessageMoveTask parity, tags beyond basics.</td>
     </tr>
     <tr>
-      <td>SSM Parameter Store</td>
-      <td>String, StringList, and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz.</td>
-      <td>Out of lab scope: parameter policies, labels, tags, documents/sessions/automation, full pagination parity, cross-account parameter access.</td>
+      <td>SSM / Parameter Store</td>
+      <td>String, StringList, and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz. Run Command lite: SendCommand/GetCommandInvocation/ListCommandInvocations for AWS-RunShellScript on nested DinD EC2 instances (Parameters.commands).</td>
+      <td>Out of lab scope: parameter policies, labels, full document catalog/sessions/automation, agent message queue, CancelCommand/ListCommands, Output S3, cross-account parameter access.</td>
     </tr>
     <tr>
       <td>Secrets Manager</td>
@@ -193,12 +193,12 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td>RDS</td>
       <td>CreateDBInstance / DescribeDBInstances / DeleteDBInstance for engines <code>postgres</code>, <code>mysql</code>, and <code>mariadb</code>. Nested Postgres (<code>postgres:16-alpine</code>), MySQL (<code>mysql:8.0</code>), or MariaDB (<code>mariadb:11</code>) via DinD data-plane helper when engine is up. Nested-network endpoint only. Master credentials in Secrets Manager.</td>
-      <td>Out of lab scope: Multi-AZ, read replicas, Aurora full cluster matrix, IAM DB auth tokens, Oracle/SQL Server. Will not ship: host-published DB ports (Postgres Data API on <code>:4566</code>; MySQL/MariaDB nested wire only).</td>
+      <td>Out of lab scope: Multi-AZ, read replicas, Aurora full cluster matrix, IAM DB auth tokens, Oracle/SQL Server. Will not ship: host-published DB ports (use RDS Data API on <code>:4566</code> or nested-network wire protocol).</td>
     </tr>
     <tr>
       <td>RDS Data API</td>
-      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code> for engine <code>postgres</code> only. Requires resourceArn and secretArn. Prefers <code>pgx</code> against the nested data-plane DSN (typed OID fields + named parameters); falls back to nested <code>psql</code> when the wire dial fails. Real Begin/Commit/Rollback via held <code>pgx</code> sessions (txn-scoped Execute/Batch); otherwise DatabaseUnavailableException (no canned SELECT). <code>formatRecordsAs=JSON</code>; Batch <code>generatedFields</code> from <code>RETURNING</code> via <code>pgx</code>. MySQL/MariaDB resourceArn returns BadRequestException.</td>
-      <td>Out of lab scope: <code>ExecuteSql</code> legacy, AWS 3-minute idle (lab 5m), cross-process transaction resume, MySQL/MariaDB Data API. Nested <code>pgx</code> dial still needs API reachability to the DinD data network.</td>
+      <td>ExecuteStatement and BatchExecuteStatement on <code>:4566</code> for engines <code>postgres</code>, <code>mysql</code>, and <code>mariadb</code>. Requires resourceArn and secretArn. Postgres prefers <code>pgx</code> (typed OID fields + named parameters) with nested <code>psql</code> fallback. MySQL/MariaDB prefer <code>go-sql-driver/mysql</code> with nested <code>mysql</code> CLI fallback. Real Begin/Commit/Rollback via held wire sessions; otherwise DatabaseUnavailableException (no canned SELECT). <code>formatRecordsAs=JSON</code>; Postgres Batch <code>generatedFields</code> from <code>RETURNING</code> via <code>pgx</code>.</td>
+      <td>Out of lab scope: <code>ExecuteSql</code> legacy, AWS 3-minute idle (lab 5m), cross-process transaction resume, full MySQL RETURNING/generatedFields parity. Nested wire dial still needs API reachability to the DinD data network.</td>
     </tr>
     <tr>
       <td>ElastiCache</td>
@@ -217,8 +217,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Neptune</td>
-      <td>CreateDBCluster / DescribeDBClusters / DeleteDBCluster (<code>Engine=neptune</code>, SigV4 <code>neptune</code>). Status creating until nested Gremlin Server starts; available only with engine. Nested-network endpoint <code>{id}.neptune.noctaxris.internal:8182</code> only.</td>
-      <td>openCypher/Neo4j backend, CreateDBInstance matrix, IAM DB auth, HTTP Gremlin on <code>:4566</code>, host-published Gremlin ports.</td>
+      <td>CreateDBCluster / DescribeDBClusters / DeleteDBCluster (<code>Engine=neptune</code>, SigV4 <code>neptune</code>). Status creating until nested engine starts; available only with engine. Default nested Gremlin <code>{id}.neptune.noctaxris.internal:8182</code>; opt-in Neo4j Bolt <code>:7687</code> via <code>NOCTAXRIS_NEPTUNE_ENGINE</code> / <code>GraphEngine</code> / tag <code>noctaxris:neptune-engine</code>. Nested-network only.</td>
+      <td>CreateDBInstance matrix, IAM DB auth, HTTP Gremlin on <code>:4566</code>, host-published Gremlin/Bolt ports.</td>
     </tr>
     <tr>
       <td rowspan="9" align="center" valign="middle">Audit and tags</td>
@@ -289,13 +289,13 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Transfer Family</td>
-      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DeleteUser. Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (path traversal fail-closed) via HTTP on <code>:4566</code> (same API port; SigV4 service <code>transfer</code>). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
+      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DescribeUser/ListUsers/DeleteUser, ImportSshPublicKey/DeleteSshPublicKey (SQLite metadata). Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (path traversal fail-closed) via HTTP on <code>:4566</code> (same API port; SigV4 service <code>transfer</code>). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
       <td>AS2, FTPS depth, IdP integration, WAN expose, live SSH/SFTP listener.</td>
     </tr>
     <tr>
       <td>SES</td>
-      <td>VerifyEmailIdentity (lab auto-verify), SendEmail/SendRawEmail catcher, ListIdentities, GetSendStatistics stub. No outbound SMTP.</td>
-      <td>Real relay, receipt rules, configuration sets, SES v2 depth.</td>
+      <td>VerifyEmailIdentity (lab auto-verify), SendEmail/SendRawEmail catcher, ListIdentities, GetSendStatistics stub. SES v2 REST on <code>/v2/email/*</code>: Create/List/Get/DeleteEmailIdentity, <code>POST /v2/email/outbound-emails</code> (Simple/Raw), GetAccount. Shared <code>ses_identities</code>/<code>ses_messages</code> store with v1. No outbound SMTP.</td>
+      <td>Real relay, receipt rules, configuration sets, templates, suppression, full v2 depth.</td>
     </tr>
     <tr>
       <td>AppConfig</td>
@@ -355,8 +355,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>ELB v2</td>
-      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type <code>application</code> or <code>network</code> (other values rejected). Target types lambda, ip, or instance (lab-opaque <code>i-*</code>; no EC2). ALB: HTTP/HTTPS listeners; path-pattern and host-header rules; lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). NLB: TCP/TLS listeners; control-plane + DescribeTargetHealth only (no L4 dataplane). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission for Lambda. DescribeTargetHealth healthy when a listener or rule forwards (Lambda also needs permission Allows).</td>
-      <td>ALB Cognito auth action, HTTP-header / query-string conditions, NLB L4 proxy / UDP, IP/instance dataplane, Gateway LB.</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type <code>application</code> or <code>network</code> (other values rejected). Target types lambda, ip, or instance (lab-opaque <code>i-*</code>; instance forward when EC2 private IP exists). ALB: HTTP/HTTPS listeners; path-pattern and host-header rules; lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). NLB: TCP/TLS listeners; lab HTTP shim <code>/nlb/{account}/{name}/{port}/...</code> to registered ip/instance targets (not true L4). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission for Lambda. DescribeTargetHealth healthy when a listener or rule forwards (Lambda also needs permission Allows).</td>
+      <td>ALB Cognito auth action, HTTP-header / query-string conditions, NLB L4 TCP/TLS / UDP, multi-target selection, Gateway LB.</td>
     </tr>
     <tr>
       <td>Control Tower</td>
@@ -381,8 +381,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>EC2 (lab nested)</td>
-      <td>RunInstances / DescribeInstances / DescribeImages / StopInstances / StartInstances / TerminateInstances (Query). Nested keep-alive containers on Internal <code>noctaxris-ec2</code> via DinD TLS (no host <code>docker.sock</code>). Lab AMI map (<code>ami-alpine</code>, <code>ami-amazonlinux2023</code>, <code>ami-ubuntu2204</code>); unknown AMI → alpine allowlist pin. Without engine, instances stay <code>pending</code>. VPC Flow CreateFlowLogs / InjectFlowLogs remain under the same <code>ec2</code> service (see VPC Flow Logs row).</td>
-      <td>Security groups, ENIs, VPC/subnet plane, SSH/UserData/IMDS, RebootInstances, host port publish.</td>
+      <td>RunInstances / DescribeInstances / DescribeImages / StopInstances / StartInstances / TerminateInstances (Query). Nested keep-alive containers on Internal <code>noctaxris-ec2</code> via DinD TLS (no host <code>docker.sock</code>). UserData decoded and executed once on create (failures logged; RunInstances still succeeds). IMDS lite sidecar on the same network with ExtraHosts for <code>169.254.169.254</code> and <code>AWS_EC2_METADATA_SERVICE_ENDPOINT</code> on port <code>9255</code> (no host publish). Lab AMI map (<code>ami-alpine</code>, <code>ami-amazonlinux2023</code>, <code>ami-ubuntu2204</code>); unknown AMI → alpine allowlist pin. Without engine, instances stay <code>pending</code>. VPC/subnet Create/Delete/Describe; security group CRUD plus Authorize/Revoke Ingress/Egress (persisted metadata only; not enforced on DinD); DescribeNetworkInterfaces (synthetic <code>eni-*</code> for instance private IPs) and CreateNetworkInterface stub. VPC Flow CreateFlowLogs / InjectFlowLogs remain under the same <code>ec2</code> service (see VPC Flow Logs row).</td>
+      <td>SG/ENI enforcement on nested Docker, SSH, RebootInstances, host port publish / socat.</td>
     </tr>
     <tr>
       <td>EKS</td>
@@ -433,8 +433,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / <code>!=</code> / <code>&lt;&gt;</code> / <code>IN (...)</code> / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
-      <td>Full SQL (outer joins, NOT IN, multi-aggregate GROUP BY, range inequalities, subqueries), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / <code>!=</code> / <code>&lt;&gt;</code> / <code>&lt;</code>/<code>&gt;</code>/<code>&lt;=</code>/<code>&gt;=</code> / <code>BETWEEN</code> / <code>IN (...)</code> / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. Optional nested DuckDB on <code>noctaxris-data</code> (<code>floci/floci-duck</code>-compatible <code>/query</code>, or <code>NOCTAXRIS_DUCKDB_URL</code>) with Glue view injection for Parquet/CSV/JSON; <code>NOCTAXRIS_ATHENA_ENGINE=duckdb\|auto\|inprocess</code>. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
+      <td>Full SQL without DuckDB (outer joins, NOT IN, multi-aggregate GROUP BY, subqueries), CTAS, federated catalogs, nested Trino/Presto/Spark, in-process Parquet decode.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>
@@ -443,13 +443,13 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>EMR</td>
-      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows <strong>control-plane stub</strong>. No host Spark/Hadoop.</td>
-      <td>Full step matrix, nested Spark engines, EMR Serverless and Studio.</td>
+      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows <strong>control-plane stub</strong>. AddJobFlowSteps / DescribeStep / ListSteps (SQLite step rows, immediate <code>COMPLETED</code>). No host Spark/Hadoop.</td>
+      <td>CancelSteps, instance groups/fleets, security configs, nested Spark engines, EMR Serverless and Studio.</td>
     </tr>
     <tr>
       <td>Bedrock Runtime</td>
-      <td>InvokeModel over allowlisted modelIds with canned JSON. Unknown modelId fails closed. No real foundation models.</td>
-      <td>Converse, streaming, Agents, Guardrails, real model runtimes.</td>
+      <td>InvokeModel and Converse over allowlisted modelIds with canned JSON. Unknown modelId fails closed. No real foundation models.</td>
+      <td>Streaming, Agents, Guardrails, real model runtimes.</td>
     </tr>
     <tr>
       <td>Textract</td>
@@ -474,8 +474,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Cost and Usage Reports</td>
-      <td>Put/Modify/Describe/DeleteReportDefinition. Optional tiny CSV/JSON PutObject to S3Bucket/S3Prefix (no DuckDB). Identity authz.</td>
-      <td>DuckDB/Parquet sidecar, FOCUS projectors from live usage enumerators, scheduled daily emit.</td>
+      <td>Put/Modify/Describe/DeleteReportDefinition. Optional CSV PutObject to S3Bucket/S3Prefix; Format=Parquet stages NDJSON then COPY via nested DuckDB (<code>noctaxris-lab-duck</code> / <code>NOCTAXRIS_DUCKDB_URL</code>), fail-closed without engine. Identity authz.</td>
+      <td>FOCUS projectors from live usage enumerators, scheduled daily emit.</td>
     </tr>
     <tr>
       <td>Cost Explorer</td>

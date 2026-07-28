@@ -79,18 +79,20 @@ type AthenaStartInput struct {
 }
 
 var (
-	athenaSelectRE     = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+)\s+FROM\s+(.+)$`)
-	athenaWhereRE      = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
-	athenaWhereNeqRE   = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(?:!=|<>)\s*'([^']*)'\s*(.*)$`)
-	athenaWhereLikeRE  = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+LIKE\s+'([^']*)'\s*(.*)$`)
-	athenaWhereInRE    = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+IN\s*\(([^)]*)\)\s*(.*)$`)
-	athenaWhereJSONRE  = regexp.MustCompile(`(?is)^WHERE\s+(?:json_extract|JSON_EXTRACT)\s*\(\s*((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*'([^']*)'\s*\)\s*(=|LIKE)\s+'([^']*)'\s*(.*)$`)
-	athenaLimitRE      = regexp.MustCompile(`(?is)^LIMIT\s+(\d+)\s*(.*)$`)
-	athenaGroupRE      = regexp.MustCompile(`(?is)^GROUP\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(.*)$`)
-	athenaOrderRE      = regexp.MustCompile(`(?is)^ORDER\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(ASC|DESC))?\s*(.*)$`)
-	athenaJoinRE       = regexp.MustCompile(`(?is)^([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:INNER\s+)?JOIN\s+([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+ON\s+([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*$`)
-	athenaFromRE       = regexp.MustCompile(`(?is)^([^\s]+)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?\s*$`)
-	athenaInLiteralRE  = regexp.MustCompile(`^'([^']*)'\s*(?:,\s*|$)`)
+	athenaSelectRE       = regexp.MustCompile(`(?is)^\s*SELECT\s+(.+)\s+FROM\s+(.+)$`)
+	athenaWhereRE        = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*'([^']*)'\s*(.*)$`)
+	athenaWhereNeqRE     = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(?:!=|<>)\s*'([^']*)'\s*(.*)$`)
+	athenaWhereLikeRE    = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+LIKE\s+'([^']*)'\s*(.*)$`)
+	athenaWhereInRE      = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+IN\s*\(([^)]*)\)\s*(.*)$`)
+	athenaWhereBetweenRE = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s+BETWEEN\s+'([^']*)'\s+AND\s+'([^']*)'\s*(.*)$`)
+	athenaWhereCmpRE     = regexp.MustCompile(`(?is)^WHERE\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(<=|>=|<|>)\s*'([^']*)'\s*(.*)$`)
+	athenaWhereJSONRE    = regexp.MustCompile(`(?is)^WHERE\s+(?:json_extract|JSON_EXTRACT)\s*\(\s*((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*'([^']*)'\s*\)\s*(=|LIKE)\s+'([^']*)'\s*(.*)$`)
+	athenaLimitRE        = regexp.MustCompile(`(?is)^LIMIT\s+(\d+)\s*(.*)$`)
+	athenaGroupRE        = regexp.MustCompile(`(?is)^GROUP\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)\s*(.*)$`)
+	athenaOrderRE        = regexp.MustCompile(`(?is)^ORDER\s+BY\s+((?:[a-zA-Z_][a-zA-Z0-9_]*\.)?[a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(ASC|DESC))?\s*(.*)$`)
+	athenaJoinRE         = regexp.MustCompile(`(?is)^([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:INNER\s+)?JOIN\s+([^\s]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+ON\s+([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*$`)
+	athenaFromRE         = regexp.MustCompile(`(?is)^([^\s]+)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?\s*$`)
+	athenaInLiteralRE    = regexp.MustCompile(`^'([^']*)'\s*(?:,\s*|$)`)
 )
 
 // EnsureAthenaSchema creates Athena tables if missing.
@@ -246,8 +248,10 @@ type athenaParsedSelect struct {
 	Limit         int // 0 = no limit
 	WhereColumn   string
 	WhereValue    string
+	WhereValue2   string // BETWEEN upper bound
 	WhereLike     bool
 	WhereNeq      bool
+	WhereCmp      string // "", "<", ">", "<=", ">=", "between"
 	WhereInValues []string // non-nil means IN (...); empty slice is valid (matches nothing)
 	WhereJSONPath string
 	CountStar     bool
@@ -265,7 +269,7 @@ type athenaParsedSelect struct {
 	JoinRightAlias string
 }
 
-const athenaSQLHelp = "unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [alias] [JOIN|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'|col != 'literal'|col <> 'literal'|col IN ('a','b')|col LIKE 'pat'|json_extract(col,'$.path') = 'literal'] [GROUP BY col] [ORDER BY col [ASC|DESC]] [LIMIT n])"
+const athenaSQLHelp = "unsupported SQL (lab supports SELECT cols|COUNT(*) FROM db.table [alias] [JOIN|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal'|col != 'literal'|col <> 'literal'|col IN ('a','b')|col LIKE 'pat'|col BETWEEN 'a' AND 'b'|col <|>|<=|>= 'literal'|json_extract(col,'$.path') = 'literal'] [GROUP BY col] [ORDER BY col [ASC|DESC]] [LIMIT n])"
 
 func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 	q = strings.TrimSpace(q)
@@ -359,8 +363,10 @@ func parseAthenaSelect(q string) (athenaParsedSelect, error) {
 	}
 	out.WhereColumn = where.Column
 	out.WhereValue = where.Value
+	out.WhereValue2 = where.Value2
 	out.WhereLike = where.Like
 	out.WhereNeq = where.Neq
+	out.WhereCmp = where.Cmp
 	out.WhereInValues = where.InValues
 	out.WhereJSONPath = where.JSONPath
 	out.Limit = limit
@@ -413,8 +419,10 @@ func splitAthenaFromAndSuffix(s string) (fromPart, suffix string) {
 type athenaWhereParsed struct {
 	Column   string
 	Value    string
+	Value2   string
 	Like     bool
 	Neq      bool
+	Cmp      string // "", "<", ">", "<=", ">=", "between"
 	JSONPath string
 	InValues []string // non-nil means IN (...); may be empty
 }
@@ -450,6 +458,12 @@ func parseAthenaSelectSuffix(s string) (where athenaWhereParsed, limit int, orde
 				where.Like = strings.EqualFold(strings.TrimSpace(m[3]), "LIKE")
 				where.Value = m[4]
 				s = strings.TrimSpace(m[5])
+			} else if m := athenaWhereBetweenRE.FindStringSubmatch(s); m != nil {
+				where.Column = strings.TrimSpace(m[1])
+				where.Cmp = "between"
+				where.Value = m[2]
+				where.Value2 = m[3]
+				s = strings.TrimSpace(m[4])
 			} else if m := athenaWhereLikeRE.FindStringSubmatch(s); m != nil {
 				where.Column = strings.TrimSpace(m[1])
 				where.Like = true
@@ -468,12 +482,17 @@ func parseAthenaSelectSuffix(s string) (where athenaWhereParsed, limit int, orde
 				where.Neq = true
 				where.Value = m[2]
 				s = strings.TrimSpace(m[3])
+			} else if m := athenaWhereCmpRE.FindStringSubmatch(s); m != nil {
+				where.Column = strings.TrimSpace(m[1])
+				where.Cmp = strings.TrimSpace(m[2])
+				where.Value = m[3]
+				s = strings.TrimSpace(m[4])
 			} else if m := athenaWhereRE.FindStringSubmatch(s); m != nil {
 				where.Column = strings.TrimSpace(m[1])
 				where.Value = m[2]
 				s = strings.TrimSpace(m[3])
 			} else {
-				return athenaWhereParsed{}, 0, "", false, "", fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal', !=, <>, IN (...), LIKE, json_extract)", ErrAthenaBadRequest)
+				return athenaWhereParsed{}, 0, "", false, "", fmt.Errorf("%w: invalid WHERE clause (lab supports col = 'literal', !=, <>, <, >, <=, >=, BETWEEN, IN (...), LIKE, json_extract)", ErrAthenaBadRequest)
 			}
 		case strings.HasPrefix(upper, "GROUP "):
 			m := athenaGroupRE.FindStringSubmatch(s)
@@ -543,6 +562,9 @@ func (s *Store) readAthenaTableRows(accountID string, table GlueTable, parsed at
 	}
 
 	jsonMode := isGlueJSON(table)
+	if isGlueParquet(table) {
+		return nil, nil, fmt.Errorf("%w: Parquet Glue tables require the DuckDB Athena engine (set NOCTAXRIS_ATHENA_ENGINE=duckdb with nested DuckDB or NOCTAXRIS_DUCKDB_URL)", ErrAthenaBadRequest)
+	}
 	var dataRows [][]string
 	earlyLimit := parsed.Limit > 0 && parsed.WhereColumn == "" && !parsed.CountStar && parsed.OrderColumn == "" && parsed.GroupColumn == ""
 	for _, obj := range listed.Contents {
@@ -755,6 +777,9 @@ func (s *Store) loadAthenaRawRows(accountID string, table GlueTable) ([][]string
 		return nil, err
 	}
 	jsonMode := isGlueJSON(table)
+	if isGlueParquet(table) {
+		return nil, fmt.Errorf("%w: Parquet Glue tables require the DuckDB Athena engine (set NOCTAXRIS_ATHENA_ENGINE=duckdb with nested DuckDB or NOCTAXRIS_DUCKDB_URL)", ErrAthenaBadRequest)
+	}
 	var dataRows [][]string
 	for _, obj := range listed.Contents {
 		_, data, err := s.GetObject(accountID, bucket, obj.Key)
@@ -1045,7 +1070,44 @@ func athenaRowMatchesWhere(row []string, idx int, parsed athenaParsedSelect) (bo
 	if parsed.WhereNeq {
 		return cell != parsed.WhereValue, nil
 	}
+	if parsed.WhereCmp != "" {
+		return athenaCmpMatch(cell, parsed.WhereCmp, parsed.WhereValue, parsed.WhereValue2), nil
+	}
 	return cell == parsed.WhereValue, nil
+}
+
+func athenaCmpMatch(cell, op, lo, hi string) bool {
+	switch op {
+	case "between":
+		return athenaCompare(cell, lo) >= 0 && athenaCompare(cell, hi) <= 0
+	case "<":
+		return athenaCompare(cell, lo) < 0
+	case ">":
+		return athenaCompare(cell, lo) > 0
+	case "<=":
+		return athenaCompare(cell, lo) <= 0
+	case ">=":
+		return athenaCompare(cell, lo) >= 0
+	default:
+		return false
+	}
+}
+
+// athenaCompare returns -1/0/1. Prefers numeric compare when both sides parse as floats.
+func athenaCompare(a, b string) int {
+	af, aErr := strconv.ParseFloat(strings.TrimSpace(a), 64)
+	bf, bErr := strconv.ParseFloat(strings.TrimSpace(b), 64)
+	if aErr == nil && bErr == nil {
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(a, b)
 }
 
 func athenaJSONExtractString(cell, path string) (string, error) {
@@ -1183,6 +1245,12 @@ func isGlueJSON(table GlueTable) bool {
 		return true
 	}
 	return false
+}
+
+func isGlueParquet(table GlueTable) bool {
+	lib := strings.ToLower(table.SerDeInfo.SerializationLibrary)
+	inFmt := strings.ToLower(table.InputFormat)
+	return strings.Contains(lib, "parquet") || strings.Contains(inFmt, "parquet")
 }
 
 func parseS3Location(loc string) (bucket, prefix string, err error) {

@@ -76,7 +76,7 @@ func (s *Server) handleELBv2LabListener(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if lb.Type == "network" {
-		http.Error(w, "network load balancers have no HTTP lab dataplane (control-plane and target health only)", http.StatusBadRequest)
+		http.Error(w, "network load balancers use the /nlb/ lab dataplane (HTTP shim, not TCP L4)", http.StatusBadRequest)
 		return
 	}
 

@@ -344,7 +344,7 @@ func (s *Server) writeMSKError(
 func tryStartNestedMSK(s *Server, accountID, clusterName string) error {
 	name := strings.ToLower(strings.TrimSpace(clusterName))
 	containerName := "noctaxris-msk-" + name
-	return tryStartNestedDataEngineWithOpts(s, accountID, "msk", name, nil, compute.DefaultDataPlaneImage(compute.DataKindMSK), compute.RedpandaStartCmd(containerName), containerName)
+	return tryStartNestedDataEngineWithOpts(s, accountID, "msk", name, nil, compute.DefaultDataPlaneImage(compute.DataKindMSK), compute.RedpandaStartCmd(containerName), containerName, 0)
 }
 
 // tryStartSharedMSK ensures the shared lab Kafka singleton and binds cluster metadata when healthy.
@@ -355,5 +355,6 @@ func tryStartSharedMSK(s *Server, accountID, clusterName string) error {
 		compute.DefaultDataPlaneImage(compute.DataKindMSK),
 		compute.RedpandaStartCmd(compute.LabKafkaContainerName),
 		compute.LabKafkaContainerName,
+		0,
 	)
 }

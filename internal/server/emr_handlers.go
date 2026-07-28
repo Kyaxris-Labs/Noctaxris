@@ -36,6 +36,12 @@ func (s *Server) handleEMR(
 		s.emrList(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionEMRTerminateJobFlows:
 		s.emrTerminate(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRAddJobFlowSteps:
+		s.emrAddJobFlowSteps(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRDescribeStep:
+		s.emrDescribeStep(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRListSteps:
+		s.emrListSteps(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeEMRError(w, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This EMR action is not implemented.")
@@ -55,6 +61,12 @@ func emrAction(action string) string {
 		return catalog.ActionEMRListClusters
 	case "TerminateJobFlows":
 		return catalog.ActionEMRTerminateJobFlows
+	case "AddJobFlowSteps":
+		return catalog.ActionEMRAddJobFlowSteps
+	case "DescribeStep":
+		return catalog.ActionEMRDescribeStep
+	case "ListSteps":
+		return catalog.ActionEMRListSteps
 	default:
 		return action
 	}
@@ -177,6 +189,162 @@ func (s *Server) emrTerminate(
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{}`))
 	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "TerminateJobFlows", readOnly)
+}
+
+func (s *Server) emrAddJobFlowSteps(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRAddJobFlowSteps, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:AddJobFlowSteps.")
+		return
+	}
+	jobFlowID, _ := params["JobFlowId"].(string)
+	inputs := parseEMRStepInputs(params["Steps"])
+	ids, err := s.store.AddEMRJobFlowSteps(verified.AccountID, jobFlowID, inputs)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to add job flow steps.")
+		return
+	}
+	payload, _ := emrsvc.AddJobFlowStepsJSON(ids)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "AddJobFlowSteps", readOnly)
+}
+
+func (s *Server) emrDescribeStep(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRDescribeStep, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:DescribeStep.")
+		return
+	}
+	clusterID, _ := params["ClusterId"].(string)
+	stepID, _ := params["StepId"].(string)
+	st, err := s.store.DescribeEMRStep(verified.AccountID, clusterID, stepID)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe step.")
+		return
+	}
+	payload, _ := emrsvc.DescribeStepJSON(st)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "DescribeStep", readOnly)
+}
+
+func (s *Server) emrListSteps(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRListSteps, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:ListSteps.")
+		return
+	}
+	clusterID, _ := params["ClusterId"].(string)
+	steps, err := s.store.ListEMRSteps(verified.AccountID, clusterID, emrStringList(params["StepStates"]), emrStringList(params["StepIds"]))
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list steps.")
+		return
+	}
+	payload, _ := emrsvc.ListStepsJSON(steps)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "ListSteps", readOnly)
+}
+
+func parseEMRStepInputs(raw any) []store.EMRStepInput {
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	out := make([]store.EMRStepInput, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		in := store.EMRStepInput{
+			Name:             stringField(m, "Name"),
+			ActionOnFailure:  stringField(m, "ActionOnFailure"),
+			ExecutionRoleArn: stringField(m, "ExecutionRoleArn"),
+		}
+		if jarStep, ok := m["HadoopJarStep"].(map[string]any); ok {
+			in.Jar = stringField(jarStep, "Jar")
+			in.MainClass = stringField(jarStep, "MainClass")
+			in.Args = emrStringList(jarStep["Args"])
+			in.Properties = emrProperties(jarStep["Properties"])
+		}
+		out = append(out, in)
+	}
+	return out
+}
+
+func emrStringList(raw any) []string {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func emrProperties(raw any) map[string]string {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		k := stringField(m, "Key")
+		if k != "" {
+			out[k] = stringField(m, "Value")
+		}
+	}
+	return out
+}
+
+func stringField(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (s *Server) writeEMROK(w http.ResponseWriter, requestID string, payload []byte) {

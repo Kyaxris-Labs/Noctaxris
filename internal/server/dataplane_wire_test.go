@@ -40,6 +40,9 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 	if _, err := st.CreateOpenSearchDomain(account, "us-east-1", "wait-fail-os", "OpenSearch_2.11"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.CreateNeptuneCluster(account, "us-east-1", "wait-fail-neptune", "neptune", "", "", 0); err != nil {
+		t.Fatal(err)
+	}
 
 	waitErr := errors.New("compute: data-plane healthy wait: timeout")
 	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindElastiCache, "wait-fail-cache", "ctr-ec", "host-ec", waitErr); err == nil {
@@ -100,6 +103,20 @@ func TestPromoteNestedDataAfterWaitFailure(t *testing.T) {
 	mdbReady, err := st.DescribeMemoryDBCluster(account, "us-east-1", "wait-fail-mdb")
 	if err != nil || mdbReady.Status != "available" || mdbReady.ContainerID != "ctr-mdb2" {
 		t.Fatalf("memorydb after wait ok: %+v err=%v", mdbReady, err)
+	}
+	if !strings.HasSuffix(mdbReady.EndpointAddress, ".memorydb.noctaxris.internal") {
+		t.Fatalf("memorydb promote must keep DNS endpoint, got %q", mdbReady.EndpointAddress)
+	}
+
+	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindNeptune, "wait-fail-neptune", "ctr-nep", "host-nep", nil); err != nil {
+		t.Fatal(err)
+	}
+	nepReady, err := st.DescribeNeptuneCluster(account, "wait-fail-neptune")
+	if err != nil || nepReady.Status != "available" || nepReady.ContainerID != "ctr-nep" {
+		t.Fatalf("neptune after wait ok: %+v err=%v", nepReady, err)
+	}
+	if nepReady.EndpointAddress != "wait-fail-neptune.neptune.noctaxris.internal" {
+		t.Fatalf("neptune promote must keep DNS endpoint, got %q", nepReady.EndpointAddress)
 	}
 
 	if err := promoteNestedDataAfterWait(srv, account, compute.DataKindMQ, mq.BrokerID, "ctr-mq2", "host-mq2", nil); err != nil {

@@ -51,12 +51,15 @@ func TestECSTaskHostConfigSecurity(t *testing.T) {
 
 func TestEC2TaskHostConfigSecurity(t *testing.T) {
 	t.Setenv(EnvInjectECSHostGateway, "")
-	hc := ec2TaskHostConfig(256)
+	hc := ec2TaskHostConfig(256, nil)
 	if !hostConfigSecurityOK(hc) {
 		t.Fatalf("ec2 HostConfig not hardened: Privileged=%v CapAdd=%#v CapDrop=%#v", hc.Privileged, hc.CapAdd, hc.CapDrop)
 	}
 	if string(hc.NetworkMode) != EC2NetworkName {
 		t.Fatalf("NetworkMode=%q", hc.NetworkMode)
+	}
+	if hc.PortBindings != nil {
+		t.Fatalf("PortBindings=%#v want nil", hc.PortBindings)
 	}
 }
 

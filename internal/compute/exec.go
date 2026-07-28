@@ -16,6 +16,8 @@ type ExecOpts struct {
 	ContainerID string
 	Cmd         []string
 	Env         []string
+	// Stdin is optional process stdin (for nested HTTP shims that POST JSON).
+	Stdin string
 }
 
 // ExecResult is stdout/stderr and the process exit code from ContainerExec.
@@ -38,9 +40,11 @@ func (c *Client) Exec(ctx context.Context, opts ExecOpts) (ExecResult, error) {
 	if len(opts.Cmd) == 0 {
 		return ExecResult{}, fmt.Errorf("compute: exec Cmd is required")
 	}
+	attachStdin := opts.Stdin != ""
 	create, err := c.cli.ContainerExecCreate(ctx, cid, container.ExecOptions{
 		AttachStdout: true,
 		AttachStderr: true,
+		AttachStdin:  attachStdin,
 		Env:          opts.Env,
 		Cmd:          opts.Cmd,
 	})
@@ -52,6 +56,13 @@ func (c *Client) Exec(ctx context.Context, opts ExecOpts) (ExecResult, error) {
 		return ExecResult{}, fmt.Errorf("compute: exec attach: %w", err)
 	}
 	defer attach.Close()
+
+	if attachStdin {
+		if _, err := io.WriteString(attach.Conn, opts.Stdin); err != nil {
+			return ExecResult{}, fmt.Errorf("compute: exec stdin: %w", err)
+		}
+		_ = attach.CloseWrite()
+	}
 
 	var stdout, stderr bytes.Buffer
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && err != io.EOF {

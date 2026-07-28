@@ -17,6 +17,7 @@ var (
 	ErrTransferServerNotFound = errors.New("ResourceNotFoundException")
 	ErrTransferUserExists     = errors.New("ResourceExistsException")
 	ErrTransferUserNotFound   = errors.New("ResourceNotFoundException")
+	ErrTransferSshKeyNotFound = errors.New("ResourceNotFoundException")
 	ErrTransferBadRequest     = errors.New("InvalidRequestException")
 	ErrTransferPathEscape     = errors.New("InvalidRequestException: path escapes home directory")
 	ErrTransferPathNotFound   = errors.New("ResourceNotFoundException")
@@ -45,6 +46,15 @@ CREATE TABLE IF NOT EXISTS transfer_users (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, server_id, user_name)
 );
+CREATE TABLE IF NOT EXISTS transfer_ssh_public_keys (
+  account_id TEXT NOT NULL,
+  server_id TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  ssh_public_key_id TEXT NOT NULL,
+  ssh_public_key_body TEXT NOT NULL,
+  imported_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, server_id, user_name, ssh_public_key_id)
+);
 `
 
 // TransferServer is a Transfer Family server row.
@@ -65,6 +75,13 @@ type TransferUser struct {
 	HomeDirectory string
 	RoleARN       string
 	CreatedAt     int64
+}
+
+// TransferSshPublicKey is a stored SSH public key for a Transfer user.
+type TransferSshPublicKey struct {
+	SshPublicKeyID   string
+	SshPublicKeyBody string
+	ImportedAt       int64 // Unix milliseconds UTC
 }
 
 // TransferDirEntry is one name in a lab home directory listing.
@@ -96,6 +113,14 @@ func TransferServerARN(region, accountID, serverID string) string {
 		region = DefaultTransferRegion
 	}
 	return fmt.Sprintf("arn:aws:transfer:%s:%s:server/%s", region, accountID, serverID)
+}
+
+// TransferUserARN builds arn:aws:transfer:REGION:ACCOUNT:user/SERVER/USER
+func TransferUserARN(region, accountID, serverID, userName string) string {
+	if region == "" {
+		region = DefaultTransferRegion
+	}
+	return fmt.Sprintf("arn:aws:transfer:%s:%s:user/%s/%s", region, accountID, serverID, userName)
 }
 
 func (s *Store) transferHomeRoot(accountID, serverID, userName string) string {
@@ -179,6 +204,9 @@ func (s *Store) DeleteTransferServer(accountID, serverID string) error {
 		return fmt.Errorf("delete transfer server: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM transfer_ssh_public_keys WHERE account_id = ? AND server_id = ?`, accountID, serverID); err != nil {
+		return fmt.Errorf("delete transfer server: ssh keys: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM transfer_users WHERE account_id = ? AND server_id = ?`, accountID, serverID); err != nil {
 		return fmt.Errorf("delete transfer server: users: %w", err)
 	}
@@ -235,6 +263,12 @@ func (s *Store) CreateTransferUser(accountID, serverID, userName, homeDirectory,
 
 // DeleteTransferUser deletes a user and their sandbox home.
 func (s *Store) DeleteTransferUser(accountID, serverID, userName string) error {
+	if _, err := s.db.Exec(
+		`DELETE FROM transfer_ssh_public_keys WHERE account_id = ? AND server_id = ? AND user_name = ?`,
+		accountID, serverID, userName,
+	); err != nil {
+		return fmt.Errorf("delete transfer user: ssh keys: %w", err)
+	}
 	res, err := s.db.Exec(
 		`DELETE FROM transfer_users WHERE account_id = ? AND server_id = ? AND user_name = ?`,
 		accountID, serverID, userName,
@@ -247,6 +281,135 @@ func (s *Store) DeleteTransferUser(accountID, serverID, userName string) error {
 		return ErrTransferUserNotFound
 	}
 	_ = os.RemoveAll(s.transferHomeRoot(accountID, serverID, userName))
+	return nil
+}
+
+// DescribeTransferUser returns a user row.
+func (s *Store) DescribeTransferUser(accountID, serverID, userName string) (TransferUser, error) {
+	if _, err := s.DescribeTransferServer(accountID, serverID); err != nil {
+		return TransferUser{}, err
+	}
+	var u TransferUser
+	err := s.db.QueryRow(
+		`SELECT server_id, user_name, home_directory, role_arn, created_at
+		 FROM transfer_users WHERE account_id = ? AND server_id = ? AND user_name = ?`,
+		accountID, serverID, userName,
+	).Scan(&u.ServerID, &u.UserName, &u.HomeDirectory, &u.RoleARN, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TransferUser{}, ErrTransferUserNotFound
+	}
+	if err != nil {
+		return TransferUser{}, fmt.Errorf("describe transfer user: %w", err)
+	}
+	return u, nil
+}
+
+// ListTransferUsers lists users on a server ordered by user name.
+func (s *Store) ListTransferUsers(accountID, serverID string) ([]TransferUser, error) {
+	if _, err := s.DescribeTransferServer(accountID, serverID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT server_id, user_name, home_directory, role_arn, created_at
+		 FROM transfer_users WHERE account_id = ? AND server_id = ? ORDER BY user_name`,
+		accountID, serverID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list transfer users: %w", err)
+	}
+	defer rows.Close()
+	out := []TransferUser{}
+	for rows.Next() {
+		var u TransferUser
+		if err := rows.Scan(&u.ServerID, &u.UserName, &u.HomeDirectory, &u.RoleARN, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list transfer users: scan: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ListTransferUserSshPublicKeys returns SSH keys for a user.
+func (s *Store) ListTransferUserSshPublicKeys(accountID, serverID, userName string) ([]TransferSshPublicKey, error) {
+	if _, err := s.DescribeTransferUser(accountID, serverID, userName); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT ssh_public_key_id, ssh_public_key_body, imported_at
+		 FROM transfer_ssh_public_keys
+		 WHERE account_id = ? AND server_id = ? AND user_name = ?
+		 ORDER BY ssh_public_key_id`,
+		accountID, serverID, userName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list transfer ssh keys: %w", err)
+	}
+	defer rows.Close()
+	out := []TransferSshPublicKey{}
+	for rows.Next() {
+		var k TransferSshPublicKey
+		if err := rows.Scan(&k.SshPublicKeyID, &k.SshPublicKeyBody, &k.ImportedAt); err != nil {
+			return nil, fmt.Errorf("list transfer ssh keys: scan: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// CountTransferUserSshPublicKeys returns the number of SSH keys for a user.
+func (s *Store) CountTransferUserSshPublicKeys(accountID, serverID, userName string) (int, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM transfer_ssh_public_keys
+		 WHERE account_id = ? AND server_id = ? AND user_name = ?`,
+		accountID, serverID, userName,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count transfer ssh keys: %w", err)
+	}
+	return n, nil
+}
+
+// ImportTransferSshPublicKey stores an SSH public key for a user.
+func (s *Store) ImportTransferSshPublicKey(accountID, serverID, userName, sshPublicKeyBody string) (TransferSshPublicKey, error) {
+	sshPublicKeyBody = strings.TrimSpace(sshPublicKeyBody)
+	if sshPublicKeyBody == "" {
+		return TransferSshPublicKey{}, fmt.Errorf("%w: SshPublicKeyBody is required", ErrTransferBadRequest)
+	}
+	if _, err := s.DescribeTransferUser(accountID, serverID, userName); err != nil {
+		return TransferSshPublicKey{}, err
+	}
+	id := "key-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:17]
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.db.Exec(
+		`INSERT INTO transfer_ssh_public_keys
+		 (account_id, server_id, user_name, ssh_public_key_id, ssh_public_key_body, imported_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		accountID, serverID, userName, id, sshPublicKeyBody, now,
+	)
+	if err != nil {
+		return TransferSshPublicKey{}, fmt.Errorf("import transfer ssh key: %w", err)
+	}
+	return TransferSshPublicKey{SshPublicKeyID: id, SshPublicKeyBody: sshPublicKeyBody, ImportedAt: now}, nil
+}
+
+// DeleteTransferSshPublicKey removes an SSH public key by id.
+func (s *Store) DeleteTransferSshPublicKey(accountID, serverID, userName, sshPublicKeyID string) error {
+	if _, err := s.DescribeTransferUser(accountID, serverID, userName); err != nil {
+		return err
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM transfer_ssh_public_keys
+		 WHERE account_id = ? AND server_id = ? AND user_name = ? AND ssh_public_key_id = ?`,
+		accountID, serverID, userName, sshPublicKeyID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete transfer ssh key: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrTransferSshKeyNotFound
+	}
 	return nil
 }
 

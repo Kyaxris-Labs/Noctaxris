@@ -658,8 +658,7 @@ func (s *Store) DescribeELBv2TargetHealth(accountID, targetGroupARN string) ([]E
 // elasticloadbalancing.amazonaws.com on the function resource policy
 // (SourceArn may be the target group ARN). DescribeTargetHealth reports
 // healthy when a lab listener forwards to the group and permission still Allows.
-// Instance Ids are lab-opaque i-* labels (no EC2 resolve). IP targets require a
-// parseable address (no L4 dataplane).
+// Instance Ids are lab-opaque i-* labels; /nlb/ dataplane resolves private IP from EC2 when present.
 func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets []ELBv2Target) error {
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{targetGroupARN})
@@ -704,6 +703,9 @@ func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets [
 			parsed := net.ParseIP(ip)
 			if parsed == nil {
 				return fmt.Errorf("%w: ip target Id must be a lab IP address", ErrELBv2BadRequest)
+			}
+			if elbv2LabForwardIPDenied(parsed) {
+				return fmt.Errorf("%w: ip target must not be unspecified or link-local", ErrELBv2BadRequest)
 			}
 		case "instance":
 			if !strings.HasPrefix(id, "i-") || len(id) < 3 {

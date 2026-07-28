@@ -47,6 +47,12 @@ func (s *Server) handleSSM(
 		s.ssmAddTagsToResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMRemoveTagsFromResource:
 		s.ssmRemoveTagsFromResource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMSendCommand:
+		s.ssmSendCommand(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMGetCommandInvocation:
+		s.ssmGetCommandInvocation(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMListCommandInvocations:
+		s.ssmListCommandInvocations(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeSSMError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This SSM action is not implemented.", readOnly, eventID, verified)
@@ -76,6 +82,12 @@ func ssmAction(action string) string {
 		return catalog.ActionSSMAddTagsToResource
 	case "RemoveTagsFromResource":
 		return catalog.ActionSSMRemoveTagsFromResource
+	case "SendCommand":
+		return catalog.ActionSSMSendCommand
+	case "GetCommandInvocation":
+		return catalog.ActionSSMGetCommandInvocation
+	case "ListCommandInvocations":
+		return catalog.ActionSSMListCommandInvocations
 	default:
 		return action
 	}

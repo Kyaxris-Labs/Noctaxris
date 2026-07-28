@@ -60,6 +60,9 @@ type Server struct {
 	// Optional unit-test hook replacing nested DinD invoke.
 	lambdaInvokeHook func(ctx context.Context, accountID, name string, fn store.LambdaFunction, executedVersion, eventJSON string) ([]byte, error)
 
+	// Optional unit-test hook replacing nested DinD docker exec for SSM Run Command.
+	ssmExecHook func(ctx context.Context, containerID string, commands []string, timeoutSeconds int) (compute.ExecResult, error)
+
 	// In-process EventBridge Scheduler ticker (ADR-0007).
 	schedulerTickerOnce   sync.Once
 	schedulerTickerCancel context.CancelFunc
@@ -111,6 +114,7 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 	}
 	st.SetCognitoInsecureCodes(cfg.CognitoInsecureCodes)
 	s.wireCognitoTriggerInvoker()
+	s.wireCURDuckRunner()
 	return s
 }
 
@@ -120,6 +124,14 @@ func (s *Server) SetLambdaInvokeHookForTest(
 	hook func(ctx context.Context, accountID, name string, fn store.LambdaFunction, executedVersion, eventJSON string) ([]byte, error),
 ) {
 	s.lambdaInvokeHook = hook
+}
+
+// SetSSMExecHookForTest replaces nested DinD docker exec for SSM Run Command unit tests.
+// Pass nil to clear. Not for production use.
+func (s *Server) SetSSMExecHookForTest(
+	hook func(ctx context.Context, containerID string, commands []string, timeoutSeconds int) (compute.ExecResult, error),
+) {
+	s.ssmExecHook = hook
 }
 
 func (s *Server) Handler() http.Handler {
@@ -263,6 +275,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isELBv2NLBLabListenerPath(r.URL.Path) {
+		s.handleELBv2NLBLabListener(w, r, body, requestID, eventID, readOnly)
+		return
+	}
+
 	action := resolveAction(r, body)
 	var verified *authn.Verified
 	if isUnauthenticatedSTSAction(action) {
@@ -366,6 +383,15 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		isBedrockRuntimePath(r.URL.Path)) {
 		if restAction, modelID := resolveBedrockRuntimeREST(r); restAction != "" {
 			s.handleBedrockRuntime(w, r, body, requestID, eventID, restAction, verified, readOnly, modelID)
+			return
+		}
+	}
+
+	if action == "" && (strings.EqualFold(verified.Service, "ses") ||
+		strings.EqualFold(verified.Service, "email") ||
+		isSESV2RESTPath(r.URL.Path)) {
+		if restAction, identity := resolveSESV2REST(r); restAction != "" {
+			s.handleSESV2(w, r, body, requestID, eventID, restAction, verified, readOnly, identity)
 			return
 		}
 	}
@@ -876,7 +902,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSSMDescribeParameters, "DescribeParameters",
 		catalog.ActionSSMListTagsForResource,
 		catalog.ActionSSMAddTagsToResource, "AddTagsToResource",
-		catalog.ActionSSMRemoveTagsFromResource, "RemoveTagsFromResource":
+		catalog.ActionSSMRemoveTagsFromResource, "RemoveTagsFromResource",
+		catalog.ActionSSMSendCommand, "SendCommand",
+		catalog.ActionSSMGetCommandInvocation, "GetCommandInvocation",
+		catalog.ActionSSMListCommandInvocations, "ListCommandInvocations":
 		s.handleSSM(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionSecretsCreateSecret, "CreateSecret",
 		catalog.ActionSecretsGetSecretValue, "GetSecretValue",
@@ -1448,6 +1477,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleS3Vectors(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionBedrockInvokeModel, "InvokeModel":
 		s.handleBedrockRuntime(w, r, body, requestID, eventID, action, verified, readOnly, "")
+	case catalog.ActionBedrockConverse, "Converse":
+		s.handleBedrockRuntime(w, r, body, requestID, eventID, action, verified, readOnly, "")
 	case catalog.ActionTextractDetectDocumentText, "DetectDocumentText",
 		catalog.ActionTextractAnalyzeDocument, "AnalyzeDocument":
 		s.handleTextract(w, r, body, requestID, eventID, action, verified, readOnly)
@@ -1458,7 +1489,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionEMRRunJobFlow, "RunJobFlow",
 		catalog.ActionEMRDescribeCluster, "DescribeCluster",
 		catalog.ActionEMRListClusters,
-		catalog.ActionEMRTerminateJobFlows, "TerminateJobFlows":
+		catalog.ActionEMRTerminateJobFlows, "TerminateJobFlows",
+		catalog.ActionEMRAddJobFlowSteps, "AddJobFlowSteps",
+		catalog.ActionEMRDescribeStep, "DescribeStep",
+		catalog.ActionEMRListSteps, "ListSteps":
 		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLabFreezeClock, "FreezeClock",
 		catalog.ActionLabUnfreezeClock, "UnfreezeClock",

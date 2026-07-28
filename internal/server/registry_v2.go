@@ -44,6 +44,10 @@ func isRegistryV2Path(path string) bool {
 	if isAPIGatewayV2RESTPath(path) {
 		return false
 	}
+	// SES v2 REST JSON uses /v2/email/... (SigV4 service ses).
+	if isSESV2RESTPath(path) {
+		return false
+	}
 	return path == "/v2" || path == "/v2/" || strings.HasPrefix(path, registryV2Prefix)
 }
 

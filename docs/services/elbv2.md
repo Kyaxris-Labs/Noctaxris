@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Application and Network load balancer, target group, listener, and (ALB) path/host listener rule CRUD lite plus an **ELB lab listener** HTTP path that invokes Lambda targets on application LBs. Target types `lambda`, `ip`, and `instance` (lab-opaque `i-*` ids; no EC2 resolve). Identity authz on control-plane APIs. Compose publishes only `127.0.0.1:4566` (no open internet).
+Application and Network load balancer, target group, listener, and (ALB) path/host listener rule CRUD lite plus **lab dataplane** HTTP paths on `:4566`: `/alb/...` invokes Lambda on application LBs; `/nlb/...` forwards HTTP to registered `ip` targets (and `instance` targets when the instance has a private IP in EC2 state). Not true TCP L4. Target types `lambda`, `ip`, and `instance` (lab-opaque `i-*` ids). Identity authz on control-plane APIs. Compose publishes only `127.0.0.1:4566` (no open internet).
 
 ## Implemented
 
@@ -14,11 +14,11 @@ Application and Network load balancer, target group, listener, and (ALB) path/ho
 | Rules | `CreateRule`, `DescribeRules`, `DeleteRule` on application listeners only (path-pattern and/or host-header forward; priority ascending). Rejected on network listeners |
 | Targets | `RegisterTargets`, `DescribeTargetHealth` (Lambda: `healthy` when a listener or rule forwards and permission Allows; IP/instance: `healthy` when a listener forwards — control-plane registration only) |
 | Access logs | `ModifyLoadBalancerAttributes` / `DescribeLoadBalancerAttributes` for `access_logs.s3.enabled` / `access_logs.s3.bucket` / `access_logs.s3.prefix`; lab `/alb/` listener appends ALB access-log lite lines to an in-account S3 bucket when enabled |
-| Lab listener | `GET`/`POST` `/alb/{accountId}/{loadBalancerName}/{port}[/{path...}]` invokes the first registered Lambda on the matched target group (ALB event shape). Network LBs have no HTTP/L4 lab dataplane |
+| Lab listener | `GET`/`POST` `/alb/{accountId}/{loadBalancerName}/{port}[/{path...}]` invokes the first registered Lambda on the matched target group (ALB event shape). `GET`/`POST` `/nlb/{accountId}/{loadBalancerName}/{port}[/{path...}]` HTTP-forwards to the first registered `ip` or resolvable `instance` target (lab shim, not TCP L4) |
 
 ### Network Load Balancer lite
 
-`CreateLoadBalancer` with `Type=network` persists `Type` and returns a `loadbalancer/net/...` ARN. Pair with `CreateTargetGroup` (`TargetType=instance` or `ip`, `Protocol=TCP` or `TLS`) and `CreateListener` (`Protocol=TCP` or `TLS`). `DescribeTargetHealth` reflects registration when a listener forwards; there is no TCP/TLS proxy or `/nlb/` invoke path on `:4566`.
+`CreateLoadBalancer` with `Type=network` persists `Type` and returns a `loadbalancer/net/...` ARN. Pair with `CreateTargetGroup` (`TargetType=instance` or `ip`, `Protocol=TCP` or `TLS`) and `CreateListener` (`Protocol=TCP` or `TLS`). `DescribeTargetHealth` reflects registration when a listener forwards. Lab traffic uses `/nlb/{account}/{name}/{port}/...` on `:4566` (same open-dataplane gate as `/alb/`); the forward is HTTP only, not raw TCP/TLS.
 
 ### Listener rules lite (application only)
 
@@ -106,14 +106,20 @@ aws elbv2 describe-target-health --target-group-arn "$NLB_TG_ARN" --endpoint-url
 aws elbv2 delete-load-balancer --load-balancer-arn "$NLB_ARN" --endpoint-url "$EP"
 ```
 
-Expect `Type=network`, a `loadbalancer/net/...` ARN, and `healthy` target health after the listener is attached. There is no `/nlb/` or TCP dataplane on `:4566`.
+Expect `Type=network`, a `loadbalancer/net/...` ARN, and `healthy` target health after the listener is attached. Optional HTTP shim (replace `BACKEND_IP` with a reachable lab target):
+
+```bash
+curl -sS "http://127.0.0.1:4566/nlb/$ACCOUNT/lab-nlb/80/"
+```
+
+For a registered `ip` target, the path suffix is forwarded to `http://{target-ip}:{port}/...`. Instance targets forward when EC2 `DescribeInstances` shows a private IP for the registered `i-*` id. Unspecified and link-local addresses (including `169.254.169.254`) are rejected at RegisterTargets and at `/nlb/` forward. Loopback and nested DinD private IPs remain allowed for same-host / lab backends.
 
 ## Not yet / deferred
 
 - ALB Cognito authenticate action
 - HTTP-header / query-string / source-ip conditions; multi-action rules
-- NLB L4 proxy / lab TCP invoke path
-- IP / instance target dataplane (beyond control-plane health)
+- True NLB TCP/TLS L4 proxy (lab uses HTTP shim on `/nlb/` only)
+- NLB listener rules; multi-target load balancing
 - Weighted target groups
 - UDP / TCP_UDP / QUIC NLB listeners
 - Gateway Load Balancer (`Type=gateway`)

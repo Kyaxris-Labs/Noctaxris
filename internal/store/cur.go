@@ -399,44 +399,78 @@ func (s *Store) emitCURArtifactBestEffort(d *CURReportDefinition) {
 	if d == nil || !curEmitEnabled() {
 		return
 	}
-	runID := uuid.NewString()
-	var body []byte
-	var contentType, ext string
-	if d.Format == "Parquet" {
-		// Lab stand-in: JSON lines shaped like CUR columns (no DuckDB/Parquet sidecar).
-		body, _ = json.Marshal([]map[string]any{{
-			"identity/LineItemId":     "lab-line-1",
-			"bill/BillingPeriodStart": "2026-07-01",
-			"lineItem/UsageAccountId": d.AccountID,
-			"lineItem/ProductCode":    "AmazonS3",
-			"lineItem/UnblendedCost":  "1.23",
-			"lineItem/CurrencyCode":   "USD",
-			"report/ReportName":       d.ReportName,
-		}})
-		contentType = "application/json"
-		ext = ".json"
-	} else {
-		body = []byte(
-			"identity/LineItemId,bill/BillingPeriodStart,lineItem/UsageAccountId,lineItem/ProductCode,lineItem/UnblendedCost,lineItem/CurrencyCode\n" +
-				"lab-line-1,2026-07-01," + d.AccountID + ",AmazonS3,1.23,USD\n",
-		)
-		contentType = "text/csv"
-		ext = ".csv"
-	}
-	key := path.Join(strings.Trim(d.S3Prefix, "/"), d.ReportName, runID+ext)
-	if strings.HasPrefix(key, "/") {
-		key = strings.TrimPrefix(key, "/")
-	}
 	if _, err := s.GetBucket(d.AccountID, d.S3Bucket); err != nil {
 		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
 		return
 	}
+	if d.Format == "Parquet" {
+		s.emitCURParquetBestEffort(d)
+		return
+	}
+	runID := uuid.NewString()
+	body := []byte(
+		"identity/LineItemId,bill/BillingPeriodStart,lineItem/UsageAccountId,lineItem/ProductCode,lineItem/UnblendedCost,lineItem/CurrencyCode\n" +
+			"lab-line-1,2026-07-01," + d.AccountID + ",AmazonS3,1.23,USD\n",
+	)
+	key := path.Join(strings.Trim(d.S3Prefix, "/"), d.ReportName, runID+".csv")
+	key = strings.TrimPrefix(key, "/")
 	if _, err := s.PutObject(d.AccountID, d.S3Bucket, key, PutObjectMeta{
 		Data:        body,
 		PlainSize:   int64(len(body)),
-		ContentType: contentType,
+		ContentType: "text/csv",
 	}); err != nil {
 		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		return
+	}
+	_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "SUCCESS")
+	d.ReportStatus = "SUCCESS"
+}
+
+// emitCURParquetBestEffort stages lab UsageLine NDJSON then asks DuckDB for COPY FORMAT PARQUET.
+// Fail-closed: missing runner or Duck/S3 errors set ReportStatus=ERROR (never SUCCESS with JSON stand-in).
+func (s *Store) emitCURParquetBestEffort(d *CURReportDefinition) {
+	run := s.getCURDuckRunner()
+	if run == nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
+		return
+	}
+	runID := uuid.NewString()
+	stagingKey := curParquetStagingKey(d.ReportName, runID)
+	destKey := curParquetDestKey(d.S3Prefix, d.ReportName, runID)
+	line, err := json.Marshal(map[string]any{
+		"identity/LineItemId":     "lab-line-1",
+		"bill/BillingPeriodStart": "2026-07-01",
+		"lineItem/UsageAccountId": d.AccountID,
+		"lineItem/ProductCode":    "AmazonS3",
+		"lineItem/UnblendedCost":  "1.23",
+		"lineItem/CurrencyCode":   "USD",
+		"report/ReportName":       d.ReportName,
+	})
+	if err != nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
+		return
+	}
+	ndjson := append(line, '\n')
+	if _, err := s.PutObject(d.AccountID, d.S3Bucket, stagingKey, PutObjectMeta{
+		Data:        ndjson,
+		PlainSize:   int64(len(ndjson)),
+		ContentType: "application/x-ndjson",
+	}); err != nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
+		return
+	}
+	querySQL, setupSQL := BuildCURParquetDuckSQL(
+		curS3URI(d.S3Bucket, stagingKey),
+		curS3URI(d.S3Bucket, destKey),
+	)
+	duckErr := run(d.AccountID, querySQL, setupSQL)
+	_ = s.DeleteObject(d.AccountID, d.S3Bucket, stagingKey)
+	if duckErr != nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
 		return
 	}
 	_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "SUCCESS")

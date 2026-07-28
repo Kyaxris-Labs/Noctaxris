@@ -52,13 +52,16 @@ CREATE TABLE IF NOT EXISTS ssm_parameters (
 );
 `
 
-// EnsureSSMSchema creates the SSM parameters table if missing.
+// EnsureSSMSchema creates the SSM parameters and Run Command tables if missing.
 func EnsureSSMSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure ssm schema: db is nil")
 	}
 	if _, err := db.Exec(ssmSchema); err != nil {
 		return fmt.Errorf("ensure ssm schema: %w", err)
+	}
+	if err := EnsureSSMCommandSchema(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -288,9 +291,9 @@ type parameterRow struct {
 func (s *Store) getParameterRow(accountID, name string) (parameterRow, error) {
 	name = normalizeParameterName(name)
 	var (
-		row      parameterRow
-		sealed   int
-		sealedB  []byte
+		row     parameterRow
+		sealed  int
+		sealedB []byte
 	)
 	err := s.db.QueryRow(
 		`SELECT name, arn, param_type, value_plain, value_sealed, sealed, kms_key_id, version, last_modified

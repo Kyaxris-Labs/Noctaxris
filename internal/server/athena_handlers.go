@@ -81,7 +81,13 @@ func (s *Server) athenaStart(
 	if wg, ok := params["WorkGroup"].(string); ok {
 		in.WorkGroup = wg
 	}
-	exec, err := s.store.StartAthenaQueryExecution(verified.AccountID, in)
+	var exec store.AthenaQueryExecution
+	var err error
+	if duckExec, used, duckErr := s.tryStartAthenaDuck(verified.AccountID, in); used {
+		exec, err = duckExec, duckErr
+	} else {
+		exec, err = s.store.StartAthenaQueryExecution(verified.AccountID, in)
+	}
 	if errors.Is(err, store.ErrAthenaBadRequest) {
 		s.writeAthenaError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
 			err.Error(), readOnly, eventID, verified)

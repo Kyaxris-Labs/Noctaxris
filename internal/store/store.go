@@ -363,6 +363,9 @@ type Store struct {
 	sfnTaskMu      sync.Mutex
 	sfnTaskInvoker SFNTaskInvoker
 
+	curDuckMu     sync.Mutex
+	curDuckRunner CURDuckRunner
+
 	// sqsMu serializes receive/send so claim+CAS and FIFO sequence stay atomic
 	// under concurrent goroutines without global BEGIN IMMEDIATE (nested writers).
 	sqsMu sync.Mutex

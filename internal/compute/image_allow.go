@@ -135,8 +135,10 @@ func isPinnedLabImage(ref string) bool {
 		"apache/activemq-classic:5.18.3":            {},
 		"opensearchproject/opensearch:2.11.1":       {},
 		"tinkerpop/gremlin-server:3.7.3":            {},
+		"neo4j:5-community":                         {},
 		"redpandadata/redpanda:v24.2.4":             {},
 		"eclipse-mosquitto:2.0.20":                  {},
+		"floci/floci-duck:latest":                   {},
 	}
 	_, ok := pinnedExact[lower]
 	return ok

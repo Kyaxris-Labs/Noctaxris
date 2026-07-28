@@ -136,7 +136,7 @@ func TestRDSAcceptsMySQLAndMariaDBRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestRDSDataRejectsMySQLEngine(t *testing.T) {
+func TestRDSDataMySQLEngineUnavailableWithoutNested(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -166,11 +166,17 @@ func TestRDSDataRejectsMySQLEngine(t *testing.T) {
 		"database":    "appdb",
 		"sql":         "SELECT 1",
 	}, now)
-	if exec.Code == http.StatusOK {
-		t.Fatalf("expected Data API rejection for mysql, got %s", exec.Body.String())
+	if exec.Code != http.StatusGatewayTimeout || !strings.Contains(exec.Body.String(), "DatabaseUnavailableException") {
+		t.Fatalf("want DatabaseUnavailableException for mysql without reachable nested engine, got status=%d body=%s", exec.Code, exec.Body.String())
 	}
-	if !strings.Contains(exec.Body.String(), "BadRequestException") && !strings.Contains(exec.Body.String(), "postgres") {
-		t.Fatalf("want BadRequest mentioning postgres-only, got %s", exec.Body.String())
+
+	begin := mustJSONTarget(t, handler, "AmazonRDSDataService.BeginTransaction", "rds-data", map[string]any{
+		"resourceArn": inst.DBInstanceARN,
+		"secretArn":   inst.MasterUserSecretARN,
+		"database":    "appdb",
+	}, now)
+	if begin.Code != http.StatusGatewayTimeout && begin.Code != http.StatusBadRequest {
+		t.Fatalf("BeginTransaction mysql status=%d body=%s", begin.Code, begin.Body.String())
 	}
 }
 

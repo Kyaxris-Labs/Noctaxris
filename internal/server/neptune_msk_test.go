@@ -67,6 +67,96 @@ func TestNeptuneHandlers(t *testing.T) {
 	}
 }
 
+func TestNeptuneNeo4jEngineSelection(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("GraphEngine param neo4j", func(t *testing.T) {
+		create := mustNeptuneQuery(t, handler, strings.Join([]string{
+			"Action=CreateDBCluster",
+			"Version=2014-10-31",
+			"DBClusterIdentifier=lab-neo4j-param",
+			"Engine=neptune",
+			"GraphEngine=neo4j",
+		}, "&"), now)
+		if create.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", create.Code, create.Body.String())
+		}
+		if !strings.Contains(create.Body.String(), "7687") {
+			t.Fatalf("want Bolt port 7687, body=%q", create.Body.String())
+		}
+		desc := mustNeptuneQuery(t, handler,
+			"Action=DescribeDBClusters&Version=2014-10-31&DBClusterIdentifier=lab-neo4j-param", now)
+		if desc.Code != http.StatusOK || !strings.Contains(desc.Body.String(), "7687") {
+			t.Fatalf("describe status=%d body=%q", desc.Code, desc.Body.String())
+		}
+	})
+
+	t.Run("tag noctaxris:neptune-engine", func(t *testing.T) {
+		create := mustNeptuneQuery(t, handler, strings.Join([]string{
+			"Action=CreateDBCluster",
+			"Version=2014-10-31",
+			"DBClusterIdentifier=lab-neo4j-tag",
+			"Engine=neptune",
+			"Tags.member.1.Key="+url.QueryEscape("noctaxris:neptune-engine"),
+			"Tags.member.1.Value=neo4j",
+		}, "&"), now)
+		if create.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", create.Code, create.Body.String())
+		}
+		if !strings.Contains(create.Body.String(), "7687") {
+			t.Fatalf("want Bolt port, body=%q", create.Body.String())
+		}
+	})
+
+	t.Run("env neo4j", func(t *testing.T) {
+		t.Setenv("NOCTAXRIS_NEPTUNE_ENGINE", "neo4j")
+		create := mustNeptuneQuery(t, handler, strings.Join([]string{
+			"Action=CreateDBCluster",
+			"Version=2014-10-31",
+			"DBClusterIdentifier=lab-neo4j-env",
+			"Engine=neptune",
+		}, "&"), now)
+		if create.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", create.Code, create.Body.String())
+		}
+		if !strings.Contains(create.Body.String(), "7687") {
+			t.Fatalf("want Bolt port from env, body=%q", create.Body.String())
+		}
+	})
+
+	t.Run("fail-closed unknown engine", func(t *testing.T) {
+		t.Setenv("NOCTAXRIS_NEPTUNE_ENGINE", "")
+		rej := mustNeptuneQuery(t, handler, strings.Join([]string{
+			"Action=CreateDBCluster",
+			"Version=2014-10-31",
+			"DBClusterIdentifier=lab-bad-engine",
+			"Engine=neptune",
+			"GraphEngine=arangodb",
+		}, "&"), now)
+		if rej.Code == http.StatusOK {
+			t.Fatalf("unknown GraphEngine must fail closed: %q", rej.Body.String())
+		}
+		if !strings.Contains(rej.Body.String(), "InvalidParameterValue") {
+			t.Fatalf("want InvalidParameterValue, body=%q", rej.Body.String())
+		}
+	})
+
+	t.Run("fail-closed unknown env", func(t *testing.T) {
+		t.Setenv("NOCTAXRIS_NEPTUNE_ENGINE", "not-real")
+		rej := mustNeptuneQuery(t, handler, strings.Join([]string{
+			"Action=CreateDBCluster",
+			"Version=2014-10-31",
+			"DBClusterIdentifier=lab-bad-env",
+			"Engine=neptune",
+		}, "&"), now)
+		if rej.Code == http.StatusOK {
+			t.Fatalf("unknown env must fail closed: %q", rej.Body.String())
+		}
+	})
+}
+
 func mustMSKJSON(t *testing.T, handler http.Handler, target string, payload map[string]any, now time.Time) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, err := json.Marshal(payload)

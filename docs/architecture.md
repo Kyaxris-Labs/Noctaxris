@@ -88,7 +88,7 @@ Lambda, ECS, CodeBuild, Batch, and nested data engines all use nested DinD (`NOC
 
 ## Nested data planes
 
-RDS, ElastiCache, MemoryDB, DocumentDB, Neptune, MQ (RabbitMQ), OpenSearch, and MSK (Redpanda) engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|memorydb|docdb|neptune|mq|opensearch|msk` identify them. Optional shared brokers (`NOCTAXRIS_SHARED_KAFKA` / `NOCTAXRIS_SHARED_MQTT`) run as fixed-name singletons on Internal `noctaxris-data` (`noctaxris-lab-kafka`, `noctaxris-lab-mqtt`) instead of per-cluster MSK containers when shared Kafka is on. The API process is not on `noctaxris-data`; the IoT MQTT shadow bridge dials `noctaxris-engine:1883` when `NOCTAXRIS_BROKER_PORT_PUBLISH` enables engine PortBindings, while DinD clients use `noctaxris-lab-mqtt:1883`. Host Compose still publishes only `127.0.0.1:4566`.
+RDS, ElastiCache, MemoryDB, DocumentDB, Neptune (Gremlin Server default; opt-in Neo4j), MQ (RabbitMQ), OpenSearch, and MSK (Redpanda) engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|memorydb|docdb|neptune|mq|opensearch|msk` identify them. Optional shared brokers (`NOCTAXRIS_SHARED_KAFKA` / `NOCTAXRIS_SHARED_MQTT`) run as fixed-name singletons on Internal `noctaxris-data` (`noctaxris-lab-kafka`, `noctaxris-lab-mqtt`) instead of per-cluster MSK containers when shared Kafka is on. The API process is not on `noctaxris-data`; the IoT MQTT shadow bridge dials `noctaxris-engine:1883` when `NOCTAXRIS_BROKER_PORT_PUBLISH` enables engine PortBindings, while DinD clients use `noctaxris-lab-mqtt:1883`. Host Compose still publishes only `127.0.0.1:4566`.
 
 ```mermaid
 flowchart TD
@@ -97,19 +97,19 @@ flowchart TD
   Helper["data-plane helper<br/>compute.Client DinD TLS"]
   Start["start labeled nested container<br/>PortBindings off by default"]
   Describe["Describe* returns nested-network hostname:port"]
-  DataAPI["RDS Data API ExecuteStatement on :4566<br/>pgx nested DSN or nested psql; else unavailable"]
+  DataAPI["RDS Data API ExecuteStatement on :4566<br/>Postgres pgx/psql or MySQL/MariaDB wire/CLI; else unavailable"]
 
   Create --> Store --> Helper --> Start --> Describe
   Helper -.-> DataAPI
 ```
 
-Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API (no nested query engine required). Nested MQ, OpenSearch, and MSK promote to `RUNNING` / `Active` / `ACTIVE` only after a healthy nested container; without DinD or on start failure they fail closed (`CREATION_FAILED` / `CreateFailed` / `FAILED` with `stub://` where applicable). OpenSearch CreateFailed may include a lab `FailureReason` when nested logs match mmap / memory-lock bootstrap failures (`vm.max_map_count`). Broker, Gremlin, and search ports stay unpublished on the host by default; opt-in loopback uses `compose.lab-nested-ports.yaml` (DinD engine hop).
+Athena queries Glue catalog metadata and lab S3 object bytes **in-process** on the API by default. Optional DuckDB HTTP sidecar (`noctaxris-lab-duck` on Internal `noctaxris-data`, or `NOCTAXRIS_DUCKDB_URL`) injects Glue views and runs SQL via a floci-duck-compatible `/query` shim; the API reaches nested DuckDB with DinD exec (no host port publish). Nested MQ, OpenSearch, and MSK promote to `RUNNING` / `Active` / `ACTIVE` only after a healthy nested container; without DinD or on start failure they fail closed (`CREATION_FAILED` / `CreateFailed` / `FAILED` with `stub://` where applicable). OpenSearch CreateFailed may include a lab `FailureReason` when nested logs match mmap / memory-lock bootstrap failures (`vm.max_map_count`). Broker, Gremlin, and search ports stay unpublished on the host by default; opt-in loopback uses `compose.lab-nested-ports.yaml` (DinD engine hop).
 
 When DinD is unset, create paths keep control-plane rows and nested start is a no-op. Live engine start requires `noctaxris-engine`. Do not mount the operator host filesystem into nested data containers.
 
 ## Networking vocabulary
 
-Noctaxris does not emulate Amazon VPC, ENIs, or PrivateLink. Nested compute and data engines use **DinD Internal** Docker networks (`noctaxris-fn`, `noctaxris-ecs`, `noctaxris-data`). Those are not AWS VPC private connectivity. Transfer omits `EndpointType=VPC`. Cloud Map private DNS stores a lab-opaque `Vpc` string only. Lambda `VpcConfig` and ECS `awsvpcConfiguration` fail closed.
+Noctaxris does not enforce Amazon VPC routing, security-group filters, or PrivateLink. EC2 exposes control-plane VPC/subnet/SG/ENI metadata only (rules are not applied on the data path). Nested compute and data engines use **DinD Internal** Docker networks (`noctaxris-fn`, `noctaxris-ecs`, `noctaxris-data`). Those are not AWS VPC private connectivity. Transfer omits `EndpointType=VPC`. Cloud Map private DNS stores a lab-opaque `Vpc` string only. Lambda `VpcConfig` and ECS `awsvpcConfiguration` fail closed.
 
 ## In-process delivery workers
 
@@ -124,7 +124,7 @@ Noctaxris does not emulate Amazon VPC, ENIs, or PrivateLink. Nested compute and 
 - API Gateway HTTP API JWT authorizer verifies Bearer tokens via the shared jose helper against lab Cognito JWKS (in-process; no remote JWKS by default). IAM routes require SigV4 and `execute-api:Invoke` (no HTTP API resource policies).
 - AppSync accepts `AMAZON_COGNITO_USER_POOLS` beside API_KEY and AWS_IAM. Custom issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` and a public host allowlist.
 - Gateway `CreateIntegration` optional `CredentialsArn` enforces PassRole plus `apigateway.amazonaws.com` trust. Without CredentialsArn, HTTP API Lambda invoke requires a function resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require the same for `appsync.amazonaws.com`.
-- CloudFront remains a config-shaped stub (no real PoP). ELBv2 has an ALB lab listener path that invokes Lambda targets (no EC2/IP dataplane, no NLB). Gateway HTTP_PROXY / VPC_LINK stay default-deny unless `NOCTAXRIS_APIGW_HTTP_PROXY=1` with allowlist.
+- CloudFront remains a config-shaped stub (no real PoP). ELBv2 ALB listeners invoke Lambda targets; network LBs expose a lab HTTP shim on `/nlb/...` for IP and instance targets (unspecified and link-local forwards denied). Gateway HTTP_PROXY / VPC_LINK stay default-deny unless `NOCTAXRIS_APIGW_HTTP_PROXY=1` with allowlist.
 
 ## Authz
 

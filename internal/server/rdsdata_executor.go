@@ -14,19 +14,21 @@ import (
 
 const nestedRDSDataExecutorMarker = `{"noctaxrisExecutor":"nested-psql"}`
 
-// EnvRDSDataPgx controls the wire-protocol Data API executor.
-// Default (unset): prefer pgx when a nested data-plane DSN can be built; fall
-// back to nested-psql on dial failure. Set to 0/false/off to force nested-psql.
+// EnvRDSDataPgx controls the wire-protocol Data API executor for Postgres and
+// MySQL/MariaDB. Default (unset): prefer wire dial when a nested data-plane DSN
+// can be built; fall back to nested CLI on dial failure. Set to 0/false/off to
+// force nested CLI for auto-commit Execute/Batch.
 const EnvRDSDataPgx = "NOCTAXRIS_RDS_DATA_PGX"
 
 // preferNestedRDSDataExecute selects a Data API executor:
 //  1. test override (SetRDSDataExecutor)
-//  2. pgx wire path when enabled and nested DSN is available (typed fields + binds)
-//  3. nested DinD psql when the instance has a container (VARCHAR cells; literal params)
-//  4. DatabaseUnavailableException
+//  2. mysql/mariadb: go-sql-driver/mysql or nested mysql CLI
+//  3. postgres: pgx when enabled and nested DSN is available (typed fields + binds)
+//  4. nested DinD psql when the instance has a container (VARCHAR cells; literal params)
+//  5. DatabaseUnavailableException
 //
-// Production never fakes SELECT success without a nested Postgres container.
-// pgx dials only the nested data-plane hostname (never host-published ports).
+// Production never fakes SELECT success without a nested engine container.
+// Wire dials only the nested data-plane hostname (never host-published ports).
 func (s *Server) preferNestedRDSDataExecute(
 	ctx context.Context,
 	accountID string,
@@ -35,6 +37,13 @@ func (s *Server) preferNestedRDSDataExecute(
 ) (store.RDSDataExecuteResult, error) {
 	if override := getRDSDataExecutorOverride(); override != nil {
 		return override.Execute(req)
+	}
+	switch store.NormalizeRDSEngine(inst.Engine) {
+	case "mysql", "mariadb":
+		return s.preferNestedRDSDataExecuteMySQL(ctx, accountID, inst, req)
+	case "postgres":
+	default:
+		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
 	if rdsDataPgxEnabled() {
 		res, err := s.executeRDSDataPgx(ctx, accountID, inst, req)
@@ -121,7 +130,7 @@ func (s *Server) rdsDataMasterCreds(accountID string, inst store.RDSDBInstance, 
 		return "", "", fmt.Errorf("%w: secret has empty password", store.ErrRDSDataInvalidSecret)
 	}
 	if user == "" {
-		user = "postgres"
+		user = store.DefaultRDSMasterUsername(inst.Engine)
 	}
 	return user, p, nil
 }

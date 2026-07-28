@@ -604,6 +604,7 @@ func (s *Store) ReconcileASGCapacity(accountID, region, name string) (AutoScalin
 		instanceType := "t3.micro"
 		keyName := ""
 		userData := ""
+		iamProfile := ""
 		if g.LaunchConfigurationName != "" {
 			lcs, err := s.DescribeLaunchConfigurations(accountID, region, []string{g.LaunchConfigurationName})
 			if err != nil {
@@ -614,17 +615,19 @@ func (s *Store) ReconcileASGCapacity(accountID, region, name string) (AutoScalin
 				instanceType = lcs[0].InstanceType
 				keyName = lcs[0].KeyName
 				userData = lcs[0].UserData
+				iamProfile = lcs[0].IamInstanceProfile
 			}
 		}
 		az := firstASGAvailabilityZone(g.AvailabilityZones)
 		launched, err := s.RunInstances(accountID, region, RunInstancesInput{
-			ImageID:          imageID,
-			InstanceType:     instanceType,
-			MinCount:         need,
-			MaxCount:         need,
-			KeyName:          keyName,
-			UserData:         userData,
-			AvailabilityZone: az,
+			ImageID:            imageID,
+			InstanceType:       instanceType,
+			MinCount:           need,
+			MaxCount:           need,
+			KeyName:            keyName,
+			UserData:           userData,
+			IamInstanceProfile: iamProfile,
+			AvailabilityZone:   az,
 		})
 		if err != nil {
 			return AutoScalingGroup{}, err

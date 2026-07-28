@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS ec2_instances (
   availability_zone TEXT NOT NULL DEFAULT 'us-east-1a',
   key_name TEXT NOT NULL DEFAULT '',
   user_data TEXT NOT NULL DEFAULT '',
+  iam_instance_profile TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, region, instance_id)
 );
@@ -72,30 +73,37 @@ type EC2Instance struct {
 	PrivateIP        string
 	PublicIP         string
 	AvailabilityZone string
-	KeyName          string
-	UserData         string
-	CreatedAt        int64
-	Region           string
+	KeyName            string
+	UserData           string
+	IamInstanceProfile string
+	CreatedAt          int64
+	Region             string
 }
 
 // RunInstancesInput holds RunInstances fields.
 type RunInstancesInput struct {
-	ImageID          string
-	InstanceType     string
-	MinCount         int
-	MaxCount         int
-	KeyName          string
-	UserData         string
-	AvailabilityZone string
+	ImageID            string
+	InstanceType       string
+	MinCount           int
+	MaxCount           int
+	KeyName            string
+	UserData           string
+	IamInstanceProfile string
+	AvailabilityZone   string
 }
 
-// EnsureEC2Schema creates EC2 instance tables if missing.
+// EnsureEC2Schema creates EC2 instance and network metadata tables if missing.
 func EnsureEC2Schema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure ec2 schema: db is nil")
 	}
 	if _, err := db.Exec(ec2Schema); err != nil {
 		return fmt.Errorf("ensure ec2 schema: %w", err)
+	}
+	// Older DBs created before IAM profile persistence.
+	_, _ = db.Exec(`ALTER TABLE ec2_instances ADD COLUMN iam_instance_profile TEXT NOT NULL DEFAULT ''`)
+	if err := EnsureEC2NetworkSchema(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -277,11 +285,11 @@ func (s *Store) RunInstances(accountID, region string, in RunInstancesInput) ([]
 			`INSERT INTO ec2_instances
 			 (account_id, region, instance_id, image_id, docker_image, instance_type,
 			  state_name, state_code, container_id, private_ip, public_ip,
-			  availability_zone, key_name, user_data, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
+			  availability_zone, key_name, user_data, iam_instance_profile, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`,
 			accountID, region, id, imageID, dockerImage, instanceType,
 			EC2StatePending, EC2StateCodePending, priv, pub, az,
-			strings.TrimSpace(in.KeyName), in.UserData, now,
+			strings.TrimSpace(in.KeyName), in.UserData, strings.TrimSpace(in.IamInstanceProfile), now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("run instances: %w", err)
@@ -291,7 +299,8 @@ func (s *Store) RunInstances(accountID, region string, in RunInstancesInput) ([]
 			InstanceType: instanceType, StateName: EC2StatePending, StateCode: EC2StateCodePending,
 			PrivateIP: priv, PublicIP: pub, AvailabilityZone: az,
 			KeyName: strings.TrimSpace(in.KeyName), UserData: in.UserData,
-			CreatedAt: now, Region: region,
+			IamInstanceProfile: strings.TrimSpace(in.IamInstanceProfile),
+			CreatedAt:          now, Region: region,
 		})
 	}
 	return out, nil
@@ -312,7 +321,8 @@ func (s *Store) DescribeInstances(accountID, region string, instanceIDs []string
 	if len(instanceIDs) == 0 {
 		rows, err = s.db.Query(
 			`SELECT instance_id, image_id, docker_image, instance_type, state_name, state_code,
-			        container_id, private_ip, public_ip, availability_zone, key_name, user_data, created_at, region
+			        container_id, private_ip, public_ip, availability_zone, key_name, user_data,
+			        iam_instance_profile, created_at, region
 			 FROM ec2_instances WHERE account_id = ? AND region = ? ORDER BY created_at`,
 			accountID, region,
 		)
@@ -331,7 +341,8 @@ func (s *Store) DescribeInstances(accountID, region string, instanceIDs []string
 			return nil, nil
 		}
 		q := `SELECT instance_id, image_id, docker_image, instance_type, state_name, state_code,
-		             container_id, private_ip, public_ip, availability_zone, key_name, user_data, created_at, region
+		             container_id, private_ip, public_ip, availability_zone, key_name, user_data,
+		             iam_instance_profile, created_at, region
 		      FROM ec2_instances WHERE account_id = ? AND region = ? AND instance_id IN (` +
 			strings.Join(placeholders, ",") + `) ORDER BY created_at`
 		rows, err = s.db.Query(q, args...)
@@ -411,6 +422,30 @@ func (s *Store) ClearEC2ContainerID(accountID, region, instanceID string) error 
 	return nil
 }
 
+// SetEC2PrivateIP records the nested container IPv4 (noctaxris-ec2) for ENI/NLB resolve.
+func (s *Store) SetEC2PrivateIP(accountID, region, instanceID, privateIP string) error {
+	if err := s.EnsureEC2Schema(); err != nil {
+		return err
+	}
+	ip := strings.TrimSpace(privateIP)
+	if ip == "" {
+		return fmt.Errorf("set ec2 private ip: empty address")
+	}
+	res, err := s.db.Exec(
+		`UPDATE ec2_instances SET private_ip = ?
+		 WHERE account_id = ? AND region = ? AND instance_id = ?`,
+		ip, accountID, region, instanceID,
+	)
+	if err != nil {
+		return fmt.Errorf("set ec2 private ip: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrEC2NotFound
+	}
+	return nil
+}
+
 func scanEC2Instances(rows *sql.Rows) ([]EC2Instance, error) {
 	var out []EC2Instance
 	for rows.Next() {
@@ -418,7 +453,8 @@ func scanEC2Instances(rows *sql.Rows) ([]EC2Instance, error) {
 		if err := rows.Scan(
 			&inst.InstanceID, &inst.ImageID, &inst.DockerImage, &inst.InstanceType,
 			&inst.StateName, &inst.StateCode, &inst.ContainerID, &inst.PrivateIP, &inst.PublicIP,
-			&inst.AvailabilityZone, &inst.KeyName, &inst.UserData, &inst.CreatedAt, &inst.Region,
+			&inst.AvailabilityZone, &inst.KeyName, &inst.UserData, &inst.IamInstanceProfile,
+			&inst.CreatedAt, &inst.Region,
 		); err != nil {
 			return nil, fmt.Errorf("scan ec2 instance: %w", err)
 		}

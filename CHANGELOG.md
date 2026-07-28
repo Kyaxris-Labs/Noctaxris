@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- SES v2 REST on `/v2/email/*`: Create/List/Get/DeleteEmailIdentity, outbound-emails (Simple/Raw), GetAccount; shared identities/messages with v1; ECR registry excludes `/v2/email/*`
+- RDS Data API: Execute/Batch/txn for nested `mysql` and `mariadb` (`go-sql-driver/mysql` or nested `mysql` CLI); Postgres path unchanged
+- Transfer: DescribeUser/ListUsers plus Import/Delete SSH public keys (SQLite metadata)
+- EMR: AddJobFlowSteps / DescribeStep / ListSteps (immediate COMPLETED lab stub)
+- ELBv2: lab HTTP shim `/nlb/{account}/{name}/{port}/...` for network LBs (open-dataplane gate; not true L4)
+- Bedrock Runtime: Converse canned JSON over allowlisted modelIds; ConverseStream 501
+- SSM: Run Command lite (SendCommand / GetCommandInvocation / ListCommandInvocations) for AWS-RunShellScript via nested DinD exec
+- EC2: UserData once on create; IMDS lite sidecar on `noctaxris-ec2` (no host `:9169`); VPC/subnet/SG/ENI metadata CRUD (rules not enforced on DinD)
+- Athena: optional nested DuckDB sidecar on `noctaxris-data` (`NOCTAXRIS_ATHENA_ENGINE` / `NOCTAXRIS_DUCKDB_URL`); in-process `BETWEEN` and range WHERE; Parquet Glue tables require DuckDB
+- CUR: `Format=Parquet` emits real Parquet via nested DuckDB (NDJSON stage + `COPY ... FORMAT PARQUET`); CSV emit unchanged; fail-closed without DuckDB (no JSON stand-in)
+- Neptune: opt-in nested Neo4j Bolt (`NOCTAXRIS_NEPTUNE_ENGINE` / GraphEngine / tag); default remains Gremlin Server
 - Lambda async SQS DLQ / OnFailure: honor destination `RedriveAllowPolicy` and foreign queue Policy via `sendLabDLQMessage`
 - Config: continuous history while recording also covers S3 object PutObject/DeleteObject (`AWS::S3::Object` resourceId `bucket/key`) via GetResourceConfigHistory
 - Transfer Family: docs/tests clarify lab Put/GetFile is HTTP on `:4566` (JSON + `/transfer/.../home/...`), not an SFTP listener
@@ -445,7 +456,7 @@ Deferred depth: [docs/services/index.md](docs/services/index.md). Athena shipped
 
 ## Multi-account honesty and audit services
 
-Multi-account honesty (cross-account dual eval, OU SCP/RCP inheritance, request-context keys) plus first expansion wave services. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md).
+Multi-account honesty (cross-account dual eval, OU SCP/RCP inheritance, request-context keys) plus additional marketed services. At ship time, verification was `go test ./...` plus operator-run per-service Compose CLI smoke on each `docs/services/` page. Live CI contract (PR `smoke-core`, manual nested smoke): [docs/ops.md](docs/ops.md).
 
 ### Included
 

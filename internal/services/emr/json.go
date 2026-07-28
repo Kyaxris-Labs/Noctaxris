@@ -45,3 +45,72 @@ func ListClustersJSON(clusters []store.EMRCluster) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{"Clusters": summaries})
 }
+
+// AddJobFlowStepsJSON builds an AddJobFlowSteps success body.
+func AddJobFlowStepsJSON(stepIDs []string) ([]byte, error) {
+	return json.Marshal(map[string]any{"StepIds": stepIDs})
+}
+
+// DescribeStepJSON builds a DescribeStep success body.
+func DescribeStepJSON(st store.EMRStep) ([]byte, error) {
+	return json.Marshal(map[string]any{"Step": stepToMap(st)})
+}
+
+// ListStepsJSON builds a ListSteps success body.
+func ListStepsJSON(steps []store.EMRStep) ([]byte, error) {
+	items := make([]map[string]any, 0, len(steps))
+	for _, st := range steps {
+		items = append(items, stepToMap(st))
+	}
+	return json.Marshal(map[string]any{"Steps": items})
+}
+
+func stepToMap(st store.EMRStep) map[string]any {
+	args := st.Args
+	if args == nil {
+		args = []string{}
+	}
+	props := st.Properties
+	if props == nil {
+		props = map[string]string{}
+	}
+	config := map[string]any{
+		"Args":       args,
+		"Properties": props,
+	}
+	if st.Jar != "" {
+		config["Jar"] = st.Jar
+	}
+	if st.MainClass != "" {
+		config["MainClass"] = st.MainClass
+	}
+	status := map[string]any{
+		"State": st.State,
+		"Timeline": timelineMap(st.CreatedAt, st.StartAt, st.EndAt),
+	}
+	node := map[string]any{
+		"Id":              st.StepID,
+		"Name":            st.Name,
+		"Config":          config,
+		"ActionOnFailure": st.ActionOnFailure,
+		"Status":          status,
+	}
+	if st.ExecutionRoleArn != "" {
+		node["ExecutionRoleArn"] = st.ExecutionRoleArn
+	}
+	return node
+}
+
+func timelineMap(createdAt, startAt, endAt int64) map[string]any {
+	out := map[string]any{}
+	if createdAt > 0 {
+		out["CreationDateTime"] = time.UnixMilli(createdAt).UTC().Format(time.RFC3339)
+	}
+	if startAt > 0 {
+		out["StartDateTime"] = time.UnixMilli(startAt).UTC().Format(time.RFC3339)
+	}
+	if endAt > 0 {
+		out["EndDateTime"] = time.UnixMilli(endAt).UTC().Format(time.RFC3339)
+	}
+	return out
+}

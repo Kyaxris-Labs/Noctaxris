@@ -26,9 +26,10 @@ services:
       - "127.0.0.1:5432:5432"
       - "127.0.0.1:6379:6379"
       - "127.0.0.1:27017:27017"
-      # Nested MySQL/MariaDB, Neptune Gremlin, MSK/Kafka when those engines exist
+      # Nested MySQL/MariaDB, Neptune Gremlin/Neo4j Bolt, MSK/Kafka when those engines exist
       - "127.0.0.1:3306:3306"
       - "127.0.0.1:8182:8182"
+      - "127.0.0.1:7687:7687"
       # Shared Kafka (9092) and shared MQTT (1883) when lab-brokers profile is on
       - "127.0.0.1:9092:9092"
       - "127.0.0.1:1883:1883"

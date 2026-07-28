@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,7 +17,10 @@ import (
 const rdsDataTxnIdleTimeout = 5 * time.Minute
 
 type rdsDataTxnSession struct {
+	engine    string
 	conn      *pgx.Conn
+	mysqlConn *sql.Conn
+	mysqlTx   *sql.Tx
 	accountID string
 	resource  string
 	secret    string
@@ -34,11 +38,21 @@ func rdsDataTxnKey(accountID, transactionID string) string {
 }
 
 func (sess *rdsDataTxnSession) close() {
-	if sess == nil || sess.conn == nil {
+	if sess == nil {
 		return
 	}
-	_ = sess.conn.Close(context.Background())
-	sess.conn = nil
+	if sess.conn != nil {
+		_ = sess.conn.Close(context.Background())
+		sess.conn = nil
+	}
+	if sess.mysqlTx != nil {
+		_ = sess.mysqlTx.Rollback()
+		sess.mysqlTx = nil
+	}
+	if sess.mysqlConn != nil {
+		_ = sess.mysqlConn.Close()
+		sess.mysqlConn = nil
+	}
 }
 
 func registerRDSDataTxnSession(transactionID string, sess *rdsDataTxnSession) {
@@ -83,9 +97,14 @@ func (s *Server) lookupRDSDataTxnSession(accountID, transactionID string) (*rdsD
 }
 
 func (s *Server) expireRDSDataTxnSession(sess *rdsDataTxnSession, accountID, transactionID string) {
-	if sess != nil && sess.conn != nil {
+	if sess != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, _ = sess.conn.Exec(ctx, "ROLLBACK")
+		if sess.conn != nil {
+			_, _ = sess.conn.Exec(ctx, "ROLLBACK")
+		}
+		if sess.mysqlTx != nil {
+			_ = sess.mysqlTx.Rollback()
+		}
 		cancel()
 		sess.close()
 	}
@@ -94,8 +113,8 @@ func (s *Server) expireRDSDataTxnSession(sess *rdsDataTxnSession, accountID, tra
 	}
 }
 
-// BeginRDSDataSQLTransaction dials nested Postgres, runs BEGIN, and registers a held session.
-// Fails with store.ErrRDSDataUnavailable when the instance is not available or pgx dial fails.
+// BeginRDSDataSQLTransaction dials the nested engine, runs BEGIN, and registers a held session.
+// Fails with store.ErrRDSDataUnavailable when the instance is not available or wire dial fails.
 func (s *Server) BeginRDSDataSQLTransaction(
 	ctx context.Context,
 	accountID string,
@@ -105,6 +124,23 @@ func (s *Server) BeginRDSDataSQLTransaction(
 	if strings.TrimSpace(inst.ContainerID) == "" || inst.DBInstanceStatus != "available" {
 		return "", store.ErrRDSDataUnavailable
 	}
+	engine := store.NormalizeRDSEngine(inst.Engine)
+	switch engine {
+	case "postgres":
+		return s.beginRDSDataPostgresTxn(ctx, accountID, inst, secretARN, database)
+	case "mysql", "mariadb":
+		return s.beginRDSDataMySQLTxn(ctx, accountID, inst, secretARN, database)
+	default:
+		return "", store.ErrRDSDataUnavailable
+	}
+}
+
+func (s *Server) beginRDSDataPostgresTxn(
+	ctx context.Context,
+	accountID string,
+	inst store.RDSDBInstance,
+	secretARN, database string,
+) (string, error) {
 	user, password, err := s.rdsDataMasterCreds(accountID, inst, secretARN)
 	if err != nil {
 		return "", err
@@ -137,7 +173,56 @@ func (s *Server) BeginRDSDataSQLTransaction(
 		return "", err
 	}
 	registerRDSDataTxnSession(txnID, &rdsDataTxnSession{
+		engine:    "postgres",
 		conn:      conn,
+		accountID: accountID,
+		resource:  inst.DBInstanceARN,
+		secret:    secretARN,
+		database:  db,
+		expires:   time.Now().UTC().Add(rdsDataTxnIdleTimeout),
+	})
+	return txnID, nil
+}
+
+func (s *Server) beginRDSDataMySQLTxn(
+	ctx context.Context,
+	accountID string,
+	inst store.RDSDBInstance,
+	secretARN, database string,
+) (string, error) {
+	if !rdsDataPgxEnabled() {
+		return "", store.ErrRDSDataUnavailable
+	}
+	user, password, err := s.rdsDataMasterCreds(accountID, inst, secretARN)
+	if err != nil {
+		return "", err
+	}
+	db := rdsDataDatabaseName(inst, database, "mysql")
+	dsn, err := buildNestedMySQLDSN(inst, user, password, db)
+	if err != nil {
+		return "", err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	sqlConn, err := rdsDataMySQLConnect(runCtx, dsn)
+	if err != nil {
+		return "", fmt.Errorf("%w: nested mysql dial: %v", store.ErrRDSDataUnavailable, err)
+	}
+	tx, err := sqlConn.BeginTx(runCtx, nil)
+	if err != nil {
+		_ = sqlConn.Close()
+		return "", err
+	}
+	txnID, err := s.store.BeginRDSDataTransaction(accountID, inst.DBInstanceARN, secretARN, db)
+	if err != nil {
+		_ = tx.Rollback()
+		_ = sqlConn.Close()
+		return "", err
+	}
+	registerRDSDataTxnSession(txnID, &rdsDataTxnSession{
+		engine:    store.NormalizeRDSEngine(inst.Engine),
+		mysqlConn: sqlConn,
+		mysqlTx:   tx,
 		accountID: accountID,
 		resource:  inst.DBInstanceARN,
 		secret:    secretARN,
@@ -163,8 +248,13 @@ func (s *Server) CommitRDSDataSQLTransaction(ctx context.Context, accountID, tra
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err = removed.conn.Exec(runCtx, "COMMIT")
-	removed.close()
+	if removed.mysqlTx != nil {
+		err = removed.mysqlTx.Commit()
+		removed.close()
+	} else {
+		_, err = removed.conn.Exec(runCtx, "COMMIT")
+		removed.close()
+	}
 	if err != nil {
 		_ = s.store.FinishRDSDataTransaction(accountID, transactionID, "failed")
 		return err
@@ -187,8 +277,13 @@ func (s *Server) RollbackRDSDataSQLTransaction(ctx context.Context, accountID, t
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err = removed.conn.Exec(runCtx, "ROLLBACK")
-	removed.close()
+	if removed.mysqlTx != nil {
+		err = removed.mysqlTx.Rollback()
+		removed.close()
+	} else {
+		_, err = removed.conn.Exec(runCtx, "ROLLBACK")
+		removed.close()
+	}
 	if err != nil {
 		_ = s.store.FinishRDSDataTransaction(accountID, transactionID, "failed")
 		return err
@@ -211,6 +306,9 @@ func (s *Server) executeRDSDataOnTransaction(
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if sess.mysqlTx != nil {
+		return executeRDSDataMySQLWithTx(runCtx, sess.mysqlTx, req)
+	}
 	return executeRDSDataPgxWithConn(runCtx, sess.conn, req)
 }
 
@@ -256,7 +354,13 @@ func (s *Server) preferNestedRDSDataBatch(
 				TransactionID: req.TransactionID,
 				Parameters:    params,
 			}
-			res, err := executeRDSDataPgxWithConn(runCtx, sess.conn, one)
+			var res store.RDSDataExecuteResult
+			var err error
+			if sess.mysqlTx != nil {
+				res, err = executeRDSDataMySQLWithTx(runCtx, sess.mysqlTx, one)
+			} else {
+				res, err = executeRDSDataPgxWithConn(runCtx, sess.conn, one)
+			}
 			if err != nil {
 				return nil, err
 			}

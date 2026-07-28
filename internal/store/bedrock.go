@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,6 +70,92 @@ func (s *Store) EnsureBedrockSchema() error {
 func BedrockCannedBody(modelID string) (string, bool) {
 	body, ok := BedrockAllowlistedModels[strings.TrimSpace(modelID)]
 	return body, ok
+}
+
+// BedrockConverseResponseBody returns AWS Converse-shaped JSON for an allowlisted modelId.
+func BedrockConverseResponseBody(modelID string) (string, error) {
+	modelID = strings.TrimSpace(modelID)
+	text := fmt.Sprintf("Noctaxris Bedrock stub response for model=%s.", modelID)
+	payload := map[string]any{
+		"output": map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]string{
+					{"text": text},
+				},
+			},
+		},
+		"stopReason": "end_turn",
+		"usage": map[string]int{
+			"inputTokens":  10,
+			"outputTokens": 12,
+			"totalTokens":  22,
+		},
+		"metrics": map[string]int{
+			"latencyMs": 1,
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal converse response: %w", err)
+	}
+	return string(b), nil
+}
+
+func validateConverseMessages(requestBody []byte) error {
+	if len(requestBody) == 0 {
+		return fmt.Errorf("%w: messages is required and must be a non-empty array", ErrBedrockValidation)
+	}
+	var req map[string]json.RawMessage
+	if err := json.Unmarshal(requestBody, &req); err != nil {
+		return fmt.Errorf("%w: malformed request body", ErrBedrockValidation)
+	}
+	raw, ok := req["messages"]
+	if !ok {
+		return fmt.Errorf("%w: messages is required and must be a non-empty array", ErrBedrockValidation)
+	}
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(raw, &msgs); err != nil || len(msgs) == 0 {
+		return fmt.Errorf("%w: messages is required and must be a non-empty array", ErrBedrockValidation)
+	}
+	return nil
+}
+
+// ConverseBedrockModel validates messages and modelId, persists metadata, and returns canned Converse JSON.
+func (s *Store) ConverseBedrockModel(accountID, modelID string, requestBody []byte) (BedrockInvocation, error) {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return BedrockInvocation{}, fmt.Errorf("%w: modelId is required", ErrBedrockValidation)
+	}
+	if _, ok := BedrockCannedBody(modelID); !ok {
+		return BedrockInvocation{}, fmt.Errorf("%w: modelId %q is not allowlisted", ErrBedrockResourceNotFound, modelID)
+	}
+	if err := validateConverseMessages(requestBody); err != nil {
+		return BedrockInvocation{}, err
+	}
+	canned, err := BedrockConverseResponseBody(modelID)
+	if err != nil {
+		return BedrockInvocation{}, err
+	}
+	id := uuid.NewString()
+	now := time.Now().UTC().UnixMilli()
+	_, err = s.db.Exec(
+		`INSERT INTO bedrock_invocations
+		 (account_id, invocation_id, model_id, content_type, request_bytes, response_body, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, id, modelID, "application/json", len(requestBody), canned, now,
+	)
+	if err != nil {
+		return BedrockInvocation{}, fmt.Errorf("converse bedrock model: insert: %w", err)
+	}
+	return BedrockInvocation{
+		InvocationID: id,
+		ModelID:      modelID,
+		ContentType:  "application/json",
+		RequestBytes: len(requestBody),
+		ResponseBody: canned,
+		CreatedAt:    now,
+	}, nil
 }
 
 // InvokeBedrockModel validates modelId against the allowlist, persists metadata,

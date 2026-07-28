@@ -10,6 +10,39 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func TestBedrockConverseAllowlist(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	body := []byte(`{"messages":[{"role":"user","content":[{"text":"hi"}]}]}`)
+
+	inv, err := st.ConverseBedrockModel(account, "anthropic.claude-3-haiku-20240307-v1:0", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.InvocationID == "" || !strings.Contains(inv.ResponseBody, "output") {
+		t.Fatalf("inv=%#v body=%s", inv, inv.ResponseBody)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(inv.ResponseBody), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := parsed["output"].(map[string]any)
+	msg, _ := out["message"].(map[string]any)
+	if msg["role"] != "assistant" {
+		t.Fatalf("message=%#v", msg)
+	}
+
+	_, err = st.ConverseBedrockModel(account, "anthropic.claude-3-haiku-20240307-v1:0", []byte(`{}`))
+	if !errors.Is(err, store.ErrBedrockValidation) {
+		t.Fatalf("want validation, got %v", err)
+	}
+
+	_, err = st.ConverseBedrockModel(account, "unknown.model-v1", body)
+	if !errors.Is(err, store.ErrBedrockResourceNotFound) {
+		t.Fatalf("want not found, got %v", err)
+	}
+}
+
 func TestBedrockInvokeAllowlist(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
@@ -160,5 +193,47 @@ func TestEMRClusterLifecycle(t *testing.T) {
 	_, err = st.RunEMRJobFlow(account, "us-east-1", "", "", "")
 	if !errors.Is(err, store.ErrEMRValidation) {
 		t.Fatalf("want validation, got %v", err)
+	}
+}
+
+func TestEMRStepLifecycle(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+
+	c, err := st.RunEMRJobFlow(account, "us-east-1", "steps-cluster", "emr-7.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := st.AddEMRJobFlowSteps(account, c.ClusterID, []store.EMRStepInput{
+		{
+			Name: "count",
+			Jar:  "command-runner.jar",
+			Args: []string{"echo", "ok"},
+			Properties: map[string]string{
+				"mapreduce.job.name": "lab",
+			},
+		},
+	})
+	if err != nil || len(ids) != 1 || !strings.HasPrefix(ids[0], "s-") {
+		t.Fatalf("add steps: ids=%v err=%v", ids, err)
+	}
+	step, err := st.DescribeEMRStep(account, c.ClusterID, ids[0])
+	if err != nil || step.State != "COMPLETED" || step.Name != "count" {
+		t.Fatalf("describe step: %v %#v", err, step)
+	}
+	list, err := st.ListEMRSteps(account, c.ClusterID, nil, nil)
+	if err != nil || len(list) != 1 || list[0].StepID != ids[0] {
+		t.Fatalf("list steps: %v %#v", err, list)
+	}
+	filtered, err := st.ListEMRSteps(account, c.ClusterID, []string{"PENDING"}, nil)
+	if err != nil || len(filtered) != 0 {
+		t.Fatalf("filter state: %v %#v", err, filtered)
+	}
+	if err := st.TerminateEMRJobFlows(account, []string{c.ClusterID}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.AddEMRJobFlowSteps(account, c.ClusterID, []store.EMRStepInput{{Name: "x"}})
+	if !errors.Is(err, store.ErrEMRNotFound) {
+		t.Fatalf("want not found on terminated cluster, got %v", err)
 	}
 }

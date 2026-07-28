@@ -12,7 +12,9 @@ import (
 )
 
 var (
-	ErrSESIdentityNotFound = errors.New("MessageRejected")
+	ErrSESIdentityNotFound    = errors.New("MessageRejected")
+	ErrSESIdentityNotFoundV2  = errors.New("NotFoundException")
+	ErrSESIdentityAlreadyExists = errors.New("AlreadyExistsException")
 )
 
 const sesSchema = `
@@ -86,6 +88,90 @@ func EnsureSESSchema(db *sql.DB) error {
 // EnsureSESSchema ensures SES tables on an open store.
 func (s *Store) EnsureSESSchema() error {
 	return EnsureSESSchema(s.db)
+}
+
+// CreateSESIdentityV2 creates an email (auto-verified) or domain (pending) identity for SES v2.
+func (s *Store) CreateSESIdentityV2(accountID, identity string) (SESIdentity, error) {
+	identity = strings.TrimSpace(strings.ToLower(identity))
+	if identity == "" {
+		return SESIdentity{}, fmt.Errorf("create email identity: EmailIdentity is required")
+	}
+	isEmail := strings.Contains(identity, "@")
+	if isEmail && !strings.Contains(identity, ".") {
+		return SESIdentity{}, fmt.Errorf("create email identity: invalid email address")
+	}
+	if !isEmail && strings.Contains(identity, "@") {
+		return SESIdentity{}, fmt.Errorf("create email identity: invalid identity")
+	}
+	var existing string
+	err := s.db.QueryRow(
+		`SELECT identity FROM ses_identities WHERE account_id = ? AND identity = ?`,
+		accountID, identity,
+	).Scan(&existing)
+	if err == nil {
+		return SESIdentity{}, ErrSESIdentityAlreadyExists
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return SESIdentity{}, fmt.Errorf("create email identity: %w", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	idType := "Domain"
+	verified := 0
+	if isEmail {
+		idType = "EmailAddress"
+		verified = 1
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO ses_identities (account_id, identity, identity_type, verified, created_at) VALUES (?, ?, ?, ?, ?)`,
+		accountID, identity, idType, verified, now,
+	)
+	if err != nil {
+		return SESIdentity{}, fmt.Errorf("create email identity: insert: %w", err)
+	}
+	return SESIdentity{
+		Identity: identity,
+		Type:     idType,
+		Verified: verified == 1,
+	}, nil
+}
+
+// GetSESIdentity returns one identity or ErrSESIdentityNotFoundV2.
+func (s *Store) GetSESIdentity(accountID, identity string) (SESIdentity, error) {
+	identity = strings.TrimSpace(strings.ToLower(identity))
+	var id SESIdentity
+	var verified int
+	err := s.db.QueryRow(
+		`SELECT identity, identity_type, verified, bounce_topic_arn FROM ses_identities WHERE account_id = ? AND identity = ?`,
+		accountID, identity,
+	).Scan(&id.Identity, &id.Type, &verified, &id.BounceTopicARN)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SESIdentity{}, ErrSESIdentityNotFoundV2
+	}
+	if err != nil {
+		return SESIdentity{}, fmt.Errorf("get ses identity: %w", err)
+	}
+	id.Verified = verified == 1
+	return id, nil
+}
+
+// DeleteSESIdentity removes an identity or returns ErrSESIdentityNotFoundV2.
+func (s *Store) DeleteSESIdentity(accountID, identity string) error {
+	identity = strings.TrimSpace(strings.ToLower(identity))
+	res, err := s.db.Exec(
+		`DELETE FROM ses_identities WHERE account_id = ? AND identity = ?`,
+		accountID, identity,
+	)
+	if err != nil {
+		return fmt.Errorf("delete ses identity: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete ses identity: rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrSESIdentityNotFoundV2
+	}
+	return nil
 }
 
 // VerifySESEmailIdentity lab-auto-verifies an email identity.

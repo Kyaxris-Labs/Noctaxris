@@ -130,6 +130,13 @@ func TestValidateDataPlaneOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts duckdb", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindDuckDB, Image: DefaultDuckImage,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestStartDataPlaneNilClient(t *testing.T) {
@@ -205,6 +212,21 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	}
 	if DefaultDataPlaneImage(DataKindNeptune) != "tinkerpop/gremlin-server:3.7.3" {
 		t.Fatalf("neptune image=%q", DefaultDataPlaneImage(DataKindNeptune))
+	}
+	if DefaultDataPlaneImageForNeptune("gremlin") != "tinkerpop/gremlin-server:3.7.3" {
+		t.Fatalf("gremlin image=%q", DefaultDataPlaneImageForNeptune("gremlin"))
+	}
+	if DefaultDataPlaneImageForNeptune("neo4j") != "neo4j:5-community" {
+		t.Fatalf("neo4j image=%q", DefaultDataPlaneImageForNeptune("neo4j"))
+	}
+	if DefaultDataPlanePortForNeptune("neo4j") != 7687 || DefaultDataPlanePortForNeptune("gremlin") != 8182 {
+		t.Fatalf("neptune ports neo4j=%d gremlin=%d", DefaultDataPlanePortForNeptune("neo4j"), DefaultDataPlanePortForNeptune("gremlin"))
+	}
+	if env := NeptuneNestedBootstrapEnv("neo4j"); env["NEO4J_AUTH"] != "none" {
+		t.Fatalf("neo4j env=%v", env)
+	}
+	if NeptuneNestedBootstrapEnv("gremlin") != nil {
+		t.Fatal("gremlin bootstrap env must be empty")
 	}
 	if DefaultDataPlanePort(DataKindMSK) != 9092 {
 		t.Fatalf("msk port=%d", DefaultDataPlanePort(DataKindMSK))
