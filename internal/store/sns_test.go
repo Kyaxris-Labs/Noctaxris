@@ -3,9 +3,12 @@ package store_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -463,5 +466,166 @@ func TestPublishRejectsSQSARNAccountMismatch(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("expected no delivery for cross-account SQS ARN, got %d", len(msgs))
+	}
+}
+
+func sqliteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "database is locked") || strings.Contains(s, "SQLITE_BUSY")
+}
+
+func TestSNSPublishConcurrentReceive(t *testing.T) {
+	st := openSNSStore(t)
+	account := "000000000001"
+	if _, err := st.CreateTopic(account, "us-east-1", "alerts", nil); err != nil {
+		t.Fatal(err)
+	}
+	target, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "sns-target", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, "sns-target", map[string]string{"Policy": policy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Subscribe(account, "alerts", "sqs", target.QueueARN); err != nil {
+		t.Fatal(err)
+	}
+
+	const otherN = 30
+	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "other", map[string]string{
+		"VisibilityTimeout": "30",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < otherN; i++ {
+		if _, err := st.SendMessage(account, "other", []byte(fmt.Sprintf("o-%d", i)), false, nil, "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const publishes = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, publishes+8)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < publishes; i++ {
+			var err error
+			for attempt := 0; attempt < 8; attempt++ {
+				_, err = st.Publish(account, "alerts", fmt.Sprintf("p-%d", i), "", nil)
+				if err == nil || !sqliteBusy(err) {
+					break
+				}
+				time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+			}
+			if err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}()
+
+	seen := sync.Map{}
+	for g := 0; g < 6; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				var msgs []store.Message
+				var err error
+				for attempt := 0; attempt < 8; attempt++ {
+					msgs, err = st.ReceiveMessages(account, "other", 5)
+					if err == nil || !sqliteBusy(err) {
+						break
+					}
+					time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+				}
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if len(msgs) == 0 {
+					return
+				}
+				for _, m := range msgs {
+					if _, loaded := seen.LoadOrStore(m.MessageID, struct{}{}); loaded {
+						errCh <- fmt.Errorf("duplicate receive of %s on other queue", m.MessageID)
+						return
+					}
+					var delErr error
+					for attempt := 0; attempt < 8; attempt++ {
+						delErr = st.DeleteMessage(account, "other", m.ReceiptHandle)
+						if delErr == nil || !sqliteBusy(delErr) {
+							break
+						}
+						time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
+					}
+					if delErr != nil {
+						errCh <- delErr
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Drain remaining other-queue messages without duplicates.
+	for {
+		msgs, err := st.ReceiveMessages(account, "other", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+		for _, m := range msgs {
+			if _, loaded := seen.LoadOrStore(m.MessageID, struct{}{}); loaded {
+				t.Fatalf("duplicate receive of %s during drain", m.MessageID)
+			}
+			if err := st.DeleteMessage(account, "other", m.ReceiptHandle); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	count := 0
+	seen.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	if count != otherN {
+		t.Fatalf("other queue delivered=%d want %d", count, otherN)
+	}
+
+	targetSeen := map[string]struct{}{}
+	for {
+		msgs, err := st.ReceiveMessages(account, "sns-target", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+		for _, m := range msgs {
+			if _, ok := targetSeen[m.MessageID]; ok {
+				t.Fatalf("duplicate SNS delivery %s", m.MessageID)
+			}
+			targetSeen[m.MessageID] = struct{}{}
+		}
+	}
+	if len(targetSeen) != publishes {
+		t.Fatalf("sns-target messages=%d want %d", len(targetSeen), publishes)
 	}
 }

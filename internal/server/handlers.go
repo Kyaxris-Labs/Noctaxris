@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -39,17 +38,19 @@ func (s *Server) lookupKey(accessKeyID string) (authn.ResolvedKey, error) {
 		return authn.ResolvedKey{}, err
 	}
 	return authn.ResolvedKey{
-		AccountID:     ak.AccountID,
-		Secret:        ak.Secret,
-		IsRoot:        ak.IsRoot,
-		UserName:      ak.UserName,
-		Status:        ak.Status,
-		SessionToken:  ak.SessionToken,
-		RoleARN:       ak.RoleARN,
-		SessionName:   ak.SessionName,
-		FederatedUser: ak.FederatedUser,
-		SessionPolicy: ak.SessionPolicy,
-		ExpiresAt:     ak.ExpiresAt,
+		AccountID:          ak.AccountID,
+		Secret:             ak.Secret,
+		IsRoot:             ak.IsRoot,
+		UserName:           ak.UserName,
+		Status:             ak.Status,
+		SessionToken:       ak.SessionToken,
+		RoleARN:            ak.RoleARN,
+		SessionName:        ak.SessionName,
+		FederatedUser:      ak.FederatedUser,
+		SessionPolicy:      ak.SessionPolicy,
+		ExpiresAt:          ak.ExpiresAt,
+		MFAAuthenticated:   ak.MFAAuthenticated,
+		MFAAuthenticatedAt: ak.MFAAuthenticatedAt,
 	}, nil
 }
 
@@ -294,7 +295,13 @@ func (s *Server) handleAssumeRole(
 		return
 	}
 
-	callerDocs := s.identityDocs(verified.Principal)
+	callerDocs, err := s.identityDocs(verified.Principal)
+	if err != nil {
+		s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+			"Not authorized to perform sts:AssumeRole on the specified resource.", readOnly, r, eventID,
+			verified.AccessKeyID, verified.AccountID, true)
+		return
+	}
 	trustKeys := s.conditionKeys(verified)
 	if ext := strings.TrimSpace(params.Get("ExternalId")); ext != "" {
 		trustKeys["sts:ExternalId"] = ext
@@ -504,10 +511,10 @@ func (s *Server) conditionKeys(verified *authn.Verified) map[string]string {
 	if ip := strings.TrimSpace(verified.SourceIP); ip != "" {
 		keys["aws:SourceIp"] = ip
 	}
-	if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.MFAAuthenticated {
+	if verified != nil && verified.MFAAuthenticated {
 		keys["aws:MultiFactorAuthPresent"] = "true"
-		if !ak.MFAAuthenticatedAt.IsZero() {
-			age := int(s.now().UTC().Sub(ak.MFAAuthenticatedAt.UTC()).Seconds())
+		if !verified.MFAAuthenticatedAt.IsZero() {
+			age := int(s.now().UTC().Sub(verified.MFAAuthenticatedAt.UTC()).Seconds())
 			if age < 0 {
 				age = 0
 			}
@@ -603,8 +610,11 @@ func serviceResourceTagKeyPrefix(arn string) string {
 }
 
 func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
-	docs := s.identityDocs(verified.Principal)
-	sessionDocs := s.sessionPolicyDocs(verified.AccessKeyID)
+	docs, err := s.identityDocs(verified.Principal)
+	if err != nil {
+		return authz.EvalInputs{}, false
+	}
+	sessionDocs := s.sessionPolicyDocs(verified)
 
 	boundaryDoc := ""
 	boundaryUser := ""
@@ -623,16 +633,20 @@ func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 		}
 	case identity.KindFederated:
 		// GetFederationToken: identity ∩ session from calling IAM user; empty session Denies.
-		if ak, err := s.store.LookupAccessKeyRecord(verified.AccessKeyID); err == nil && ak.FederatedUser != "" {
-			if ak.UserName != "" {
-				docs = s.identityDocs(identity.UserPrincipal(ak.AccountID, ak.UserName, verified.AccessKeyID))
-				boundaryUser = ak.UserName
-			} else if ak.IsRoot {
+		// Use plumbed Verified fields only (no re-LookupAccessKeyRecord).
+		if verified.FederatedUser != "" {
+			if verified.UserName != "" {
+				docs, err = s.identityDocs(identity.UserPrincipal(verified.AccountID, verified.UserName, verified.AccessKeyID))
+				if err != nil {
+					return authz.EvalInputs{}, false
+				}
+				boundaryUser = verified.UserName
+			} else if verified.IsRoot {
 				docs = []string{`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`}
 			} else {
 				docs = nil
 			}
-			if ak.SessionPolicy == "" {
+			if verified.SessionPolicy == "" {
 				sessionDocs = []string{`{"Version":"2012-10-17","Statement":[]}`}
 			}
 		}
@@ -647,11 +661,7 @@ func (s *Server) evalInputs(verified *authn.Verified) (authz.EvalInputs, bool) {
 		}
 	}
 
-	scpDocs, err := s.store.SCPDocsForAccount(verified.AccountID)
-	if err != nil {
-		return authz.EvalInputs{}, false
-	}
-	rcpDocs, err := s.store.RCPDocsForAccount(verified.AccountID)
+	scpDocs, rcpDocs, err := s.store.OrgFilterDocsForAccount(verified.AccountID)
 	if err != nil {
 		return authz.EvalInputs{}, false
 	}
@@ -775,18 +785,18 @@ func (s *Server) authorizeDataplaneKMS(
 	return true
 }
 
-func (s *Server) identityDocs(principal identity.Principal) []string {
+func (s *Server) identityDocs(principal identity.Principal) ([]string, error) {
 	if principal.Kind == identity.KindAnonymous {
-		return nil
+		return nil, nil
 	}
 	if principal.Kind == identity.KindUser && principal.UserName != "" {
 		docs, err := s.store.IdentityPolicyDocsForUser(principal.AccountID, principal.UserName)
-		if err == nil {
-			return docs
+		if err != nil {
+			return nil, fmt.Errorf("identity docs user load account=%s user=%s: %w", principal.AccountID, principal.UserName, err)
 		}
-		log.Printf("identity docs user load failed account=%s user=%s err=%v", principal.AccountID, principal.UserName, err)
-		return nil
+		return docs, nil
 	}
+	// Root (KindRoot / IsRoot): still load attachments+inline on root ARN for denyScanFull.
 	// Assumed-role sessions use sts:assumed-role/... ARNs; IAM attachments live on the role ARN.
 	arn := principal.ARN()
 	if principal.Kind == identity.KindRole && principal.RoleName != "" {
@@ -794,26 +804,23 @@ func (s *Server) identityDocs(principal identity.Principal) []string {
 	}
 	docs, err := s.store.ListAttachedPolicyDocuments(arn)
 	if err != nil {
-		log.Printf("identity docs attached load failed arn=%s err=%v", arn, err)
-		return nil
+		return nil, fmt.Errorf("identity docs attached load arn=%s: %w", arn, err)
 	}
 	inline, err := s.store.ListInlinePolicies(arn)
 	if err != nil {
-		log.Printf("identity docs inline load failed arn=%s err=%v", arn, err)
-		return nil
+		return nil, fmt.Errorf("identity docs inline load arn=%s: %w", arn, err)
 	}
 	for _, p := range inline {
 		docs = append(docs, p.Document)
 	}
-	return docs
+	return docs, nil
 }
 
-func (s *Server) sessionPolicyDocs(accessKeyID string) []string {
-	ak, err := s.store.LookupAccessKeyRecord(accessKeyID)
-	if err != nil || ak.SessionPolicy == "" {
+func (s *Server) sessionPolicyDocs(verified *authn.Verified) []string {
+	if verified == nil || verified.SessionPolicy == "" {
 		return nil
 	}
-	return []string{ak.SessionPolicy}
+	return []string{verified.SessionPolicy}
 }
 
 func (s *Server) writeXMLOK(w http.ResponseWriter, requestID string, payload []byte) {

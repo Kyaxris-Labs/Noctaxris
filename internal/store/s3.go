@@ -502,7 +502,12 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 	}
 
 	unlock := s.lockS3Object(accountID, bucket, key)
-	defer unlock()
+	held := true
+	defer func() {
+		if held {
+			unlock()
+		}
+	}()
 
 	rel, abs, err := s3ObjectAbsPath(s.dataRoot, accountID, bucket, key)
 	if err != nil {
@@ -580,6 +585,8 @@ func (s *Store) PutObject(accountID, bucket, key string, meta PutObjectMeta) (Ob
 	if eventName == "" {
 		eventName = "ObjectCreated:Put"
 	}
+	held = false
+	unlock()
 	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, eventName, "", size, etag)
 	return out, nil
 }

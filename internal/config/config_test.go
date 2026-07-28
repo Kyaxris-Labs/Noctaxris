@@ -160,3 +160,4 @@ func TestLoadFromEnvCognitoInsecureCodes(t *testing.T) {
 		t.Fatal("CognitoInsecureCodes=1 want true")
 	}
 }
+

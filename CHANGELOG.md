@@ -2,26 +2,53 @@
 
 ## Unreleased
 
-- SES v2 REST on `/v2/email/*`: Create/List/Get/DeleteEmailIdentity, outbound-emails (Simple/Raw), GetAccount; shared identities/messages with v1; ECR registry excludes `/v2/email/*`
+## 1.3.0
+
+Minor after 1.2.0: Floci-parity nested compute and data labs (EC2/ASG/EKS, RDS MySQL, Athena/CUR DuckDB, Neptune Neo4j), observe and edge depth (SES v2, SSM Run Command, NLB shim, Bedrock Converse), opt-in shared Kafka/MQTT brokers, and request-path speedups that keep durable fail-closed authz. Docker Hub: `kyaxris/noctaxris` (`1.3.0`, `1.3`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+### Nested compute and control-plane labs
+
+- EC2: Query Run/Describe/Stop/Start/Terminate on DinD `noctaxris-ec2`; AMI→allowlisted image map; pending without engine; UserData once on create; IMDS lite sidecar (no host `:9169`); VPC/subnet/SG/ENI metadata CRUD (rules not enforced on DinD); VPC Flow unchanged under `ec2`
+- Auto Scaling: DesiredCapacity reconciles to lab EC2 (`Pending` without engine; `InService` when running; ForceDelete terminates)
+- EKS lite: Create/Describe/List/DeleteCluster REST; metadata-only ACTIVE (no nested k3s under restricted DinD)
+- Lightsail, Elastic Beanstalk, AWS Backup: stored-state control-plane labs
+
+### Nested data and analytics
+
+- RDS: MySQL/MariaDB engines alongside Postgres; opt-in `compose.lab-nested-ports.yaml` + `NOCTAXRIS_NESTED_PORT_PUBLISH`
 - RDS Data API: Execute/Batch/txn for nested `mysql` and `mariadb` (`go-sql-driver/mysql` or nested `mysql` CLI); Postgres path unchanged
-- Transfer: DescribeUser/ListUsers plus Import/Delete SSH public keys (SQLite metadata)
+- Neptune: default Gremlin Server; opt-in nested Neo4j Bolt (`NOCTAXRIS_NEPTUNE_ENGINE` / GraphEngine / tag)
+- MemoryDB nested lab; MSK nested Redpanda (per-cluster default)
+- Athena: optional nested DuckDB sidecar (`NOCTAXRIS_ATHENA_ENGINE` / `NOCTAXRIS_DUCKDB_URL`); in-process `BETWEEN` and range WHERE; Parquet Glue tables require DuckDB
+- CUR: `Format=Parquet` emits real Parquet via nested DuckDB (NDJSON stage + `COPY ... FORMAT PARQUET`); CSV unchanged; fail-closed without DuckDB (no JSON stand-in)
+- DynamoDB LSI + PartiQL lite; Kinesis EFO + UpdateShardCount
+
+### Observe, messaging, and edge
+
+- SES v2 REST on `/v2/email/*`: Create/List/Get/DeleteEmailIdentity, outbound-emails (Simple/Raw), GetAccount; shared identities/messages with v1; ECR registry excludes `/v2/email/*`
+- SSM Run Command lite: SendCommand / GetCommandInvocation / ListCommandInvocations for AWS-RunShellScript via nested DinD exec
+- Transfer: DescribeUser/ListUsers plus Import/Delete SSH public keys; lab Put/GetFile stays HTTP on `:4566` (not an SFTP listener)
 - EMR: AddJobFlowSteps / DescribeStep / ListSteps (immediate COMPLETED lab stub)
 - ELBv2: lab HTTP shim `/nlb/{account}/{name}/{port}/...` for network LBs (open-dataplane gate; not true L4)
 - Bedrock Runtime: Converse canned JSON over allowlisted modelIds; ConverseStream 501
-- SSM: Run Command lite (SendCommand / GetCommandInvocation / ListCommandInvocations) for AWS-RunShellScript via nested DinD exec
-- EC2: UserData once on create; IMDS lite sidecar on `noctaxris-ec2` (no host `:9169`); VPC/subnet/SG/ENI metadata CRUD (rules not enforced on DinD)
-- Athena: optional nested DuckDB sidecar on `noctaxris-data` (`NOCTAXRIS_ATHENA_ENGINE` / `NOCTAXRIS_DUCKDB_URL`); in-process `BETWEEN` and range WHERE; Parquet Glue tables require DuckDB
-- CUR: `Format=Parquet` emits real Parquet via nested DuckDB (NDJSON stage + `COPY ... FORMAT PARQUET`); CSV emit unchanged; fail-closed without DuckDB (no JSON stand-in)
-- Neptune: opt-in nested Neo4j Bolt (`NOCTAXRIS_NEPTUNE_ENGINE` / GraphEngine / tag); default remains Gremlin Server
+- CloudWatch Metrics/Alarms; CUR definitions; IoT Core/Data HTTP shadows
+- Config: continuous history while recording covers S3 object PutObject/DeleteObject (`AWS::S3::Object` resourceId `bucket/key`)
 - Lambda async SQS DLQ / OnFailure: honor destination `RedriveAllowPolicy` and foreign queue Policy via `sendLabDLQMessage`
-- Config: continuous history while recording also covers S3 object PutObject/DeleteObject (`AWS::S3::Object` resourceId `bucket/key`) via GetResourceConfigHistory
-- Transfer Family: docs/tests clarify lab Put/GetFile is HTTP on `:4566` (JSON + `/transfer/.../home/...`), not an SFTP listener
-- EC2 lab nested RunInstances: Query Run/Describe/Stop/Start/Terminate on DinD `noctaxris-ec2`; AMI→allowlisted image map; pending without engine; VPC Flow unchanged under `ec2`
-- EKS lite: Create/Describe/List/DeleteCluster REST; metadata-only ACTIVE (no nested k3s under restricted DinD)
-- Auto Scaling: DesiredCapacity reconciles to lab EC2 (`Pending` without engine; `InService` when running; ForceDelete terminates)
-- Nested data: RDS MySQL/MariaDB engines; MemoryDB; Neptune (Gremlin); MSK (Redpanda); opt-in `compose.lab-nested-ports.yaml` + `NOCTAXRIS_NESTED_PORT_PUBLISH`
-- Observe/govern: CloudWatch Metrics/Alarms; CUR definitions; IoT Core/Data HTTP shadows; Lightsail; Elastic Beanstalk; AWS Backup; DynamoDB LSI + PartiQL lite; Kinesis EFO + UpdateShardCount
-- API edge: API Gateway REST v1 + WebSocket lite; HTTP_PROXY allowlist opt-in; SNS HTTPS egress gate; ELBv2 Network Load Balancer
+- API edge: API Gateway REST v1 + WebSocket lite; HTTP_PROXY allowlist opt-in; SNS HTTPS egress gate
+
+### Shared brokers
+
+- Opt-in `NOCTAXRIS_SHARED_KAFKA=1` binds one MSK cluster process-wide to DinD Redpanda `noctaxris-lab-kafka:9092` (`compose.lab-brokers.yaml`)
+- Opt-in `NOCTAXRIS_SHARED_MQTT=1` starts Mosquitto `noctaxris-lab-mqtt` plus API MQTT shadow bridge; default remains HTTP shadows only
+- `NOCTAXRIS_BROKER_PORT_PUBLISH` narrow gate for engine PortBindings (`:9092` / `:1883`); no default host publish of broker ports
+
+### Request path performance
+
+- Access-key material cache after Unseal (always on); invalidate on Delete/UpdateAccessKey (including `*InAccount`); SigV4 still re-checks Status, ExpiresAt, and session token
+- Verified plumbing carries SessionPolicy, MFA time, and federated caller fields so authorize paths avoid re-LookupAccessKeyRecord
+- Fail-closed identity policy load errors; batched `IdentityPolicyDocsForUser`; shared OU path for SCP/RCP via `OrgFilterDocsForAccount`
+- S3 notification emit after object lock release; SQS `SendMessage` prep outside `sqsMu` (re-GetQueue under lock)
+- Does not cache Allow/Deny decisions or authz policy document sets
 
 ## 1.2.0
 

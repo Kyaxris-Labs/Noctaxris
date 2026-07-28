@@ -130,7 +130,12 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	}
 
 	unlock := s.lockS3Object(accountID, bucket, key)
-	defer unlock()
+	held := true
+	defer func() {
+		if held {
+			unlock()
+		}
+	}()
 
 	versionID := "null"
 	if status == VersioningEnabled {
@@ -250,6 +255,8 @@ func (s *Store) PutObjectVersioned(accountID, bucket, key string, meta PutObject
 	if emitVersionID == "null" {
 		emitVersionID = ""
 	}
+	held = false
+	unlock()
 	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, eventName, emitVersionID, size, etag)
 	return out, versionID, nil
 }
@@ -398,15 +405,29 @@ func (s *Store) DeleteObjectVersionedWithOptions(accountID, bucket, key, version
 	}
 
 	unlock := s.lockS3Object(accountID, bucket, key)
-	defer unlock()
+	held := true
+	defer func() {
+		if held {
+			unlock()
+		}
+	}()
 
 	if versionID != "" {
 		if err := s.deleteObjectVersionByID(accountID, bucket, key, versionID); err != nil {
 			return DeleteObjectVersionResult{}, err
 		}
+		held = false
+		unlock()
 		return DeleteObjectVersionResult{}, nil
 	}
-	return s.createDeleteMarker(accountID, bucket, key, status)
+	result, err := s.createDeleteMarker(accountID, bucket, key, status)
+	if err != nil {
+		return DeleteObjectVersionResult{}, err
+	}
+	held = false
+	unlock()
+	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, "ObjectRemoved:DeleteMarkerCreated", result.VersionID, 0, "")
+	return result, nil
 }
 
 func (s *Store) deleteObjectVersionByID(accountID, bucket, key, versionID string) error {
@@ -504,7 +525,6 @@ func (s *Store) createDeleteMarker(accountID, bucket, key, versioningStatus stri
 	if err := tx.Commit(); err != nil {
 		return DeleteObjectVersionResult{}, err
 	}
-	s.emitS3EventNotifications(accountID, DefaultEventsRegion, bucket, key, "ObjectRemoved:DeleteMarkerCreated", markerID, 0, "")
 	return DeleteObjectVersionResult{VersionID: markerID, DeleteMarker: true}, nil
 }
 

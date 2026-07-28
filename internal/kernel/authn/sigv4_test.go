@@ -462,3 +462,52 @@ func uriEncode(s string) string {
 	}
 	return b.String()
 }
+
+func TestAccessKeyPlumbVerifyCopiesResolvedFields(t *testing.T) {
+	now := fixedNow()
+	mfaAt := now.Add(-2 * time.Minute)
+	sessionPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	req.Header.Set("X-Amz-Security-Token", "session-token-value")
+	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
+	req.Header.Set("X-Amz-Security-Token", "session-token-value")
+
+	lookup := func(string) (authn.ResolvedKey, error) {
+		return authn.ResolvedKey{
+			AccountID:          testAcct,
+			Secret:             testSecret,
+			UserName:           "caller",
+			IsRoot:             false,
+			SessionToken:       "session-token-value",
+			FederatedUser:      "broker",
+			SessionPolicy:      sessionPolicy,
+			MFAAuthenticated:   true,
+			MFAAuthenticatedAt: mfaAt,
+			ExpiresAt:          now.Add(time.Hour),
+		}, nil
+	}
+
+	got, err := authn.Verify(req, body, now, 15*time.Minute, lookup)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.SessionPolicy != sessionPolicy {
+		t.Fatalf("SessionPolicy=%q", got.SessionPolicy)
+	}
+	if !got.MFAAuthenticated {
+		t.Fatal("expected MFAAuthenticated=true")
+	}
+	if !got.MFAAuthenticatedAt.Equal(mfaAt) {
+		t.Fatalf("MFAAuthenticatedAt=%v want %v", got.MFAAuthenticatedAt, mfaAt)
+	}
+	if got.UserName != "caller" {
+		t.Fatalf("UserName=%q", got.UserName)
+	}
+	if got.IsRoot {
+		t.Fatal("expected IsRoot=false")
+	}
+	if got.FederatedUser != "broker" {
+		t.Fatalf("FederatedUser=%q", got.FederatedUser)
+	}
+}

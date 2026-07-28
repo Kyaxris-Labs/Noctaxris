@@ -31,21 +31,30 @@ type Verified struct {
 	AccountID       string
 	// SourceIP is the caller address for aws:SourceIp (set by the HTTP server).
 	SourceIP string
+	// Plumbed once from ResolvedKey so authorize paths need no re-Lookup.
+	SessionPolicy      string
+	MFAAuthenticated   bool
+	MFAAuthenticatedAt time.Time
+	UserName           string
+	IsRoot             bool
+	FederatedUser      string
 }
 
 // ResolvedKey is the credential material returned by KeyLookup.
 type ResolvedKey struct {
-	AccountID     string
-	Secret        string
-	IsRoot        bool
-	UserName      string
-	Status        string
-	SessionToken  string
-	RoleARN       string
-	SessionName   string
-	FederatedUser string
-	SessionPolicy string
-	ExpiresAt     time.Time
+	AccountID          string
+	Secret             string
+	IsRoot             bool
+	UserName           string
+	Status             string
+	SessionToken       string
+	RoleARN            string
+	SessionName        string
+	FederatedUser      string
+	SessionPolicy      string
+	ExpiresAt          time.Time
+	MFAAuthenticated   bool
+	MFAAuthenticatedAt time.Time
 }
 
 // KeyLookup resolves an access key id to credential material.
@@ -166,13 +175,19 @@ func Verify(r *http.Request, body []byte, now time.Time, skew time.Duration, loo
 	}
 
 	return &Verified{
-		Principal:       principal,
-		AccessKeyID:     mat.accessKeyID,
-		SecretAccessKey: cred.Secret,
-		SessionToken:    cred.SessionToken,
-		Region:          mat.region,
-		Service:         mat.service,
-		AccountID:       cred.AccountID,
+		Principal:          principal,
+		AccessKeyID:        mat.accessKeyID,
+		SecretAccessKey:    cred.Secret,
+		SessionToken:       cred.SessionToken,
+		Region:             mat.region,
+		Service:            mat.service,
+		AccountID:          cred.AccountID,
+		SessionPolicy:      cred.SessionPolicy,
+		MFAAuthenticated:   cred.MFAAuthenticated,
+		MFAAuthenticatedAt: cred.MFAAuthenticatedAt,
+		UserName:           cred.UserName,
+		IsRoot:             cred.IsRoot,
+		FederatedUser:      cred.FederatedUser,
 	}, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -377,6 +378,13 @@ type Store struct {
 	// wsConnOnce + wsConn hold in-memory WebSocket API lab connections (PostToConnection).
 	wsConnOnce sync.Once
 	wsConn     *sync.Map
+
+	// accessKeyCache holds unsealed AccessKey rows after LookupAccessKeyRecord.
+	// Always on; invalidate only after successful Delete/Update of that key.
+	accessKeyCacheMu  sync.Mutex
+	accessKeyCache    map[string]accessKeyCacheEntry
+	accessKeyCacheGen uint64
+	accessKeyUnsealN  atomic.Uint64
 }
 
 type s3ObjectLock struct {
@@ -936,87 +944,6 @@ func (s *Store) EnsureRoot(accountID, accessKeyID, secret string) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// LookupAccessKeyRecord returns the full access key record including session fields.
-func (s *Store) LookupAccessKeyRecord(accessKeyID string) (AccessKey, error) {
-	var (
-		accountID              string
-		ciphertext             []byte
-		rootFlag               int
-		sessionTokenCiphertext []byte
-		roleARN                sql.NullString
-		sessionName            sql.NullString
-		expiresAt              sql.NullString
-		userName               sql.NullString
-		status                 sql.NullString
-		sessionPolicy          sql.NullString
-		federatedUser          sql.NullString
-		mfaAuthenticated       int
-		mfaAuthenticatedAt     sql.NullString
-	)
-	err := s.db.QueryRow(
-		`SELECT account_id, secret_ciphertext, is_root,
-		        session_token_ciphertext, role_arn, session_name, expires_at, user_name, status,
-		        session_policy, federated_user, mfa_authenticated, mfa_authenticated_at
-		 FROM access_keys WHERE access_key_id = ?`,
-		accessKeyID,
-	).Scan(&accountID, &ciphertext, &rootFlag, &sessionTokenCiphertext, &roleARN, &sessionName, &expiresAt, &userName, &status, &sessionPolicy, &federatedUser, &mfaAuthenticated, &mfaAuthenticatedAt)
-	if err != nil {
-		return AccessKey{}, err
-	}
-	plaintext, err := Unseal(s.master, ciphertext)
-	if err != nil {
-		return AccessKey{}, err
-	}
-	ak := AccessKey{
-		AccessKeyID:      accessKeyID,
-		AccountID:        accountID,
-		Secret:           string(plaintext),
-		IsRoot:           rootFlag == 1,
-		Status:           AccessKeyStatusActive,
-		MFAAuthenticated: mfaAuthenticated == 1,
-	}
-	if userName.Valid {
-		ak.UserName = userName.String
-	}
-	if status.Valid && status.String != "" {
-		ak.Status = status.String
-	}
-	if sessionPolicy.Valid {
-		ak.SessionPolicy = sessionPolicy.String
-	}
-	if federatedUser.Valid {
-		ak.FederatedUser = federatedUser.String
-	}
-	if len(sessionTokenCiphertext) > 0 {
-		tokenPlain, err := Unseal(s.master, sessionTokenCiphertext)
-		if err != nil {
-			return AccessKey{}, fmt.Errorf("unseal session token: %w", err)
-		}
-		ak.SessionToken = string(tokenPlain)
-	}
-	if roleARN.Valid {
-		ak.RoleARN = roleARN.String
-	}
-	if sessionName.Valid {
-		ak.SessionName = sessionName.String
-	}
-	if expiresAt.Valid && expiresAt.String != "" {
-		t, err := time.Parse(time.RFC3339, expiresAt.String)
-		if err != nil {
-			return AccessKey{}, fmt.Errorf("parse expires_at: %w", err)
-		}
-		ak.ExpiresAt = t
-	}
-	if mfaAuthenticatedAt.Valid && mfaAuthenticatedAt.String != "" {
-		t, err := time.Parse(time.RFC3339, mfaAuthenticatedAt.String)
-		if err != nil {
-			return AccessKey{}, fmt.Errorf("parse mfa_authenticated_at: %w", err)
-		}
-		ak.MFAAuthenticatedAt = t
-	}
-	return ak, nil
 }
 
 // LookupAccessKey is a thin wrapper for long-lived credential callers.

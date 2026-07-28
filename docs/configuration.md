@@ -127,6 +127,6 @@ curl http://127.0.0.1:4566/_noctaxris/ready
 curl http://127.0.0.1:4566/_noctaxris/version
 ```
 
-Expect liveness body `ok`, readiness body `ready`, and version body matching `VERSION` (e.g. `1.2.0`). Distroless probes use `/noctaxris healthcheck` inside the API container.
+Expect liveness body `ok`, readiness body `ready`, and version body matching `VERSION` (e.g. `1.3.0`). Distroless probes use `/noctaxris healthcheck` inside the API container.
 
 Root `.dockerignore` keeps `.env`, git metadata, and similar junk out of the build context.

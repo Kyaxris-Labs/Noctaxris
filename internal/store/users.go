@@ -201,6 +201,7 @@ func (s *Store) DeleteAccessKey(accessKeyID string) error {
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
+	s.invalidateAccessKeyCache(accessKeyID)
 	return nil
 }
 
@@ -220,6 +221,7 @@ func (s *Store) DeleteAccessKeyInAccount(accountID, accessKeyID string) error {
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
+	s.invalidateAccessKeyCache(accessKeyID)
 	return nil
 }
 
@@ -244,6 +246,7 @@ func (s *Store) UpdateAccessKey(accessKeyID, status string) error {
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
+	s.invalidateAccessKeyCache(accessKeyID)
 	return nil
 }
 
@@ -268,5 +271,6 @@ func (s *Store) UpdateAccessKeyInAccount(accountID, accessKeyID, status string) 
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
+	s.invalidateAccessKeyCache(accessKeyID)
 	return nil
 }

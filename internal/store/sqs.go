@@ -548,8 +548,45 @@ func (s *Store) nextSequenceNumber(accountID, queueName, messageGroupID string) 
 	return next, nil
 }
 
+// prepareSendFIFOFields derives MessageGroupId / MessageDeduplicationId from
+// already-loaded queue attributes. Callers may run this outside sqsMu.
+func prepareSendFIFOFields(attrs map[string]string, body []byte, opts *SendMessageOpts) (groupID, dedupID string, fifo bool, err error) {
+	fifo = queueIsFIFO(attrs)
+	if !fifo {
+		return "", "", false, nil
+	}
+	if opts == nil || strings.TrimSpace(opts.MessageGroupID) == "" {
+		return "", "", true, ErrMissingMessageGroupID
+	}
+	groupID = strings.TrimSpace(opts.MessageGroupID)
+	if queueContentBasedDedup(attrs) {
+		return groupID, contentBasedDedupID(body), true, nil
+	}
+	if opts != nil && strings.TrimSpace(opts.MessageDeduplicationID) != "" {
+		return groupID, strings.TrimSpace(opts.MessageDeduplicationID), true, nil
+	}
+	return "", "", true, ErrMissingMessageDeduplication
+}
+
+func prepareSendVisibleAfter(attrs map[string]string, opts *SendMessageOpts) string {
+	delay := queueDelaySeconds(attrs)
+	if opts != nil && opts.DelaySeconds > 0 {
+		delay = opts.DelaySeconds
+		if delay > maxDelaySeconds {
+			delay = maxDelaySeconds
+		}
+	}
+	if delay <= 0 {
+		return ""
+	}
+	return time.Now().UTC().Add(time.Duration(delay) * time.Second).Format(time.RFC3339)
+}
+
 // SendMessage stores a message on the queue. body is plaintext when sealed is
 // false, or ciphertext when sealed is true. messageAttributesJSON is stored as-is.
+// UUID, attribute defaulting, delay math, and FIFO field prep run outside sqsMu;
+// the critical section re-loads the queue (fail closed) then performs FIFO
+// dedup/sequence+INSERT or standard INSERT under the mutex.
 func (s *Store) SendMessage(
 	accountID, queueName string,
 	body []byte,
@@ -558,29 +595,14 @@ func (s *Store) SendMessage(
 	messageAttributesJSON string,
 	opts *SendMessageOpts,
 ) (Message, error) {
-	s.sqsMu.Lock()
-	defer s.sqsMu.Unlock()
-
-	q, err := s.GetQueue(accountID, queueName)
+	qSnap, err := s.GetQueue(accountID, queueName)
 	if err != nil {
 		return Message{}, err
 	}
 
-	messageGroupID := ""
-	dedupID := ""
-	fifo := queueIsFIFO(q.Attributes)
-	if fifo {
-		if opts == nil || strings.TrimSpace(opts.MessageGroupID) == "" {
-			return Message{}, ErrMissingMessageGroupID
-		}
-		messageGroupID = strings.TrimSpace(opts.MessageGroupID)
-		if queueContentBasedDedup(q.Attributes) {
-			dedupID = contentBasedDedupID(body)
-		} else if opts != nil && strings.TrimSpace(opts.MessageDeduplicationID) != "" {
-			dedupID = strings.TrimSpace(opts.MessageDeduplicationID)
-		} else {
-			return Message{}, ErrMissingMessageDeduplication
-		}
+	messageGroupID, dedupID, fifo, err := prepareSendFIFOFields(qSnap.Attributes, body, opts)
+	if err != nil {
+		return Message{}, err
 	}
 
 	messageID := uuid.NewString()
@@ -593,17 +615,23 @@ func (s *Store) SendMessage(
 	if strings.TrimSpace(attrsJSON) == "" {
 		attrsJSON = "{}"
 	}
+	visibleAfter := prepareSendVisibleAfter(qSnap.Attributes, opts)
 
-	delay := queueDelaySeconds(q.Attributes)
-	if opts != nil && opts.DelaySeconds > 0 {
-		delay = opts.DelaySeconds
-		if delay > maxDelaySeconds {
-			delay = maxDelaySeconds
-		}
+	s.sqsMu.Lock()
+	defer s.sqsMu.Unlock()
+
+	q, err := s.GetQueue(accountID, queueName)
+	if err != nil {
+		return Message{}, err
 	}
-	visibleAfter := ""
-	if delay > 0 {
-		visibleAfter = time.Now().UTC().Add(time.Duration(delay) * time.Second).Format(time.RFC3339)
+	// Queue attrs may have changed between snapshot and lock; re-derive FIFO fields.
+	if queueIsFIFO(q.Attributes) != fifo ||
+		(fifo && queueContentBasedDedup(q.Attributes) != queueContentBasedDedup(qSnap.Attributes)) {
+		messageGroupID, dedupID, fifo, err = prepareSendFIFOFields(q.Attributes, body, opts)
+		if err != nil {
+			return Message{}, err
+		}
+		visibleAfter = prepareSendVisibleAfter(q.Attributes, opts)
 	}
 
 	if fifo {

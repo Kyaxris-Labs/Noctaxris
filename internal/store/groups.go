@@ -269,7 +269,86 @@ func (s *Store) PutGroupInlinePolicy(accountID, groupName, policyName, document 
 
 // IdentityPolicyDocsForUser returns identity policy documents for the user plus
 // attached and inline policies from every group the user belongs to.
+// Reads run under a single deferred transaction (not BEGIN IMMEDIATE).
+// Attached managed policies use INNER JOIN to policies (omit missing synced rows).
 func (s *Store) IdentityPolicyDocsForUser(accountID, userName string) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("identity policy docs for user: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var userARN string
+	err = tx.QueryRow(
+		`SELECT arn FROM users WHERE account_id = ? AND user_name = ?`,
+		accountID, userName,
+	).Scan(&userARN)
+	if err != nil {
+		return nil, fmt.Errorf("identity policy docs for user: %w", err)
+	}
+
+	rows, err := tx.Query(
+		`SELECT p.document
+		 FROM policy_attachments a
+		 JOIN policies p ON p.policy_id = a.policy_id
+		 WHERE a.principal_arn = ?
+		 UNION ALL
+		 SELECT document
+		 FROM inline_policies
+		 WHERE principal_arn = ?
+		 UNION ALL
+		 SELECT p.document
+		 FROM iam_group_memberships m
+		 JOIN iam_groups g ON g.account_id = m.account_id AND g.group_name = m.group_name
+		 JOIN policy_attachments a ON a.principal_arn = g.arn
+		 JOIN policies p ON p.policy_id = a.policy_id
+		 WHERE m.account_id = ? AND m.user_name = ?
+		 UNION ALL
+		 SELECT i.document
+		 FROM iam_group_memberships m
+		 JOIN iam_groups g ON g.account_id = m.account_id AND g.group_name = m.group_name
+		 JOIN inline_policies i ON i.principal_arn = g.arn
+		 WHERE m.account_id = ? AND m.user_name = ?`,
+		userARN, userARN, accountID, userName, accountID, userName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("identity policy docs for user: %w", err)
+	}
+
+	var docs []string
+	for rows.Next() {
+		var doc string
+		if err := rows.Scan(&doc); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("identity policy docs for user: %w", err)
+		}
+		docs = append(docs, doc)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("identity policy docs for user: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("identity policy docs for user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("identity policy docs for user: commit: %w", err)
+	}
+	if docs == nil {
+		docs = []string{}
+	}
+	return docs, nil
+}
+
+// IdentityPolicyDocsForUserSequentialForTest exposes the pre-batch sequential
+// reader for equivalence tests.
+func (s *Store) IdentityPolicyDocsForUserSequentialForTest(accountID, userName string) ([]string, error) {
+	return s.identityPolicyDocsForUserSequential(accountID, userName)
+}
+
+// identityPolicyDocsForUserSequential is the pre-batch reader retained for
+// equivalence checks against the batched path.
+func (s *Store) identityPolicyDocsForUserSequential(accountID, userName string) ([]string, error) {
 	u, err := s.GetUser(accountID, userName)
 	if err != nil {
 		return nil, fmt.Errorf("identity policy docs for user: %w", err)

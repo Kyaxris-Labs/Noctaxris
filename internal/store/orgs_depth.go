@@ -588,12 +588,33 @@ func (s *Store) RCPDocsForAccount(accountID string) ([]string, error) {
 	return s.orgPolicyDocsForAccount(accountID, "RCP")
 }
 
+// OrgFilterDocsForAccount returns SCP and RCP documents for accountID using a
+// single OUPathToRoot walk. Path or query errors propagate (callers Deny).
+func (s *Store) OrgFilterDocsForAccount(accountID string) (scp, rcp []string, err error) {
+	ouPath, err := s.OUPathToRoot(accountID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("org filter docs for account %s: %w", accountID, err)
+	}
+	scp, err = s.orgPolicyDocsForAccountWithPath(accountID, "SCP", ouPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	rcp, err = s.orgPolicyDocsForAccountWithPath(accountID, "RCP", ouPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return scp, rcp, nil
+}
+
 func (s *Store) orgPolicyDocsForAccount(accountID, policyType string) ([]string, error) {
 	ouPath, err := s.OUPathToRoot(accountID)
 	if err != nil {
 		return nil, fmt.Errorf("%s docs for account %s: %w", policyType, accountID, err)
 	}
+	return s.orgPolicyDocsForAccountWithPath(accountID, policyType, ouPath)
+}
 
+func (s *Store) orgPolicyDocsForAccountWithPath(accountID, policyType string, ouPath []string) ([]string, error) {
 	args := []any{policyType, accountID, OrgRootID}
 	ouClause := ""
 	if len(ouPath) > 0 {
