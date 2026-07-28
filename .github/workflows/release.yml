@@ -1,6 +1,7 @@
 name: release
 
 # Publish semver Docker Hub tags when a v* git tag is pushed (e.g. v1.0.0).
+# Docker Hub push runs only after required CI gates pass (ci-required.yml).
 # Nightly tags use docker-nightly.yml instead.
 on:
   push:
@@ -25,8 +26,11 @@ env:
   CANONICAL_REPO: Kyaxris-Labs/Noctaxris
 
 jobs:
-  publish:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
+      raw: ${{ steps.ref.outputs.raw }}
     steps:
       - name: Gate (canonical repo + secrets)
         id: gate
@@ -62,17 +66,31 @@ jobs:
           fi
           echo "raw=${RAW}" >> "$GITHUB_OUTPUT"
 
+  verify:
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true'
+    uses: ./.github/workflows/ci-required.yml
+    with:
+      ref: ${{ needs.resolve.outputs.raw }}
+
+  publish:
+    needs: [resolve, verify]
+    # Never push when verify failed/cancelled/skipped; forks keep publish=false.
+    if: >
+      always() &&
+      needs.resolve.outputs.publish == 'true' &&
+      needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.publish == 'true'
         with:
-          ref: ${{ steps.ref.outputs.raw }}
+          ref: ${{ needs.resolve.outputs.raw }}
 
       - name: Resolve version from tag
-        if: steps.gate.outputs.publish == 'true'
         id: ver
         run: |
           set -euo pipefail
-          RAW="${{ steps.ref.outputs.raw }}"
+          RAW="${{ needs.resolve.outputs.raw }}"
           case "$RAW" in
             v*) VERSION="${RAW#v}" ;;
             *)
@@ -105,18 +123,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        if: steps.gate.outputs.publish == 'true'
         uses: docker/setup-buildx-action@v4
 
       - name: Login to Docker Hub
-        if: steps.gate.outputs.publish == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
-        if: steps.gate.outputs.publish == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .

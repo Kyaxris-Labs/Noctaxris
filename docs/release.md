@@ -28,7 +28,7 @@ git tag -a v1.3.0 -m "Release Noctaxris 1.3.0"
 git push origin v1.3.0
 ```
 
-Pushing tag `v*` runs [`.github/workflows/release.yml`](../.github/workflows/release.yml), which builds `docker/Dockerfile` and pushes:
+Pushing tag `v*` runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). That workflow first runs the required CI gates ([`.github/workflows/ci-required.yml`](../.github/workflows/ci-required.yml): unit, compose-static, govulncheck, race, image, smoke-core) against the tagged commit. Docker Hub push runs only when those gates succeed. Then it builds `docker/Dockerfile` and pushes:
 
 | Tag | Meaning |
 |-----|---------|
