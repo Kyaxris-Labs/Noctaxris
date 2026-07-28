@@ -107,5 +107,8 @@ test("MSK CreateCluster soft-skip unless ACTIVE", async (t) => {
     "Kafka_1.0.GetBootstrapBrokers",
     { ClusterArn: arn },
   );
-  assert.match(String(boot.json?.BootstrapBrokerString || ""), /noctaxris-msk-/);
+  assert.match(
+    String(boot.json?.BootstrapBrokerString || ""),
+    /noctaxris-msk-|noctaxris-lab-kafka/,
+  );
 });

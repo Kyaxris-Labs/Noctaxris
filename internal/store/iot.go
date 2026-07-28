@@ -1,18 +1,14 @@
 package store
 
 import (
-	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 var (
@@ -307,19 +303,20 @@ func (s *Store) DeleteIoTThing(accountID, region, thingName string) error {
 	return nil
 }
 
-// CreateIoTKeysAndCertificate creates a local self-signed cert and key pair.
+// CreateIoTKeysAndCertificate creates a device cert and key pair signed by the lab IoT CA.
 func (s *Store) CreateIoTKeysAndCertificate(accountID, region string, setAsActive bool) (IoTCertificate, error) {
 	if err := s.EnsureIoTSchema(); err != nil {
 		return IoTCertificate{}, err
 	}
 	region = iotRegion(region)
-	cn := "noctaxris-iot-" + uuid.NewString()[:8]
-	certPEM, keyPEM, err := generateSelfSignedCert(cn)
+	ca, err := s.EnsureLabIoTCA()
+	if err != nil {
+		return IoTCertificate{}, fmt.Errorf("ensure lab iot ca: %w", err)
+	}
+	certPEM, keyPEM, certID, err := signIoTDeviceCertificate(ca, "")
 	if err != nil {
 		return IoTCertificate{}, fmt.Errorf("generate iot certificate: %w", err)
 	}
-	sum := sha256.Sum256([]byte(certPEM))
-	certID := hex.EncodeToString(sum[:])
 	status := "INACTIVE"
 	if setAsActive {
 		status = "ACTIVE"

@@ -105,7 +105,10 @@ func TestMSKCreateSkipUnlessActive(t *testing.T) {
 		t.Fatalf("GetBootstrapBrokers status=%d", st)
 	}
 	brokers, _ := boot["BootstrapBrokerString"].(string)
-	if brokers == "" || !strings.Contains(brokers, "noctaxris-msk-") {
-		t.Fatalf("expected nested bootstrap brokers, got %q", brokers)
+	if brokers == "" {
+		t.Fatalf("expected nested bootstrap brokers, got empty")
+	}
+	if !strings.Contains(brokers, "noctaxris-msk-") && !strings.Contains(brokers, "noctaxris-lab-kafka") {
+		t.Fatalf("expected per-cluster noctaxris-msk-* or shared noctaxris-lab-kafka bootstrap, got %q", brokers)
 	}
 }

@@ -136,6 +136,7 @@ func isPinnedLabImage(ref string) bool {
 		"opensearchproject/opensearch:2.11.1":       {},
 		"tinkerpop/gremlin-server:3.7.3":            {},
 		"redpandadata/redpanda:v24.2.4":             {},
+		"eclipse-mosquitto:2.0.20":                  {},
 	}
 	_, ok := pinnedExact[lower]
 	return ok

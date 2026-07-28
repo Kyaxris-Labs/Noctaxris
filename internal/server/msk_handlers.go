@@ -167,10 +167,20 @@ func (s *Server) mskCreate(
 			"User is not authorized to perform kafka:CreateCluster.", readOnly, eventID, verified)
 		return
 	}
-	c, err := s.store.CreateMSKCluster(verified.AccountID, s.mskRegion(verified), name, version, nodes)
+	c, err := s.store.CreateMSKCluster(verified.AccountID, s.mskRegion(verified), name, version, nodes, s.cfg.SharedKafka)
 	if errors.Is(err, store.ErrMSKClusterExists) {
 		s.writeMSKError(w, r, body, requestID, http.StatusConflict, "ConflictException",
 			"Cluster already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrMSKLimitExceeded) {
+		s.writeMSKError(w, r, body, requestID, http.StatusBadRequest, "LimitExceededException",
+			store.MSKMsgSharedOneClusterLimit, readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrMSKSharedRemapRefused) {
+		s.writeMSKError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			store.MSKMsgSharedRemapRefuse, readOnly, eventID, verified)
 		return
 	}
 	if errors.Is(err, store.ErrMSKBadRequest) {
@@ -183,7 +193,11 @@ func (s *Server) mskCreate(
 			"Unable to create cluster.", readOnly, eventID, verified)
 		return
 	}
-	_ = tryStartNestedMSK(s, verified.AccountID, c.ClusterName)
+	if s.cfg.SharedKafka {
+		_ = tryStartSharedMSK(s, verified.AccountID, c.ClusterName)
+	} else {
+		_ = tryStartNestedMSK(s, verified.AccountID, c.ClusterName)
+	}
 	if updated, err := s.store.DescribeMSKClusterByName(verified.AccountID, c.ClusterName); err == nil {
 		c = updated
 	}
@@ -266,7 +280,9 @@ func (s *Server) mskDelete(
 			"Unable to delete cluster.", readOnly, eventID, verified)
 		return
 	}
-	_ = tryStopNestedDataEngine(s, containerID)
+	if !s.cfg.SharedKafka {
+		_ = tryStopNestedDataEngine(s, containerID)
+	}
 	payload, _ := msksvc.DeleteClusterJSON(arn)
 	s.writeMSKOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, mskEventSource, "DeleteCluster", readOnly)
@@ -329,4 +345,15 @@ func tryStartNestedMSK(s *Server, accountID, clusterName string) error {
 	name := strings.ToLower(strings.TrimSpace(clusterName))
 	containerName := "noctaxris-msk-" + name
 	return tryStartNestedDataEngineWithOpts(s, accountID, "msk", name, nil, compute.DefaultDataPlaneImage(compute.DataKindMSK), compute.RedpandaStartCmd(containerName), containerName)
+}
+
+// tryStartSharedMSK ensures the shared lab Kafka singleton and binds cluster metadata when healthy.
+func tryStartSharedMSK(s *Server, accountID, clusterName string) error {
+	name := strings.ToLower(strings.TrimSpace(clusterName))
+	return tryStartNestedDataEngineWithOpts(
+		s, accountID, "msk", name, nil,
+		compute.DefaultDataPlaneImage(compute.DataKindMSK),
+		compute.RedpandaStartCmd(compute.LabKafkaContainerName),
+		compute.LabKafkaContainerName,
+	)
 }

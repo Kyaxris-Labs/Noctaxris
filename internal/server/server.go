@@ -148,6 +148,7 @@ func (s *Server) ListenAndServeContext(ctx context.Context) error {
 		}
 		errCh <- err
 	}()
+	s.startSharedMQTTIfEnabled()
 
 	select {
 	case <-ctx.Done():

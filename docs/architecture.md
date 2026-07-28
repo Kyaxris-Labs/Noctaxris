@@ -21,7 +21,7 @@ flowchart TB
   subgraph Nested["Inside noctaxris-engine"]
     FnNet["Lambda on noctaxris-fn<br/>Internal network"]
     EcsNet["ECS / CodeBuild / Batch<br/>on noctaxris-ecs Internal"]
-    DataNet["RDS / ElastiCache / MemoryDB / DocDB / Neptune / MSK<br/>nested-network endpoints only"]
+    DataNet["RDS / ElastiCache / MemoryDB / DocDB / Neptune / MSK<br/>optional shared noctaxris-lab-kafka / noctaxris-lab-mqtt<br/>nested-network endpoints only"]
   end
 
   Client --> HostPort --> API
@@ -88,7 +88,7 @@ Lambda, ECS, CodeBuild, Batch, and nested data engines all use nested DinD (`NOC
 
 ## Nested data planes
 
-RDS, ElastiCache, MemoryDB, DocumentDB, Neptune, MQ (RabbitMQ), OpenSearch, and MSK (Redpanda) engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|memorydb|docdb|neptune|mq|opensearch|msk` identify them. Host Compose still publishes only `127.0.0.1:4566`.
+RDS, ElastiCache, MemoryDB, DocumentDB, Neptune, MQ (RabbitMQ), OpenSearch, and MSK (Redpanda) engine processes (when started) are nested containers via the same `noctaxris-engine` TLS client used for Lambda. Labels such as `noctaxris.data=rds|elasticache|memorydb|docdb|neptune|mq|opensearch|msk` identify them. Optional shared brokers (`NOCTAXRIS_SHARED_KAFKA` / `NOCTAXRIS_SHARED_MQTT`) run as fixed-name singletons on Internal `noctaxris-data` (`noctaxris-lab-kafka`, `noctaxris-lab-mqtt`) instead of per-cluster MSK containers when shared Kafka is on. The API process is not on `noctaxris-data`; the IoT MQTT shadow bridge dials `noctaxris-engine:1883` when `NOCTAXRIS_BROKER_PORT_PUBLISH` enables engine PortBindings, while DinD clients use `noctaxris-lab-mqtt:1883`. Host Compose still publishes only `127.0.0.1:4566`.
 
 ```mermaid
 flowchart TD

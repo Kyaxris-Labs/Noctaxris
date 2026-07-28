@@ -94,6 +94,54 @@ func TestLoadFromEnvComputeRuntimeUnknown(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvSharedBrokerFlagsDefaultOff(t *testing.T) {
+	t.Setenv(config.EnvSharedKafka, "")
+	t.Setenv(config.EnvSharedMQTT, "")
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SharedKafka || cfg.SharedMQTT {
+		t.Fatalf("defaults want off: kafka=%v mqtt=%v", cfg.SharedKafka, cfg.SharedMQTT)
+	}
+}
+
+func TestLoadFromEnvStrictBoolSharedFlags(t *testing.T) {
+	cases := []struct {
+		env   string
+		want  bool
+		valid bool
+	}{
+		{"", false, true},
+		{"0", false, true},
+		{"false", false, true},
+		{"off", false, true},
+		{"1", true, true},
+		{"true", true, true},
+		{"on", true, true},
+		{"maybe", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(config.EnvSharedKafka+"="+tc.env, func(t *testing.T) {
+			t.Setenv(config.EnvSharedKafka, tc.env)
+			t.Setenv(config.EnvSharedMQTT, "")
+			cfg, err := config.LoadFromEnv()
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("expected error for invalid bool")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.SharedKafka != tc.want {
+				t.Fatalf("SharedKafka=%v want %v", cfg.SharedKafka, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvCognitoInsecureCodes(t *testing.T) {
 	t.Setenv(config.EnvCognitoInsecureCodes, "")
 	cfg, err := config.LoadFromEnv()

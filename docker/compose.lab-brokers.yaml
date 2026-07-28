@@ -1,0 +1,15 @@
+# Opt-in shared DinD Kafka (Redpanda) and MQTT (Mosquitto) for MSK / IoT labs.
+# Enables singleton brokers inside DinD and narrow engine PortBindings so the API
+# can dial noctaxris-engine:1883 / :9092 without blanket nested port publish.
+#
+# Usage (from repo root):
+#   docker compose -f docker/compose.yaml -f docker/compose.lab-brokers.yaml --env-file docker/.env up --build
+#
+# For operator loopback 9092/1883, also add compose.lab-nested-ports.yaml.
+# Do not remap to 0.0.0.0. No host docker.sock.
+services:
+  noctaxris:
+    environment:
+      NOCTAXRIS_SHARED_KAFKA: "1"
+      NOCTAXRIS_SHARED_MQTT: "1"
+      NOCTAXRIS_BROKER_PORT_PUBLISH: "1"

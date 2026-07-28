@@ -152,8 +152,26 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 	if strings.Contains(noctaxris, `NOCTAXRIS_NESTED_PORT_PUBLISH: "1"`) {
 		t.Fatal("default Compose must not hardcode NOCTAXRIS_NESTED_PORT_PUBLISH=1")
 	}
-	if !strings.Contains(noctaxris, `NOCTAXRIS_NESTED_PORT_PUBLISH: "${NOCTAXRIS_NESTED_PORT_PUBLISH:-0}"`) {
-		t.Fatal("default Compose must pass nested port publish env defaulting to 0")
+	if strings.Contains(noctaxris, `NOCTAXRIS_SHARED_KAFKA: "1"`) {
+		t.Fatal("default Compose must not hardcode NOCTAXRIS_SHARED_KAFKA=1")
+	}
+	if strings.Contains(noctaxris, `NOCTAXRIS_BROKER_PORT_PUBLISH: "1"`) {
+		t.Fatal("default Compose must not hardcode NOCTAXRIS_BROKER_PORT_PUBLISH=1")
+	}
+	if !strings.Contains(noctaxris, `NOCTAXRIS_SHARED_KAFKA: "${NOCTAXRIS_SHARED_KAFKA:-0}"`) {
+		t.Fatal("default Compose must pass shared Kafka env defaulting to 0")
+	}
+	if !strings.Contains(noctaxris, `NOCTAXRIS_BROKER_PORT_PUBLISH: "${NOCTAXRIS_BROKER_PORT_PUBLISH:-0}"`) {
+		t.Fatal("default Compose must pass broker port publish env defaulting to 0")
+	}
+	brokers, err := os.ReadFile("compose.lab-brokers.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(brokers), `NOCTAXRIS_SHARED_KAFKA: "1"`) ||
+		!strings.Contains(string(brokers), `NOCTAXRIS_SHARED_MQTT: "1"`) ||
+		!strings.Contains(string(brokers), `NOCTAXRIS_BROKER_PORT_PUBLISH: "1"`) {
+		t.Fatal("compose.lab-brokers.yaml must opt in shared broker flags")
 	}
 	for _, needle := range []string{
 		`"127.0.0.1:5432:5432"`,
@@ -162,6 +180,7 @@ func TestComposeDoesNotDefaultOpenDataPlane(t *testing.T) {
 		`"127.0.0.1:27017:27017"`,
 		`"127.0.0.1:8182:8182"`,
 		`"127.0.0.1:9092:9092"`,
+		`"127.0.0.1:1883:1883"`,
 	} {
 		if !strings.Contains(np, needle) {
 			t.Fatalf("compose.lab-nested-ports.yaml missing loopback publish %s", needle)

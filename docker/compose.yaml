@@ -45,6 +45,10 @@ services:
       # Nested data PortBindings on DinD engine. Code default is off; set 1 or use
       # compose.lab-nested-ports.yaml (also publishes engine ports to 127.0.0.1).
       NOCTAXRIS_NESTED_PORT_PUBLISH: "${NOCTAXRIS_NESTED_PORT_PUBLISH:-0}"
+      # Shared DinD brokers (MSK / IoT MQTT). Code default is off; use compose.lab-brokers.yaml.
+      NOCTAXRIS_SHARED_KAFKA: "${NOCTAXRIS_SHARED_KAFKA:-0}"
+      NOCTAXRIS_SHARED_MQTT: "${NOCTAXRIS_SHARED_MQTT:-0}"
+      NOCTAXRIS_BROKER_PORT_PUBLISH: "${NOCTAXRIS_BROKER_PORT_PUBLISH:-0}"
     volumes:
       # API sealed state (state.db, s3/, …). Not mounted on DinD.
       - noctaxris-data:/var/lib/noctaxris

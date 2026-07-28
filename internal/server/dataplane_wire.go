@@ -11,6 +11,9 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+// stopDataPlaneHook is set by MSK unit tests to observe StopDataPlane calls without DinD.
+var stopDataPlaneHook func(containerID string)
+
 // tryStartNestedDataEngine starts a nested data engine via compute.StartDataPlane when DinD is configured.
 // ElastiCache/MemoryDB/DocDB/Neptune: without DockerHost this is a no-op (control-plane may stay creating).
 // MQ/OpenSearch/MSK: without DockerHost or on start/wait failure, status is fail-closed.
@@ -143,14 +146,22 @@ func markNestedDataFailed(s *Server, accountID string, dk compute.DataKind, name
 		reason := ossvc.ClassifyOpenSearchNestedFailure(evidence)
 		return s.store.SetOpenSearchContainerID(accountID, name, "", store.OpenSearchDomainStatusCreateFailed, "", reason)
 	case compute.DataKindMSK:
-		stub := fmt.Sprintf("stub://127.0.0.1/msk/%s", strings.TrimSpace(name))
-		return s.store.SetMSKContainerID(accountID, name, "", store.MSKClusterStateFailed, stub)
+		return s.store.SetMSKContainerID(accountID, name, "", store.MSKClusterStateFailed, "")
 	default:
 		return nil
 	}
 }
 
+// SetStopDataPlaneHookForTest records nested StopDataPlane container IDs when set (unit tests).
+func SetStopDataPlaneHookForTest(hook func(containerID string)) {
+	stopDataPlaneHook = hook
+}
+
 func tryStopNestedDataEngine(s *Server, containerID string) error {
+	if stopDataPlaneHook != nil {
+		stopDataPlaneHook(containerID)
+		return nil
+	}
 	if s == nil || strings.TrimSpace(containerID) == "" {
 		return nil
 	}

@@ -49,7 +49,7 @@ func TestNeptuneClusterCRUD(t *testing.T) {
 func TestMSKClusterCRUD(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
-	c, err := st.CreateMSKCluster(account, "us-east-1", "lab-msk-1", "3.6.0", 1)
+	c, err := st.CreateMSKCluster(account, "us-east-1", "lab-msk-1", "3.6.0", 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestMSKClusterCRUD(t *testing.T) {
 	if c.BootstrapBrokers != "noctaxris-msk-lab-msk-1:9092" {
 		t.Fatalf("bootstrap=%q", c.BootstrapBrokers)
 	}
-	if _, err := st.CreateMSKCluster(account, "us-east-1", "lab-msk-1", "", 1); !errors.Is(err, store.ErrMSKClusterExists) {
+	if _, err := st.CreateMSKCluster(account, "us-east-1", "lab-msk-1", "", 1, false); !errors.Is(err, store.ErrMSKClusterExists) {
 		t.Fatalf("exists? err=%v", err)
 	}
 	if err := st.SetMSKContainerID(account, "lab-msk-1", "ctr-msk", store.MSKClusterStateActive, "noctaxris-msk-lab-msk-1:9092"); err != nil {

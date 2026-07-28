@@ -7,7 +7,8 @@ import (
 
 func TestDataPlaneHostConfigNeverPublishesPorts(t *testing.T) {
 	t.Setenv(EnvNestedPortPublish, "")
-	hc := dataPlaneHostConfig(5432)
+	t.Setenv(EnvBrokerPortPublish, "")
+	hc := dataPlaneHostConfig(5432, DataKindRDS)
 	if hc.PublishAllPorts {
 		t.Fatal("PublishAllPorts must be false")
 	}
@@ -121,6 +122,14 @@ func TestValidateDataPlaneOpts(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("accepts mqtt", func(t *testing.T) {
+		if err := ValidateDataPlaneOpts(DataPlaneOpts{
+			Kind: DataKindMQTT, Image: "eclipse-mosquitto:2.0.20",
+			Cmd:  MosquittoStartCmd("/etc/noctaxris/mqtt/mosquitto.conf"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestStartDataPlaneNilClient(t *testing.T) {
@@ -206,6 +215,30 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	cmd := RedpandaStartCmd("noctaxris-msk-x")
 	if len(cmd) < 3 || cmd[0] != "redpanda" || !strings.Contains(strings.Join(cmd, " "), "noctaxris-msk-x:9092") {
 		t.Fatalf("redpanda cmd=%v", cmd)
+	}
+	if DefaultDataPlanePort(DataKindMQTT) != 1883 {
+		t.Fatalf("mqtt port=%d", DefaultDataPlanePort(DataKindMQTT))
+	}
+	if DefaultDataPlaneImage(DataKindMQTT) != defaultMosquittoImage {
+		t.Fatalf("mqtt image=%q", DefaultDataPlaneImage(DataKindMQTT))
+	}
+	mqttCmd := MosquittoStartCmd("")
+	if len(mqttCmd) != 3 || mqttCmd[0] != "/usr/sbin/mosquitto" || mqttCmd[2] != "/etc/noctaxris/mqtt/mosquitto.conf" {
+		t.Fatalf("mosquitto cmd=%v", mqttCmd)
+	}
+}
+
+func TestDataPlaneBindsHashStable(t *testing.T) {
+	a := dataPlaneBindsHash([]string{"/b:/x:ro", "/a:/y:ro"})
+	b := dataPlaneBindsHash([]string{"/a:/y:ro", "/b:/x:ro"})
+	if a != b || a == "none" {
+		t.Fatalf("hash a=%q b=%q", a, b)
+	}
+	if dataPlaneBindsHash(nil) != "none" {
+		t.Fatal("empty binds want none")
+	}
+	if dataPlaneBindsHash([]string{"/a:/x"}) == dataPlaneBindsHash([]string{"/a:/y"}) {
+		t.Fatal("different binds must differ")
 	}
 }
 

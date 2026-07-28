@@ -16,6 +16,10 @@ import (
 // engine ports to 127.0.0.1; a plain ports: map on the API service cannot reach DinD.
 const EnvNestedPortPublish = "NOCTAXRIS_NESTED_PORT_PUBLISH"
 
+// EnvBrokerPortPublish gates engine-side PortBindings for shared broker containers
+// (MSK/Kafka and MQTT) when blanket NOCTAXRIS_NESTED_PORT_PUBLISH is off.
+const EnvBrokerPortPublish = "NOCTAXRIS_BROKER_PORT_PUBLISH"
+
 // nestedPortPublishEnabled reports whether nested data containers may bind ports
 // on the DinD engine host. Default false.
 func nestedPortPublishEnabled() bool {
@@ -23,10 +27,37 @@ func nestedPortPublishEnabled() bool {
 	return v == "1" || strings.EqualFold(v, "true")
 }
 
-// dataPlaneExposedPorts returns ExposedPorts when nested port publish is on.
+// BrokerPortPublishReady reports whether shared MSK/MQTT engine PortBindings are allowed.
+func BrokerPortPublishReady() bool {
+	return nestedPortPublishEnabled() || brokerPortPublishEnabled()
+}
+
+// brokerPortPublishEnabled reports whether shared MSK/MQTT containers may bind
+// broker ports on the DinD engine when blanket nested publish is off. Default false.
+func brokerPortPublishEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(EnvBrokerPortPublish))
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// dataPlanePortPublishEnabled reports whether StartDataPlane should apply engine
+// PortBindings for the given kind and container port.
+func dataPlanePortPublishEnabled(kind DataKind, containerPort int) bool {
+	if containerPort <= 0 {
+		return false
+	}
+	if nestedPortPublishEnabled() {
+		return true
+	}
+	if !brokerPortPublishEnabled() {
+		return false
+	}
+	return kind == DataKindMSK || kind == DataKindMQTT
+}
+
+// dataPlaneExposedPorts returns ExposedPorts when port publish is enabled for kind.
 // Empty when disabled or containerPort is non-positive.
-func dataPlaneExposedPorts(containerPort int) nat.PortSet {
-	if !nestedPortPublishEnabled() || containerPort <= 0 {
+func dataPlaneExposedPorts(containerPort int, kind DataKind) nat.PortSet {
+	if !dataPlanePortPublishEnabled(kind, containerPort) {
 		return nil
 	}
 	p, err := nat.NewPort("tcp", strconv.Itoa(containerPort))
@@ -40,8 +71,8 @@ func dataPlaneExposedPorts(containerPort int) nat.PortSet {
 // HostIP is left empty so the binding is reachable on the DinD engine's eth0
 // (required for Compose to forward noctaxris-engine published ports). Operator
 // loopback restriction is enforced by the Compose overlay (127.0.0.1:…), not here.
-func applyDataPlanePortPublish(hc *container.HostConfig, containerPort int) {
-	if hc == nil || !nestedPortPublishEnabled() || containerPort <= 0 {
+func applyDataPlanePortPublish(hc *container.HostConfig, containerPort int, kind DataKind) {
+	if hc == nil || !dataPlanePortPublishEnabled(kind, containerPort) {
 		return
 	}
 	p, err := nat.NewPort("tcp", strconv.Itoa(containerPort))

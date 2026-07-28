@@ -99,7 +99,7 @@ def test_msk_create_skip_without_engine(unique_prefix):
             {"ClusterArn": arn},
         )
         brokers = boot.get("BootstrapBrokerString") or ""
-        assert "noctaxris-msk-" in brokers
+        assert ("noctaxris-msk-" in brokers) or ("noctaxris-lab-kafka" in brokers), brokers
     finally:
         if arn:
             try:

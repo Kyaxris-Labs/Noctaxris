@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -347,6 +348,11 @@ func (s *Server) iotCreateKeysAndCertificate(
 		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
 			"Unable to create keys and certificate.", readOnly, eventID, verified)
 		return
+	}
+	if s.cfg.SharedMQTT {
+		if err := tryEnsureSharedMQTT(s); err != nil {
+			log.Printf("shared mqtt ensure: %v", err)
+		}
 	}
 	payload, _ := iotsvc.CreateKeysAndCertificateJSON(cert)
 	s.writeIoTOK(w, payload)

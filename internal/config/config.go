@@ -13,6 +13,12 @@ import (
 // EnvCognitoInsecureCodes restores Cognito lab stub confirmation codes when set to 1/true.
 const EnvCognitoInsecureCodes = "NOCTAXRIS_COGNITO_INSECURE_CODES"
 
+// EnvSharedKafka enables the shared DinD Redpanda singleton for MSK (strict bool; default off).
+const EnvSharedKafka = "NOCTAXRIS_SHARED_KAFKA"
+
+// EnvSharedMQTT enables the shared DinD Mosquitto singleton for IoT MQTT (strict bool; default off).
+const EnvSharedMQTT = "NOCTAXRIS_SHARED_MQTT"
+
 type Config struct {
 	ListenAddr          string
 	DataRoot            string
@@ -81,6 +87,10 @@ type Config struct {
 	// any-non-empty ConfirmSignUp (NOCTAXRIS_COGNITO_INSECURE_CODES=1).
 	// Default false: high-entropy single-use codes with expiry.
 	CognitoInsecureCodes bool
+	// SharedKafka starts the shared noctaxris-lab-kafka Redpanda singleton (NOCTAXRIS_SHARED_KAFKA).
+	SharedKafka bool
+	// SharedMQTT starts the shared noctaxris-lab-mqtt Mosquitto singleton (NOCTAXRIS_SHARED_MQTT).
+	SharedMQTT bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -114,8 +124,20 @@ func LoadFromEnv() (Config, error) {
 		VPCFlowInject:         envTruthy("NOCTAXRIS_VPCFLOW_INJECT"),
 		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
-		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
+		CognitoInsecureCodes: envTruthy(EnvCognitoInsecureCodes),
 	}
+
+	sharedKafka, err := envStrictBool(EnvSharedKafka)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", EnvSharedKafka, err)
+	}
+	cfg.SharedKafka = sharedKafka
+
+	sharedMQTT, err := envStrictBool(EnvSharedMQTT)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", EnvSharedMQTT, err)
+	}
+	cfg.SharedMQTT = sharedMQTT
 
 	proxies, err := ParseTrustedProxies(os.Getenv(EnvTrustedProxies))
 	if err != nil {
@@ -170,6 +192,23 @@ func getenv(key, fallback string) string {
 func envTruthy(key string) bool {
 	return strings.EqualFold(os.Getenv(key), "1") ||
 		strings.EqualFold(os.Getenv(key), "true")
+}
+
+// envStrictBool parses unset/0/false/off as false and 1/true/on as true.
+// Any other value fails closed.
+func envStrictBool(key string) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false, nil
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "off":
+		return false, nil
+	case "1", "true", "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value %q", v)
+	}
 }
 
 func splitCSVEnv(key string) []string {

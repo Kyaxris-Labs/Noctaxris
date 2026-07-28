@@ -284,8 +284,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>MSK</td>
-      <td>CreateCluster/DescribeCluster/ListClusters/DeleteCluster/GetBootstrapBrokers. Nested Redpanda when DinD up (CREATING→ACTIVE). No DinD → FAILED. Bootstrap brokers nested-network only (<code>noctaxris-msk-&lt;name&gt;:9092</code>). No host/WAN Kafka ports.</td>
-      <td>CreateClusterV2/serverless, TLS/SASL/IAM auth endpoints, multi-broker topology, host-published Kafka ports.</td>
+      <td>CreateCluster/DescribeCluster/ListClusters/DeleteCluster/GetBootstrapBrokers. Nested Redpanda when DinD up (CREATING→ACTIVE). No DinD → FAILED. Default per-cluster bootstrap <code>noctaxris-msk-&lt;name&gt;:9092</code>; opt-in <code>NOCTAXRIS_SHARED_KAFKA=1</code> (<code>compose.lab-brokers.yaml</code>) binds one CREATING/ACTIVE cluster process-wide to <code>noctaxris-lab-kafka:9092</code> (FAILED does not hold the slot; second CREATING/ACTIVE → <code>LimitExceededException</code>; Delete leaves singleton running). No host/WAN Kafka ports.</td>
+      <td>CreateClusterV2/serverless, TLS/SASL/IAM auth endpoints, multi-broker topology, host-published Kafka ports, multi-tenant shared Kafka.</td>
     </tr>
     <tr>
       <td>Transfer Family</td>
@@ -490,8 +490,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="1" align="center" valign="middle">Devices</td>
       <td>IoT Core / Data</td>
-      <td>Things CRUD; CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal/ListThingPrincipals; Update/Get/DeleteThingShadow over HTTP JSON. Identity authz.</td>
-      <td>Embedded MQTT broker, rules engine depth, Jobs.</td>
+      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; HTTP shadows; opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>). Identity authz on HTTP APIs.</td>
+      <td>IoT Rules engine depth, Jobs, fleet indexing, operator BYO CA APIs, retained MQTT APIs.</td>
     </tr>
     <tr>
       <td rowspan="4" align="center" valign="middle">Control plane labs</td>

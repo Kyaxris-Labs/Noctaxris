@@ -3,8 +3,11 @@ package compute
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,11 +23,19 @@ const (
 	// Containers on this network are not published to the operator host.
 	DataPlaneNetworkName = "noctaxris-data"
 
-	// LabelDataKind marks nested data containers (values: rds|elasticache|memorydb|docdb|mq|opensearch|neptune|msk).
+	// LabelDataKind marks nested data containers (values: rds|elasticache|memorydb|docdb|mq|opensearch|neptune|msk|mqtt).
 	LabelDataKind = "noctaxris.data"
+
+	// LabKafkaContainerName is the shared DinD Redpanda singleton when shared Kafka is on.
+	LabKafkaContainerName = "noctaxris-lab-kafka"
+	// LabMQTTContainerName is the shared DinD Mosquitto singleton when shared MQTT is on.
+	LabMQTTContainerName = "noctaxris-lab-mqtt"
 
 	// LabelManaged marks Noctaxris-managed Docker objects.
 	LabelManaged = "noctaxris.managed"
+	// LabelBindsHash fingerprints HostConfig.Binds so EnsureDataPlaneByName can recreate
+	// when TLS/config mounts change (e.g. Mosquitto material written after first start).
+	LabelBindsHash = "noctaxris.binds_hash"
 
 	defaultPostgresImage   = "postgres:16-alpine"
 	defaultMySQLImage      = "mysql:8.0"
@@ -37,6 +48,7 @@ const (
 	defaultOpenSearchImage = "opensearchproject/opensearch:2.11.1"
 	defaultGremlinImage    = "tinkerpop/gremlin-server:3.7.3"
 	defaultRedpandaImage   = "redpandadata/redpanda:v24.2.4"
+	defaultMosquittoImage  = "eclipse-mosquitto:2.0.20"
 
 	defaultPostgresPort   = 5432
 	defaultMySQLPort      = 3306
@@ -46,6 +58,7 @@ const (
 	defaultOpenSearchPort = 9200
 	defaultGremlinPort    = 8182
 	defaultKafkaPort      = 9092
+	defaultMQTTPort       = 1883
 )
 
 // DataKind identifies which nested data engine family a container belongs to.
@@ -60,6 +73,7 @@ const (
 	DataKindOpenSearch  DataKind = "opensearch"
 	DataKindNeptune     DataKind = "neptune"
 	DataKindMSK         DataKind = "msk"
+	DataKindMQTT        DataKind = "mqtt"
 )
 
 // DataPlaneOpts configures a nested data-engine container inside DinD.
@@ -83,6 +97,8 @@ type DataPlaneOpts struct {
 	// ContainerPort is the engine listen port inside the nested network.
 	// Zero selects the default for Kind (5432 / 6379 / 27017 / 5672 / 9200 / 8182 / 9092).
 	ContainerPort int
+	// Binds are optional host bind mounts (host:container:mode).
+	Binds []string
 }
 
 // DataPlaneInstance describes a started (or inspected) nested data container.
@@ -99,9 +115,9 @@ type DataPlaneInstance struct {
 // ValidateDataPlaneOpts checks required fields without talking to Docker.
 func ValidateDataPlaneOpts(opts DataPlaneOpts) error {
 	switch opts.Kind {
-	case DataKindRDS, DataKindElastiCache, DataKindMemoryDB, DataKindDocDB, DataKindMQ, DataKindOpenSearch, DataKindNeptune, DataKindMSK:
+	case DataKindRDS, DataKindElastiCache, DataKindMemoryDB, DataKindDocDB, DataKindMQ, DataKindOpenSearch, DataKindNeptune, DataKindMSK, DataKindMQTT:
 	default:
-		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, memorydb, docdb, mq, opensearch, neptune, or msk")
+		return fmt.Errorf("compute: data-plane Kind must be rds, elasticache, memorydb, docdb, mq, opensearch, neptune, msk, or mqtt")
 	}
 	if strings.TrimSpace(opts.Image) == "" {
 		return fmt.Errorf("compute: data-plane Image is required")
@@ -132,6 +148,8 @@ func DefaultDataPlaneImage(kind DataKind) string {
 		return defaultGremlinImage
 	case DataKindMSK:
 		return defaultRedpandaImage
+	case DataKindMQTT:
+		return defaultMosquittoImage
 	default:
 		return ""
 	}
@@ -188,6 +206,8 @@ func DefaultDataPlanePort(kind DataKind) int {
 		return defaultGremlinPort
 	case DataKindMSK:
 		return defaultKafkaPort
+	case DataKindMQTT:
+		return defaultMQTTPort
 	default:
 		return 0
 	}
@@ -211,6 +231,15 @@ func RedpandaStartCmd(advertiseHost string) []string {
 		"--kafka-addr", "internal://0.0.0.0:9092",
 		"--advertise-kafka-addr", "internal://" + host + ":9092",
 	}
+}
+
+// MosquittoStartCmd returns Mosquitto start args using the mounted lab TLS config path.
+func MosquittoStartCmd(configPath string) []string {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		path = "/etc/noctaxris/mqtt/mosquitto.conf"
+	}
+	return []string{"/usr/sbin/mosquitto", "-c", path}
 }
 
 // NestedDataEndpoint builds the documented nested-network endpoint string.
@@ -237,7 +266,7 @@ var dataPlaneBootstrapCaps = []string{
 // set for nested data-engine bootstrap. PortBindings stay empty unless
 // NOCTAXRIS_NESTED_PORT_PUBLISH is enabled (see applyDataPlanePortPublish).
 // Exported via tests in this package to lock the secure-default invariant.
-func dataPlaneHostConfig(containerPort int) *container.HostConfig {
+func dataPlaneHostConfig(containerPort int, kind DataKind) *container.HostConfig {
 	sec := nestedTaskSecurity(0)
 	hc := &container.HostConfig{
 		AutoRemove:      false,
@@ -248,7 +277,7 @@ func dataPlaneHostConfig(containerPort int) *container.HostConfig {
 		CapAdd:          append([]string(nil), dataPlaneBootstrapCaps...),
 		SecurityOpt:     append([]string(nil), sec.SecurityOpt...),
 	}
-	applyDataPlanePortPublish(hc, containerPort)
+	applyDataPlanePortPublish(hc, containerPort, kind)
 	return hc
 }
 
@@ -293,11 +322,12 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 	}
 
 	labels := map[string]string{
-		LabelManaged:  "true",
-		LabelDataKind: string(opts.Kind),
+		LabelManaged:   "true",
+		LabelDataKind:  string(opts.Kind),
+		LabelBindsHash: dataPlaneBindsHash(opts.Binds),
 	}
 	for k, v := range opts.Labels {
-		if k == "" || k == LabelManaged || k == LabelDataKind {
+		if k == "" || k == LabelManaged || k == LabelDataKind || k == LabelBindsHash {
 			continue
 		}
 		labels[k] = v
@@ -315,12 +345,15 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 		Image:        opts.Image,
 		Env:          env,
 		Labels:       labels,
-		ExposedPorts: dataPlaneExposedPorts(port),
+		ExposedPorts: dataPlaneExposedPorts(port, opts.Kind),
 	}
 	if len(opts.Cmd) > 0 {
 		cfg.Cmd = append([]string(nil), opts.Cmd...)
 	}
-	hostConfig := dataPlaneHostConfig(port)
+	hostConfig := dataPlaneHostConfig(port, opts.Kind)
+	if len(opts.Binds) > 0 {
+		hostConfig.Binds = append([]string(nil), opts.Binds...)
+	}
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			DataPlaneNetworkName: {},
@@ -345,6 +378,72 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 		Image:       opts.Image,
 		Running:     true,
 	}, nil
+}
+
+// EnsureDataPlaneByName starts or reuses a named nested data container (idempotent singleton ensure).
+// If a running container exists with a different binds fingerprint (LabelBindsHash), it is removed
+// and recreated so new TLS/config mounts take effect.
+func (c *Client) EnsureDataPlaneByName(ctx context.Context, opts DataPlaneOpts) (DataPlaneInstance, error) {
+	if c == nil || c.cli == nil {
+		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane client unavailable")
+	}
+	name := strings.TrimSpace(opts.Name)
+	if name == "" {
+		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane Name is required for ensure")
+	}
+	wantHash := dataPlaneBindsHash(opts.Binds)
+	insp, err := c.cli.ContainerInspect(ctx, name)
+	if err == nil {
+		port := opts.ContainerPort
+		if port == 0 {
+			port = DefaultDataPlanePort(opts.Kind)
+		}
+		gotHash := ""
+		if insp.Config != nil && insp.Config.Labels != nil {
+			gotHash = insp.Config.Labels[LabelBindsHash]
+		}
+		if gotHash != wantHash {
+			if err := c.StopDataPlane(ctx, insp.ID); err != nil {
+				return DataPlaneInstance{}, fmt.Errorf("compute: recreate data-plane (binds changed): %w", err)
+			}
+			return c.StartDataPlane(ctx, opts)
+		}
+		if insp.State != nil && insp.State.Running {
+			return DataPlaneInstance{
+				ContainerID: insp.ID,
+				Name:        name,
+				Kind:        opts.Kind,
+				Endpoint:    NestedDataEndpoint(name, port),
+				Image:       insp.Config.Image,
+				Running:     true,
+			}, nil
+		}
+		if err := c.cli.ContainerStart(ctx, insp.ID, container.StartOptions{}); err != nil {
+			return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container start: %w", err)
+		}
+		return DataPlaneInstance{
+			ContainerID: insp.ID,
+			Name:        name,
+			Kind:        opts.Kind,
+			Endpoint:    NestedDataEndpoint(name, port),
+			Image:       insp.Config.Image,
+			Running:     true,
+		}, nil
+	}
+	if !errdefs.IsNotFound(err) {
+		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane inspect: %w", err)
+	}
+	return c.StartDataPlane(ctx, opts)
+}
+
+func dataPlaneBindsHash(binds []string) string {
+	if len(binds) == 0 {
+		return "none"
+	}
+	sorted := append([]string(nil), binds...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // StopDataPlane stops and removes a nested data container by Docker ID.

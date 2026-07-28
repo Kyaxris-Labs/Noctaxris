@@ -67,7 +67,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Cost and Usage Reports](cur.md) | Shipped | Report definition CRUD; optional tiny CSV/JSON Put to S3 (no DuckDB) |
 | [Cost Explorer](ce.md) | Shipped | GetCostAndUsage / GetCostForecast over seeded amounts |
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
-| [IoT Core / Data](iot.md) | Shipped | Things, local PEM certs, policies, principals; HTTP shadows (no MQTT broker) |
+| [IoT Core / Data](iot.md) | Shipped | Things, lab CA-signed certs, policies, principals; HTTP shadows; opt-in MQTT shadow bridge (`NOCTAXRIS_SHARED_MQTT`) |
 | [Lightsail](lightsail.md) | Shipped | Instance state machine; GetBlueprints/GetBundles; create/get/start/stop/reboot/delete |
 | [Auto Scaling](autoscaling.md) | Shipped | Launch config + ASG CRUD; DesiredCapacity reconciles lab EC2 (Pending without engine; InService when running) |
 | [Elastic Beanstalk](elastic-beanstalk.md) | Shipped | Application/version/environment lite; Ready/Green; ListAvailableSolutionStacks |
@@ -81,7 +81,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Neptune](neptune.md) | Shipped | neptune Create/Describe/Delete; nested Gremlin Server `:8182` when DinD up; nested-network endpoint only |
 | [Athena](athena.md) | Shipped | Start/Get/Stop/GetQueryResults over Glue + lab S3 CSV/JSON; WHERE equality/`!=`/`<>`/`IN`/LIKE/json_extract; COUNT(*), INNER JOIN, GROUP BY, ORDER BY; CloudTrail Records[] + gzip; GetObject/OutputLocation fail closed |
 | [OpenSearch](opensearch.md) | Shipped | Domain CRUD; nested OpenSearch when DinD up (`Active`); else `CreateFailed` + `stub://`; SigV4 lab query facade `_doc` / allowlisted `_search` |
-| [MSK](msk.md) | Shipped | Create/Describe/List/DeleteCluster + GetBootstrapBrokers; nested Redpanda when DinD up (`ACTIVE`); else `FAILED`; nested brokers only |
+| [MSK](msk.md) | Shipped | Create/Describe/List/DeleteCluster + GetBootstrapBrokers; nested Redpanda when DinD up (`ACTIVE`); per-cluster or opt-in shared `noctaxris-lab-kafka:9092`; else `FAILED`; nested brokers only |
 | [EMR](emr.md) | Shipped | RunJobFlow / Describe / List / Terminate **control-plane stub** (no Spark/Hadoop) |
 | [Bedrock Runtime](bedrock-runtime.md) | Shipped | InvokeModel allowlist **canned** JSON stub |
 | [Textract](textract.md) | Shipped | DetectDocumentText / AnalyzeDocument **canned** Blocks |

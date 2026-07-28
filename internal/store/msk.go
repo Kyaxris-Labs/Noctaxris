@@ -11,10 +11,23 @@ import (
 )
 
 var (
-	ErrMSKClusterExists   = errors.New("ConflictException")
-	ErrMSKClusterNotFound = errors.New("NotFoundException")
-	ErrMSKBadRequest      = errors.New("BadRequestException")
+	ErrMSKClusterExists      = errors.New("ConflictException")
+	ErrMSKClusterNotFound    = errors.New("NotFoundException")
+	ErrMSKBadRequest         = errors.New("BadRequestException")
+	ErrMSKLimitExceeded      = errors.New("LimitExceededException")
+	ErrMSKSharedRemapRefused = errors.New("msk shared remap refused")
 )
+
+// MSKMsgSharedOneClusterLimit is the pinned LimitExceeded message for shared Kafka.
+const MSKMsgSharedOneClusterLimit = "Shared Kafka allows only one cluster per Noctaxris process"
+
+// MSKMsgSharedRemapRefuse is the pinned BadRequest message when per-cluster MSK rows remain.
+const MSKMsgSharedRemapRefuse = "Delete existing per-cluster MSK containers before enabling shared Kafka binds"
+
+// MSKSharedBootstrap is the nested-network bootstrap when shared Kafka is enabled.
+const MSKSharedBootstrap = "noctaxris-lab-kafka:9092"
+
+const mskPerClusterBootstrapPrefix = "noctaxris-msk-"
 
 const DefaultMSKRegion = "us-east-1"
 
@@ -91,9 +104,47 @@ func MSKNestedBootstrap(clusterName string) string {
 	return fmt.Sprintf("noctaxris-msk-%s:%d", name, MSKNestedPort)
 }
 
+// CountMSKClusters returns all MSK metadata rows across accounts.
+func (s *Store) CountMSKClusters() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM msk_clusters`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count msk clusters: %w", err)
+	}
+	return n, nil
+}
+
+// CountMSKSharedSlotHolders returns CREATING and ACTIVE MSK rows across accounts.
+// FAILED and DELETING do not hold the shared-Kafka one-cluster slot.
+func (s *Store) CountMSKSharedSlotHolders() (int, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM msk_clusters WHERE state IN (?, ?)`,
+		MSKClusterStateCreating, MSKClusterStateActive,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count msk shared slot holders: %w", err)
+	}
+	return n, nil
+}
+
+// MSKHasPerClusterBind reports whether any MSK row still references a per-cluster nested broker.
+func (s *Store) MSKHasPerClusterBind() (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM msk_clusters WHERE bootstrap_brokers LIKE ? OR container_id LIKE ?`,
+		mskPerClusterBootstrapPrefix+"%", mskPerClusterBootstrapPrefix+"%",
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("msk per-cluster bind: %w", err)
+	}
+	return n > 0, nil
+}
+
 // CreateMSKCluster creates a control-plane MSK cluster.
 // Starts CREATING; nested DinD may promote to ACTIVE. Without engine, handlers fail closed to FAILED.
-func (s *Store) CreateMSKCluster(accountID, region, clusterName, kafkaVersion string, numberOfBrokerNodes int) (MSKCluster, error) {
+// When sharedKafka is true, bootstrap is MSKSharedBootstrap and process-wide singleton rules apply.
+func (s *Store) CreateMSKCluster(accountID, region, clusterName, kafkaVersion string, numberOfBrokerNodes int, sharedKafka bool) (MSKCluster, error) {
 	name := strings.ToLower(strings.TrimSpace(clusterName))
 	if name == "" {
 		return MSKCluster{}, fmt.Errorf("%w: ClusterName is required", ErrMSKBadRequest)
@@ -106,6 +157,22 @@ func (s *Store) CreateMSKCluster(accountID, region, clusterName, kafkaVersion st
 	}
 	if numberOfBrokerNodes < 1 {
 		numberOfBrokerNodes = 1
+	}
+	if sharedKafka {
+		hasPerCluster, err := s.MSKHasPerClusterBind()
+		if err != nil {
+			return MSKCluster{}, err
+		}
+		if hasPerCluster {
+			return MSKCluster{}, fmt.Errorf("%w", ErrMSKSharedRemapRefused)
+		}
+		inFlight, err := s.CountMSKSharedSlotHolders()
+		if err != nil {
+			return MSKCluster{}, err
+		}
+		if inFlight >= 1 {
+			return MSKCluster{}, fmt.Errorf("%w: %s", ErrMSKLimitExceeded, MSKMsgSharedOneClusterLimit)
+		}
 	}
 	var existing string
 	err := s.db.QueryRow(
@@ -122,6 +189,9 @@ func (s *Store) CreateMSKCluster(accountID, region, clusterName, kafkaVersion st
 	arn := MSKClusterARN(region, accountID, name, id)
 	now := time.Now().UTC().UnixMilli()
 	bootstrap := MSKNestedBootstrap(name)
+	if sharedKafka {
+		bootstrap = MSKSharedBootstrap
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO msk_clusters
 		 (account_id, cluster_uuid, cluster_name, cluster_arn, kafka_version, number_of_broker_nodes, state, bootstrap_brokers, container_id, created_at)
