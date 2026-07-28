@@ -49,7 +49,7 @@ Labs index and search through the API port. The facade dials only nested hostnam
 | `PUT` | `/opensearch/{domain}/lab/{index}/_doc/{id}` | `PUT /{index}/_doc/{id}` |
 | `POST` | `/opensearch/{domain}/lab/{index}/_search` | `POST /{index}/_search` |
 
-Search body allowlist: top-level `query`, `size`, `aggs`/`aggregations`, and `sort`. Under `query`: `match`, `match_all`, and lite `bool` (`must`/`should`/`must_not`/`filter` with nested `match`/`match_all` only). Aggregations: `terms` (`field`, optional `size`) and `value_count` (`field`). Sort: one field per clause with `order` `asc`/`desc` only. Unknown DSL keys return `400 ValidationException`.
+Search body allowlist: top-level `query`, `size`, `aggs`/`aggregations`, and `sort`. Under `query`: `match`, `match_all`, `term`, `range`, and lite `bool` (`must`/`should`/`must_not`/`filter` with nested `match`/`match_all`/`term` only; no nested `bool` or `range` under bool clauses). Aggregations: `terms` (`field`, optional `size`) and `value_count` (`field`). Sort: one field per clause with `order` `asc`/`desc` only. Unknown DSL keys return `400 ValidationException`.
 
 Fail closed with `409` when the domain is missing, not `Active`, or still on a `stub://` endpoint.
 
@@ -96,7 +96,7 @@ Unit tests mock the nested HTTP transport and do not require DinD.
 
 ## Not yet / deferred
 
-- Broader query DSL (nested bool, term/range, nested aggs, highlighting, script sort, etc.)
+- Broader query DSL (nested bool, range under bool, nested aggs, highlighting, script sort, etc.)
 - Fine-grained access control
 - VPC options, custom endpoints, and Autotune parity
 - Automatic host sysctl tuning for Desktop/WSL (operator must set `vm.max_map_count` when nested Active is required; fail-closed by design)

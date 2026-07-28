@@ -180,3 +180,54 @@ func TestAthenaWhereLikeUnderscore(t *testing.T) {
 		t.Fatalf("expected 3 data rows, got %#v", exec.ResultRows)
 	}
 }
+
+func TestAthenaWhereIn(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaCloudTrailJSON(t, st, account, "athena-in", "in/")
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT eventName FROM ctdb.events WHERE eventName IN ('AssumeRole', 'PutObject') ORDER BY eventName",
+	})
+	if err != nil || exec.State != "SUCCEEDED" {
+		t.Fatalf("exec err=%v state=%s reason=%s", err, exec.State, exec.StateChangeReason)
+	}
+	if len(exec.ResultRows) != 3 {
+		t.Fatalf("expected header+2 rows, got %#v", exec.ResultRows)
+	}
+	if exec.ResultRows[1][0] != "AssumeRole" || exec.ResultRows[2][0] != "PutObject" {
+		t.Fatalf("rows=%#v", exec.ResultRows)
+	}
+}
+
+func TestAthenaWhereNeq(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaCloudTrailJSON(t, st, account, "athena-neq", "neq/")
+
+	exec, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT eventName, eventID FROM ctdb.events WHERE eventName != 'PutObject' ORDER BY eventID",
+	})
+	if err != nil || exec.State != "SUCCEEDED" {
+		t.Fatalf("exec err=%v state=%s reason=%s", err, exec.State, exec.StateChangeReason)
+	}
+	if len(exec.ResultRows) != 3 {
+		t.Fatalf("expected header+2 rows, got %#v", exec.ResultRows)
+	}
+	if exec.ResultRows[1][0] != "AssumeRole" || exec.ResultRows[2][0] != "AssumeRoleWithSAML" {
+		t.Fatalf("rows=%#v", exec.ResultRows)
+	}
+
+	exec2, err := st.StartAthenaQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT eventID FROM ctdb.events WHERE eventID <> 'e2' ORDER BY eventID",
+	})
+	if err != nil || exec2.State != "SUCCEEDED" {
+		t.Fatalf("<> exec err=%v state=%s reason=%s", err, exec2.State, exec2.StateChangeReason)
+	}
+	if len(exec2.ResultRows) != 3 {
+		t.Fatalf("expected header+2 rows for <>, got %#v", exec2.ResultRows)
+	}
+	if exec2.ResultRows[1][0] != "e1" || exec2.ResultRows[2][0] != "e3" {
+		t.Fatalf("<> rows=%#v", exec2.ResultRows)
+	}
+}

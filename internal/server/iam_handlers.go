@@ -648,7 +648,8 @@ func (s *Server) handleIAM(
 }
 
 // iamRequestResource returns the AWS-shaped IAM resource ARN for authorize.
-// List-all and unknown create shapes fall back to "*".
+// Account-scoped list/report actions use type wildcards or the account root ARN.
+// Unknown create shapes without a name still fall back to "*".
 func (s *Server) iamRequestResource(accountID, action string, params map[string]string, verified *authn.Verified) string {
 	userName := strings.TrimSpace(params["UserName"])
 	roleName := strings.TrimSpace(params["RoleName"])
@@ -658,6 +659,23 @@ func (s *Server) iamRequestResource(accountID, action string, params map[string]
 	accessKeyID := strings.TrimSpace(params["AccessKeyId"])
 
 	switch action {
+	case catalog.ActionIAMListUsers, "ListUsers":
+		return "arn:aws:iam::" + accountID + ":user/*"
+	case catalog.ActionIAMListRoles, "ListRoles":
+		return "arn:aws:iam::" + accountID + ":role/*"
+	case catalog.ActionIAMListGroups, "ListGroups":
+		return "arn:aws:iam::" + accountID + ":group/*"
+	case catalog.ActionIAMListPolicies, "ListPolicies":
+		return "arn:aws:iam::" + accountID + ":policy/*"
+	case catalog.ActionIAMListInstanceProfiles, "ListInstanceProfiles":
+		return "arn:aws:iam::" + accountID + ":instance-profile/*"
+	case catalog.ActionIAMListOpenIDConnectProviders, "ListOpenIDConnectProviders":
+		return "arn:aws:iam::" + accountID + ":oidc-provider/*"
+	case catalog.ActionIAMListSAMLProviders, "ListSAMLProviders":
+		return "arn:aws:iam::" + accountID + ":saml-provider/*"
+	case catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport",
+		catalog.ActionIAMGetCredentialReport, "GetCredentialReport":
+		return "arn:aws:iam::" + accountID + ":root"
 	case catalog.ActionIAMCreateUser, "CreateUser",
 		catalog.ActionIAMGetUser, "GetUser",
 		catalog.ActionIAMDeleteUser, "DeleteUser",

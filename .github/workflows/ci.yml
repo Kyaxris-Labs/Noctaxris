@@ -69,13 +69,34 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pin module version (not @latest) for supply-chain reproducibility.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - name: govulncheck
         # Native govulncheck has no per-ID exclude. scripts/govulncheck-ci still
         # fails on any non-allowlisted finding; allowlist is only daemon-side Docker
         # Engine CVEs with Fixed in: N/A on github.com/docker/docker (see
         # scripts/govulncheck-allowlist.txt and docs/security-defaults.md).
         run: go run ./scripts/govulncheck-ci
+
+  sbom:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    needs: [image]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build API image for SBOM
+        run: docker build -t noctaxris:ci-sbom -f docker/Dockerfile .
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: noctaxris:ci-sbom
+          format: spdx-json
+          output-file: noctaxris-sbom.spdx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: noctaxris-sbom
+          path: noctaxris-sbom.spdx.json
 
   race:
     runs-on: ubuntu-latest

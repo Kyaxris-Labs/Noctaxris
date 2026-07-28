@@ -176,3 +176,117 @@ func TestGetAccessKeyInfoRequiresAuthorize(t *testing.T) {
 		t.Fatalf("GetAccessKeyInfo without sts permission want 403 got status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+// Deny on account user/* must bind ListUsers (authorize resource is not bare "*").
+func TestIAMListUsersDenyOnUserWildcard(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, actorARN, err := st.CreateUser(testAccountID, "list-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	akid, secret, err := st.CreateUserAccessKey(testAccountID, "list-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":"iam:*","Resource":"*"},
+			{"Effect":"Deny","Action":"iam:ListUsers","Resource":"arn:aws:iam::%s:user/*"}
+		]
+	}`, testAccountID)
+	if err := st.PutInlinePolicy(actorARN, "list-deny", policy); err != nil {
+		t.Fatal(err)
+	}
+
+	body := "Action=ListUsers&Version=2010-05-08"
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(body))
+	signHeader(t, req, []byte(body), akid, secret, testRegion, "iam", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("ListUsers want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// Deny on account role/* must bind ListRoles (authorize resource is not bare "*").
+func TestIAMListRolesDenyOnRoleWildcard(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, actorARN, err := st.CreateUser(testAccountID, "role-list-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	akid, secret, err := st.CreateUserAccessKey(testAccountID, "role-list-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":"iam:*","Resource":"*"},
+			{"Effect":"Deny","Action":"iam:ListRoles","Resource":"arn:aws:iam::%s:role/*"}
+		]
+	}`, testAccountID)
+	if err := st.PutInlinePolicy(actorARN, "role-list-deny", policy); err != nil {
+		t.Fatal(err)
+	}
+
+	body := "Action=ListRoles&Version=2010-05-08"
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(body))
+	signHeader(t, req, []byte(body), akid, secret, testRegion, "iam", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("ListRoles want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+// Deny on account root must bind credential report APIs (authorize resource is not bare "*").
+func TestIAMCredentialReportDenyOnAccountRoot(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, actorARN, err := st.CreateUser(testAccountID, "cred-report-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	akid, secret, err := st.CreateUserAccessKey(testAccountID, "cred-report-denied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":"iam:*","Resource":"*"},
+			{"Effect":"Deny","Action":["iam:GenerateCredentialReport","iam:GetCredentialReport"],"Resource":"arn:aws:iam::%s:root"}
+		]
+	}`, testAccountID)
+	if err := st.PutInlinePolicy(actorARN, "cred-deny", policy); err != nil {
+		t.Fatal(err)
+	}
+
+	iamPost := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(body))
+		signHeader(t, req, []byte(body), akid, secret, testRegion, "iam", now)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := iamPost("Action=GenerateCredentialReport&Version=2010-05-08")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("GenerateCredentialReport want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = iamPost("Action=GetCredentialReport&Version=2010-05-08")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("GetCredentialReport want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}

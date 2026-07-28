@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,85 @@ func TestConfigHistoryOnlyWhenRecording(t *testing.T) {
 	}
 	if items[1].ConfigurationItemStatus != store.ConfigItemStatusResourceDeleted {
 		t.Fatalf("second item status: %#v", items[1])
+	}
+}
+
+func TestConfigObjectHistoryPutDelete(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000003"
+	if _, err := st.CreateBucket(account, "obj-hist-delivery"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateBucket(account, "obj-hist-data"); err != nil {
+		t.Fatal(err)
+	}
+	key := "docs/readme.txt"
+	resourceID := store.ConfigS3ObjectResourceID("obj-hist-data", key)
+
+	if _, err := st.PutObject(account, "obj-hist-data", key, store.PutObjectMeta{
+		Data: []byte("before-recording"), PlainSize: 16, ContentType: "text/plain", ETag: "etag-pre",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendS3ObjectConfigHistory(account, "obj-hist-data", key, false); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.GetResourceConfigHistory(account, "AWS::S3::Object", resourceID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no object history before recording: %#v", items)
+	}
+
+	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutConfigDeliveryChannel(account, "default", "obj-hist-delivery", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartConfigRecorder(account, "default"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.PutObject(account, "obj-hist-data", key, store.PutObjectMeta{
+		Data: []byte("hello-config"), PlainSize: 12, ContentType: "text/plain", ETag: "etag-ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendS3ObjectConfigHistory(account, "obj-hist-data", key, false); err != nil {
+		t.Fatal(err)
+	}
+	items, err = st.GetResourceConfigHistory(account, "AWS::S3::Object", resourceID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ConfigurationItemStatus != store.ConfigItemStatusOK {
+		t.Fatalf("put history: %#v", items)
+	}
+	if items[0].ResourceType != "AWS::S3::Object" || items[0].ResourceID != resourceID {
+		t.Fatalf("resource identity: %#v", items[0])
+	}
+	if !strings.Contains(items[0].Configuration, `"bucket":"obj-hist-data"`) ||
+		!strings.Contains(items[0].Configuration, `"key":"docs/readme.txt"`) {
+		t.Fatalf("configuration body: %q", items[0].Configuration)
+	}
+
+	if err := st.DeleteObject(account, "obj-hist-data", key); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendS3ObjectConfigHistory(account, "obj-hist-data", key, true); err != nil {
+		t.Fatal(err)
+	}
+	items, err = st.GetResourceConfigHistory(account, "AWS::S3::Object", resourceID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected put+delete items: %#v", items)
+	}
+	if items[1].ConfigurationItemStatus != store.ConfigItemStatusResourceDeleted {
+		t.Fatalf("delete item status: %#v", items[1])
 	}
 }
 

@@ -3,6 +3,7 @@ module github.com/Kyaxris-Labs/Noctaxris
 go 1.26.5
 
 require (
+	github.com/Azure/go-amqp v1.4.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/go-jose/go-jose/v4 v4.1.4

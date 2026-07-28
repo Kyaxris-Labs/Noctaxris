@@ -9,7 +9,7 @@ In-process SELECT subset over Glue Data Catalog tables and lab S3 CSV or JSON ob
 | Area | Actions |
 |------|---------|
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
-| SQL subset | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
+| SQL subset | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col != 'literal' \| col <> 'literal' \| col IN ('a','b') \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON) |
 | Trail-shaped JSON | Top-level `{"Records":[...]}` objects expand one row per record; `.gz` objects decompress before parse |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
@@ -66,6 +66,20 @@ QID=$(aws athena start-query-execution \
   --endpoint-url "$EP" --query QueryExecutionId --output text)
 aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
 
+# WHERE IN
+QID=$(aws athena start-query-execution \
+  --query-string "SELECT id, name FROM labdb.people WHERE name IN ('alice', 'bob')" \
+  --query-execution-context Database=labdb \
+  --endpoint-url "$EP" --query QueryExecutionId --output text)
+aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
+# WHERE !=
+QID=$(aws athena start-query-execution \
+  --query-string "SELECT id, name FROM labdb.people WHERE name != 'bob'" \
+  --query-execution-context Database=labdb \
+  --endpoint-url "$EP" --query QueryExecutionId --output text)
+aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
 # COUNT(*)
 QID=$(aws athena start-query-execution \
   --query-string "SELECT COUNT(*) FROM labdb.people WHERE name = 'bob'" \
@@ -99,7 +113,7 @@ Skip live Compose smoke when Docker is unavailable. Store and server unit tests 
 
 ## Not yet / deferred
 
-- Broader SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, inequalities, `IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
+- Broader SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, range inequalities (`<`/`>`/`BETWEEN`), `NOT IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
 - WorkGroup configuration matrix and result reuse
 - Nested Trino / Presto / Spark engines
 - Managed query results encryption options

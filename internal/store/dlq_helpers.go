@@ -14,6 +14,7 @@ var labDLQServicePrincipals = []string{
 	authz.ServicePrincipalEvents,
 	authz.ServicePrincipalSNS,
 	authz.ServicePrincipalPipes,
+	authz.ServicePrincipalLambda,
 }
 
 // sendLabDLQMessage delivers a failure payload to an SQS dead-letter queue ARN.

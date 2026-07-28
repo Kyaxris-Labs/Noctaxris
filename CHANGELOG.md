@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Lambda async SQS DLQ / OnFailure: honor destination `RedriveAllowPolicy` and foreign queue Policy via `sendLabDLQMessage`
+- Config: continuous history while recording also covers S3 object PutObject/DeleteObject (`AWS::S3::Object` resourceId `bucket/key`) via GetResourceConfigHistory
+- Transfer Family: docs/tests clarify lab Put/GetFile is HTTP on `:4566` (JSON + `/transfer/.../home/...`), not an SFTP listener
 - EC2 lab nested RunInstances: Query Run/Describe/Stop/Start/Terminate on DinD `noctaxris-ec2`; AMI→allowlisted image map; pending without engine; VPC Flow unchanged under `ec2`
 - EKS lite: Create/Describe/List/DeleteCluster REST; metadata-only ACTIVE (no nested k3s under restricted DinD)
 - Auto Scaling: DesiredCapacity reconciles to lab EC2 (`Pending` without engine; `InService` when running; ForceDelete terminates)

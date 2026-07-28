@@ -30,6 +30,8 @@ Group-attached and inline policies feed identity documents for authorization. Ac
 
 IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection. Assumed-role sessions resolve identity documents from the IAM role ARN (attachments and inline role policies), not the STS session ARN.
 
+List and credential-report actions authorize against account-scoped resources (`arn:aws:iam::ACCOUNT:user/*`, `role/*`, `group/*`, `policy/*`, `instance-profile/*`, IdP wildcards, and account `root` for Generate/GetCredentialReport), not bare `*`. Named mutation APIs still bind the specific user/role/group/policy ARN from the request.
+
 Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Request context populates username, userid, PrincipalType, SecureTransport, and clock keys; see [index.md](index.md#cross-cutting) for the operator matrix. PassRole trust evaluation sets `aws:SourceAccount` and `aws:SourceArn` from the resource being configured on Lambda, EventBridge `PutTargets`, ECS task-definition, Scheduler `CreateSchedule`/`UpdateSchedule`, Pipes `CreatePipe`, Secrets Manager Lambda `RotateSecret`, API Gateway HTTP `CredentialsArn` / `AuthorizerCredentialsArn`, and Cognito user-pool trigger RoleArn (pool ARN). `CreateRole` accepts `MaxSessionDuration` (default 3600). OIDC providers persist the full `ClientIDList` and thumbprint list.
 
 ## How to verify / CLI smoke

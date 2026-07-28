@@ -159,8 +159,15 @@ func TestUpdateUserAttributesCustomMessageAndVerify(t *testing.T) {
 	if msg.TriggerSource != "CustomMessage_UpdateUserAttribute" {
 		t.Fatalf("trigger=%q", msg.TriggerSource)
 	}
-	if !strings.Contains(msg.EmailMessage, "123456") {
-		t.Fatalf("email=%q", msg.EmailMessage)
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "attr-user", store.CognitoConfirmPurposeAttrVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == "" || code == store.CognitoLabConfirmationCode {
+		t.Fatalf("attr verify code=%q want non-empty non-stub", code)
+	}
+	if !strings.Contains(msg.EmailMessage, code) {
+		t.Fatalf("email=%q want issued code %q", msg.EmailMessage, code)
 	}
 	attr, err := st.GetCognitoUserAttribute(account, pool.PoolID, "attr-user", "email")
 	if err != nil {
@@ -195,11 +202,22 @@ func TestUpdateUserAttributesCustomMessageAndVerify(t *testing.T) {
 	if !foundVerify {
 		t.Fatalf("sources=%v want VerifyUserAttribute", seenSources)
 	}
+	code, err = st.PeekCognitoConfirmationCode(account, pool.PoolID, "attr-user", store.CognitoConfirmPurposeAttrVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == "" || code == store.CognitoLabConfirmationCode {
+		t.Fatalf("GetUserAttributeVerificationCode code=%q want non-empty non-stub", code)
+	}
 	err = st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", "000000")
 	if !errors.Is(err, store.ErrCognitoCodeMismatch) {
 		t.Fatalf("wrong code err=%v", err)
 	}
-	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", store.CognitoLabConfirmationCode); err != nil {
+	err = st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", store.CognitoLabConfirmationCode)
+	if !errors.Is(err, store.ErrCognitoCodeMismatch) {
+		t.Fatalf("stub code err=%v want CodeMismatch", err)
+	}
+	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", code); err != nil {
 		t.Fatal(err)
 	}
 	attr, err = st.GetCognitoUserAttribute(account, pool.PoolID, "attr-user", "email")
@@ -238,7 +256,14 @@ func TestUpdateUserAttributesWithoutCustomMessage(t *testing.T) {
 	if len(details) != 1 {
 		t.Fatalf("details=%+v", details)
 	}
-	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", store.CognitoLabConfirmationCode); err != nil {
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "plain-user", store.CognitoConfirmPurposeAttrVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == "" || code == store.CognitoLabConfirmationCode {
+		t.Fatalf("attr verify code=%q want non-empty non-stub", code)
+	}
+	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", code); err != nil {
 		t.Fatal(err)
 	}
 }

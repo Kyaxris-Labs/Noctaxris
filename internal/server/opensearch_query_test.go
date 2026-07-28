@@ -50,8 +50,11 @@ func TestOpenSearchLabSearchBodyAllowlist(t *testing.T) {
 		`{"size":10}`,
 		`{"query":{"match_all":{}}}`,
 		`{"query":{"match":{"title":"hello"}},"size":5}`,
+		`{"query":{"term":{"status":"active"}}}`,
+		`{"query":{"term":{"count":{"value":3}}}}`,
+		`{"query":{"range":{"price":{"gte":10,"lt":100}}}}`,
 		`{"query":{"bool":{"must":[]}}}`,
-		`{"query":{"bool":{"must":[{"match":{"title":"hello"}}],"filter":{"match_all":{}},"should":[{"match":{"tag":"a"}}],"must_not":[{"match":{"tag":"b"}}]}}}`,
+		`{"query":{"bool":{"must":[{"match":{"title":"hello"}},{"term":{"status":"ok"}}],"filter":{"match_all":{}},"should":[{"match":{"tag":"a"}}],"must_not":[{"match":{"tag":"b"}}]}}}`,
 		`{"aggs":{}}`,
 		`{"aggs":{"by_tag":{"terms":{"field":"tag","size":5}},"n":{"value_count":{"field":"id"}}}}`,
 		`{"aggregations":{"n":{"value_count":{"field":"id"}}}}`,
@@ -65,11 +68,14 @@ func TestOpenSearchLabSearchBodyAllowlist(t *testing.T) {
 		}
 	}
 	badBodies := []string{
-		`{"query":{"term":{"a":1}}}`,
+		`{"query":{"wildcard":{"a":"*"}}}`,
 		`{"_source":true}`,
-		`{"query":{"bool":{"must":[{"term":{"a":1}}]}}}`,
+		`{"query":{"bool":{"must":[{"range":{"a":{"gte":1}}}]}}}`,
 		`{"query":{"bool":{"minimum_should_match":1}}}`,
 		`{"query":{"bool":{"must":[{"bool":{"must":[{"match_all":{}}]}}]}}}`,
+		`{"query":{"term":{"a":1,"b":2}}}`,
+		`{"query":{"range":{"a":{"gte":1},"b":{"lte":2}}}}`,
+		`{"query":{"range":{"a":{"boost":1}}}}`,
 		`{"aggs":{"x":{"sum":{"field":"n"}}}}`,
 		`{"aggs":{"x":{"terms":{"field":"tag","script":"1"}}}}`,
 		`{"aggs":{"x":{"value_count":{"field":"id","missing":0}}}}`,
@@ -188,7 +194,7 @@ func TestOpenSearchLabRejectUnknownDSL(t *testing.T) {
 	})
 	t.Cleanup(func() { openSearchLabTransport = prev })
 
-	body := []byte(`{"query":{"term":{"a":1}}}`)
+	body := []byte(`{"query":{"wildcard":{"a":"*"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/opensearch/labdsl/lab/idx/_search", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	srv.handleOpenSearchLabQuery(rec, req, body, "req", "evt", nil, false)
@@ -197,6 +203,33 @@ func TestOpenSearchLabRejectUnknownDSL(t *testing.T) {
 	}
 	if dialed {
 		t.Fatal("must not proxy unknown DSL")
+	}
+
+	// term + range + bool.must(term) are allowlisted and must proxy.
+	okBody := []byte(`{"query":{"bool":{"must":[{"term":{"status":"ok"}},{"match":{"title":"x"}}]}},"size":2}`)
+	var gotURL string
+	openSearchLabTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		dialed = true
+		gotURL = req.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"hits":{"total":{"value":0}}}`)),
+			Request:    req,
+		}, nil
+	})
+	dialed = false
+	okReq := httptest.NewRequest(http.MethodPost, "/opensearch/labdsl/lab/idx/_search", bytes.NewReader(okBody))
+	okRec := httptest.NewRecorder()
+	srv.handleOpenSearchLabQuery(okRec, okReq, okBody, "req2", "evt2", nil, false)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("allowlisted DSL status=%d body=%q", okRec.Code, okRec.Body.String())
+	}
+	if !dialed {
+		t.Fatal("allowlisted term/bool.must must proxy")
+	}
+	if gotURL != "http://noctaxris-opensearch-labdsl:9200/idx/_search" {
+		t.Fatalf("proxied url=%q", gotURL)
 	}
 }
 

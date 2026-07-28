@@ -223,6 +223,46 @@ func TestPipesForeignDLQWithoutAllow(t *testing.T) {
 	}
 }
 
+func TestLambdaAsyncDLQRedriveAllowDenyAll(t *testing.T) {
+	st := openDLQHelperStore(t)
+	owner := "000000000001"
+	dlq, err := st.CreateQueue(owner, "us-east-1", "127.0.0.1:4566", "lambda-deny-dlq", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := `{"redrivePermission":"denyAll"}`
+	if err := st.SetQueueAttributes(owner, dlq.QueueName, map[string]string{"RedriveAllowPolicy": allow}); err != nil {
+		t.Fatal(err)
+	}
+	zip := map[string]string{"app.py": "def handler(e,c): return e"}
+	fn, err := st.CreateFunction(CreateFunctionMeta{
+		AccountID: owner, Region: "us-east-1", FunctionName: "async-dlq-deny",
+		RoleARN: "arn:aws:iam::000000000001:role/lambda-exec", Runtime: LambdaRuntimePython312,
+		Handler: "app.handler", Timeout: 3, Memory: 128, Zip: dlqTestZip(t, zip),
+		DeadLetterTargetArn: dlq.QueueARN,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.EnqueueAsyncInvoke(owner, fn.FunctionName, "$LATEST", `{"task":"deny"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.ProcessAsyncInvocation(job.InvocationID, LambdaAsyncMaxRetries, func() error {
+		return errors.New("synthetic invoke failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "RedriveAllowPolicy") {
+		t.Fatalf("want RedriveAllowPolicy error, got %v", err)
+	}
+	msgs, err := st.ReceiveMessages(owner, dlq.QueueName, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("denyAll dlq got %d messages", len(msgs))
+	}
+}
+
 func TestEventBridgeForeignDLQWithoutAllow(t *testing.T) {
 	st := openDLQHelperStore(t)
 	owner := "000000000001"

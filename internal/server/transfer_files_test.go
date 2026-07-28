@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +86,61 @@ func TestTransferLabFileJSONRoundTrip(t *testing.T) {
 	}, now)
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("traversal put status=%d body=%q", bad.Code, bad.Body.String())
+	}
+}
+
+func TestTransferLabHomeHTTPRoundTrip(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustTransferJSON(t, handler, "CreateServer", map[string]any{"Protocols": []string{"SFTP"}}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateServer status=%d body=%q", create.Code, create.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := created["ServerId"].(string)
+	if id == "" {
+		t.Fatal("missing ServerId")
+	}
+	user := mustTransferJSON(t, handler, "CreateUser", map[string]any{
+		"ServerId": id, "UserName": "carol",
+	}, now)
+	if user.Code != http.StatusOK {
+		t.Fatalf("CreateUser status=%d body=%q", user.Code, user.Body.String())
+	}
+
+	payload := []byte("hello-transfer-http")
+	homeURL := "http://127.0.0.1:4566/transfer/" + id + "/home/carol/inbox/note.txt"
+	putReq := mustNewRequest(t, http.MethodPut, homeURL, payload)
+	putReq.Header.Set("Content-Type", "text/plain")
+	signHeader(t, putReq, payload, testAccessKey, testSecret, testRegion, "transfer", now)
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("HTTP PutFile path status=%d body=%q", putRec.Code, putRec.Body.String())
+	}
+
+	getReq := mustNewRequest(t, http.MethodGet, homeURL, nil)
+	signHeader(t, getReq, nil, testAccessKey, testSecret, testRegion, "transfer", now)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("HTTP GetFile path status=%d body=%q", getRec.Code, getRec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("GetFile JSON: %v body=%q", err, getRec.Body.String())
+	}
+	b64, _ := got["BodyBase64"].(string)
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != string(payload) {
+		t.Fatalf("HTTP roundtrip body=%q want %q", raw, payload)
 	}
 }

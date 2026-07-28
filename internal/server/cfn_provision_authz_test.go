@@ -279,3 +279,70 @@ func TestCloudControlUpdateIAMRoleAttachDeniedWithoutPutAttach(t *testing.T) {
 		t.Fatalf("role inline policies must be unchanged, got %+v", inline)
 	}
 }
+
+func TestCloudControlDeleteBucketDeniedWithoutDeleteBucket(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if _, err := st.CreateBucket(testAccountID, "cc-del-gate-bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	akid, secret := setupCFNOnlyUser(t, st, "cc-del-only", "CCDeleteOnly",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"cloudcontrol:DeleteResource","Resource":"*"}]}`)
+
+	rec := mustCloudControlJSONCreds(t, handler, "CloudControlApi.DeleteResource", map[string]any{
+		"TypeName":   "AWS::S3::Bucket",
+		"Identifier": "cc-del-gate-bucket",
+	}, akid, secret, now)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("CloudControl DeleteResource without s3:DeleteBucket want AccessDenied status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if _, err := st.GetBucket(testAccountID, "cc-del-gate-bucket"); err != nil {
+		t.Fatal("bucket must remain after denied DeleteResource")
+	}
+}
+
+func TestCFNUpdateStackUsesStoredRoleARN(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	roleARN, err := st.CreateRole(testAccountID, "cfn-update-stack-role",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"cloudformation.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "s3-create-only",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:CreateBucket","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+
+	baseTpl := `{"Resources":{"B":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-role-rebind-bucket"}}}}`
+	create := mustCFNForm(t, handler, url.Values{
+		"Action":       {"CreateStack"},
+		"Version":      {"2010-05-15"},
+		"StackName":    {"role-rebind"},
+		"TemplateBody": {baseTpl},
+		"RoleARN":      {roleARN},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateStack status=%d body=%q", create.Code, create.Body.String())
+	}
+
+	// Admin caller has dynamodb:CreateTable; stack RoleARN does not. Update must evaluate as the stack role.
+	updTpl := `{"Resources":{"B":{"Type":"AWS::S3::Bucket","Properties":{"BucketName":"cfn-role-rebind-bucket"}},"T":{"Type":"AWS::DynamoDB::Table","Properties":{"TableName":"cfn-role-rebind-table","AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"}],"KeySchema":[{"AttributeName":"id","KeyType":"HASH"}],"BillingMode":"PAY_PER_REQUEST"}}}}`
+	rec := mustCFNForm(t, handler, url.Values{
+		"Action":       {"UpdateStack"},
+		"Version":      {"2010-05-15"},
+		"StackName":    {"role-rebind"},
+		"TemplateBody": {updTpl},
+	}, now)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("UpdateStack with stack RoleARN lacking dynamodb:CreateTable want AccessDenied status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if _, err := st.GetTable(testAccountID, "cfn-role-rebind-table"); err == nil {
+		t.Fatal("cfn-role-rebind-table must not exist after denied UpdateStack")
+	}
+}

@@ -83,6 +83,11 @@ func TestAuditClientIPTrustXFFOptIn(t *testing.T) {
 	t.Run("xff_opt_in", func(t *testing.T) {
 		srv, _, auditDir := newTestServerStoreWith(t, func(cfg *config.Config) {
 			cfg.CloudTrailTrustXFF = true
+			nets, err := config.ParseTrustedProxies("203.0.113.0/24")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.TrustedProxies = nets
 		})
 		handler := srv.Handler()
 		now := time.Now().UTC().Truncate(time.Second)

@@ -16,7 +16,7 @@ Broker CRUD for ActiveMQ or RabbitMQ engine strings. `PubliclyAccessible=true` i
 | CRUD | `CreateBroker`, `DescribeBroker`, `ListBrokers`, `DeleteBroker` |
 | Engines | `ACTIVEMQ` (nested when DinD up), `RABBITMQ` (nested when DinD up) |
 | Network | Internal nested network only; no host publish of 5672/61616 |
-| Lambda ESM | `CreateEventSourceMapping` accepts broker ARNs when the broker is `RUNNING` with a nested non-`stub://` endpoint; poll dials allowlisted `noctaxris-mq-*` hosts only (never operator/WAN hosts). RabbitMQ: AMQP 0-9-1 Dial + `basic.get` on queue `noctaxris` (lab user `noctaxris` / `noctaxris-mq-lab`) returns real bodies when `RUNNING`. ActiveMQ: classic AMQP on 5672 is AMQP 1.0 — TCP-probe then empty batch (no AMQP 1.0/JMS client). Injectable `MQReceiveFunc` remains for unit tests (see [lambda.md](lambda.md)). Skip live MQ→Lambda smoke without DinD/broker. |
+| Lambda ESM | `CreateEventSourceMapping` accepts broker ARNs when the broker is `RUNNING` with a nested non-`stub://` endpoint; poll dials allowlisted `noctaxris-mq-*` hosts only (never operator/WAN hosts). RabbitMQ: AMQP 0-9-1 Dial + `basic.get` on queue `noctaxris` (lab user `noctaxris` / `noctaxris-mq-lab`) returns real bodies when `RUNNING`. ActiveMQ: AMQP 1.0 Dial + receive on `queue://noctaxris` (`github.com/Azure/go-amqp`) returns real bodies when messages are present; empty queue yields an empty batch. Injectable `MQReceiveFunc` remains for unit tests (see [lambda.md](lambda.md)). Skip live MQ→Lambda smoke without DinD/broker. |
 
 ### Authz notes
 
@@ -60,9 +60,9 @@ AMQP smoke from a nested peer (same DinD network), not from the operator host:
 # ActiveMQ (AMQP 1.0 on classic connector): amqp://noctaxris-mq-<broker-id>:5672
 ```
 
-Lambda ESM poll allowlists the nested host only. RabbitMQ ESM runs AMQP 0-9-1 `basic.get` on queue `noctaxris` when the broker is `RUNNING`. ActiveMQ remains dial-only empty (AMQP 1.0/JMS). Unit tests may inject `MQReceiveFunc`.
+Lambda ESM poll allowlists the nested host only. RabbitMQ ESM runs AMQP 0-9-1 `basic.get` on queue `noctaxris` when the broker is `RUNNING`. ActiveMQ ESM runs AMQP 1.0 receive on `queue://noctaxris` and returns real bodies when messages are present. Unit tests may inject `MQReceiveFunc`. Soft-skip live MQ→Lambda smoke when DinD/broker is down.
 
 ## Not yet / deferred
 
 - Full broker admin APIs and public endpoints
-- ActiveMQ AMQP 1.0/JMS consumer for Lambda ESM (dial-only empty after allowlisted probe; RabbitMQ `basic.get` is shipped — see [lambda.md](lambda.md))
+- ActiveMQ JMS client, multi-destination ESM, durable subscriptions, and OpenWire/STOMP ESM paths (AMQP 1.0 receive on `queue://noctaxris` is shipped — see [lambda.md](lambda.md))

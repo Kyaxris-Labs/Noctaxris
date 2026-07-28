@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -12,7 +13,7 @@ import (
 // any candidate ARN evaluates to Block. Missing associations are a no-op.
 // Evaluation errors with an association present fail closed (403).
 func (s *Server) enforceAssociatedWAF(w http.ResponseWriter, r *http.Request, accountID string, candidateARNs []string) bool {
-	view := wafRequestViewFromHTTP(r)
+	view := s.wafRequestViewFromHTTP(r)
 	action, associated, err := s.store.EvaluateAssociatedWAFWithView(accountID, candidateARNs, "", view)
 	if err != nil {
 		if associated {
@@ -35,7 +36,7 @@ func (s *Server) enforceAssociatedWAF(w http.ResponseWriter, r *http.Request, ac
 
 var wafEnforceHeaderNames = []string{"Host", "User-Agent", "X-Forwarded-For"}
 
-func wafRequestViewFromHTTP(r *http.Request) *store.WAFRequestView {
+func (s *Server) wafRequestViewFromHTTP(r *http.Request) *store.WAFRequestView {
 	if r == nil || r.URL == nil {
 		return nil
 	}
@@ -45,25 +46,39 @@ func wafRequestViewFromHTTP(r *http.Request) *store.WAFRequestView {
 			headers[name] = v
 		}
 	}
+	var trusted []*net.IPNet
+	if s != nil {
+		trusted = s.cfg.TrustedProxies
+	}
 	return &store.WAFRequestView{
 		URI:      r.URL.Path,
 		Headers:  headers,
-		SourceIP: wafSourceIPFromHTTP(r),
+		SourceIP: wafSourceIPFromHTTP(r, trusted),
 	}
 }
 
 // wafSourceIPFromHTTP picks the client IP for IPSet matching.
-// Prefer the first parseable hop in allowlisted X-Forwarded-For when present;
-// otherwise use RemoteAddr (host only). Invalid XFF falls back to RemoteAddr.
-func wafSourceIPFromHTTP(r *http.Request) string {
+// X-Forwarded-For is used only when the TCP peer is in TrustedProxies;
+// otherwise RemoteAddr (host only). Invalid XFF falls back to RemoteAddr.
+func wafSourceIPFromHTTP(r *http.Request, trusted []*net.IPNet) string {
 	if r == nil {
 		return ""
 	}
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		first := strings.TrimSpace(strings.Split(xff, ",")[0])
-		if ip := net.ParseIP(first); ip != nil {
-			return ip.String()
+	peer := peerHostOnly(r)
+	if config.PeerInTrustedProxies(peer, trusted) {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if ip := net.ParseIP(first); ip != nil {
+				return ip.String()
+			}
 		}
+	}
+	return peer
+}
+
+func peerHostOnly(r *http.Request) string {
+	if r == nil {
+		return ""
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil && host != "" {

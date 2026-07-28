@@ -41,3 +41,34 @@ func TestCreateCloudFrontDistributionDeployedWithDomain(t *testing.T) {
 		t.Fatalf("DomainName=%q want prefix %q", d.DomainName, wantPrefix)
 	}
 }
+
+func TestSelectCloudFrontOriginPathPattern(t *testing.T) {
+	origins := []store.CloudFrontOrigin{
+		{ID: "default", DomainName: "a", OriginType: "s3"},
+		{ID: "api", DomainName: "b", OriginType: "s3"},
+	}
+	behaviors := []store.CloudFrontCacheBehavior{
+		{PathPattern: "/api/*", TargetOriginId: "api"},
+		{PathPattern: "*", TargetOriginId: "default"},
+	}
+	got, err := store.SelectCloudFrontOrigin(origins, behaviors, "api/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "api" {
+		t.Fatalf("got origin %q want api", got.ID)
+	}
+	got, err = store.SelectCloudFrontOrigin(origins, behaviors, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "default" {
+		t.Fatalf("got origin %q want default", got.ID)
+	}
+	if !store.MatchCloudFrontPathPattern("/images/x", "/images/*") {
+		t.Fatal("expected /images/* to match /images/x")
+	}
+	if store.MatchCloudFrontPathPattern("/img/x", "/images/*") {
+		t.Fatal("expected /images/* not to match /img/x")
+	}
+}

@@ -84,8 +84,8 @@ func validateNestedOpenSearchHost(host string) error {
 }
 
 // validateOpenSearchLabSearchBody allowlists a lite _search DSL:
-// top-level query/size/aggs|aggregations/sort; query.match|match_all|bool;
-// bool must/should/must_not/filter with nested match|match_all only;
+// top-level query/size/aggs|aggregations/sort; query.match|match_all|term|range|bool;
+// bool must/should/must_not/filter with nested match|match_all|term (no nested bool);
 // aggs terms|value_count lite; sort field+order only. Fail-closed otherwise.
 func validateOpenSearchLabSearchBody(body []byte) error {
 	trimmed := strings.TrimSpace(string(body))
@@ -144,12 +144,20 @@ func validateOpenSearchLabQuery(raw any) error {
 	for k, v := range qm {
 		switch k {
 		case "match", "match_all":
+		case "term":
+			if err := validateOpenSearchLabTerm(v); err != nil {
+				return err
+			}
+		case "range":
+			if err := validateOpenSearchLabRange(v); err != nil {
+				return err
+			}
 		case "bool":
 			if err := validateOpenSearchLabBool(v); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("unsupported query type %q (allowed: match, match_all, bool)", k)
+			return fmt.Errorf("unsupported query type %q (allowed: match, match_all, term, range, bool)", k)
 		}
 	}
 	return nil
@@ -196,16 +204,99 @@ func validateOpenSearchLabBoolClauses(clause string, raw any) error {
 	}
 }
 
-// validateOpenSearchLabLeafQuery allowlists only match/match_all under bool clauses (no nested bool).
+// validateOpenSearchLabLeafQuery allowlists match/match_all/term under bool clauses (no nested bool/range).
 func validateOpenSearchLabLeafQuery(clause string, qm map[string]any) error {
 	if len(qm) == 0 {
 		return fmt.Errorf("bool.%s query object is empty", clause)
 	}
-	for k := range qm {
+	for k, v := range qm {
 		switch k {
 		case "match", "match_all":
+		case "term":
+			if err := validateOpenSearchLabTerm(v); err != nil {
+				return fmt.Errorf("bool.%s: %w", clause, err)
+			}
 		default:
-			return fmt.Errorf("unsupported bool.%s query type %q (allowed: match, match_all)", clause, k)
+			return fmt.Errorf("unsupported bool.%s query type %q (allowed: match, match_all, term)", clause, k)
+		}
+	}
+	return nil
+}
+
+// validateOpenSearchLabTerm allowlists {"field": value} or {"field": {"value": ...}} lite shapes.
+func validateOpenSearchLabTerm(raw any) error {
+	tm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("term must be an object")
+	}
+	if len(tm) == 0 {
+		return fmt.Errorf("term object is empty")
+	}
+	if len(tm) != 1 {
+		return fmt.Errorf("term must have exactly one field")
+	}
+	for field, spec := range tm {
+		if field == "" {
+			return fmt.Errorf("term field must be non-empty")
+		}
+		switch s := spec.(type) {
+		case map[string]any:
+			if len(s) == 0 {
+				return fmt.Errorf("term.%s object is empty", field)
+			}
+			for k := range s {
+				if k != "value" {
+					return fmt.Errorf("unsupported term key %q on %q (allowed: value)", k, field)
+				}
+			}
+			if _, ok := s["value"]; !ok {
+				return fmt.Errorf("term.%s requires value", field)
+			}
+		case string, float64, bool, json.Number:
+			// scalar term value
+		case nil:
+			return fmt.Errorf("term.%s value must not be null", field)
+		default:
+			return fmt.Errorf("term.%s value must be a scalar or {\"value\":...}", field)
+		}
+	}
+	return nil
+}
+
+// validateOpenSearchLabRange allowlists {"field": {"gte"|"gt"|"lte"|"lt": scalar}} lite shapes.
+func validateOpenSearchLabRange(raw any) error {
+	rm, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("range must be an object")
+	}
+	if len(rm) == 0 {
+		return fmt.Errorf("range object is empty")
+	}
+	if len(rm) != 1 {
+		return fmt.Errorf("range must have exactly one field")
+	}
+	for field, spec := range rm {
+		if field == "" {
+			return fmt.Errorf("range field must be non-empty")
+		}
+		sm, ok := spec.(map[string]any)
+		if !ok {
+			return fmt.Errorf("range.%s must be an object", field)
+		}
+		if len(sm) == 0 {
+			return fmt.Errorf("range.%s object is empty", field)
+		}
+		for k, v := range sm {
+			switch k {
+			case "gte", "gt", "lte", "lt":
+				switch v.(type) {
+				case string, float64, bool, json.Number:
+				default:
+					return fmt.Errorf("range.%s.%s must be a scalar", field, k)
+				}
+			default:
+				return fmt.Errorf("unsupported range key %q on %q (allowed: gte, gt, lte, lt)", k, field)
+			}
 		}
 	}
 	return nil

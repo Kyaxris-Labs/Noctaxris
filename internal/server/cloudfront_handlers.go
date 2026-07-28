@@ -91,6 +91,41 @@ func parseCloudFrontOrigins(params map[string]any) []store.CloudFrontOrigin {
 	return out
 }
 
+func parseCloudFrontBehaviors(params map[string]any) []store.CloudFrontCacheBehavior {
+	cfg, _ := params["DistributionConfig"].(map[string]any)
+	if cfg == nil {
+		cfg = params
+	}
+	var out []store.CloudFrontCacheBehavior
+	if def, ok := cfg["DefaultCacheBehavior"].(map[string]any); ok {
+		target, _ := def["TargetOriginId"].(string)
+		if strings.TrimSpace(target) != "" {
+			out = append(out, store.CloudFrontCacheBehavior{
+				PathPattern: "*", TargetOriginId: target,
+			})
+		}
+	}
+	behaviorsBlock, _ := cfg["CacheBehaviors"].(map[string]any)
+	rawItems, _ := behaviorsBlock["Items"].([]any)
+	if rawItems == nil {
+		if flat, ok := params["CacheBehaviors"].([]any); ok {
+			rawItems = flat
+		}
+	}
+	for _, item := range rawItems {
+		m, _ := item.(map[string]any)
+		pat, _ := m["PathPattern"].(string)
+		target, _ := m["TargetOriginId"].(string)
+		if strings.TrimSpace(pat) == "" || strings.TrimSpace(target) == "" {
+			continue
+		}
+		out = append(out, store.CloudFrontCacheBehavior{
+			PathPattern: pat, TargetOriginId: target,
+		})
+	}
+	return out
+}
+
 func parseCloudFrontLogging(cfg map[string]any) store.CloudFrontLoggingConfig {
 	if cfg == nil {
 		return store.CloudFrontLoggingConfig{}
@@ -128,7 +163,10 @@ func (s *Server) cfCreateDistribution(
 	if e, ok := cfg["Enabled"].(bool); ok {
 		enabled = e
 	}
-	d, err := s.store.CreateCloudFrontDistribution(verified.AccountID, comment, caller, enabled, parseCloudFrontOrigins(params))
+	d, err := s.store.CreateCloudFrontDistributionWithBehaviors(
+		verified.AccountID, comment, caller, enabled,
+		parseCloudFrontOrigins(params), parseCloudFrontBehaviors(params),
+	)
 	if errors.Is(err, store.ErrCloudFrontExists) {
 		s.writeCloudFrontError(w, r, body, requestID, http.StatusConflict, "DistributionAlreadyExists",
 			"Distribution already exists.", readOnly, eventID, verified)

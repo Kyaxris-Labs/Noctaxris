@@ -2,6 +2,8 @@ package server
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -1816,7 +1818,25 @@ func readBody(r *http.Request, limit int64) ([]byte, error) {
 		return nil, nil
 	}
 	defer r.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+	compressed := io.LimitReader(r.Body, limit+1)
+	var src io.Reader = compressed
+	switch enc {
+	case "", "identity":
+		// plaintext under compressed limit
+	case "gzip":
+		gz, err := gzip.NewReader(compressed)
+		if err != nil {
+			return nil, fmt.Errorf("gzip body: %w", err)
+		}
+		defer gz.Close()
+		src = io.LimitReader(gz, limit+1)
+	case "deflate":
+		src = io.LimitReader(flate.NewReader(compressed), limit+1)
+	default:
+		return nil, fmt.Errorf("unsupported Content-Encoding %q", enc)
+	}
+	data, err := io.ReadAll(src)
 	if err != nil {
 		return nil, err
 	}
@@ -2712,17 +2732,21 @@ func clientIP(r *http.Request) string {
 }
 
 // auditClientIP is sourceIPAddress for CloudTrail-shaped audit lines.
-// When NOCTAXRIS_CLOUDTRAIL_TRUST_XFF is enabled, the first X-Forwarded-For hop
-// is used; otherwise the TCP peer address is used (secure default).
+// When NOCTAXRIS_CLOUDTRAIL_TRUST_XFF is enabled and the TCP peer is in
+// TrustedProxies, the first X-Forwarded-For hop is used; otherwise the TCP
+// peer address is used (secure default).
 func (s *Server) auditClientIP(r *http.Request) string {
 	if s != nil && s.cfg.CloudTrailTrustXFF {
-		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-			first := strings.TrimSpace(strings.Split(xff, ",")[0])
-			if first != "" {
-				if host, _, err := net.SplitHostPort(first); err == nil && host != "" {
-					return host
+		peer := peerHostOnly(r)
+		if config.PeerInTrustedProxies(peer, s.cfg.TrustedProxies) {
+			if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+				first := strings.TrimSpace(strings.Split(xff, ",")[0])
+				if first != "" {
+					if host, _, err := net.SplitHostPort(first); err == nil && host != "" {
+						return host
+					}
+					return first
 				}
-				return first
 			}
 		}
 	}

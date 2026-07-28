@@ -289,7 +289,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Transfer Family</td>
-      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DeleteUser. Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (path traversal fail-closed). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
+      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DeleteUser. Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (path traversal fail-closed) via HTTP on <code>:4566</code> (same API port; SigV4 service <code>transfer</code>). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
       <td>AS2, FTPS depth, IdP integration, WAN expose, live SSH/SFTP listener.</td>
     </tr>
     <tr>
@@ -330,7 +330,7 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>Config</td>
-      <td>PutConfigurationRecorder, PutDeliveryChannel (existing S3 bucket), StartConfigurationRecorder writes one lab-shaped JSON snapshot per delivery channel then sets recording (fail closed if PutObject fails) + ConfigurationRecorderStarted SNS, continuous history while recording (S3 bucket create/delete), GetResourceConfigHistory, DescribeComplianceByConfigRule returns NOT_APPLICABLE. Optional PassRole for config.amazonaws.com.</td>
+      <td>PutConfigurationRecorder, PutDeliveryChannel (existing S3 bucket), StartConfigurationRecorder writes one lab-shaped JSON snapshot per delivery channel then sets recording (fail closed if PutObject fails) + ConfigurationRecorderStarted SNS, continuous history while recording (S3 bucket create/delete and object PutObject/DeleteObject), GetResourceConfigHistory, DescribeComplianceByConfigRule returns NOT_APPLICABLE. Optional PassRole for config.amazonaws.com.</td>
       <td>Full AWS Config item schema, managed rule catalog, remediations, aggregator, organization rules.</td>
     </tr>
     <tr>
@@ -350,8 +350,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     </tr>
     <tr>
       <td>CloudFront</td>
-      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. Optional Logging bucket/prefix writes tab-separated access-log lite lines on edge GET. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> fetches first origin (S3 or internal HTTP API). No real PoP.</td>
-      <td>Real CDN, signed cookies depth, multi-behavior / multi-origin matrices.</td>
+      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. Optional DefaultCacheBehavior / CacheBehaviors PathPattern → TargetOriginId (list order; trailing <code>*</code> prefix; <code>*</code> default). Optional Logging bucket/prefix writes tab-separated access-log lite lines on edge GET. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> selects origin by path pattern (first origin when no behaviors). No real PoP.</td>
+      <td>Real CDN, signed cookies depth, mid-path wildcards and full cache policy / TTL matrix.</td>
     </tr>
     <tr>
       <td>ELB v2</td>
@@ -433,8 +433,8 @@ Expand for detailed actions and gaps. Full notes and CLI smoke: [docs/services/]
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
-      <td>Full SQL (outer joins, IN, multi-aggregate GROUP BY, inequalities beyond lab LIKE/json_extract), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
+      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / <code>!=</code> / <code>&lt;&gt;</code> / <code>IN (...)</code> / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
+      <td>Full SQL (outer joins, NOT IN, multi-aggregate GROUP BY, range inequalities, subqueries), CTAS, federated catalogs, nested Trino/Presto/Spark.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>

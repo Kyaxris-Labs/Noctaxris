@@ -42,20 +42,21 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_RDS_DATA_PGX` | prefer on | Set to `0` / `false` / `off` to force RDS Data API nested-psql (skip `pgx` dial). Default prefers `pgx` against the nested data-plane DSN only, then falls back to nested-psql. |
 | `NOCTAXRIS_LAMBDA_ENDPOINT_URL` | `http://host.docker.internal:4566` when unset in compute | API URL injected into function containers for in-function SDK calls. |
 | `NOCTAXRIS_CLOUDTRAIL_INJECT` | disabled | Set to `1` to enable lab-only `cloudtrail:InjectEvents` and `cloudtrail:InjectInsightsEvents` (`NoctaxrisCloudTrail.*`) for seeding forensic JSONL events. Default off returns AccessDenied. |
-| `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF` | disabled | Set to `1` to use the first `X-Forwarded-For` hop for CloudTrail-shaped audit `sourceIPAddress` only. Default uses TCP `RemoteAddr`. Authz `aws:SourceIp` always stays the peer address. |
+| `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF` | disabled | Set to `1` to use the first `X-Forwarded-For` hop for CloudTrail-shaped audit `sourceIPAddress` only when the TCP peer is also covered by `NOCTAXRIS_TRUSTED_PROXIES`. Default uses TCP `RemoteAddr`. Authz `aws:SourceIp` always stays the peer address. |
+| `NOCTAXRIS_TRUSTED_PROXIES` | empty | Comma-separated CIDRs (or bare IPs) whose peers may supply `X-Forwarded-For` for WAFv2 SourceIP matching and (with `NOCTAXRIS_CLOUDTRAIL_TRUST_XFF`) audit `sourceIPAddress`. Empty ignores XFF for those paths. |
 | `NOCTAXRIS_CLOUDTRAIL_GZIP` | disabled | Set to `1` to gzip-compress CloudTrail trail delivery objects under the AWSLogs hive (`.json.gz`). Athena reads decompress by suffix/magic. |
 | `NOCTAXRIS_GUARDDUTY_INJECT` | disabled | Set to `1` to enable lab-only `guardduty:InjectFindings` (`NoctaxrisGuardDuty.InjectFindings`). Default off returns AccessDenied. |
 | `NOCTAXRIS_MACIE_INJECT` | disabled | Set to `1` to enable lab-only `macie2:InjectFindings` (`NoctaxrisMacie.InjectFindings`) including canned S3 object matches. Default off returns AccessDenied. |
 | `NOCTAXRIS_VPCFLOW_INJECT` | disabled | Set to `1` to enable lab-only `ec2:InjectFlowLogs` (`NoctaxrisEC2.InjectFlowLogs`). Default off returns AccessDenied. |
 | `NOCTAXRIS_LAB_FORENSICS` | disabled | Set to `1` to enable lab FreezeClock/UnfreezeClock/SetClock/BulkSeed (`NoctaxrisLab.*`). Default off returns AccessDenied. |
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
-| `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` / any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
+| `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` for forgot/attr-verify; any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
 
 ### Cognito confirmation codes (`NOCTAXRIS_COGNITO_INSECURE_CODES`)
 
-Default Cognito forgot-password and sign-up confirmation codes are random (8+ hex characters), single-use, and expire after one hour. `ConfirmForgotPassword` and `ConfirmSignUp` reject wrong or reused codes with `CodeMismatchException`.
+Default Cognito forgot-password, sign-up, and attribute-verify confirmation codes are random (8+ hex characters), single-use, and expire after one hour. `ConfirmForgotPassword`, `ConfirmSignUp`, and `VerifyUserAttribute` reject wrong or reused codes with `CodeMismatchException`.
 
-Set `NOCTAXRIS_COGNITO_INSECURE_CODES=1` only for intentional insecure labs: ForgotPassword stores fixed `123456`, and `ConfirmSignUp` accepts any non-empty code (previous stub behavior). Attribute verify still uses lab code `123456` either way (no SES).
+Set `NOCTAXRIS_COGNITO_INSECURE_CODES=1` only for intentional insecure labs: ForgotPassword and attribute verify store fixed `123456`, and `ConfirmSignUp` accepts any non-empty code (previous stub behavior).
 
 ### Lab forensics helpers (`NOCTAXRIS_LAB_FORENSICS`)
 

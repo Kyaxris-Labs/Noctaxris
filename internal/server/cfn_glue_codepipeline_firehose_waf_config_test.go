@@ -384,3 +384,107 @@ func TestConfigGetResourceConfigHistory(t *testing.T) {
 		t.Fatalf("unexpected history XML: %q", body)
 	}
 }
+
+func TestConfigGetResourceConfigHistoryObjectPutDelete(t *testing.T) {
+	srv, _, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/config-obj-delivery", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/config-obj-data", nil, "s3", now, nil)
+
+	putRec := []byte(url.Values{
+		"Action":                     {"PutConfigurationRecorder"},
+		"Version":                    {"2014-11-12"},
+		"ConfigurationRecorder.Name": {"default"},
+	}.Encode())
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", putRec)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, req, putRec, testAccessKey, testSecret, testRegion, "config", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PutConfigurationRecorder status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	delivBody := []byte(url.Values{
+		"Action":                       {"PutDeliveryChannel"},
+		"Version":                      {"2014-11-12"},
+		"DeliveryChannel.Name":         {"default"},
+		"DeliveryChannel.s3BucketName": {"config-obj-delivery"},
+	}.Encode())
+	delivReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", delivBody)
+	delivReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, delivReq, delivBody, testAccessKey, testSecret, testRegion, "config", now)
+	delivRec := httptest.NewRecorder()
+	handler.ServeHTTP(delivRec, delivReq)
+	if delivRec.Code != http.StatusOK {
+		t.Fatalf("PutDeliveryChannel status=%d body=%q", delivRec.Code, delivRec.Body.String())
+	}
+
+	startBody := []byte(url.Values{
+		"Action":                    {"StartConfigurationRecorder"},
+		"Version":                   {"2014-11-12"},
+		"ConfigurationRecorderName": {"default"},
+	}.Encode())
+	startReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", startBody)
+	startReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, startReq, startBody, testAccessKey, testSecret, testRegion, "config", now)
+	startRec := httptest.NewRecorder()
+	handler.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("StartConfigurationRecorder status=%d body=%q", startRec.Code, startRec.Body.String())
+	}
+
+	payload := []byte("config-object-body")
+	putObj := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/config-obj-data/inbox/item.txt", payload, "s3", now, map[string]string{
+		"Content-Type": "text/plain",
+	})
+	if putObj.Code != http.StatusOK {
+		t.Fatalf("PutObject status=%d body=%q", putObj.Code, putObj.Body.String())
+	}
+
+	resourceID := "config-obj-data/inbox/item.txt"
+	histBody := []byte(url.Values{
+		"Action":       {"GetResourceConfigHistory"},
+		"Version":      {"2014-11-12"},
+		"resourceType": {"AWS::S3::Object"},
+		"resourceId":   {resourceID},
+	}.Encode())
+	histReq := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", histBody)
+	histReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, histReq, histBody, testAccessKey, testSecret, testRegion, "config", now)
+	histRec := httptest.NewRecorder()
+	handler.ServeHTTP(histRec, histReq)
+	if histRec.Code != http.StatusOK {
+		t.Fatalf("GetResourceConfigHistory after put status=%d body=%q", histRec.Code, histRec.Body.String())
+	}
+	hist := histRec.Body.String()
+	if !strings.Contains(hist, resourceID) || !strings.Contains(hist, "<configurationItemStatus>OK</configurationItemStatus>") {
+		t.Fatalf("unexpected put history XML: %q", hist)
+	}
+
+	delObj := mustS3(t, handler, http.MethodDelete, "http://127.0.0.1:4566/config-obj-data/inbox/item.txt", nil, "s3", now, nil)
+	if delObj.Code != http.StatusNoContent {
+		t.Fatalf("DeleteObject status=%d body=%q", delObj.Code, delObj.Body.String())
+	}
+
+	histBody2 := []byte(url.Values{
+		"Action":       {"GetResourceConfigHistory"},
+		"Version":      {"2014-11-12"},
+		"resourceType": {"AWS::S3::Object"},
+		"resourceId":   {resourceID},
+	}.Encode())
+	histReq2 := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", histBody2)
+	histReq2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	signHeader(t, histReq2, histBody2, testAccessKey, testSecret, testRegion, "config", now)
+	histRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(histRec2, histReq2)
+	if histRec2.Code != http.StatusOK {
+		t.Fatalf("GetResourceConfigHistory after delete status=%d body=%q", histRec2.Code, histRec2.Body.String())
+	}
+	hist2 := histRec2.Body.String()
+	if !strings.Contains(hist2, "<configurationItemStatus>ResourceDeleted</configurationItemStatus>") {
+		t.Fatalf("unexpected delete history XML: %q", hist2)
+	}
+}

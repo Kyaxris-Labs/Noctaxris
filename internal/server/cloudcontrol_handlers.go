@@ -186,7 +186,18 @@ func (s *Server) ccDeleteResource(
 			"User is not authorized to perform cloudcontrol:DeleteResource.", readOnly, eventID, verified)
 		return
 	}
-	token, err := s.store.CloudControlDeleteResource(verified.AccountID, typeName, identifier)
+	authz, aerr := s.newCFNAuthorizer(verified, "")
+	if aerr != nil {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			aerr.Error(), readOnly, eventID, verified)
+		return
+	}
+	token, err := s.store.CloudControlDeleteResourceAuthorized(verified.AccountID, typeName, identifier, authz)
+	if errors.Is(err, store.ErrCFNAccessDenied) {
+		s.writeCloudControlError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
 	if errors.Is(err, store.ErrCloudControlTypeUnsupported) {
 		s.writeCloudControlError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedActionException",
 			err.Error(), readOnly, eventID, verified)

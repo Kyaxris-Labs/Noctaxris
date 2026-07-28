@@ -14,7 +14,7 @@ import (
 )
 
 // CognitoLabConfirmationCode is the stub code used when Cognito insecure codes
-// are enabled, and for attribute-verify CustomMessage bodies (no SES).
+// are enabled (ForgotPassword, attribute verify, and related CustomMessage bodies).
 const CognitoLabConfirmationCode = "123456"
 
 // Confirmation-code purposes stored in cognito_confirmation_codes.
@@ -233,7 +233,7 @@ func (s *Store) ConfirmForgotPasswordCognitoUser(clientID, username, confirmatio
 
 // UpdateUserAttributesCognitoUser stores lab attributes for the access-token identity.
 // When email or phone_number is updated and CustomMessage is configured, fires
-// CustomMessage_UpdateUserAttribute (stub code {####} / 123456; no SES).
+// CustomMessage_UpdateUserAttribute (codeParameter {####}; no SES).
 func (s *Store) UpdateUserAttributesCognitoUser(accessToken string, attrs map[string]string) ([]CognitoCodeDeliveryDetails, error) {
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
@@ -280,6 +280,10 @@ func (s *Store) UpdateUserAttributesCognitoUser(accessToken string, attrs map[st
 		if !needsVerify {
 			continue
 		}
+		code, err := s.issueCognitoConfirmationCode()
+		if err != nil {
+			return nil, err
+		}
 		cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
 			TriggerSource: "CustomMessage_UpdateUserAttribute",
 			UserPoolID:    poolID,
@@ -292,10 +296,10 @@ func (s *Store) UpdateUserAttributesCognitoUser(accessToken string, attrs map[st
 		if err != nil {
 			return nil, err
 		}
-		if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_UpdateUserAttribute", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
+		if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_UpdateUserAttribute", "{####}", code, cmPayload); err != nil {
 			return nil, err
 		}
-		if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, CognitoLabConfirmationCode, name); err != nil {
+		if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, code, name); err != nil {
 			return nil, err
 		}
 		medium := "EMAIL"
@@ -314,7 +318,8 @@ func (s *Store) UpdateUserAttributesCognitoUser(accessToken string, attrs map[st
 }
 
 // GetUserAttributeVerificationCodeCognitoUser fires CustomMessage_VerifyUserAttribute
-// for the named attribute (stub code {####} / 123456; no SES).
+// for the named attribute (codeParameter {####}; no SES) and stores a confirmation code
+// on the same secure path as ForgotPassword / SignUp.
 func (s *Store) GetUserAttributeVerificationCodeCognitoUser(accessToken, attributeName string) (CognitoCodeDeliveryDetails, error) {
 	accessToken = strings.TrimSpace(accessToken)
 	attributeName = strings.TrimSpace(attributeName)
@@ -345,6 +350,10 @@ func (s *Store) GetUserAttributeVerificationCodeCognitoUser(accessToken, attribu
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
+	code, err := s.issueCognitoConfirmationCode()
+	if err != nil {
+		return CognitoCodeDeliveryDetails{}, err
+	}
 	cmPayload, err := s.FireCognitoTriggerEvent(acct, poolID, CognitoTriggerCustomMessage, CognitoTriggerEventInput{
 		TriggerSource: "CustomMessage_VerifyUserAttribute",
 		UserPoolID:    poolID,
@@ -357,10 +366,10 @@ func (s *Store) GetUserAttributeVerificationCodeCognitoUser(accessToken, attribu
 	if err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_VerifyUserAttribute", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
+	if err := s.applyCustomMessagePayload(acct, poolID, username, "CustomMessage_VerifyUserAttribute", "{####}", code, cmPayload); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
-	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, CognitoLabConfirmationCode, attributeName); err != nil {
+	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeAttrVerify, code, attributeName); err != nil {
 		return CognitoCodeDeliveryDetails{}, err
 	}
 	medium := "EMAIL"
@@ -376,7 +385,7 @@ func (s *Store) GetUserAttributeVerificationCodeCognitoUser(accessToken, attribu
 	}, nil
 }
 
-// VerifyUserAttributeCognitoUser marks an attribute verified when the lab code matches.
+// VerifyUserAttributeCognitoUser marks an attribute verified when the stored code matches.
 func (s *Store) VerifyUserAttributeCognitoUser(accessToken, attributeName, code string) error {
 	accessToken = strings.TrimSpace(accessToken)
 	attributeName = strings.TrimSpace(attributeName)

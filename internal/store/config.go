@@ -502,6 +502,48 @@ func (s *Store) AppendS3BucketConfigHistory(accountID, bucketName string, delete
 	})
 }
 
+// ConfigS3ObjectResourceID returns the lab resourceId for an S3 object (bucket/key).
+func ConfigS3ObjectResourceID(bucket, key string) string {
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimPrefix(strings.TrimSpace(key), "/")
+	if bucket == "" || key == "" {
+		return ""
+	}
+	return bucket + "/" + key
+}
+
+// AppendS3ObjectConfigHistory records object Put (deleted=false) or Delete (deleted=true) when recording.
+func (s *Store) AppendS3ObjectConfigHistory(accountID, bucket, key string, deleted bool) error {
+	bucket = strings.TrimSpace(bucket)
+	key = strings.TrimPrefix(strings.TrimSpace(key), "/")
+	resourceID := ConfigS3ObjectResourceID(bucket, key)
+	if resourceID == "" {
+		return nil
+	}
+	status := ConfigItemStatusOK
+	cfg := map[string]any{"bucket": bucket, "key": key}
+	if deleted {
+		status = ConfigItemStatusResourceDeleted
+	} else if meta, err := s.HeadObject(accountID, bucket, key); err == nil {
+		cfg["size"] = meta.Size
+		cfg["eTag"] = meta.ETag
+		if meta.ContentType != "" {
+			cfg["contentType"] = meta.ContentType
+		}
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("append s3 object config history: %w", err)
+	}
+	return s.AppendConfigHistoryItem(accountID, ConfigConfigurationItem{
+		ConfigurationItemStatus: status,
+		ResourceType:            "AWS::S3::Object",
+		ResourceID:              resourceID,
+		ResourceName:            key,
+		Configuration:           string(cfgJSON),
+	})
+}
+
 // GetResourceConfigHistory returns configuration items in chronological order (oldest first).
 func (s *Store) GetResourceConfigHistory(accountID, resourceType, resourceID string, limit int) ([]ConfigConfigurationItem, error) {
 	resourceType = strings.TrimSpace(resourceType)

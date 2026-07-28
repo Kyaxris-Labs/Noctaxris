@@ -59,7 +59,7 @@ ChangeSet Modify in-place subsets (fail closed otherwise):
 
 ### Authz notes
 
-Identity `EvaluateFull` on `cloudformation:*`. When `RoleARN` is set on CreateStack, PassRole plus `cloudformation.amazonaws.com` trust is required for the caller; resource provision then evaluates as that role.
+Identity `EvaluateFull` on `cloudformation:*`. When `RoleARN` is set on CreateStack, PassRole plus `cloudformation.amazonaws.com` trust is required for the caller; resource provision then evaluates as that role. UpdateStack and ExecuteChangeSet re-bind to the stack's stored `RoleARN` from Create (AWS-shaped: callers need stack operate permission; provision actions and PassRole for Lambda/EventBridge targets evaluate as that role).
 
 Provision fails closed on underlying actions (for example `iam:CreateRole`, `lambda:CreateFunction`, `events:PutTargets`). Lambda `Role` and EventBridge target `RoleArn` require the same PassRole checks as the direct APIs. ChangeSet/UpdateStack Modify of `AWS::IAM::Role` requires `iam:PutRolePolicy` / `iam:AttachRolePolicy` (and delete/detach counterparts) when replacing inline or managed policies; `iam:UpdateAssumeRolePolicy` is required only when the trust document changes.
 

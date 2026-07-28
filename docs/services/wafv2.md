@@ -14,7 +14,7 @@ Web ACL and rule group shape lite, AssociateWebACL with a lab resource ARN strin
 | Invoke gate | Associated Web ACL rules and DefaultAction on HTTP API, AppSync GraphQL, Function URL, and ELB lab listener invoke (evaluate errors fail closed with 403) |
 | Lab helper | `Evaluate` (label match and optional URI/headers/SourceIP for statements) |
 
-Rules may use a `Label` string on the Evaluate helper, or a statement on invoke (and Evaluate when URI/headers/SourceIP are supplied): `Statement.ByteMatchStatement`, `Statement.SizeConstraintStatement`, or lab `Statement.IPSetReferenceStatement` with inline `Addresses`. Invoke enforcement passes request path, allowlisted headers (`Host`, `User-Agent`, `X-Forwarded-For`), and `SourceIP` (first parseable `X-Forwarded-For` hop when present, else `RemoteAddr` host). Rules run in priority order; first match wins; otherwise DefaultAction applies. DefaultAction is Allow or Block.
+Rules may use a `Label` string on the Evaluate helper, or a statement on invoke (and Evaluate when URI/headers/SourceIP are supplied): `Statement.ByteMatchStatement`, `Statement.SizeConstraintStatement`, or lab `Statement.IPSetReferenceStatement` with inline `Addresses`. Invoke enforcement passes request path, allowlisted headers (`Host`, `User-Agent`, `X-Forwarded-For`), and `SourceIP` from the TCP peer by default. The first parseable `X-Forwarded-For` hop is used only when the peer is covered by `NOCTAXRIS_TRUSTED_PROXIES` (empty default ignores XFF). Rules run in priority order; first match wins; otherwise DefaultAction applies. DefaultAction is Allow or Block.
 
 ### ByteMatch statement subset (lab)
 
@@ -75,4 +75,4 @@ A Block default action or matching ByteMatch / SizeConstraint / IPSet rule on th
 
 - Real edge PoP / CAPTCHA / Bot Control beyond supported rules
 - Full WAF statement catalog (And/Or/Not, managed rule groups, rate-based, GeoMatch, CreateIPSet ARN reference)
-- Trusted-proxy allowlist for `X-Forwarded-For` (lab uses first hop when present)
+- Trusted-proxy allowlist for `X-Forwarded-For`: set `NOCTAXRIS_TRUSTED_PROXIES` (comma-separated CIDRs). When empty (default), invoke enforcement uses the TCP peer only. With a matching peer, the first parseable XFF hop is used for IPSet SourceIP.

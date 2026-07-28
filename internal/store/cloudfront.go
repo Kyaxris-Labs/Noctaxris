@@ -49,6 +49,13 @@ type CloudFrontOrigin struct {
 	OriginType string `json:"OriginType"` // s3 | apigateway
 }
 
+// CloudFrontCacheBehavior is a lite PathPattern → TargetOriginId mapping.
+// PathPattern "*" is the default behavior (applied when no other pattern matches).
+type CloudFrontCacheBehavior struct {
+	PathPattern    string `json:"PathPattern"`
+	TargetOriginId string `json:"TargetOriginId"`
+}
+
 // CloudFrontDistribution is a lab CloudFront distribution row.
 type CloudFrontDistribution struct {
 	ID              string
@@ -57,6 +64,7 @@ type CloudFrontDistribution struct {
 	Comment         string
 	Enabled         bool
 	OriginsJSON     string
+	BehaviorsJSON   string
 	CallerReference string
 	Status          string
 	CreatedAt       int64
@@ -77,6 +85,7 @@ func EnsureCloudFrontSchema(db *sql.DB) error {
 		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_bucket TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_prefix TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cloudfront_distributions ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'`,
 	}); err != nil {
 		return fmt.Errorf("ensure cloudfront schema: migrate: %w", err)
 	}
@@ -95,6 +104,15 @@ func CloudFrontDistributionARN(accountID, id string) string {
 
 // CreateCloudFrontDistribution creates a lite distribution.
 func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference string, enabled bool, origins []CloudFrontOrigin) (CloudFrontDistribution, error) {
+	return s.CreateCloudFrontDistributionWithBehaviors(accountID, comment, callerReference, enabled, origins, nil)
+}
+
+// CreateCloudFrontDistributionWithBehaviors creates a distribution with optional cache behaviors.
+// Behaviors are matched in list order; PathPattern "*" is the default fallback origin.
+func (s *Store) CreateCloudFrontDistributionWithBehaviors(
+	accountID, comment, callerReference string, enabled bool,
+	origins []CloudFrontOrigin, behaviors []CloudFrontCacheBehavior,
+) (CloudFrontDistribution, error) {
 	callerReference = strings.TrimSpace(callerReference)
 	if callerReference == "" {
 		return CloudFrontDistribution{}, fmt.Errorf("%w: CallerReference required", ErrCloudFrontBadRequest)
@@ -130,9 +148,31 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 			}
 		}
 	}
+	originIDs := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		originIDs[o.ID] = struct{}{}
+	}
+	cleanedBehaviors := make([]CloudFrontCacheBehavior, 0, len(behaviors))
+	for _, b := range behaviors {
+		pat := strings.TrimSpace(b.PathPattern)
+		target := strings.TrimSpace(b.TargetOriginId)
+		if pat == "" || target == "" {
+			return CloudFrontDistribution{}, fmt.Errorf("%w: CacheBehavior PathPattern and TargetOriginId required", ErrCloudFrontBadRequest)
+		}
+		if _, ok := originIDs[target]; !ok {
+			return CloudFrontDistribution{}, fmt.Errorf("%w: CacheBehavior TargetOriginId %q not found in Origins", ErrCloudFrontBadRequest, target)
+		}
+		cleanedBehaviors = append(cleanedBehaviors, CloudFrontCacheBehavior{
+			PathPattern: pat, TargetOriginId: target,
+		})
+	}
 	originsJSON, err := json.Marshal(origins)
 	if err != nil {
 		return CloudFrontDistribution{}, fmt.Errorf("marshal origins: %w", err)
+	}
+	behaviorsJSON, err := json.Marshal(cleanedBehaviors)
+	if err != nil {
+		return CloudFrontDistribution{}, fmt.Errorf("marshal behaviors: %w", err)
 	}
 	id := "E" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:13])
 	arn := CloudFrontDistributionARN(accountID, id)
@@ -146,9 +186,9 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO cloudfront_distributions
-		 (account_id, id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), callerReference, status, now,
+		 (account_id, id, arn, domain_name, comment, enabled, origins_json, behaviors_json, caller_reference, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), string(behaviorsJSON), callerReference, status, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -158,8 +198,89 @@ func (s *Store) CreateCloudFrontDistribution(accountID, comment, callerReference
 	}
 	return CloudFrontDistribution{
 		ID: id, ARN: arn, DomainName: domain, Comment: comment, Enabled: enabled,
-		OriginsJSON: string(originsJSON), CallerReference: callerReference, Status: status, CreatedAt: now,
+		OriginsJSON: string(originsJSON), BehaviorsJSON: string(behaviorsJSON),
+		CallerReference: callerReference, Status: status, CreatedAt: now,
 	}, nil
+}
+
+// MatchCloudFrontPathPattern reports whether requestPath matches a lite PathPattern.
+// Bare "*" matches all. A single trailing "*" is a prefix match. Otherwise equality.
+// Leading "/" on pattern or path is optional (normalized). Case sensitive.
+func MatchCloudFrontPathPattern(requestPath, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	requestPath = strings.TrimSpace(requestPath)
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" {
+		return true
+	}
+	normPath := cloudFrontNormalizePath(requestPath)
+	normPat := cloudFrontNormalizePath(pattern)
+	if strings.Count(normPat, "*") > 1 {
+		return false
+	}
+	if strings.HasSuffix(normPat, "*") {
+		return strings.HasPrefix(normPath, strings.TrimSuffix(normPat, "*"))
+	}
+	if strings.Contains(normPat, "*") {
+		return false
+	}
+	return normPath == normPat
+}
+
+func cloudFrontNormalizePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "*" {
+		return p
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
+}
+
+// SelectCloudFrontOrigin picks an origin for objectKey using cache behaviors in list order.
+// First non-"*" matching PathPattern wins; otherwise the first "*" (default) TargetOriginId;
+// with no behaviors, the first origin is used.
+func SelectCloudFrontOrigin(origins []CloudFrontOrigin, behaviors []CloudFrontCacheBehavior, objectKey string) (CloudFrontOrigin, error) {
+	if len(origins) == 0 {
+		return CloudFrontOrigin{}, fmt.Errorf("%w: no origins", ErrCloudFrontBadRequest)
+	}
+	byID := make(map[string]CloudFrontOrigin, len(origins))
+	for _, o := range origins {
+		byID[o.ID] = o
+	}
+	path := cloudFrontNormalizePath(objectKey)
+	if objectKey == "" {
+		path = "/"
+	}
+	var defaultTarget string
+	for _, b := range behaviors {
+		pat := strings.TrimSpace(b.PathPattern)
+		target := strings.TrimSpace(b.TargetOriginId)
+		if pat == "*" {
+			if defaultTarget == "" {
+				defaultTarget = target
+			}
+			continue
+		}
+		if MatchCloudFrontPathPattern(path, pat) {
+			o, ok := byID[target]
+			if !ok {
+				return CloudFrontOrigin{}, fmt.Errorf("%w: TargetOriginId %q not found", ErrCloudFrontBadRequest, target)
+			}
+			return o, nil
+		}
+	}
+	if defaultTarget != "" {
+		o, ok := byID[defaultTarget]
+		if !ok {
+			return CloudFrontOrigin{}, fmt.Errorf("%w: default TargetOriginId %q not found", ErrCloudFrontBadRequest, defaultTarget)
+		}
+		return o, nil
+	}
+	return origins[0], nil
 }
 
 func scanCloudFrontDistribution(
@@ -168,13 +289,17 @@ func scanCloudFrontDistribution(
 	var d CloudFrontDistribution
 	var enabledInt, loggingInt int
 	if err := scan(
-		&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.CallerReference, &d.Status, &d.CreatedAt,
+		&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.BehaviorsJSON,
+		&d.CallerReference, &d.Status, &d.CreatedAt,
 		&loggingInt, &d.LoggingBucket, &d.LoggingPrefix,
 	); err != nil {
 		return CloudFrontDistribution{}, err
 	}
 	d.Enabled = enabledInt != 0
 	d.LoggingEnabled = loggingInt != 0
+	if strings.TrimSpace(d.BehaviorsJSON) == "" {
+		d.BehaviorsJSON = "[]"
+	}
 	return d, nil
 }
 
@@ -183,7 +308,8 @@ func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistr
 	id = strings.TrimSpace(id)
 	d, err := scanCloudFrontDistribution(
 		s.db.QueryRow(
-			`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at,
+			`SELECT id, arn, domain_name, comment, enabled, origins_json, COALESCE(behaviors_json, '[]'),
+			        caller_reference, status, created_at,
 			        logging_enabled, logging_bucket, logging_prefix
 			 FROM cloudfront_distributions WHERE account_id = ? AND id = ?`,
 			accountID, id,
@@ -201,7 +327,8 @@ func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistr
 // ListCloudFrontDistributions lists distributions for an account.
 func (s *Store) ListCloudFrontDistributions(accountID string) ([]CloudFrontDistribution, error) {
 	rows, err := s.db.Query(
-		`SELECT id, arn, domain_name, comment, enabled, origins_json, caller_reference, status, created_at,
+		`SELECT id, arn, domain_name, comment, enabled, origins_json, COALESCE(behaviors_json, '[]'),
+		        caller_reference, status, created_at,
 		        logging_enabled, logging_bucket, logging_prefix
 		 FROM cloudfront_distributions WHERE account_id = ? ORDER BY id`,
 		accountID,

@@ -2,6 +2,7 @@ package cloudfront
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -17,19 +18,47 @@ func distributionMap(d store.CloudFrontDistribution) map[string]any {
 			"OriginType": o.OriginType,
 		})
 	}
-	out := map[string]any{
-		"Id":     d.ID,
-		"ARN":    d.ARN,
-		"Status": d.Status,
-		"DistributionConfig": map[string]any{
-			"CallerReference": d.CallerReference,
-			"Comment":         d.Comment,
-			"Enabled":         d.Enabled,
-			"Origins": map[string]any{
-				"Quantity": len(items),
-				"Items":    items,
-			},
+	var behaviors []store.CloudFrontCacheBehavior
+	if strings.TrimSpace(d.BehaviorsJSON) != "" {
+		_ = json.Unmarshal([]byte(d.BehaviorsJSON), &behaviors)
+	}
+	var defaultTarget string
+	cacheItems := make([]map[string]any, 0)
+	for _, b := range behaviors {
+		if b.PathPattern == "*" && defaultTarget == "" {
+			defaultTarget = b.TargetOriginId
+			continue
+		}
+		cacheItems = append(cacheItems, map[string]any{
+			"PathPattern":    b.PathPattern,
+			"TargetOriginId": b.TargetOriginId,
+		})
+	}
+	cfg := map[string]any{
+		"CallerReference": d.CallerReference,
+		"Comment":         d.Comment,
+		"Enabled":         d.Enabled,
+		"Origins": map[string]any{
+			"Quantity": len(items),
+			"Items":    items,
 		},
+	}
+	if defaultTarget != "" {
+		cfg["DefaultCacheBehavior"] = map[string]any{
+			"TargetOriginId": defaultTarget,
+		}
+	}
+	if len(cacheItems) > 0 {
+		cfg["CacheBehaviors"] = map[string]any{
+			"Quantity": len(cacheItems),
+			"Items":    cacheItems,
+		}
+	}
+	out := map[string]any{
+		"Id":                 d.ID,
+		"ARN":                d.ARN,
+		"Status":             d.Status,
+		"DistributionConfig": cfg,
 	}
 	if d.DomainName != "" {
 		out["DomainName"] = d.DomainName

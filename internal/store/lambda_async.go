@@ -297,11 +297,7 @@ func (s *Store) sendLambdaFailureDestination(accountID, destARN string, body []b
 	destARN = strings.TrimSpace(destARN)
 	switch {
 	case strings.HasPrefix(destARN, "arn:aws:sqs:"):
-		queueName, err := queueNameFromARN(destARN)
-		if err != nil {
-			return err
-		}
-		if _, err := s.SendMessage(accountID, queueName, body, false, nil, "", nil); err != nil {
+		if err := s.sendLabDLQMessage(accountID, destARN, body); err != nil {
 			return fmt.Errorf("send lambda failure to SQS: %w", err)
 		}
 		return nil

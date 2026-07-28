@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -50,9 +51,14 @@ type Config struct {
 	// (NOCTAXRIS_CLOUDTRAIL_INJECT=1). Default false (AccessDenied when off).
 	CloudTrailInject bool
 	// CloudTrailTrustXFF uses the first X-Forwarded-For hop for audit
-	// sourceIPAddress only (NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1). Default false
-	// uses TCP RemoteAddr. Authz aws:SourceIp always stays the peer address.
+	// sourceIPAddress when the TCP peer is in TrustedProxies
+	// (NOCTAXRIS_CLOUDTRAIL_TRUST_XFF=1). Default false uses TCP RemoteAddr.
+	// Authz aws:SourceIp always stays the peer address.
 	CloudTrailTrustXFF bool
+	// TrustedProxies are CIDRs whose peers may supply X-Forwarded-For for
+	// WAFv2 SourceIP and (with CloudTrailTrustXFF) audit sourceIPAddress.
+	// Empty (default): ignore XFF for those paths.
+	TrustedProxies []*net.IPNet
 	// CloudTrailGzip gzip-compresses trail S3 delivery objects when
 	// NOCTAXRIS_CLOUDTRAIL_GZIP=1. Default false.
 	CloudTrailGzip bool
@@ -110,6 +116,12 @@ func LoadFromEnv() (Config, error) {
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
 		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
 	}
+
+	proxies, err := ParseTrustedProxies(os.Getenv(EnvTrustedProxies))
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", EnvTrustedProxies, err)
+	}
+	cfg.TrustedProxies = proxies
 
 	runtime, err := compute.ParseComputeRuntime(cfg.ComputeRuntime)
 	if err != nil {

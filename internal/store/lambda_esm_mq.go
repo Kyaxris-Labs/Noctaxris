@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	amqp10 "github.com/Azure/go-amqp"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -29,6 +31,12 @@ const (
 	mqLabHostPrefix = "noctaxris-mq-"
 
 	mqESMDialTimeout = 2 * time.Second
+
+	// activeMQAMQP10ReceiveWait is the per-message wait when the lab queue is empty.
+	activeMQAMQP10ReceiveWait = 250 * time.Millisecond
+
+	// activeMQLabQueueAddress is the ActiveMQ classic AMQP 1.0 source for the lab queue.
+	activeMQLabQueueAddress = "queue://" + LambdaESMLabMQQueue
 )
 
 var (
@@ -50,8 +58,9 @@ type MQESMMessage struct {
 // Unit tests inject this to avoid DinD/broker. When nil, the poller uses engine-specific receive.
 type MQReceiveFunc func(endpoint string, batchSize int) ([]MQESMMessage, error)
 
-// MQDialFunc is an optional TCP dial override for unit tests (ActiveMQ success→empty default path).
-// Production ActiveMQ path uses net.DialTimeout to the allowlisted nested host:port only.
+// MQDialFunc is an optional TCP dial override for unit tests (ActiveMQ AMQP 1.0 path).
+// Production ActiveMQ path uses net.DialTimeout to the allowlisted nested host:port only,
+// then negotiates AMQP 1.0 over that connection.
 type MQDialFunc func(network, address string, timeout time.Duration) (net.Conn, error)
 
 var (
@@ -90,15 +99,15 @@ func getMQDialFunc() MQDialFunc {
 
 // MQDefaultReceiveEmptyReason explains empty default (non-injected) batches.
 // RabbitMQ uses AMQP 0-9-1 basic.get (empty only when the queue has no messages).
-// ActiveMQ classic AMQP on 5672 is AMQP 1.0 — no in-tree client, so dial-only empty.
+// ActiveMQ uses AMQP 1.0 receive on queue://noctaxris (empty when no message arrives in wait).
 func MQDefaultReceiveEmptyReason(engineType string) string {
 	switch strings.ToUpper(strings.TrimSpace(engineType)) {
 	case "RABBITMQ":
 		return "RabbitMQ: empty batch when basic.get finds no messages on queue " + LambdaESMLabMQQueue
 	case "ACTIVEMQ":
-		return "dial-only: ActiveMQ needs AMQP 1.0/JMS (no in-tree client); empty batch"
+		return "ActiveMQ: empty batch when AMQP 1.0 receive finds no messages on " + activeMQLabQueueAddress
 	default:
-		return "dial-only: no in-tree AMQP client for this engine; empty batch after allowlisted dial"
+		return "empty batch after allowlisted dial with no messages"
 	}
 }
 
@@ -278,7 +287,7 @@ func (s *Store) receiveMQESMMessages(endpoint, engineType string, batchSize int)
 // defaultMQReceiveDial receives from an allowlisted nested host only (no operator/WAN hosts).
 //
 //   - RABBITMQ: AMQP 0-9-1 Dial + basic.get on LambdaESMLabMQQueue (lab user MQLabAMQPUser).
-//   - ACTIVEMQ: nested classic AMQP connector on 5672 speaks AMQP 1.0 (not 0-9-1); TCP probe then empty.
+//   - ACTIVEMQ: AMQP 1.0 Dial + receive on queue://noctaxris (nested classic connector on 5672).
 //
 // MQReceiveFunc injection takes precedence for unit tests.
 func defaultMQReceiveDial(host string, port int, engineType string, batchSize int) ([]MQESMMessage, error) {
@@ -289,7 +298,7 @@ func defaultMQReceiveDial(host string, port int, engineType string, batchSize in
 	case "RABBITMQ":
 		return rabbitMQBasicGet(host, port, batchSize)
 	default:
-		return activeMQDialEmpty(host, port)
+		return activeMQAMQP10Receive(host, port, batchSize)
 	}
 }
 
@@ -360,34 +369,118 @@ func rabbitMQBasicGet(host string, port int, batchSize int) ([]MQESMMessage, err
 	return out, nil
 }
 
-// activeMQDialEmpty TCP-probes the allowlisted host then returns an empty batch (AMQP 1.0 out of scope).
-func activeMQDialEmpty(host string, port int) ([]MQESMMessage, error) {
+// activeMQAMQP10Receive dials the allowlisted host and receives up to batchSize messages
+// via AMQP 1.0 from activeMQLabQueueAddress. Dial/protocol errors fail closed.
+// An empty queue within the short receive wait returns an empty batch (not an error).
+func activeMQAMQP10Receive(host string, port int, batchSize int) ([]MQESMMessage, error) {
 	if err := ValidateNestedMQHost(host); err != nil {
 		return nil, err
+	}
+	if batchSize <= 0 {
+		batchSize = LambdaESMDefaultBatchSize
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dial := getMQDialFunc()
 	var (
-		conn net.Conn
-		err  error
+		netConn net.Conn
+		err     error
 	)
 	if dial != nil {
-		conn, err = dial("tcp", addr, mqESMDialTimeout)
+		netConn, err = dial("tcp", addr, mqESMDialTimeout)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, mqESMDialTimeout)
+		netConn, err = net.DialTimeout("tcp", addr, mqESMDialTimeout)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("mq esm dial %s: %w", addr, err)
+		return nil, fmt.Errorf("mq esm activemq dial %s: %w", addr, err)
 	}
-	return postDialMQReceive(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), mqESMDialTimeout+activeMQAMQP10ReceiveWait*time.Duration(batchSize+1))
+	defer cancel()
+
+	conn, err := amqp10.NewConn(ctx, netConn, &amqp10.ConnOptions{
+		HostName:    host,
+		SASLType:    amqp10.SASLTypeAnonymous(),
+		IdleTimeout: -1,
+	})
+	if err != nil {
+		_ = netConn.Close()
+		return nil, fmt.Errorf("mq esm activemq amqp1.0 conn %s: %w", addr, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	session, err := conn.NewSession(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mq esm activemq amqp1.0 session: %w", err)
+	}
+	defer func() { _ = session.Close(ctx) }()
+
+	receiver, err := session.NewReceiver(ctx, activeMQLabQueueAddress, &amqp10.ReceiverOptions{
+		Credit: int32(batchSize),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mq esm activemq amqp1.0 receiver %s: %w", activeMQLabQueueAddress, err)
+	}
+	defer func() { _ = receiver.Close(ctx) }()
+
+	out := make([]MQESMMessage, 0, batchSize)
+	for i := 0; i < batchSize; i++ {
+		recvCtx, recvCancel := context.WithTimeout(ctx, activeMQAMQP10ReceiveWait)
+		msg, rerr := receiver.Receive(recvCtx, nil)
+		recvCancel()
+		if rerr != nil {
+			if errors.Is(rerr, context.DeadlineExceeded) || errors.Is(rerr, context.Canceled) {
+				break
+			}
+			// Empty / no credit left often surfaces as link errors after wait; treat as empty.
+			if len(out) == 0 && isActiveMQEmptyReceive(rerr) {
+				break
+			}
+			if len(out) > 0 && isActiveMQEmptyReceive(rerr) {
+				break
+			}
+			return nil, fmt.Errorf("mq esm activemq amqp1.0 receive: %w", rerr)
+		}
+		if aerr := receiver.AcceptMessage(ctx, msg); aerr != nil {
+			return nil, fmt.Errorf("mq esm activemq amqp1.0 accept: %w", aerr)
+		}
+		id := ""
+		if msg.Properties != nil {
+			switch mid := msg.Properties.MessageID.(type) {
+			case string:
+				id = strings.TrimSpace(mid)
+			case []byte:
+				id = strings.TrimSpace(string(mid))
+			case uint64:
+				id = strconv.FormatUint(mid, 10)
+			}
+		}
+		if id == "" {
+			id = fmt.Sprintf("lab-amq-%d", i+1)
+		}
+		body := msg.GetData()
+		if body == nil {
+			body = []byte{}
+		}
+		out = append(out, MQESMMessage{
+			MessageID:   id,
+			Data:        append([]byte(nil), body...),
+			Destination: LambdaESMLabMQQueue,
+			Redelivered: false,
+		})
+	}
+	return out, nil
 }
 
-// postDialMQReceive closes the ActiveMQ TCP probe and returns an empty batch.
-func postDialMQReceive(conn net.Conn) ([]MQESMMessage, error) {
-	if conn != nil {
-		_ = conn.Close()
+func isActiveMQEmptyReceive(err error) bool {
+	if err == nil {
+		return false
 	}
-	return nil, nil
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "timeout") ||
+		strings.Contains(s, "deadline") ||
+		strings.Contains(s, "no messages") ||
+		strings.Contains(s, "link closed") ||
+		strings.Contains(s, "connection closed")
 }
 
 func buildMQLambdaEventJSON(eventSourceARN, engineType string, msgs []MQESMMessage) (string, error) {

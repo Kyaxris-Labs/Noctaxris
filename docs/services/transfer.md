@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. Servers create as `State=ONLINE`. There is no real SFTP/SSH listener and no extra Compose port: file Put/Get/List is a lab HTTP API on `:4566` only. Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe omits `EndpointType` (no VPC theatre). `EndpointDetails` and client `EndpointType` are rejected.
+Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. Servers create as `State=ONLINE`. There is no real SFTP/SSH listener and no extra Compose port: file Put/Get/List is a lab HTTP API on the same `:4566` API port only (SigV4 service `transfer`). Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe omits `EndpointType` (no VPC theatre). `EndpointDetails` and client `EndpointType` are rejected.
 
 ## Implemented
 
@@ -12,7 +12,7 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 | User | `CreateUser`, `DeleteUser` |
 | Protocol | SFTP only (label; not a live SFTP daemon) |
 | Storage | Per-user sandbox directory under data root |
-| Lab files | `PutFile` / `GetFile` / `ListDirectory` (JSON targets) and `PUT|GET /transfer/{serverId}/home/{user}/{path...}` |
+| Lab files | `PutFile` / `GetFile` / `ListDirectory` (JSON `X-Amz-Target` on `:4566`) and `PUT|GET /transfer/{serverId}/home/{user}/{path...}` on `:4566` |
 
 ### Authz notes
 
@@ -29,17 +29,19 @@ aws transfer create-user --server-id "$SID" --user-name alice --endpoint-url "$E
 aws transfer list-servers --endpoint-url "$EP"
 ```
 
-Lab file API (JSON targets via any SigV4 client for service `transfer`):
+Lab file API on the API port (not SFTP):
 
 ```bash
-# PutFile / GetFile / ListDirectory with ServerId, UserName, Path
-# Or: PUT/GET $EP/transfer/$SID/home/alice/inbox/hello.txt
+# JSON targets (service transfer, X-Amz-Target TransferService.PutFile / GetFile / ListDirectory):
+#   ServerId, UserName, Path; PutFile Body or BodyBase64
+# HTTP path (same host:port as the AWS API, SigV4 service transfer):
+#   PUT|GET $EP/transfer/$SID/home/alice/inbox/hello.txt
 ```
 
-No live SFTP port is published. Unit tests assert ONLINE create, put/get roundtrip, and path-traversal rejection.
+No live SFTP port is published. Unit tests assert ONLINE create, JSON PutFile/GetFile roundtrip, HTTP `/transfer/.../home/...` Put/Get roundtrip, and path-traversal rejection.
 
 ## Not yet / deferred
 
-- Real SFTP listener even on loopback
+- Real SFTP listener (even on loopback); lab files stay HTTP on `:4566`
 - AS2, FTPS, IdP integration
 - WAN expose

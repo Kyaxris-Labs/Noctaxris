@@ -13,8 +13,9 @@ import (
 )
 
 // Lab CloudFront fake-edge path: /cloudfront/{distributionId}/{objectKey...}
-// SigV4 required (no anonymous). First origin only. Origins resolve in-store only
-// (S3 GetObject or internal HTTP API invoke). Never dials arbitrary hosts.
+// SigV4 required (no anonymous). Origin selected via CacheBehavior PathPattern
+// (list order; "*" default) or first origin when no behaviors. Origins resolve
+// in-store only (S3 GetObject or internal HTTP API invoke). Never dials arbitrary hosts.
 
 func isCloudFrontEdgePath(path string) bool {
 	path = strings.TrimSuffix(path, "/")
@@ -122,7 +123,18 @@ func (s *Server) handleCloudFrontEdgeAfterAuth(
 		http.Error(w, "invalid origin configuration", http.StatusBadGateway)
 		return
 	}
-	origin := origins[0]
+	var behaviors []store.CloudFrontCacheBehavior
+	if strings.TrimSpace(d.BehaviorsJSON) != "" {
+		if err := json.Unmarshal([]byte(d.BehaviorsJSON), &behaviors); err != nil {
+			http.Error(w, "invalid cache behavior configuration", http.StatusBadGateway)
+			return
+		}
+	}
+	origin, err := store.SelectCloudFrontOrigin(origins, behaviors, objectKey)
+	if err != nil {
+		http.Error(w, "origin selection failed", http.StatusBadGateway)
+		return
+	}
 
 	switch origin.OriginType {
 	case "s3":

@@ -126,3 +126,66 @@ func TestCloudFrontEdgeMissingObjectNotFound(t *testing.T) {
 		t.Fatalf("missing object status=%d want 404 body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+func TestCloudFrontEdgePathPatternOriginSelection(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const defaultBucket = "cf-path-default"
+	const imagesBucket = "cf-path-images"
+	for _, b := range []string{defaultBucket, imagesBucket} {
+		if _, err := st.CreateBucket(testAccountID, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.PutObject(testAccountID, defaultBucket, "index.html", store.PutObjectMeta{
+		Data: []byte("default-origin"), PlainSize: 14, ContentType: "text/html",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(testAccountID, imagesBucket, "images/logo.png", store.PutObjectMeta{
+		Data: []byte("image-origin"), PlainSize: 12, ContentType: "image/png",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := st.CreateCloudFrontDistributionWithBehaviors(testAccountID, "lab", "edge-path", true,
+		[]store.CloudFrontOrigin{
+			{ID: "default", DomainName: defaultBucket, OriginType: "s3"},
+			{ID: "images", DomainName: imagesBucket, OriginType: "s3"},
+		},
+		[]store.CloudFrontCacheBehavior{
+			{PathPattern: "/images/*", TargetOriginId: "images"},
+			{PathPattern: "*", TargetOriginId: "default"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edge := srv.CloudFrontEdgeHandler()
+
+	imgReq := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/cloudfront/"+d.ID+"/images/logo.png", nil)
+	imgReq.Header.Del("Content-Type")
+	signS3Header(t, imgReq, nil, testAccessKey, testSecret, testRegion, "cloudfront", now)
+	imgRec := httptest.NewRecorder()
+	edge.ServeHTTP(imgRec, imgReq)
+	if imgRec.Code != http.StatusOK {
+		t.Fatalf("images path status=%d body=%q", imgRec.Code, imgRec.Body.String())
+	}
+	if imgRec.Body.String() != "image-origin" {
+		t.Fatalf("images body=%q want image-origin", imgRec.Body.String())
+	}
+
+	defReq := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/cloudfront/"+d.ID+"/index.html", nil)
+	defReq.Header.Del("Content-Type")
+	signS3Header(t, defReq, nil, testAccessKey, testSecret, testRegion, "cloudfront", now)
+	defRec := httptest.NewRecorder()
+	edge.ServeHTTP(defRec, defReq)
+	if defRec.Code != http.StatusOK {
+		t.Fatalf("default path status=%d body=%q", defRec.Code, defRec.Body.String())
+	}
+	if defRec.Body.String() != "default-origin" {
+		t.Fatalf("default body=%q want default-origin", defRec.Body.String())
+	}
+}

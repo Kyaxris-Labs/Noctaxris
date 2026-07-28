@@ -251,9 +251,12 @@ func TestMQDefaultReceiveEmptyReasonProtocolSplit(t *testing.T) {
 	if !strings.Contains(active, "empty batch") {
 		t.Fatalf("activemq reason=%q", active)
 	}
+	if strings.Contains(active, "dial-only") || strings.Contains(active, "no in-tree") {
+		t.Fatalf("activemq must not be dial-only empty: %q", active)
+	}
 }
 
-func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
+func TestMQESMActiveMQNonAMQPPeerFailClosed(t *testing.T) {
 	st := openLambdaStore(t)
 	account := "000000000001"
 	if err := st.EnsureLambdaESMSchema(); err != nil {
@@ -272,7 +275,7 @@ func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
 	fn, err := st.CreateFunction(store.CreateFunctionMeta{
 		AccountID:    account,
 		Region:       "us-east-1",
-		FunctionName: "mq-esm-dial-empty",
+		FunctionName: "mq-esm-dial-fail",
 		Runtime:      store.LambdaRuntimePython312,
 		RoleARN:      roleARN,
 		Handler:      "app.handler",
@@ -281,7 +284,6 @@ func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ActiveMQ remains dial-only empty (AMQP 1.0); RabbitMQ uses amqp091 Dial+basic.get instead.
 	b, err := st.CreateMQBroker(account, "us-east-1", "dial-broker", "ACTIVEMQ", "", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -312,9 +314,6 @@ func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
 		if network != "tcp" {
 			t.Fatalf("network=%q", network)
 		}
-		if timeout <= 0 {
-			t.Fatalf("timeout=%v", timeout)
-		}
 		host, _, splitErr := net.SplitHostPort(address)
 		if splitErr != nil {
 			t.Fatalf("SplitHostPort: %v", splitErr)
@@ -336,19 +335,96 @@ func TestMQESMDefaultDialSuccessReturnsEmptyBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	invoked := false
-	if err := st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
+	err = st.PollEventSourceMappingOnce(m.UUID, func(string, string, string, string) (string, error) {
 		invoked = true
 		return "", nil
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err == nil {
+		t.Fatal("ActiveMQ AMQP 1.0 path must fail closed against a non-AMQP peer")
+	}
+	if !strings.Contains(err.Error(), "amqp1.0") && !strings.Contains(err.Error(), "activemq") {
+		t.Fatalf("want activemq/amqp1.0 error, got %v", err)
 	}
 	if invoked {
-		t.Fatal("ActiveMQ dial success must return empty batch and skip Invoke")
+		t.Fatal("must not Invoke after AMQP 1.0 negotiation failure")
 	}
 	if dialedAddr == "" {
 		t.Fatal("expected ActiveMQ default path to dial allowlisted nested address")
 	}
 	if !strings.HasPrefix(dialedAddr, "noctaxris-mq-") {
 		t.Fatalf("dialedAddr=%q", dialedAddr)
+	}
+}
+
+func TestMQESMActiveMQInjectableReceiveReturnsBody(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	if err := st.EnsureLambdaESMSchema(); err != nil {
+		t.Fatal(err)
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "lambda-mq-amq-body", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["mq:DescribeBroker"],"Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "esm-mq", allowDoc); err != nil {
+		t.Fatal(err)
+	}
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "mq-esm-amq-body",
+		Runtime:      store.LambdaRuntimePython312,
+		RoleARN:      roleARN,
+		Handler:      "app.handler",
+		Zip:          zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.CreateMQBroker(account, "us-east-1", "amq-body-broker", "ACTIVEMQ", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := store.MQNestedAMQPEndpoint(b.BrokerID)
+	if err := st.SetMQContainerID(account, b.BrokerID, "ctr-amq-body", store.MQBrokerStateRunning, ep); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("activemq-lab-body")
+	store.SetMQReceiveFunc(func(endpoint string, batchSize int) ([]store.MQESMMessage, error) {
+		return []store.MQESMMessage{{
+			MessageID:   "amq-1",
+			Data:        payload,
+			Destination: store.LambdaESMLabMQQueue,
+		}}, nil
+	})
+	t.Cleanup(func() { store.SetMQReceiveFunc(nil) })
+
+	m, err := st.CreateEventSourceMapping(store.CreateEventSourceMappingInput{
+		AccountID:      account,
+		FunctionName:   fn.FunctionName,
+		EventSourceARN: b.BrokerARN,
+		BatchSize:      2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoked := false
+	if err := st.PollEventSourceMappingOnce(m.UUID, func(_, _, _, eventJSON string) (string, error) {
+		invoked = true
+		if !strings.Contains(eventJSON, `"eventSource":"aws:mq"`) {
+			t.Fatalf("event=%s", eventJSON)
+		}
+		if !strings.Contains(eventJSON, base64.StdEncoding.EncodeToString(payload)) {
+			t.Fatalf("missing body event=%s", eventJSON)
+		}
+		return "", nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !invoked {
+		t.Fatal("expected ActiveMQ ESM invoke with injectable body")
 	}
 }

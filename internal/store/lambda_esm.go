@@ -574,7 +574,7 @@ func (s *Store) esmEventSourceAllows(fn LambdaFunction, eventSourceARN string) b
 // On invoke error, SQS messages remain invisible until the visibility timeout expires; DynamoDB/Kinesis cursor is not advanced.
 // With FunctionResponseTypes ReportBatchItemFailures, only non-failed SQS messages are deleted;
 // DynamoDB/Kinesis cursor advances only when batchItemFailures is empty.
-// MQ lab lite: injectable MQReceiveFunc, RabbitMQ basic.get, or ActiveMQ allowlisted dial-empty; ack is implicit on successful Invoke.
+// MQ lab lite: injectable MQReceiveFunc, RabbitMQ basic.get, or ActiveMQ AMQP 1.0 receive; ack is implicit on successful Invoke.
 func (s *Store) PollEventSourceMappingOnce(mappingUUID string, invoke ESMInvokeFunc) error {
 	row := s.db.QueryRow(
 		`SELECT `+lambdaESMSelectCols+`

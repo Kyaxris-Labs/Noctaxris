@@ -285,6 +285,13 @@ func (s *Store) cloudControlLiveList(accountID, typeName string) ([]CloudControl
 
 // CloudControlDeleteResource deletes an allowlisted resource.
 func (s *Store) CloudControlDeleteResource(accountID, typeName, identifier string) (string, error) {
+	return s.CloudControlDeleteResourceAuthorized(accountID, typeName, identifier, nil)
+}
+
+// CloudControlDeleteResourceAuthorized deletes an allowlisted resource after per-type
+// underlying-action (and PassRole where create does) checks.
+func (s *Store) CloudControlDeleteResourceAuthorized(accountID, typeName, identifier string, authz CFNAuthorizer) (string, error) {
+	auth := cfnProvisionAuth{Authorizer: authz}
 	typeName = strings.TrimSpace(typeName)
 	identifier = strings.TrimSpace(identifier)
 	if !cloudControlTypeAllowed(typeName) {
@@ -293,7 +300,16 @@ func (s *Store) CloudControlDeleteResource(accountID, typeName, identifier strin
 	if identifier == "" {
 		return "", fmt.Errorf("%w: Identifier required", ErrCloudControlBadRequest)
 	}
-	s.deleteCFNPhysical(accountID, CFNStackResource{ResourceType: typeName, PhysicalID: identifier, LogicalID: identifier})
+	res := CFNStackResource{ResourceType: typeName, PhysicalID: identifier, LogicalID: identifier}
+	if typeName == "AWS::IAM::Role" {
+		if !strings.HasPrefix(identifier, "arn:aws:iam::") {
+			res.PhysicalID = fmt.Sprintf("arn:aws:iam::%s:role/%s", accountID, identifier)
+		}
+	}
+	if err := s.cfnAuthorizeDeletePhysical(auth, accountID, DefaultCFNRegion, res); err != nil {
+		return "", err
+	}
+	s.deleteCFNPhysical(accountID, res)
 	_, _ = s.db.Exec(
 		`DELETE FROM cloudcontrol_resources WHERE account_id = ? AND type_name = ? AND identifier = ?`,
 		accountID, typeName, identifier,

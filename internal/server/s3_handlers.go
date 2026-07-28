@@ -799,6 +799,7 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		w.Header().Set(headerSSEKMSKeyID, obj.KMSKeyID)
 	}
 	w.WriteHeader(http.StatusOK)
+	_ = s.store.AppendS3ObjectConfigHistory(ref.accountID, bucket, key, false)
 	s.emitS3ServerAccessLog(ref.accountID, bucket, "REST.PUT.OBJECT", key, requestID, r, verified, http.StatusOK, int64(len(body)), obj.Size)
 	s.writeSuccessAudit(r, requestID, eventID, verified, "s3.amazonaws.com", "PutObject", readOnly,
 		WithAuditResources([]audit.Resource{
@@ -1092,6 +1093,7 @@ func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestI
 		w.Header().Set("x-amz-version-id", result.VersionID)
 	}
 	w.WriteHeader(http.StatusNoContent)
+	_ = s.store.AppendS3ObjectConfigHistory(ref.accountID, bucket, key, true)
 	s.emitS3ServerAccessLog(ref.accountID, bucket, "REST.DELETE.OBJECT", key, requestID, r, verified, http.StatusNoContent, 0, 0)
 	auditVid := versionID
 	if auditVid == "" && result.VersionID != "" {

@@ -119,4 +119,73 @@ func TestCognitoInsecureCodesRestoresStubs(t *testing.T) {
 	if err := st.ConfirmSignUpCognitoUser(client.ClientID, "insecure-bob", "any-non-empty"); err != nil {
 		t.Fatal(err)
 	}
+
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "insecure-attr", "Secret1!"); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := st.InitiateCognitoAuth(client.ClientID, "insecure-attr", "Secret1!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateUserAttributesCognitoUser(auth.AccessToken, map[string]string{
+		"email": "insecure@example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attrCode, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "insecure-attr", store.CognitoConfirmPurposeAttrVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrCode != store.CognitoLabConfirmationCode {
+		t.Fatalf("attr verify code=%q want stub", attrCode)
+	}
+	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", store.CognitoLabConfirmationCode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttributeVerifySecureCodeRejectsStubAndIsSingleUse(t *testing.T) {
+	st := openCognitoTriggerStore(t)
+	account := "000000000001"
+	pool, err := st.CreateCognitoUserPool(account, "us-east-1", "secure-attr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := st.CreateCognitoUserPoolClient(account, pool.PoolID, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AdminCreateCognitoUser(account, pool.PoolID, "secure-attr-user", "Secret1!"); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := st.InitiateCognitoAuth(client.ClientID, "secure-attr-user", "Secret1!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateUserAttributesCognitoUser(auth.AccessToken, map[string]string{
+		"email": "secure-attr@example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, err := st.PeekCognitoConfirmationCode(account, pool.PoolID, "secure-attr-user", store.CognitoConfirmPurposeAttrVerify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code == "" || code == store.CognitoLabConfirmationCode {
+		t.Fatalf("stored code=%q want non-empty non-stub", code)
+	}
+	if len(code) < 8 {
+		t.Fatalf("stored code=%q want length >= 8", code)
+	}
+	err = st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", store.CognitoLabConfirmationCode)
+	if !errors.Is(err, store.ErrCognitoCodeMismatch) {
+		t.Fatalf("stub code err=%v want CodeMismatch", err)
+	}
+	if err := st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", code); err != nil {
+		t.Fatal(err)
+	}
+	err = st.VerifyUserAttributeCognitoUser(auth.AccessToken, "email", code)
+	if !errors.Is(err, store.ErrCognitoCodeMismatch) {
+		t.Fatalf("reuse err=%v want CodeMismatch", err)
+	}
 }

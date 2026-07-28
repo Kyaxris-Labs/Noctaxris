@@ -284,6 +284,17 @@ func (s *Server) writeCFNError(
 	s.writeAWSError(w, requestID, status, code, message, readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 }
 
+func (s *Server) cfnStackRoleARN(accountID, nameOrID string) (string, error) {
+	stacks, err := s.store.DescribeCFNStacks(accountID, nameOrID)
+	if err != nil {
+		return "", err
+	}
+	if len(stacks) == 0 {
+		return "", store.ErrCFNStackNotFound
+	}
+	return stacks[0].RoleARN, nil
+}
+
 func (s *Server) cfnUpdateStack(
 	w http.ResponseWriter, r *http.Request, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params url.Values,
@@ -300,8 +311,17 @@ func (s *Server) cfnUpdateStack(
 			"User is not authorized to perform cloudformation:UpdateStack.", readOnly, eventID, verified)
 		return
 	}
+	stackRoleARN, loadErr := s.cfnStackRoleARN(verified.AccountID, name)
+	if errors.Is(loadErr, store.ErrCFNStackNotFound) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ValidationError", "Stack does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if loadErr != nil {
+		s.writeCFNError(w, r, requestID, http.StatusInternalServerError, "InternalFailure", "Unable to update stack.", readOnly, eventID, verified)
+		return
+	}
 	caps := cfnCapabilitiesFromParams(params)
-	authz, aerr := s.newCFNAuthorizer(verified, "")
+	authz, aerr := s.newCFNAuthorizer(verified, stackRoleARN)
 	if aerr != nil {
 		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
 			aerr.Error(), readOnly, eventID, verified)
@@ -400,14 +420,34 @@ func (s *Server) cfnExecuteChangeSet(
 			"User is not authorized to perform cloudformation:ExecuteChangeSet.", readOnly, eventID, verified)
 		return
 	}
+	csName := params.Get("ChangeSetName")
+	stackName := params.Get("StackName")
+	cs, csErr := s.store.DescribeCFNChangeSet(verified.AccountID, csName, stackName)
+	if errors.Is(csErr, store.ErrCFNChangeSetNotFound) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ChangeSetNotFound", "Change set does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if csErr != nil {
+		s.writeCFNError(w, r, requestID, http.StatusInternalServerError, "InternalFailure", "Unable to execute change set.", readOnly, eventID, verified)
+		return
+	}
+	stackRoleARN, loadErr := s.cfnStackRoleARN(verified.AccountID, cs.StackID)
+	if errors.Is(loadErr, store.ErrCFNStackNotFound) {
+		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ValidationError", "Stack does not exist.", readOnly, eventID, verified)
+		return
+	}
+	if loadErr != nil {
+		s.writeCFNError(w, r, requestID, http.StatusInternalServerError, "InternalFailure", "Unable to execute change set.", readOnly, eventID, verified)
+		return
+	}
 	caps := cfnCapabilitiesFromParams(params)
-	authz, aerr := s.newCFNAuthorizer(verified, "")
+	authz, aerr := s.newCFNAuthorizer(verified, stackRoleARN)
 	if aerr != nil {
 		s.writeCFNError(w, r, requestID, http.StatusForbidden, "AccessDenied",
 			aerr.Error(), readOnly, eventID, verified)
 		return
 	}
-	_, err := s.store.ExecuteCFNChangeSetAuthorized(verified.AccountID, s.cfnRegion(verified), params.Get("ChangeSetName"), params.Get("StackName"), caps, authz)
+	_, err := s.store.ExecuteCFNChangeSetAuthorized(verified.AccountID, s.cfnRegion(verified), csName, stackName, caps, authz)
 	if errors.Is(err, store.ErrCFNChangeSetNotFound) {
 		s.writeCFNError(w, r, requestID, http.StatusBadRequest, "ChangeSetNotFound", "Change set does not exist.", readOnly, eventID, verified)
 		return

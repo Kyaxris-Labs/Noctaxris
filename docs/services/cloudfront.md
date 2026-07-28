@@ -10,8 +10,9 @@ Distribution CRUD lite plus a loopback fake-edge fetch path. Origins must resolv
 |------|-----------------|
 | Distribution | `CreateDistribution`, `GetDistribution`, `ListDistributions`, `DeleteDistribution` |
 | Origins | `OriginType` `s3` or `apigateway` (DomainName must exist in-account; fail closed) |
+| Cache behaviors | Optional `DefaultCacheBehavior.TargetOriginId` (`*` path) plus `CacheBehaviors.Items` with `PathPattern` → `TargetOriginId` (matched in list order; prefix `*` suffix lite) |
 | Logging | Optional `Logging` on create (`Bucket` / `Prefix` / `Enabled`); edge GET appends tab-separated access-log lite lines to an in-account S3 bucket |
-| Fake-edge | SigV4 `GET /cloudfront/{distributionId}/{objectKey...}` on `:4566` (first origin only) |
+| Fake-edge | SigV4 `GET /cloudfront/{distributionId}/{objectKey...}` on `:4566` (origin selected by path pattern; first origin when no behaviors) |
 | Edge fetch | S3 → in-store `GetObject`; apigateway → internal `/http-api/...` invoke (never dials arbitrary hosts) |
 
 ### Authz notes
@@ -35,11 +36,11 @@ Fake-edge fetch (SigV4; substitute distribution id and object key):
 # GET $EP/cloudfront/<DistributionId>/path/to/object
 ```
 
-Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName, SigV4-required edge, S3 origin bytes, and disabled-distribution 403).
+Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName, SigV4-required edge, S3 origin bytes, path-pattern origin selection, and disabled-distribution 403).
 
 ## Not yet / deferred
 
-- Real CloudFront PoPs and cache behaviors matrix
-- Multi-origin selection / path pattern routing
+- Real CloudFront PoPs and full cache policy / TTL matrix
+- Mid-path wildcards beyond trailing `*` prefix (e.g. `images/*.jpg`)
 - Signed cookies / URLs depth
 - Custom domain ACM linkage beyond string fields
