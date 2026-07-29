@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.3.1
+
+Patch after 1.3.0: SQLite busy-retry for multi-connection store writes, and release publish gated on required CI. Docker Hub: `kyaxris/noctaxris` (`1.3.1`, `1.3`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- SQLite: retry multi-connection `SQLITE_BUSY` deadlock victims on PutObject meta writes and SQS begin (`busy_timeout` does not wait on those)
+- Release: `v*` tag publish runs `ci-required.yml` (unit, compose-static, govulncheck, race, image, smoke-core) and pushes to Docker Hub only when those gates succeed
+
 ## 1.3.0
 
 Minor after 1.2.0: Floci-parity nested compute and data labs (EC2/ASG/EKS, RDS MySQL, Athena/CUR DuckDB, Neptune Neo4j), observe and edge depth (SES v2, SSM Run Command, NLB shim, Bedrock Converse), opt-in shared Kafka/MQTT brokers, and request-path speedups that keep durable fail-closed authz. Docker Hub: `kyaxris/noctaxris` (`1.3.0`, `1.3`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
@@ -48,7 +55,6 @@ Minor after 1.2.0: Floci-parity nested compute and data labs (EC2/ASG/EKS, RDS M
 - Verified plumbing carries SessionPolicy, MFA time, and federated caller fields so authorize paths avoid re-LookupAccessKeyRecord
 - Fail-closed identity policy load errors; batched `IdentityPolicyDocsForUser`; shared OU path for SCP/RCP via `OrgFilterDocsForAccount`
 - S3 notification emit after object lock release; SQS `SendMessage` prep outside `sqsMu` (re-GetQueue under lock)
-- SQLite: retry multi-connection `SQLITE_BUSY` deadlock victims on PutObject meta writes and SQS begin (busy_timeout does not wait on those)
 - Does not cache Allow/Deny decisions or authz policy document sets
 
 ## 1.2.0
