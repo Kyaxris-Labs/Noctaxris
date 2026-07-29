@@ -87,6 +87,20 @@ func (s *Server) runSharedMQTTBridge(ctx context.Context) error {
 		}
 		return tok.Error()
 	})
+	setMQTTRepublish(func(topic string, payload []byte) error {
+		mu.Lock()
+		c := client
+		mu.Unlock()
+		if c == nil || !c.IsConnected() {
+			return fmt.Errorf("mqtt bridge not connected")
+		}
+		tok := c.Publish(topic, 0, false, payload)
+		if !tok.WaitTimeout(10 * time.Second) {
+			return fmt.Errorf("mqtt publish timeout")
+		}
+		return tok.Error()
+	})
+	defer setMQTTRepublish(nil)
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
 		SetTLSConfig(tlsCfg).
@@ -100,6 +114,16 @@ func (s *Server) runSharedMQTTBridge(ctx context.Context) error {
 			}); token.Wait() && token.Error() != nil {
 				log.Printf("mqtt subscribe %s: %v", f, token.Error())
 			}
+		}
+		// Non-shadow publishes for topic rules (opt-in shared MQTT only).
+		if token := c.Subscribe("#", 0, func(_ mqtt.Client, msg mqtt.Message) {
+			topic := msg.Topic()
+			if strings.HasPrefix(topic, "$aws/") {
+				return
+			}
+			s.DispatchMQTTPublish(topic, msg.Payload())
+		}); token.Wait() && token.Error() != nil {
+			log.Printf("mqtt subscribe #: %v", token.Error())
 		}
 		if mqttBridgeRunningHook != nil {
 			mqttBridgeRunningHook()

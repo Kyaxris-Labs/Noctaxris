@@ -60,6 +60,43 @@ CREATE TABLE IF NOT EXISTS asg_instances (
 );
 CREATE INDEX IF NOT EXISTS idx_asg_instances_lookup
   ON asg_instances(account_id, region, asg_name);
+CREATE TABLE IF NOT EXISTS asg_scaling_policies (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  asg_name TEXT NOT NULL,
+  policy_name TEXT NOT NULL,
+  policy_arn TEXT NOT NULL,
+  policy_type TEXT NOT NULL DEFAULT 'SimpleScaling',
+  adjustment_type TEXT NOT NULL DEFAULT '',
+  scaling_adjustment INTEGER NOT NULL DEFAULT 0,
+  cooldown INTEGER NOT NULL DEFAULT 300,
+  estimated_instance_warmup INTEGER,
+  target_tracking_json TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, asg_name, policy_name)
+);
+CREATE TABLE IF NOT EXISTS asg_lifecycle_hooks (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  asg_name TEXT NOT NULL,
+  hook_name TEXT NOT NULL,
+  lifecycle_transition TEXT NOT NULL DEFAULT '',
+  notification_target_arn TEXT NOT NULL DEFAULT '',
+  role_arn TEXT NOT NULL DEFAULT '',
+  notification_metadata TEXT NOT NULL DEFAULT '',
+  heartbeat_timeout INTEGER NOT NULL DEFAULT 3600,
+  default_result TEXT NOT NULL DEFAULT 'ABANDON',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, asg_name, hook_name)
+);
+CREATE TABLE IF NOT EXISTS asg_target_groups (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  asg_name TEXT NOT NULL,
+  target_group_arn TEXT NOT NULL,
+  attached_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, asg_name, target_group_arn)
+);
 `
 
 // ASGLaunchConfiguration is a launch configuration row.
@@ -100,6 +137,7 @@ type AutoScalingGroup struct {
 	CreatedAt               int64
 	Region                  string
 	Instances               []ASGInstance
+	TargetGroupARNs         []string
 }
 
 // ClampASGDesired returns desired clamped into [minSize, maxSize].
@@ -487,6 +525,11 @@ func (s *Store) DescribeAutoScalingGroups(accountID, region string, names []stri
 			return nil, err
 		}
 		g.Instances = insts
+		tgs, err := s.listASGTargetGroupARNs(accountID, region, g.AutoScalingGroupName)
+		if err != nil {
+			return nil, err
+		}
+		g.TargetGroupARNs = tgs
 		out = append(out, g)
 	}
 	return out, rows.Err()
@@ -719,6 +762,9 @@ func (s *Store) DeleteAutoScalingGroup(accountID, region, name string, forceDele
 		}
 	}
 	if err := s.clearASGInstances(accountID, region, name); err != nil {
+		return err
+	}
+	if err := s.clearASGPoliciesHooksTGs(accountID, region, name); err != nil {
 		return err
 	}
 	res, err := s.db.Exec(

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func TestLightsailHandlers(t *testing.T) {
@@ -54,6 +57,91 @@ func TestLightsailHandlers(t *testing.T) {
 	}, now)
 	if del.Code != http.StatusOK {
 		t.Fatalf("DeleteInstance status=%d body=%q", del.Code, del.Body.String())
+	}
+}
+
+func TestLightsailDiskStaticIPKeyPairPortHandlers(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustOK := func(target string, body map[string]any) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := mustJSONTarget(t, handler, target, "lightsail", body, now)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%q", target, rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+
+	mustOK("Lightsail_20161128.CreateInstances", map[string]any{
+		"instanceNames":    []string{"web-a"},
+		"availabilityZone": "us-east-1a",
+		"blueprintId":      "ubuntu_22_04",
+		"bundleId":         "nano_3_0",
+	})
+	mustOK("Lightsail_20161128.CreateDisk", map[string]any{
+		"diskName": "data-1", "availabilityZone": "us-east-1a", "sizeInGb": 32,
+	})
+	getDisk := mustOK("Lightsail_20161128.GetDisk", map[string]any{"diskName": "data-1"})
+	if !strings.Contains(getDisk.Body.String(), `"available"`) {
+		t.Fatalf("GetDisk: %q", getDisk.Body.String())
+	}
+	mustOK("Lightsail_20161128.AttachDisk", map[string]any{
+		"diskName": "data-1", "instanceName": "web-a", "diskPath": "/dev/xvdf",
+	})
+	getDisk = mustOK("Lightsail_20161128.GetDisk", map[string]any{"diskName": "data-1"})
+	if !strings.Contains(getDisk.Body.String(), `"in-use"`) || !strings.Contains(getDisk.Body.String(), `"web-a"`) {
+		t.Fatalf("attached GetDisk: %q", getDisk.Body.String())
+	}
+	mustOK("Lightsail_20161128.DetachDisk", map[string]any{"diskName": "data-1"})
+	mustOK("Lightsail_20161128.DeleteDisk", map[string]any{"diskName": "data-1"})
+
+	badDisk := mustJSONTarget(t, handler, "Lightsail_20161128.CreateDisk", "lightsail", map[string]any{
+		"diskName": "tiny", "availabilityZone": "us-east-1a", "sizeInGb": 4,
+	}, now)
+	if badDisk.Code != http.StatusBadRequest {
+		t.Fatalf("small disk status=%d", badDisk.Code)
+	}
+
+	mustOK("Lightsail_20161128.AllocateStaticIp", map[string]any{"staticIpName": "web-ip"})
+	mustOK("Lightsail_20161128.AttachStaticIp", map[string]any{
+		"staticIpName": "web-ip", "instanceName": "web-a",
+	})
+	getInst := mustOK("Lightsail_20161128.GetInstance", map[string]any{"instanceName": "web-a"})
+	var instBody map[string]any
+	if err := json.Unmarshal(getInst.Body.Bytes(), &instBody); err != nil {
+		t.Fatal(err)
+	}
+	inst, _ := instBody["instance"].(map[string]any)
+	if inst["isStaticIp"] != true {
+		t.Fatalf("expected isStaticIp true: %#v", inst)
+	}
+	mustOK("Lightsail_20161128.DetachStaticIp", map[string]any{"staticIpName": "web-ip"})
+	mustOK("Lightsail_20161128.ReleaseStaticIp", map[string]any{"staticIpName": "web-ip"})
+
+	createKP := mustOK("Lightsail_20161128.CreateKeyPair", map[string]any{"keyPairName": "lab-key"})
+	if !strings.Contains(createKP.Body.String(), "privateKeyBase64") {
+		t.Fatalf("CreateKeyPair missing private key: %q", createKP.Body.String())
+	}
+	mustOK("Lightsail_20161128.GetKeyPair", map[string]any{"keyPairName": "lab-key"})
+	mustOK("Lightsail_20161128.DeleteKeyPair", map[string]any{"keyPairName": "lab-key"})
+
+	mustOK("Lightsail_20161128.OpenInstancePublicPorts", map[string]any{
+		"instanceName": "web-a",
+		"portInfo":     map[string]any{"fromPort": 80, "toPort": 80, "protocol": "tcp"},
+	})
+	ports := mustOK("Lightsail_20161128.GetInstancePortStates", map[string]any{"instanceName": "web-a"})
+	if !strings.Contains(ports.Body.String(), `"fromPort":80`) && !strings.Contains(ports.Body.String(), `"fromPort": 80`) {
+		t.Fatalf("port states: %q", ports.Body.String())
+	}
+	mustOK("Lightsail_20161128.CloseInstancePublicPorts", map[string]any{
+		"instanceName": "web-a",
+		"portInfo":     map[string]any{"fromPort": 80, "toPort": 80, "protocol": "tcp"},
+	})
+	ports = mustOK("Lightsail_20161128.GetInstancePortStates", map[string]any{"instanceName": "web-a"})
+	if strings.Contains(ports.Body.String(), `"fromPort":80`) || strings.Contains(ports.Body.String(), `"fromPort": 80`) {
+		t.Fatalf("expected empty ports: %q", ports.Body.String())
 	}
 }
 
@@ -132,6 +220,152 @@ func TestAutoScalingHandlers(t *testing.T) {
 	}, "&"), now)
 	if del.Code != http.StatusOK {
 		t.Fatalf("ForceDelete status=%d body=%q", del.Code, del.Body.String())
+	}
+}
+
+func TestAutoScalingPolicyHookTGAndAttachHandlers(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+	account := "000000000001"
+
+	createLC := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=CreateLaunchConfiguration",
+		"Version=2011-01-01",
+		"LaunchConfigurationName=lc-ext",
+		"ImageId=ami-123",
+		"InstanceType=t3.micro",
+	}, "&"), now)
+	if createLC.Code != http.StatusOK {
+		t.Fatalf("CreateLaunchConfiguration status=%d body=%q", createLC.Code, createLC.Body.String())
+	}
+	createASG := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=CreateAutoScalingGroup",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"LaunchConfigurationName=lc-ext",
+		"MinSize=0",
+		"MaxSize=4",
+		"DesiredCapacity=0",
+		"AvailabilityZones.member.1=us-east-1a",
+	}, "&"), now)
+	if createASG.Code != http.StatusOK {
+		t.Fatalf("CreateAutoScalingGroup status=%d body=%q", createASG.Code, createASG.Body.String())
+	}
+
+	putPol := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=PutScalingPolicy",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"PolicyName=scale-out",
+		"PolicyType=SimpleScaling",
+		"AdjustmentType=ChangeInCapacity",
+		"ScalingAdjustment=1",
+		"Cooldown=60",
+	}, "&"), now)
+	if putPol.Code != http.StatusOK || !strings.Contains(putPol.Body.String(), "<PolicyARN>") {
+		t.Fatalf("PutScalingPolicy status=%d body=%q", putPol.Code, putPol.Body.String())
+	}
+	descPol := mustASGQuery(t, handler,
+		"Action=DescribePolicies&Version=2011-01-01&AutoScalingGroupName=asg-ext", now)
+	if descPol.Code != http.StatusOK || !strings.Contains(descPol.Body.String(), "scale-out") {
+		t.Fatalf("DescribePolicies status=%d body=%q", descPol.Code, descPol.Body.String())
+	}
+
+	putHook := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=PutLifecycleHook",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"LifecycleHookName=launch-hook",
+		"LifecycleTransition=autoscaling:EC2_INSTANCE_LAUNCHING",
+		"HeartbeatTimeout=300",
+		"DefaultResult=CONTINUE",
+	}, "&"), now)
+	if putHook.Code != http.StatusOK {
+		t.Fatalf("PutLifecycleHook status=%d body=%q", putHook.Code, putHook.Body.String())
+	}
+	descHook := mustASGQuery(t, handler,
+		"Action=DescribeLifecycleHooks&Version=2011-01-01&AutoScalingGroupName=asg-ext", now)
+	if descHook.Code != http.StatusOK || !strings.Contains(descHook.Body.String(), "launch-hook") {
+		t.Fatalf("DescribeLifecycleHooks status=%d body=%q", descHook.Code, descHook.Body.String())
+	}
+
+	tg, err := st.CreateELBv2TargetGroup(account, "us-east-1", "asg-ext-tg", "instance", "HTTP", 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachTG := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=AttachLoadBalancerTargetGroups",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"TargetGroupARNs.member.1=" + url.QueryEscape(tg.ARN),
+	}, "&"), now)
+	if attachTG.Code != http.StatusOK {
+		t.Fatalf("AttachLoadBalancerTargetGroups status=%d body=%q", attachTG.Code, attachTG.Body.String())
+	}
+	descTG := mustASGQuery(t, handler,
+		"Action=DescribeLoadBalancerTargetGroups&Version=2011-01-01&AutoScalingGroupName=asg-ext", now)
+	if descTG.Code != http.StatusOK || !strings.Contains(descTG.Body.String(), tg.ARN) {
+		t.Fatalf("DescribeLoadBalancerTargetGroups status=%d body=%q", descTG.Code, descTG.Body.String())
+	}
+	badTG := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=AttachLoadBalancerTargetGroups",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"TargetGroupARNs.member.1=" + url.QueryEscape("arn:aws:elasticloadbalancing:us-east-1:"+account+":targetgroup/nope/0123456789abcdef"),
+	}, "&"), now)
+	if badTG.Code != http.StatusBadRequest {
+		t.Fatalf("missing TG want 400 got %d body=%q", badTG.Code, badTG.Body.String())
+	}
+
+	launched, err := st.RunInstances(account, "us-east-1", store.RunInstancesInput{
+		ImageID: "ami-123", InstanceType: "t3.micro", MinCount: 1, MaxCount: 1, AvailabilityZone: "us-east-1a",
+	})
+	if err != nil || len(launched) != 1 {
+		t.Fatalf("RunInstances: %+v err=%v", launched, err)
+	}
+	attachInst := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=AttachInstances",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"InstanceIds.member.1=" + launched[0].InstanceID,
+	}, "&"), now)
+	if attachInst.Code != http.StatusOK {
+		t.Fatalf("AttachInstances status=%d body=%q", attachInst.Code, attachInst.Body.String())
+	}
+	descInst := mustASGQuery(t, handler,
+		"Action=DescribeAutoScalingInstances&Version=2011-01-01", now)
+	if descInst.Code != http.StatusOK || !strings.Contains(descInst.Body.String(), launched[0].InstanceID) {
+		t.Fatalf("DescribeAutoScalingInstances status=%d body=%q", descInst.Code, descInst.Body.String())
+	}
+	detachInst := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=DetachInstances",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"InstanceIds.member.1=" + launched[0].InstanceID,
+		"ShouldDecrementDesiredCapacity=true",
+	}, "&"), now)
+	if detachInst.Code != http.StatusOK || !strings.Contains(detachInst.Body.String(), "DetachInstancesResult") {
+		t.Fatalf("DetachInstances status=%d body=%q", detachInst.Code, detachInst.Body.String())
+	}
+
+	delPol := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=DeletePolicy",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"PolicyName=scale-out",
+	}, "&"), now)
+	if delPol.Code != http.StatusOK {
+		t.Fatalf("DeletePolicy status=%d body=%q", delPol.Code, delPol.Body.String())
+	}
+	delHook := mustASGQuery(t, handler, strings.Join([]string{
+		"Action=DeleteLifecycleHook",
+		"Version=2011-01-01",
+		"AutoScalingGroupName=asg-ext",
+		"LifecycleHookName=launch-hook",
+	}, "&"), now)
+	if delHook.Code != http.StatusOK {
+		t.Fatalf("DeleteLifecycleHook status=%d body=%q", delHook.Code, delHook.Body.String())
 	}
 }
 
@@ -227,6 +461,39 @@ func TestBackupHandlers(t *testing.T) {
 	if createPlan.Code != http.StatusOK || !strings.Contains(createPlan.Body.String(), "BackupPlanId") {
 		t.Fatalf("CreateBackupPlan status=%d body=%q", createPlan.Code, createPlan.Body.String())
 	}
+	var planOut map[string]any
+	if err := json.Unmarshal(createPlan.Body.Bytes(), &planOut); err != nil {
+		t.Fatal(err)
+	}
+	planID, _ := planOut["BackupPlanId"].(string)
+	if planID == "" {
+		t.Fatal("missing BackupPlanId")
+	}
+
+	createSel := mustBackupREST(t, handler, http.MethodPut, "/backup/plans/"+planID+"/selections/", map[string]any{
+		"BackupSelection": map[string]any{
+			"SelectionName": "lab-sel",
+			"IamRoleArn":    "arn:aws:iam::000000000001:role/Backup",
+			"Resources":     []string{"arn:aws:dynamodb:us-east-1:000000000001:table/lab"},
+		},
+	}, now)
+	if createSel.Code != http.StatusOK || !strings.Contains(createSel.Body.String(), "SelectionId") {
+		t.Fatalf("CreateBackupSelection status=%d body=%q", createSel.Code, createSel.Body.String())
+	}
+	var selOut map[string]any
+	if err := json.Unmarshal(createSel.Body.Bytes(), &selOut); err != nil {
+		t.Fatal(err)
+	}
+	selectionID, _ := selOut["SelectionId"].(string)
+
+	listSel := mustBackupREST(t, handler, http.MethodGet, "/backup/plans/"+planID+"/selections/", nil, now)
+	if listSel.Code != http.StatusOK || !strings.Contains(listSel.Body.String(), "lab-sel") {
+		t.Fatalf("ListBackupSelections status=%d body=%q", listSel.Code, listSel.Body.String())
+	}
+	getSel := mustBackupREST(t, handler, http.MethodGet, "/backup/plans/"+planID+"/selections/"+selectionID, nil, now)
+	if getSel.Code != http.StatusOK || !strings.Contains(getSel.Body.String(), "IamRoleArn") {
+		t.Fatalf("GetBackupSelection status=%d body=%q", getSel.Code, getSel.Body.String())
+	}
 
 	start := mustBackupREST(t, handler, http.MethodPut, "/backup-jobs", map[string]any{
 		"BackupVaultName": "lab-vault",
@@ -236,9 +503,37 @@ func TestBackupHandlers(t *testing.T) {
 	if start.Code != http.StatusOK || !strings.Contains(start.Body.String(), "RecoveryPointArn") {
 		t.Fatalf("StartBackupJob status=%d body=%q", start.Code, start.Body.String())
 	}
+	var startOut map[string]any
+	if err := json.Unmarshal(start.Body.Bytes(), &startOut); err != nil {
+		t.Fatal(err)
+	}
+	jobID, _ := startOut["BackupJobId"].(string)
+	rpARN, _ := startOut["RecoveryPointArn"].(string)
+
+	listJobs := mustBackupREST(t, handler, http.MethodGet, "/backup-jobs/", nil, now)
+	if listJobs.Code != http.StatusOK || !strings.Contains(listJobs.Body.String(), jobID) {
+		t.Fatalf("ListBackupJobs status=%d body=%q", listJobs.Code, listJobs.Body.String())
+	}
+	stop := mustBackupREST(t, handler, http.MethodPost, "/backup-jobs/"+jobID, nil, now)
+	if stop.Code != http.StatusOK {
+		t.Fatalf("StopBackupJob status=%d body=%q", stop.Code, stop.Body.String())
+	}
 
 	listRP := mustBackupREST(t, handler, http.MethodGet, "/backup-vaults/lab-vault/recovery-points/", nil, now)
 	if listRP.Code != http.StatusOK || !strings.Contains(listRP.Body.String(), "DynamoDB") {
 		t.Fatalf("ListRecoveryPoints status=%d body=%q", listRP.Code, listRP.Body.String())
+	}
+	delRP := mustBackupREST(t, handler, http.MethodDelete, "/backup-vaults/lab-vault/recovery-points/"+url.PathEscape(rpARN), nil, now)
+	if delRP.Code != http.StatusOK {
+		t.Fatalf("DeleteRecoveryPoint status=%d body=%q", delRP.Code, delRP.Body.String())
+	}
+	listRP2 := mustBackupREST(t, handler, http.MethodGet, "/backup-vaults/lab-vault/recovery-points/", nil, now)
+	if listRP2.Code != http.StatusOK || strings.Contains(listRP2.Body.String(), rpARN) {
+		t.Fatalf("ListRecoveryPoints after delete status=%d body=%q", listRP2.Code, listRP2.Body.String())
+	}
+
+	delSel := mustBackupREST(t, handler, http.MethodDelete, "/backup/plans/"+planID+"/selections/"+selectionID, nil, now)
+	if delSel.Code != http.StatusOK {
+		t.Fatalf("DeleteBackupSelection status=%d body=%q", delSel.Code, delSel.Body.String())
 	}
 }

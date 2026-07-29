@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -304,6 +305,12 @@ func ssmIntParam(v any, def int) int {
 		return t
 	case int64:
 		return int(t)
+	case json.Number:
+		i, err := t.Int64()
+		if err != nil {
+			return def
+		}
+		return int(i)
 	default:
 		return def
 	}

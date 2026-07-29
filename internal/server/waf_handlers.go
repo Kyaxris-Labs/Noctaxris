@@ -43,6 +43,16 @@ func (s *Server) handleWAFv2(
 		s.wafAssociate(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionWAFEvaluate:
 		s.wafEvaluate(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionWAFCreateIPSet:
+		s.wafCreateIPSet(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionWAFGetIPSet:
+		s.wafGetIPSet(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionWAFUpdateIPSet:
+		s.wafUpdateIPSet(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionWAFDeleteIPSet:
+		s.wafDeleteIPSet(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionWAFListIPSets:
+		s.wafListIPSets(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeWAFError(w, r, body, requestID, http.StatusNotImplemented, "WAFInternalErrorException",
 			"This WAFv2 action is not implemented.", readOnly, eventID, verified)
@@ -68,6 +78,16 @@ func wafAction(action string) string {
 		return catalog.ActionWAFAssociateWebACL
 	case "Evaluate":
 		return catalog.ActionWAFEvaluate
+	case "CreateIPSet":
+		return catalog.ActionWAFCreateIPSet
+	case "GetIPSet":
+		return catalog.ActionWAFGetIPSet
+	case "UpdateIPSet":
+		return catalog.ActionWAFUpdateIPSet
+	case "DeleteIPSet":
+		return catalog.ActionWAFDeleteIPSet
+	case "ListIPSets":
+		return catalog.ActionWAFListIPSets
 	default:
 		return action
 	}
@@ -209,10 +229,12 @@ func parseWAFIPSetReferenceStatement(rule map[string]any) *store.WAFIPSetReferen
 	if ip == nil {
 		return nil
 	}
-	raw, _ := ip["Addresses"].([]any)
-	if len(raw) == 0 {
-		return nil
+	arn, _ := ip["ARN"].(string)
+	if arn == "" {
+		arn, _ = ip["Arn"].(string)
 	}
+	arn = strings.TrimSpace(arn)
+	raw, _ := ip["Addresses"].([]any)
 	addrs := make([]string, 0, len(raw))
 	for _, a := range raw {
 		s, ok := a.(string)
@@ -224,10 +246,26 @@ func parseWAFIPSetReferenceStatement(rule map[string]any) *store.WAFIPSetReferen
 			addrs = append(addrs, s)
 		}
 	}
-	if len(addrs) == 0 {
+	if arn == "" && len(addrs) == 0 {
 		return nil
 	}
-	return &store.WAFIPSetReferenceStatement{Addresses: addrs}
+	return &store.WAFIPSetReferenceStatement{ARN: arn, Addresses: addrs}
+}
+
+func parseWAFIPSetAddresses(params map[string]any) []string {
+	raw, _ := params["Addresses"].([]any)
+	addrs := make([]string, 0, len(raw))
+	for _, a := range raw {
+		s, ok := a.(string)
+		if !ok {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			addrs = append(addrs, s)
+		}
+	}
+	return addrs
 }
 
 func parseWAFDefaultAction(params map[string]any) string {
@@ -445,6 +483,151 @@ func (s *Server) wafEvaluate(
 	payload, _ := wafsvc.EvaluateJSON(action)
 	s.writeWAFOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "Evaluate", readOnly)
+}
+
+func (s *Server) wafCreateIPSet(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	scope, _ := params["Scope"].(string)
+	desc, _ := params["Description"].(string)
+	version, _ := params["IPAddressVersion"].(string)
+	if !s.authorize(verified, catalog.ActionWAFCreateIPSet, "*") {
+		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform wafv2:CreateIPSet.", readOnly, eventID, verified)
+		return
+	}
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultWAFRegion
+	}
+	ip, err := s.store.CreateWAFIPSet(verified.AccountID, region, name, scope, desc, version, parseWAFIPSetAddresses(params))
+	if errors.Is(err, store.ErrWAFAlreadyExists) {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFDuplicateItemException",
+			"IPSet already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrWAFBadRequest) {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFInvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeWAFError(w, r, body, requestID, http.StatusInternalServerError, "WAFInternalErrorException",
+			"Unable to create IPSet.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := wafsvc.CreateIPSetJSON(ip)
+	s.writeWAFOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "CreateIPSet", readOnly)
+}
+
+func (s *Server) wafGetIPSet(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	scope, _ := params["Scope"].(string)
+	id, _ := params["Id"].(string)
+	if !s.authorize(verified, catalog.ActionWAFGetIPSet, "*") {
+		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform wafv2:GetIPSet.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.GetWAFIPSet(verified.AccountID, name, scope, id)
+	if errors.Is(err, store.ErrWAFNotFound) {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFNonexistentItemException",
+			"IPSet not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeWAFError(w, r, body, requestID, http.StatusInternalServerError, "WAFInternalErrorException",
+			"Unable to get IPSet.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := wafsvc.GetIPSetJSON(ip)
+	s.writeWAFOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "GetIPSet", readOnly)
+}
+
+func (s *Server) wafUpdateIPSet(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	scope, _ := params["Scope"].(string)
+	id, _ := params["Id"].(string)
+	lock, _ := params["LockToken"].(string)
+	if !s.authorize(verified, catalog.ActionWAFUpdateIPSet, "*") {
+		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform wafv2:UpdateIPSet.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.UpdateWAFIPSet(verified.AccountID, name, scope, id, lock, parseWAFIPSetAddresses(params))
+	if errors.Is(err, store.ErrWAFNotFound) {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFNonexistentItemException",
+			"IPSet not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFInvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := wafsvc.UpdateIPSetJSON(ip)
+	s.writeWAFOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "UpdateIPSet", readOnly)
+}
+
+func (s *Server) wafDeleteIPSet(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	scope, _ := params["Scope"].(string)
+	id, _ := params["Id"].(string)
+	lock, _ := params["LockToken"].(string)
+	if !s.authorize(verified, catalog.ActionWAFDeleteIPSet, "*") {
+		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform wafv2:DeleteIPSet.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteWAFIPSet(verified.AccountID, name, scope, id, lock)
+	if errors.Is(err, store.ErrWAFNotFound) {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFNonexistentItemException",
+			"IPSet not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeWAFError(w, r, body, requestID, http.StatusBadRequest, "WAFInvalidParameterException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := wafsvc.DeleteIPSetJSON()
+	s.writeWAFOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "DeleteIPSet", readOnly)
+}
+
+func (s *Server) wafListIPSets(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	scope, _ := params["Scope"].(string)
+	if !s.authorize(verified, catalog.ActionWAFListIPSets, "*") {
+		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform wafv2:ListIPSets.", readOnly, eventID, verified)
+		return
+	}
+	sets, err := s.store.ListWAFIPSets(verified.AccountID, scope)
+	if err != nil {
+		s.writeWAFError(w, r, body, requestID, http.StatusInternalServerError, "WAFInternalErrorException",
+			"Unable to list IPSets.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := wafsvc.ListIPSetsJSON(sets)
+	s.writeWAFOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, wafEventSource, "ListIPSets", readOnly)
 }
 
 func (s *Server) writeWAFOK(w http.ResponseWriter, payload []byte) {

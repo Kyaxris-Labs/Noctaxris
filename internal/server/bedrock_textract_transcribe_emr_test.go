@@ -171,6 +171,17 @@ func TestEMRRunDescribeListTerminate(t *testing.T) {
 		"Name":         "srv-emr",
 		"ReleaseLabel": "emr-7.0.0",
 		"LogUri":       "s3://logs/",
+		"Tags": []map[string]any{
+			{"Key": "team", "Value": "lab"},
+		},
+		"Instances": map[string]any{
+			"InstanceGroups": []map[string]any{
+				{"Name": "master", "InstanceRole": "MASTER", "InstanceType": "m5.xlarge", "InstanceCount": 1},
+			},
+			"InstanceFleets": []map[string]any{
+				{"Name": "core-fleet", "InstanceFleetType": "CORE", "TargetOnDemandCapacity": 2},
+			},
+		},
 	}, now)
 	if run.Code != http.StatusOK {
 		t.Fatalf("RunJobFlow status=%d body=%q", run.Code, run.Body.String())
@@ -189,6 +200,23 @@ func TestEMRRunDescribeListTerminate(t *testing.T) {
 	}, now)
 	if desc.Code != http.StatusOK || !strings.Contains(desc.Body.String(), "WAITING") {
 		t.Fatalf("DescribeCluster status=%d body=%q", desc.Code, desc.Body.String())
+	}
+	if !strings.Contains(desc.Body.String(), "team") {
+		t.Fatalf("DescribeCluster missing tags body=%q", desc.Body.String())
+	}
+
+	groups := mustJSONTarget(t, handler, "ElasticMapReduce.ListInstanceGroups", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+	}, now)
+	if groups.Code != http.StatusOK || !strings.Contains(groups.Body.String(), "MASTER") {
+		t.Fatalf("ListInstanceGroups status=%d body=%q", groups.Code, groups.Body.String())
+	}
+
+	fleets := mustJSONTarget(t, handler, "ElasticMapReduce.ListInstanceFleets", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+	}, now)
+	if fleets.Code != http.StatusOK || !strings.Contains(fleets.Body.String(), "CORE") {
+		t.Fatalf("ListInstanceFleets status=%d body=%q", fleets.Code, fleets.Body.String())
 	}
 
 	list := mustJSONTarget(t, handler, "ElasticMapReduce.ListClusters", "elasticmapreduce", map[string]any{}, now)
@@ -238,6 +266,66 @@ func TestEMRRunDescribeListTerminate(t *testing.T) {
 	}, now)
 	if listSteps.Code != http.StatusOK || !strings.Contains(listSteps.Body.String(), stepID) {
 		t.Fatalf("ListSteps status=%d body=%q", listSteps.Code, listSteps.Body.String())
+	}
+
+	cancel := mustJSONTarget(t, handler, "ElasticMapReduce.CancelSteps", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+		"StepIds":   []string{stepID},
+	}, now)
+	if cancel.Code != http.StatusOK || !strings.Contains(cancel.Body.String(), "SUBMITTED") {
+		t.Fatalf("CancelSteps status=%d body=%q", cancel.Code, cancel.Body.String())
+	}
+	descCancelled := mustJSONTarget(t, handler, "ElasticMapReduce.DescribeStep", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+		"StepId":    stepID,
+	}, now)
+	if descCancelled.Code != http.StatusOK || !strings.Contains(descCancelled.Body.String(), "CANCELLED") {
+		t.Fatalf("DescribeStep after cancel status=%d body=%q", descCancelled.Code, descCancelled.Body.String())
+	}
+
+	addTag := mustJSONTarget(t, handler, "ElasticMapReduce.AddTags", "elasticmapreduce", map[string]any{
+		"ResourceId": id,
+		"Tags":       []map[string]any{{"Key": "owner", "Value": "qa"}},
+	}, now)
+	if addTag.Code != http.StatusOK {
+		t.Fatalf("AddTags status=%d body=%q", addTag.Code, addTag.Body.String())
+	}
+	descTagged := mustJSONTarget(t, handler, "ElasticMapReduce.DescribeCluster", "elasticmapreduce", map[string]any{
+		"ClusterId": id,
+	}, now)
+	if descTagged.Code != http.StatusOK || !strings.Contains(descTagged.Body.String(), "owner") {
+		t.Fatalf("DescribeCluster after AddTags status=%d body=%q", descTagged.Code, descTagged.Body.String())
+	}
+	rmTag := mustJSONTarget(t, handler, "ElasticMapReduce.RemoveTags", "elasticmapreduce", map[string]any{
+		"ResourceId": id,
+		"TagKeys":    []string{"team"},
+	}, now)
+	if rmTag.Code != http.StatusOK {
+		t.Fatalf("RemoveTags status=%d body=%q", rmTag.Code, rmTag.Body.String())
+	}
+
+	createSC := mustJSONTarget(t, handler, "ElasticMapReduce.CreateSecurityConfiguration", "elasticmapreduce", map[string]any{
+		"Name":                  "srv-sec",
+		"SecurityConfiguration": `{"EncryptionConfiguration":{}}`,
+	}, now)
+	if createSC.Code != http.StatusOK || !strings.Contains(createSC.Body.String(), "srv-sec") {
+		t.Fatalf("CreateSecurityConfiguration status=%d body=%q", createSC.Code, createSC.Body.String())
+	}
+	descSC := mustJSONTarget(t, handler, "ElasticMapReduce.DescribeSecurityConfiguration", "elasticmapreduce", map[string]any{
+		"Name": "srv-sec",
+	}, now)
+	if descSC.Code != http.StatusOK || !strings.Contains(descSC.Body.String(), "EncryptionConfiguration") {
+		t.Fatalf("DescribeSecurityConfiguration status=%d body=%q", descSC.Code, descSC.Body.String())
+	}
+	listSC := mustJSONTarget(t, handler, "ElasticMapReduce.ListSecurityConfigurations", "elasticmapreduce", map[string]any{}, now)
+	if listSC.Code != http.StatusOK || !strings.Contains(listSC.Body.String(), "srv-sec") {
+		t.Fatalf("ListSecurityConfigurations status=%d body=%q", listSC.Code, listSC.Body.String())
+	}
+	delSC := mustJSONTarget(t, handler, "ElasticMapReduce.DeleteSecurityConfiguration", "elasticmapreduce", map[string]any{
+		"Name": "srv-sec",
+	}, now)
+	if delSC.Code != http.StatusOK {
+		t.Fatalf("DeleteSecurityConfiguration status=%d body=%q", delSC.Code, delSC.Body.String())
 	}
 
 	term := mustJSONTarget(t, handler, "ElasticMapReduce.TerminateJobFlows", "elasticmapreduce", map[string]any{

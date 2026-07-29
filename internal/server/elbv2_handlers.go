@@ -58,6 +58,10 @@ func (s *Server) handleELBv2(
 		s.elbDescribeRules(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionELBv2DeleteRule:
 		s.elbDeleteRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionELBv2ModifyListener:
+		s.elbModifyListener(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionELBv2ModifyRule:
+		s.elbModifyRule(w, r, body, requestID, eventID, verified, readOnly, params)
 	case "elasticloadbalancing:ModifyLoadBalancerAttributes", "ModifyLoadBalancerAttributes":
 		s.elbModifyLoadBalancerAttributes(w, r, body, requestID, eventID, verified, readOnly, params)
 	case "elasticloadbalancing:DescribeLoadBalancerAttributes", "DescribeLoadBalancerAttributes":
@@ -101,6 +105,10 @@ func elbv2Action(action string) string {
 		return catalog.ActionELBv2DescribeRules
 	case "DeleteRule":
 		return catalog.ActionELBv2DeleteRule
+	case "ModifyListener":
+		return catalog.ActionELBv2ModifyListener
+	case "ModifyRule":
+		return catalog.ActionELBv2ModifyRule
 	case "ModifyLoadBalancerAttributes":
 		return "elasticloadbalancing:ModifyLoadBalancerAttributes"
 	case "DescribeLoadBalancerAttributes":
@@ -517,6 +525,82 @@ func elbHostHeadersFromConditions(params map[string]any) []string {
 	return out
 }
 
+func elbHTTPHeadersFromConditions(params map[string]any) []store.ELBv2HTTPHeaderCond {
+	raw, _ := params["Conditions"].([]any)
+	var out []store.ELBv2HTTPHeaderCond
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		field, _ := m["Field"].(string)
+		if !strings.EqualFold(field, "http-header") {
+			continue
+		}
+		cfg, _ := m["HttpHeaderConfig"].(map[string]any)
+		name, _ := cfg["HttpHeaderName"].(string)
+		var vals []string
+		if rawVals, ok := cfg["Values"].([]any); ok {
+			for _, v := range rawVals {
+				if s, ok := v.(string); ok {
+					vals = append(vals, s)
+				}
+			}
+		}
+		out = append(out, store.ELBv2HTTPHeaderCond{Name: name, Values: vals})
+	}
+	return out
+}
+
+func elbQueryStringsFromConditions(params map[string]any) []store.ELBv2QueryStringCond {
+	raw, _ := params["Conditions"].([]any)
+	var out []store.ELBv2QueryStringCond
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		field, _ := m["Field"].(string)
+		if !strings.EqualFold(field, "query-string") {
+			continue
+		}
+		cfg, _ := m["QueryStringConfig"].(map[string]any)
+		rawVals, _ := cfg["Values"].([]any)
+		for _, v := range rawVals {
+			qm, _ := v.(map[string]any)
+			key, _ := qm["Key"].(string)
+			val, _ := qm["Value"].(string)
+			out = append(out, store.ELBv2QueryStringCond{Key: key, Value: val})
+		}
+	}
+	return out
+}
+
+func elbSourceIPsFromConditions(params map[string]any) []string {
+	raw, _ := params["Conditions"].([]any)
+	var out []string
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		field, _ := m["Field"].(string)
+		if !strings.EqualFold(field, "source-ip") {
+			continue
+		}
+		cfg, _ := m["SourceIpConfig"].(map[string]any)
+		if vals, ok := cfg["Values"].([]any); ok {
+			for _, v := range vals {
+				if s, ok := v.(string); ok {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func elbRuleConditionsFromParams(params map[string]any) store.ELBv2RuleConditions {
+	return store.ELBv2RuleConditions{
+		PathPatterns: elbPathPatternsFromConditions(params),
+		HostHeaders:  elbHostHeadersFromConditions(params),
+		HTTPHeaders:  elbHTTPHeadersFromConditions(params),
+		QueryStrings: elbQueryStringsFromConditions(params),
+		SourceIPs:    elbSourceIPsFromConditions(params),
+	}
+}
+
 func elbForwardTargetGroupFromActions(params map[string]any) string {
 	raw, _ := params["Actions"].([]any)
 	for _, item := range raw {
@@ -533,8 +617,20 @@ func elbForwardTargetGroupFromActions(params map[string]any) string {
 	return tg
 }
 
+func elbDefaultForwardTargetGroup(params map[string]any) string {
+	if actions, ok := params["DefaultActions"].([]any); ok && len(actions) > 0 {
+		if m, ok := actions[0].(map[string]any); ok {
+			if tg, ok := m["TargetGroupArn"].(string); ok && strings.TrimSpace(tg) != "" {
+				return tg
+			}
+		}
+	}
+	tg, _ := params["TargetGroupArn"].(string)
+	return tg
+}
+
 func elbRuleJSON(rule store.ELBv2Rule) map[string]any {
-	conds := make([]map[string]any, 0, 2)
+	conds := make([]map[string]any, 0, 5)
 	if len(rule.HostHeaders) > 0 {
 		conds = append(conds, map[string]any{
 			"Field":  "host-header",
@@ -545,6 +641,39 @@ func elbRuleJSON(rule store.ELBv2Rule) map[string]any {
 		conds = append(conds, map[string]any{
 			"Field":  "path-pattern",
 			"Values": rule.PathPatterns,
+		})
+	}
+	for _, h := range rule.HTTPHeaders {
+		conds = append(conds, map[string]any{
+			"Field": "http-header",
+			"HttpHeaderConfig": map[string]any{
+				"HttpHeaderName": h.Name,
+				"Values":         h.Values,
+			},
+		})
+	}
+	if len(rule.QueryStrings) > 0 {
+		vals := make([]map[string]any, 0, len(rule.QueryStrings))
+		for _, q := range rule.QueryStrings {
+			item := map[string]any{"Value": q.Value}
+			if q.Key != "" {
+				item["Key"] = q.Key
+			}
+			vals = append(vals, item)
+		}
+		conds = append(conds, map[string]any{
+			"Field": "query-string",
+			"QueryStringConfig": map[string]any{
+				"Values": vals,
+			},
+		})
+	}
+	if len(rule.SourceIPs) > 0 {
+		conds = append(conds, map[string]any{
+			"Field": "source-ip",
+			"SourceIpConfig": map[string]any{
+				"Values": rule.SourceIPs,
+			},
 		})
 	}
 	return map[string]any{
@@ -572,8 +701,7 @@ func (s *Server) elbCreateRule(
 		priority, _ = strconv.Atoi(p)
 	}
 	tgARN := elbForwardTargetGroupFromActions(params)
-	patterns := elbPathPatternsFromConditions(params)
-	hosts := elbHostHeadersFromConditions(params)
+	cond := elbRuleConditionsFromParams(params)
 	if !s.authorize(verified, catalog.ActionELBv2CreateRule, listenerARN) {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform elasticloadbalancing:CreateRule.", readOnly, eventID, verified)
@@ -583,7 +711,7 @@ func (s *Server) elbCreateRule(
 	if region == "" {
 		region = store.DefaultELBv2Region
 	}
-	rule, err := s.store.CreateELBv2Rule(verified.AccountID, region, listenerARN, tgARN, priority, patterns, hosts)
+	rule, err := s.store.CreateELBv2Rule(verified.AccountID, region, listenerARN, tgARN, priority, cond)
 	if errors.Is(err, store.ErrELBv2ListenerNotFound) {
 		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ListenerNotFound",
 			"Listener not found.", readOnly, eventID, verified)
@@ -692,6 +820,110 @@ func (s *Server) elbDeleteRule(
 	payload, _ := elbsvc.DeleteOKJSON()
 	s.writeELBv2OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "DeleteRule", readOnly)
+}
+
+func (s *Server) elbModifyListener(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	arn, _ := params["ListenerArn"].(string)
+	if !s.authorize(verified, catalog.ActionELBv2ModifyListener, arn) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform elasticloadbalancing:ModifyListener.", readOnly, eventID, verified)
+		return
+	}
+	var (
+		portPtr     *int
+		protocolPtr *string
+		tgPtr       *string
+	)
+	if p, ok := params["Port"].(float64); ok {
+		n := int(p)
+		portPtr = &n
+	}
+	if p, ok := params["Protocol"].(string); ok && strings.TrimSpace(p) != "" {
+		protocolPtr = &p
+	}
+	if _, hasActions := params["DefaultActions"]; hasActions {
+		tg := elbDefaultForwardTargetGroup(params)
+		tgPtr = &tg
+	} else if tg, ok := params["TargetGroupArn"].(string); ok && strings.TrimSpace(tg) != "" {
+		tgPtr = &tg
+	}
+	l, err := s.store.ModifyELBv2Listener(verified.AccountID, arn, portPtr, protocolPtr, tgPtr)
+	if errors.Is(err, store.ErrELBv2ListenerNotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ListenerNotFound",
+			"Listener not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrELBv2TGNotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "TargetGroupNotFound",
+			"Target group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrELBv2BadRequest) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to modify listener.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := elbsvc.CreateListenerJSON(l)
+	s.writeELBv2OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "ModifyListener", readOnly)
+}
+
+func (s *Server) elbModifyRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	arn, _ := params["RuleArn"].(string)
+	if !s.authorize(verified, catalog.ActionELBv2ModifyRule, arn) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform elasticloadbalancing:ModifyRule.", readOnly, eventID, verified)
+		return
+	}
+	var (
+		condPtr *store.ELBv2RuleConditions
+		tgPtr   *string
+	)
+	if _, has := params["Conditions"]; has {
+		c := elbRuleConditionsFromParams(params)
+		condPtr = &c
+	}
+	if _, has := params["Actions"]; has {
+		tg := elbForwardTargetGroupFromActions(params)
+		tgPtr = &tg
+	} else if tg, ok := params["TargetGroupArn"].(string); ok && strings.TrimSpace(tg) != "" {
+		tgPtr = &tg
+	}
+	rule, err := s.store.ModifyELBv2Rule(verified.AccountID, arn, condPtr, tgPtr)
+	if errors.Is(err, store.ErrELBv2RuleNotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "RuleNotFound",
+			"Rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrELBv2TGNotFound) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "TargetGroupNotFound",
+			"Target group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrELBv2BadRequest) {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusBadRequest, "ValidationError",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeELBv2Error(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to modify rule.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{"Rules": []map[string]any{elbRuleJSON(rule)}})
+	s.writeELBv2OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, elbv2EventSource, "ModifyRule", readOnly)
 }
 
 func elbAttributesFromParams(params map[string]any) map[string]string {

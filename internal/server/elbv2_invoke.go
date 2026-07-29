@@ -106,7 +106,13 @@ func (s *Server) handleELBv2LabListener(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tgARN, err := s.store.ResolveELBv2ListenerTargetGroup(accountID, listener, routePath, r.Host)
+	tgARN, err := s.store.ResolveELBv2ListenerTargetGroup(accountID, listener, store.ELBv2RuleMatchInput{
+		Path:     routePath,
+		Host:     r.Host,
+		Headers:  elbLowerHeaderMap(r.Header),
+		Query:    elbQueryFirstValues(r),
+		SourceIP: peerClientIP(r),
+	})
 	if err != nil || tgARN == "" {
 		logState.set(http.StatusBadGateway, 0, 0, "")
 		http.Error(w, "target group not found", http.StatusBadGateway)
@@ -287,6 +293,28 @@ func elbClientEndpoint(r *http.Request) (string, int) {
 		}
 	}
 	return host, port
+}
+
+func elbQueryFirstValues(r *http.Request) map[string]string {
+	out := map[string]string{}
+	for k, vals := range r.URL.Query() {
+		if len(vals) == 0 {
+			continue
+		}
+		out[strings.ToLower(k)] = vals[0]
+	}
+	return out
+}
+
+func elbLowerHeaderMap(h http.Header) map[string]string {
+	out := map[string]string{}
+	for k, vals := range h {
+		if len(vals) == 0 {
+			continue
+		}
+		out[strings.ToLower(k)] = vals[0]
+	}
+	return out
 }
 
 func elbStatusFromLambdaProxy(result []byte) (elbStatus, targetStatus int, sentBytes int64) {

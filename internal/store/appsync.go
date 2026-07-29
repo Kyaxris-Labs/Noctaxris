@@ -30,6 +30,11 @@ const (
 	AppSyncAuthCognito = "AMAZON_COGNITO_USER_POOLS"
 )
 
+const (
+	AppSyncSchemaStatusNotApplicable = "NOT_APPLICABLE"
+	AppSyncSchemaStatusSuccess       = "SUCCESS"
+)
+
 const appSyncSchema = `
 CREATE TABLE IF NOT EXISTS appsync_apis (
   account_id TEXT NOT NULL,
@@ -38,6 +43,7 @@ CREATE TABLE IF NOT EXISTS appsync_apis (
   arn TEXT NOT NULL,
   authentication_type TEXT NOT NULL,
   schema_sdl TEXT NOT NULL DEFAULT '',
+  schema_creation_status TEXT NOT NULL DEFAULT 'NOT_APPLICABLE',
   created_at INTEGER NOT NULL,
   user_pool_id TEXT NOT NULL DEFAULT '',
   user_pool_region TEXT NOT NULL DEFAULT '',
@@ -76,16 +82,23 @@ CREATE TABLE IF NOT EXISTS appsync_resolvers (
 
 // AppSyncAPI is a GraphQL API row.
 type AppSyncAPI struct {
-	APIID              string
-	Name               string
-	ARN                string
-	AuthenticationType string
-	SchemaSDL          string
-	CreatedAt          int64
-	UserPoolID         string
-	UserPoolRegion     string
-	UserPoolClientID   string
-	UserPoolIssuer     string
+	APIID                string
+	Name                 string
+	ARN                  string
+	AuthenticationType   string
+	SchemaSDL            string
+	SchemaCreationStatus string
+	CreatedAt            int64
+	UserPoolID           string
+	UserPoolRegion       string
+	UserPoolClientID     string
+	UserPoolIssuer       string
+}
+
+// AppSyncSchemaCreationStatus is the lab GetSchemaCreationStatus payload.
+type AppSyncSchemaCreationStatus struct {
+	Status  string
+	Details string
 }
 
 // AppSyncUserPoolConfig is Cognito User Pools auth config for AMAZON_COGNITO_USER_POOLS.
@@ -134,6 +147,7 @@ func EnsureAppSyncSchema(db *sql.DB) error {
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_region TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_client_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE appsync_apis ADD COLUMN user_pool_issuer TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE appsync_apis ADD COLUMN schema_creation_status TEXT NOT NULL DEFAULT 'NOT_APPLICABLE'`,
 		`ALTER TABLE appsync_data_sources ADD COLUMN service_role_arn TEXT NOT NULL DEFAULT ''`,
 	}); err != nil {
 		return fmt.Errorf("ensure appsync schema alter: %w", err)
@@ -194,10 +208,10 @@ func (s *Store) CreateAppSyncGraphqlAPIWithConfig(accountID, region, name, authT
 	arn := fmt.Sprintf("arn:aws:appsync:%s:%s:apis/%s", region, accountID, apiID)
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.Exec(
-		`INSERT INTO appsync_apis (account_id, api_id, name, arn, authentication_type, schema_sdl, created_at,
+		`INSERT INTO appsync_apis (account_id, api_id, name, arn, authentication_type, schema_sdl, schema_creation_status, created_at,
 		 user_pool_id, user_pool_region, user_pool_client_id, user_pool_issuer)
-		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
-		accountID, apiID, name, arn, authType, now,
+		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
+		accountID, apiID, name, arn, authType, AppSyncSchemaStatusNotApplicable, now,
 		pool.UserPoolID, pool.AwsRegion, pool.ClientID, pool.Issuer,
 	)
 	if err != nil {
@@ -207,7 +221,8 @@ func (s *Store) CreateAppSyncGraphqlAPIWithConfig(accountID, region, name, authT
 		return AppSyncAPI{}, fmt.Errorf("create graphql api: %w", err)
 	}
 	return AppSyncAPI{
-		APIID: apiID, Name: name, ARN: arn, AuthenticationType: authType, CreatedAt: now,
+		APIID: apiID, Name: name, ARN: arn, AuthenticationType: authType,
+		SchemaCreationStatus: AppSyncSchemaStatusNotApplicable, CreatedAt: now,
 		UserPoolID: pool.UserPoolID, UserPoolRegion: pool.AwsRegion,
 		UserPoolClientID: pool.ClientID, UserPoolIssuer: pool.Issuer,
 	}, nil
@@ -244,11 +259,12 @@ func (s *Store) DeleteAppSyncGraphqlAPI(accountID, apiID string) error {
 func (s *Store) GetAppSyncGraphqlAPI(accountID, apiID string) (AppSyncAPI, error) {
 	var a AppSyncAPI
 	err := s.db.QueryRow(
-		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at,
+		`SELECT api_id, name, arn, authentication_type, schema_sdl,
+		 COALESCE(schema_creation_status, ?), created_at,
 		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
 		 FROM appsync_apis WHERE account_id = ? AND api_id = ?`,
-		accountID, apiID,
-	).Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt,
+		AppSyncSchemaStatusNotApplicable, accountID, apiID,
+	).Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.SchemaCreationStatus, &a.CreatedAt,
 		&a.UserPoolID, &a.UserPoolRegion, &a.UserPoolClientID, &a.UserPoolIssuer)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AppSyncAPI{}, ErrAppSyncNotFound
@@ -262,11 +278,12 @@ func (s *Store) GetAppSyncGraphqlAPI(accountID, apiID string) (AppSyncAPI, error
 // GetAppSyncGraphqlAPIByID returns an API and owning account by api_id (lab: api_id is globally unique).
 func (s *Store) GetAppSyncGraphqlAPIByID(apiID string) (accountID string, api AppSyncAPI, err error) {
 	err = s.db.QueryRow(
-		`SELECT account_id, api_id, name, arn, authentication_type, schema_sdl, created_at,
+		`SELECT account_id, api_id, name, arn, authentication_type, schema_sdl,
+		 COALESCE(schema_creation_status, ?), created_at,
 		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
 		 FROM appsync_apis WHERE api_id = ?`,
-		apiID,
-	).Scan(&accountID, &api.APIID, &api.Name, &api.ARN, &api.AuthenticationType, &api.SchemaSDL, &api.CreatedAt,
+		AppSyncSchemaStatusNotApplicable, apiID,
+	).Scan(&accountID, &api.APIID, &api.Name, &api.ARN, &api.AuthenticationType, &api.SchemaSDL, &api.SchemaCreationStatus, &api.CreatedAt,
 		&api.UserPoolID, &api.UserPoolRegion, &api.UserPoolClientID, &api.UserPoolIssuer)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", AppSyncAPI{}, ErrAppSyncNotFound
@@ -280,10 +297,11 @@ func (s *Store) GetAppSyncGraphqlAPIByID(apiID string) (accountID string, api Ap
 // ListAppSyncGraphqlAPIs lists APIs for an account.
 func (s *Store) ListAppSyncGraphqlAPIs(accountID string) ([]AppSyncAPI, error) {
 	rows, err := s.db.Query(
-		`SELECT api_id, name, arn, authentication_type, schema_sdl, created_at,
+		`SELECT api_id, name, arn, authentication_type, schema_sdl,
+		 COALESCE(schema_creation_status, ?), created_at,
 		 COALESCE(user_pool_id,''), COALESCE(user_pool_region,''), COALESCE(user_pool_client_id,''), COALESCE(user_pool_issuer,'')
 		 FROM appsync_apis WHERE account_id = ? ORDER BY name`,
-		accountID,
+		AppSyncSchemaStatusNotApplicable, accountID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list graphql apis: %w", err)
@@ -292,7 +310,7 @@ func (s *Store) ListAppSyncGraphqlAPIs(accountID string) ([]AppSyncAPI, error) {
 	var out []AppSyncAPI
 	for rows.Next() {
 		var a AppSyncAPI
-		if err := rows.Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.CreatedAt,
+		if err := rows.Scan(&a.APIID, &a.Name, &a.ARN, &a.AuthenticationType, &a.SchemaSDL, &a.SchemaCreationStatus, &a.CreatedAt,
 			&a.UserPoolID, &a.UserPoolRegion, &a.UserPoolClientID, &a.UserPoolIssuer); err != nil {
 			return nil, fmt.Errorf("list graphql apis scan: %w", err)
 		}
@@ -301,15 +319,15 @@ func (s *Store) ListAppSyncGraphqlAPIs(accountID string) ([]AppSyncAPI, error) {
 	return out, rows.Err()
 }
 
-// StartAppSyncSchemaCreation stores the schema SDL (lab: immediate success, no async job).
+// StartAppSyncSchemaCreation stores the schema SDL (lab: immediate SUCCESS, no async job).
 func (s *Store) StartAppSyncSchemaCreation(accountID, apiID, definition string) error {
 	definition = strings.TrimSpace(definition)
 	if definition == "" {
 		return fmt.Errorf("%w: definition required", ErrAppSyncBadRequest)
 	}
 	res, err := s.db.Exec(
-		`UPDATE appsync_apis SET schema_sdl = ? WHERE account_id = ? AND api_id = ?`,
-		definition, accountID, apiID,
+		`UPDATE appsync_apis SET schema_sdl = ?, schema_creation_status = ? WHERE account_id = ? AND api_id = ?`,
+		definition, AppSyncSchemaStatusSuccess, accountID, apiID,
 	)
 	if err != nil {
 		return fmt.Errorf("start schema creation: %w", err)
@@ -319,6 +337,20 @@ func (s *Store) StartAppSyncSchemaCreation(accountID, apiID, definition string) 
 		return ErrAppSyncNotFound
 	}
 	return nil
+}
+
+// GetAppSyncSchemaCreationStatus returns schema creation status for an API.
+// Lab: NOT_APPLICABLE until StartSchemaCreation; SUCCESS immediately after.
+func (s *Store) GetAppSyncSchemaCreationStatus(accountID, apiID string) (AppSyncSchemaCreationStatus, error) {
+	api, err := s.GetAppSyncGraphqlAPI(accountID, apiID)
+	if err != nil {
+		return AppSyncSchemaCreationStatus{}, err
+	}
+	status := api.SchemaCreationStatus
+	if status == "" {
+		status = AppSyncSchemaStatusNotApplicable
+	}
+	return AppSyncSchemaCreationStatus{Status: status, Details: ""}, nil
 }
 
 // CreateAppSyncAPIKey creates an API key for an API_KEY authenticated API.
@@ -375,6 +407,67 @@ func (s *Store) hashAppSyncAPIKey(apiKey string) string {
 	mac := hmac.New(sha256.New, s.master[:])
 	_, _ = mac.Write([]byte(apiKey))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ListAppSyncAPIKeys lists API key management rows for an API.
+// Lab: id is the opaque row UUID (plaintext secrets are not recoverable after Create).
+func (s *Store) ListAppSyncAPIKeys(accountID, apiID string) ([]AppSyncAPIKey, error) {
+	if _, err := s.GetAppSyncGraphqlAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT id, api_id, expires_at FROM appsync_api_keys
+		 WHERE account_id = ? AND api_id = ? ORDER BY id`,
+		accountID, apiID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list api keys: %w", err)
+	}
+	defer rows.Close()
+	var out []AppSyncAPIKey
+	for rows.Next() {
+		var k AppSyncAPIKey
+		if err := rows.Scan(&k.ID, &k.APIID, &k.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("list api keys scan: %w", err)
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// DeleteAppSyncAPIKey deletes an API key by row UUID or by plaintext key (HMAC lookup).
+func (s *Store) DeleteAppSyncAPIKey(accountID, apiID, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("%w: id required", ErrAppSyncBadRequest)
+	}
+	if _, err := s.GetAppSyncGraphqlAPI(accountID, apiID); err != nil {
+		return err
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM appsync_api_keys WHERE account_id = ? AND api_id = ? AND id = ?`,
+		accountID, apiID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("delete api key: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		return nil
+	}
+	keyHash := s.hashAppSyncAPIKey(id)
+	res, err = s.db.Exec(
+		`DELETE FROM appsync_api_keys WHERE account_id = ? AND api_id = ? AND api_key = ?`,
+		accountID, apiID, keyHash,
+	)
+	if err != nil {
+		return fmt.Errorf("delete api key by hash: %w", err)
+	}
+	n, _ = res.RowsAffected()
+	if n == 0 {
+		return ErrAppSyncNotFound
+	}
+	return nil
 }
 
 // CreateAppSyncDataSource creates a Lambda data source.
@@ -434,6 +527,98 @@ func (s *Store) GetAppSyncDataSource(accountID, apiID, name string) (AppSyncData
 	return ds, nil
 }
 
+// ListAppSyncDataSources lists data sources for an API.
+func (s *Store) ListAppSyncDataSources(accountID, apiID string) ([]AppSyncDataSource, error) {
+	if _, err := s.GetAppSyncGraphqlAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT name, api_id, type, lambda_function_arn, COALESCE(service_role_arn,'')
+		 FROM appsync_data_sources WHERE account_id = ? AND api_id = ? ORDER BY name`,
+		accountID, apiID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list data sources: %w", err)
+	}
+	defer rows.Close()
+	var out []AppSyncDataSource
+	for rows.Next() {
+		var ds AppSyncDataSource
+		if err := rows.Scan(&ds.Name, &ds.APIID, &ds.Type, &ds.LambdaFunctionARN, &ds.ServiceRoleArn); err != nil {
+			return nil, fmt.Errorf("list data sources scan: %w", err)
+		}
+		out = append(out, ds)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAppSyncDataSource updates a Lambda data source.
+// serviceRoleARN is optional; when empty, GraphQL invoke uses Lambda resource policy only.
+func (s *Store) UpdateAppSyncDataSource(accountID, apiID, name, dsType, lambdaARN, serviceRoleARN string) (AppSyncDataSource, error) {
+	name = strings.TrimSpace(name)
+	dsType = strings.ToUpper(strings.TrimSpace(dsType))
+	lambdaARN = strings.TrimSpace(lambdaARN)
+	serviceRoleARN = strings.TrimSpace(serviceRoleARN)
+	if name == "" {
+		return AppSyncDataSource{}, fmt.Errorf("%w: name required", ErrAppSyncBadRequest)
+	}
+	if dsType == "" {
+		dsType = "AWS_LAMBDA"
+	}
+	if dsType != "AWS_LAMBDA" {
+		return AppSyncDataSource{}, fmt.Errorf("%w: only AWS_LAMBDA data sources in lab core", ErrAppSyncBadRequest)
+	}
+	if lambdaARN == "" {
+		return AppSyncDataSource{}, fmt.Errorf("%w: lambdaFunctionArn required", ErrAppSyncBadRequest)
+	}
+	if _, err := s.GetAppSyncDataSource(accountID, apiID, name); err != nil {
+		return AppSyncDataSource{}, err
+	}
+	_, err := s.db.Exec(
+		`UPDATE appsync_data_sources SET type = ?, lambda_function_arn = ?, service_role_arn = ?
+		 WHERE account_id = ? AND api_id = ? AND name = ?`,
+		dsType, lambdaARN, serviceRoleARN, accountID, apiID, name,
+	)
+	if err != nil {
+		return AppSyncDataSource{}, fmt.Errorf("update data source: %w", err)
+	}
+	return AppSyncDataSource{
+		Name: name, APIID: apiID, Type: dsType,
+		LambdaFunctionARN: lambdaARN, ServiceRoleArn: serviceRoleARN,
+	}, nil
+}
+
+// DeleteAppSyncDataSource deletes a data source. Fails if resolvers still reference it.
+func (s *Store) DeleteAppSyncDataSource(accountID, apiID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("%w: name required", ErrAppSyncBadRequest)
+	}
+	if _, err := s.GetAppSyncDataSource(accountID, apiID, name); err != nil {
+		return err
+	}
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM appsync_resolvers
+		 WHERE account_id = ? AND api_id = ? AND data_source_name = ?`,
+		accountID, apiID, name,
+	).Scan(&n)
+	if err != nil {
+		return fmt.Errorf("delete data source check resolvers: %w", err)
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: data source is in use by resolvers", ErrAppSyncBadRequest)
+	}
+	_, err = s.db.Exec(
+		`DELETE FROM appsync_data_sources WHERE account_id = ? AND api_id = ? AND name = ?`,
+		accountID, apiID, name,
+	)
+	if err != nil {
+		return fmt.Errorf("delete data source: %w", err)
+	}
+	return nil
+}
+
 // CreateAppSyncResolver creates a resolver for one type/field.
 func (s *Store) CreateAppSyncResolver(accountID, apiID, typeName, fieldName, dataSourceName string) (AppSyncResolver, error) {
 	typeName = strings.TrimSpace(typeName)
@@ -474,6 +659,83 @@ func (s *Store) GetAppSyncResolver(accountID, apiID, typeName, fieldName string)
 		return AppSyncResolver{}, fmt.Errorf("get resolver: %w", err)
 	}
 	return r, nil
+}
+
+// ListAppSyncResolvers lists resolvers for an API type.
+func (s *Store) ListAppSyncResolvers(accountID, apiID, typeName string) ([]AppSyncResolver, error) {
+	typeName = strings.TrimSpace(typeName)
+	if typeName == "" {
+		return nil, fmt.Errorf("%w: typeName required", ErrAppSyncBadRequest)
+	}
+	if _, err := s.GetAppSyncGraphqlAPI(accountID, apiID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT api_id, type_name, field_name, data_source_name FROM appsync_resolvers
+		 WHERE account_id = ? AND api_id = ? AND type_name = ?
+		 ORDER BY field_name`,
+		accountID, apiID, typeName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list resolvers: %w", err)
+	}
+	defer rows.Close()
+	var out []AppSyncResolver
+	for rows.Next() {
+		var r AppSyncResolver
+		if err := rows.Scan(&r.APIID, &r.TypeName, &r.FieldName, &r.DataSourceName); err != nil {
+			return nil, fmt.Errorf("list resolvers scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAppSyncResolver updates a resolver's data source binding.
+func (s *Store) UpdateAppSyncResolver(accountID, apiID, typeName, fieldName, dataSourceName string) (AppSyncResolver, error) {
+	typeName = strings.TrimSpace(typeName)
+	fieldName = strings.TrimSpace(fieldName)
+	dataSourceName = strings.TrimSpace(dataSourceName)
+	if typeName == "" || fieldName == "" || dataSourceName == "" {
+		return AppSyncResolver{}, fmt.Errorf("%w: typeName, fieldName, dataSourceName required", ErrAppSyncBadRequest)
+	}
+	if _, err := s.GetAppSyncResolver(accountID, apiID, typeName, fieldName); err != nil {
+		return AppSyncResolver{}, err
+	}
+	if _, err := s.GetAppSyncDataSource(accountID, apiID, dataSourceName); err != nil {
+		return AppSyncResolver{}, err
+	}
+	_, err := s.db.Exec(
+		`UPDATE appsync_resolvers SET data_source_name = ?
+		 WHERE account_id = ? AND api_id = ? AND type_name = ? AND field_name = ?`,
+		dataSourceName, accountID, apiID, typeName, fieldName,
+	)
+	if err != nil {
+		return AppSyncResolver{}, fmt.Errorf("update resolver: %w", err)
+	}
+	return AppSyncResolver{APIID: apiID, TypeName: typeName, FieldName: fieldName, DataSourceName: dataSourceName}, nil
+}
+
+// DeleteAppSyncResolver deletes a resolver.
+func (s *Store) DeleteAppSyncResolver(accountID, apiID, typeName, fieldName string) error {
+	typeName = strings.TrimSpace(typeName)
+	fieldName = strings.TrimSpace(fieldName)
+	if typeName == "" || fieldName == "" {
+		return fmt.Errorf("%w: typeName and fieldName required", ErrAppSyncBadRequest)
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM appsync_resolvers
+		 WHERE account_id = ? AND api_id = ? AND type_name = ? AND field_name = ?`,
+		accountID, apiID, typeName, fieldName,
+	)
+	if err != nil {
+		return fmt.Errorf("delete resolver: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrAppSyncNotFound
+	}
+	return nil
 }
 
 var (

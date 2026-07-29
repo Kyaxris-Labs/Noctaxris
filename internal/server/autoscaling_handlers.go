@@ -53,6 +53,30 @@ func (s *Server) handleAutoScaling(
 		s.asgDeleteGroup(w, r, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionASGSetDesiredCapacity:
 		s.asgSetDesired(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGPutScalingPolicy:
+		s.asgPutScalingPolicy(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDescribePolicies:
+		s.asgDescribePolicies(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDeletePolicy:
+		s.asgDeletePolicy(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGPutLifecycleHook:
+		s.asgPutLifecycleHook(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDescribeLifecycleHooks:
+		s.asgDescribeLifecycleHooks(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDeleteLifecycleHook:
+		s.asgDeleteLifecycleHook(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGAttachInstances:
+		s.asgAttachInstances(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDetachInstances:
+		s.asgDetachInstances(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDescribeAutoScalingInstances:
+		s.asgDescribeAutoScalingInstances(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGAttachLoadBalancerTargetGroups:
+		s.asgAttachLoadBalancerTargetGroups(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDetachLoadBalancerTargetGroups:
+		s.asgDetachLoadBalancerTargetGroups(w, r, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionASGDescribeLoadBalancerTargetGroups:
+		s.asgDescribeLoadBalancerTargetGroups(w, r, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeASGError(w, r, requestID, http.StatusBadRequest, "InvalidAction",
 			"This Auto Scaling action is not implemented.", readOnly, eventID, verified)
@@ -60,8 +84,12 @@ func (s *Server) handleAutoScaling(
 }
 
 func asgAction(action string) string {
-	if strings.Contains(action, ":") {
+	if strings.HasPrefix(action, "autoscaling:") {
 		return action
+	}
+	// Shared short names (e.g. DeletePolicy) may be normalized to another service.
+	if i := strings.Index(action, ":"); i >= 0 {
+		action = action[i+1:]
 	}
 	switch action {
 	case "CreateLaunchConfiguration":
@@ -80,6 +108,30 @@ func asgAction(action string) string {
 		return catalog.ActionASGDeleteAutoScalingGroup
 	case "SetDesiredCapacity":
 		return catalog.ActionASGSetDesiredCapacity
+	case "PutScalingPolicy":
+		return catalog.ActionASGPutScalingPolicy
+	case "DescribePolicies":
+		return catalog.ActionASGDescribePolicies
+	case "DeletePolicy":
+		return catalog.ActionASGDeletePolicy
+	case "PutLifecycleHook":
+		return catalog.ActionASGPutLifecycleHook
+	case "DescribeLifecycleHooks":
+		return catalog.ActionASGDescribeLifecycleHooks
+	case "DeleteLifecycleHook":
+		return catalog.ActionASGDeleteLifecycleHook
+	case "AttachInstances":
+		return catalog.ActionASGAttachInstances
+	case "DetachInstances":
+		return catalog.ActionASGDetachInstances
+	case "DescribeAutoScalingInstances":
+		return catalog.ActionASGDescribeAutoScalingInstances
+	case "AttachLoadBalancerTargetGroups":
+		return catalog.ActionASGAttachLoadBalancerTargetGroups
+	case "DetachLoadBalancerTargetGroups":
+		return catalog.ActionASGDetachLoadBalancerTargetGroups
+	case "DescribeLoadBalancerTargetGroups":
+		return catalog.ActionASGDescribeLoadBalancerTargetGroups
 	default:
 		return action
 	}
@@ -477,6 +529,405 @@ func (s *Server) asgSetDesired(
 	payload, _ := asgsvc.EmptyOKXML("SetDesiredCapacity", requestID)
 	s.writeASGOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "SetDesiredCapacity", readOnly)
+}
+
+func (s *Server) asgPutScalingPolicy(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGPutScalingPolicy, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:PutScalingPolicy.", readOnly, eventID, verified)
+		return
+	}
+	var warmup *int
+	if v := params.Get("EstimatedInstanceWarmup"); v != "" {
+		n, _ := strconv.Atoi(v)
+		warmup = &n
+	}
+	cooldown, _ := strconv.Atoi(params.Get("Cooldown"))
+	adjustment, _ := strconv.Atoi(params.Get("ScalingAdjustment"))
+	var tt *store.ASGTargetTrackingConfiguration
+	metricType := params.Get("TargetTrackingConfiguration.PredefinedMetricSpecification.PredefinedMetricType")
+	targetVal := params.Get("TargetTrackingConfiguration.TargetValue")
+	if metricType != "" || targetVal != "" {
+		tt = &store.ASGTargetTrackingConfiguration{
+			PredefinedMetricType: metricType,
+			ResourceLabel:        params.Get("TargetTrackingConfiguration.PredefinedMetricSpecification.ResourceLabel"),
+		}
+		if targetVal != "" {
+			f, _ := strconv.ParseFloat(targetVal, 64)
+			tt.TargetValue = f
+		}
+	}
+	policy, err := s.store.PutScalingPolicy(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), params.Get("PolicyName"),
+		params.Get("PolicyType"), params.Get("AdjustmentType"),
+		adjustment, cooldown, warmup, tt,
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to put scaling policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.PutScalingPolicyXML(policy.PolicyARN, requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "PutScalingPolicy", readOnly)
+}
+
+func (s *Server) asgDescribePolicies(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDescribePolicies, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DescribePolicies.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.DescribePolicies(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "PolicyNames"),
+	)
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe policies.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.DescribePoliciesXML(list, requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DescribePolicies", readOnly)
+}
+
+func (s *Server) asgDeletePolicy(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDeletePolicy, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DeletePolicy.", readOnly, eventID, verified)
+		return
+	}
+	nameOrARN := params.Get("PolicyName")
+	if nameOrARN == "" {
+		nameOrARN = params.Get("PolicyARN")
+	}
+	err := s.store.DeletePolicy(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), nameOrARN,
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Scaling policy not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete policy.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("DeletePolicy", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DeletePolicy", readOnly)
+}
+
+func (s *Server) asgPutLifecycleHook(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGPutLifecycleHook, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:PutLifecycleHook.", readOnly, eventID, verified)
+		return
+	}
+	var timeout *int
+	if v := params.Get("HeartbeatTimeout"); v != "" {
+		n, _ := strconv.Atoi(v)
+		timeout = &n
+	}
+	_, err := s.store.PutLifecycleHook(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), params.Get("LifecycleHookName"),
+		params.Get("LifecycleTransition"), params.Get("NotificationTargetARN"),
+		params.Get("RoleARN"), params.Get("NotificationMetadata"),
+		timeout, params.Get("DefaultResult"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to put lifecycle hook.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("PutLifecycleHook", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "PutLifecycleHook", readOnly)
+}
+
+func (s *Server) asgDescribeLifecycleHooks(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDescribeLifecycleHooks, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DescribeLifecycleHooks.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.DescribeLifecycleHooks(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "LifecycleHookNames"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe lifecycle hooks.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.DescribeLifecycleHooksXML(list, requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DescribeLifecycleHooks", readOnly)
+}
+
+func (s *Server) asgDeleteLifecycleHook(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDeleteLifecycleHook, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DeleteLifecycleHook.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteLifecycleHook(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), params.Get("LifecycleHookName"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Lifecycle hook not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete lifecycle hook.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("DeleteLifecycleHook", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DeleteLifecycleHook", readOnly)
+}
+
+func (s *Server) asgAttachInstances(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGAttachInstances, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:AttachInstances.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.AttachASGInstances(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "InstanceIds"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to attach instances.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("AttachInstances", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "AttachInstances", readOnly)
+}
+
+func (s *Server) asgDetachInstances(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDetachInstances, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DetachInstances.", readOnly, eventID, verified)
+		return
+	}
+	decrement := strings.EqualFold(strings.TrimSpace(params.Get("ShouldDecrementDesiredCapacity")), "true")
+	err := s.store.DetachASGInstances(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "InstanceIds"), decrement,
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to detach instances.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.DetachInstancesXML(requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DetachInstances", readOnly)
+}
+
+func (s *Server) asgDescribeAutoScalingInstances(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDescribeAutoScalingInstances, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DescribeAutoScalingInstances.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.DescribeAutoScalingInstances(
+		verified.AccountID, s.asgRegion(verified), formMemberList(params, "InstanceIds"),
+	)
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe auto scaling instances.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.DescribeAutoScalingInstancesXML(list, requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DescribeAutoScalingInstances", readOnly)
+}
+
+func (s *Server) asgAttachLoadBalancerTargetGroups(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGAttachLoadBalancerTargetGroups, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:AttachLoadBalancerTargetGroups.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.AttachLoadBalancerTargetGroups(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "TargetGroupARNs"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to attach load balancer target groups.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("AttachLoadBalancerTargetGroups", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "AttachLoadBalancerTargetGroups", readOnly)
+}
+
+func (s *Server) asgDetachLoadBalancerTargetGroups(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDetachLoadBalancerTargetGroups, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DetachLoadBalancerTargetGroups.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DetachLoadBalancerTargetGroups(
+		verified.AccountID, s.asgRegion(verified),
+		params.Get("AutoScalingGroupName"), formMemberList(params, "TargetGroupARNs"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to detach load balancer target groups.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.EmptyOKXML("DetachLoadBalancerTargetGroups", requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DetachLoadBalancerTargetGroups", readOnly)
+}
+
+func (s *Server) asgDescribeLoadBalancerTargetGroups(
+	w http.ResponseWriter, r *http.Request, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params url.Values,
+) {
+	if !s.authorize(verified, catalog.ActionASGDescribeLoadBalancerTargetGroups, "*") {
+		s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform autoscaling:DescribeLoadBalancerTargetGroups.", readOnly, eventID, verified)
+		return
+	}
+	arns, err := s.store.DescribeLoadBalancerTargetGroups(
+		verified.AccountID, s.asgRegion(verified), params.Get("AutoScalingGroupName"),
+	)
+	if errors.Is(err, store.ErrASGNotFound) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError",
+			"Auto scaling group not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrASGBadRequest) {
+		s.writeASGError(w, r, requestID, http.StatusBadRequest, "ValidationError", err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeASGError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe load balancer target groups.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := asgsvc.DescribeLoadBalancerTargetGroupsXML(arns, requestID)
+	s.writeASGOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, "DescribeLoadBalancerTargetGroups", readOnly)
 }
 
 func (s *Server) writeASGOK(w http.ResponseWriter, payload []byte) {

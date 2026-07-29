@@ -315,16 +315,23 @@ func validateCURReportDefinition(d *CURReportDefinition) error {
 	}
 	d.Format = strings.TrimSpace(d.Format)
 	switch d.Format {
-	case "textORcsv", "Parquet":
+	case "textORcsv", "Parquet", "FOCUS":
 	default:
-		return fmt.Errorf("%w: Format must be textORcsv or Parquet", ErrCURBadRequest)
+		return fmt.Errorf("%w: Format must be textORcsv, Parquet, or FOCUS", ErrCURBadRequest)
 	}
 	d.Compression = strings.TrimSpace(d.Compression)
-	if d.Format == "Parquet" {
+	switch d.Format {
+	case "Parquet":
 		if d.Compression != "Parquet" {
 			return fmt.Errorf("%w: Compression must be Parquet when Format is Parquet", ErrCURBadRequest)
 		}
-	} else {
+	case "FOCUS":
+		switch d.Compression {
+		case "ZIP", "GZIP", "Parquet":
+		default:
+			return fmt.Errorf("%w: Compression must be ZIP, GZIP, or Parquet when Format is FOCUS", ErrCURBadRequest)
+		}
+	default:
 		switch d.Compression {
 		case "ZIP", "GZIP":
 		default:
@@ -362,10 +369,11 @@ func validateCURReportDefinition(d *CURReportDefinition) error {
 	}
 	allowedSchema := map[string]struct{}{
 		"RESOURCES": {}, "SPLIT_COST_ALLOCATION_DATA": {}, "MANUAL_DISCOUNT_COMPATIBILITY": {},
+		"FOCUS": {},
 	}
 	for _, e := range d.AdditionalSchemaElements {
 		if _, ok := allowedSchema[e]; !ok {
-			return fmt.Errorf("%w: AdditionalSchemaElements must be RESOURCES, SPLIT_COST_ALLOCATION_DATA, or MANUAL_DISCOUNT_COMPATIBILITY", ErrCURBadRequest)
+			return fmt.Errorf("%w: AdditionalSchemaElements must be RESOURCES, SPLIT_COST_ALLOCATION_DATA, MANUAL_DISCOUNT_COMPATIBILITY, or FOCUS", ErrCURBadRequest)
 		}
 	}
 	if d.AdditionalSchemaElements == nil {
@@ -403,8 +411,8 @@ func (s *Store) emitCURArtifactBestEffort(d *CURReportDefinition) {
 		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
 		return
 	}
-	if d.Format == "Parquet" {
-		s.emitCURParquetBestEffort(d)
+	if curRequestsFOCUS(d) {
+		s.emitCURFOCUSBestEffort(d)
 		return
 	}
 	runID := uuid.NewString()
@@ -426,9 +434,49 @@ func (s *Store) emitCURArtifactBestEffort(d *CURReportDefinition) {
 	d.ReportStatus = "SUCCESS"
 }
 
-// emitCURParquetBestEffort stages lab UsageLine NDJSON then asks DuckDB for COPY FORMAT PARQUET.
+// emitCURFOCUSBestEffort enumerates lab usage, projects FOCUS columns, then writes CSV or Parquet.
+func (s *Store) emitCURFOCUSBestEffort(d *CURReportDefinition) {
+	lines := s.CollectCURUsageLines(d.AccountID, d.Region)
+	rows := ProjectFOCUSRows(lines)
+	if curFOCUSUsesParquet(d) {
+		s.emitCURFOCUSParquetBestEffort(d, rows)
+		return
+	}
+	body, err := encodeFOCUSCSV(rows)
+	if err != nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
+		return
+	}
+	runID := uuid.NewString()
+	key := path.Join(strings.Trim(d.S3Prefix, "/"), d.ReportName, runID+".csv")
+	key = strings.TrimPrefix(key, "/")
+	if _, err := s.PutObject(d.AccountID, d.S3Bucket, key, PutObjectMeta{
+		Data:        body,
+		PlainSize:   int64(len(body)),
+		ContentType: "text/csv",
+	}); err != nil {
+		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
+		d.ReportStatus = "ERROR"
+		return
+	}
+	_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "SUCCESS")
+	d.ReportStatus = "SUCCESS"
+}
+
+func curFOCUSUsesParquet(d *CURReportDefinition) bool {
+	if d == nil {
+		return false
+	}
+	if d.Format == "Parquet" {
+		return true
+	}
+	return d.Format == "FOCUS" && d.Compression == "Parquet"
+}
+
+// emitCURFOCUSParquetBestEffort stages FOCUS NDJSON then asks DuckDB for COPY FORMAT PARQUET.
 // Fail-closed: missing runner or Duck/S3 errors set ReportStatus=ERROR (never SUCCESS with JSON stand-in).
-func (s *Store) emitCURParquetBestEffort(d *CURReportDefinition) {
+func (s *Store) emitCURFOCUSParquetBestEffort(d *CURReportDefinition, rows []FocusRow) {
 	run := s.getCURDuckRunner()
 	if run == nil {
 		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
@@ -438,21 +486,12 @@ func (s *Store) emitCURParquetBestEffort(d *CURReportDefinition) {
 	runID := uuid.NewString()
 	stagingKey := curParquetStagingKey(d.ReportName, runID)
 	destKey := curParquetDestKey(d.S3Prefix, d.ReportName, runID)
-	line, err := json.Marshal(map[string]any{
-		"identity/LineItemId":     "lab-line-1",
-		"bill/BillingPeriodStart": "2026-07-01",
-		"lineItem/UsageAccountId": d.AccountID,
-		"lineItem/ProductCode":    "AmazonS3",
-		"lineItem/UnblendedCost":  "1.23",
-		"lineItem/CurrencyCode":   "USD",
-		"report/ReportName":       d.ReportName,
-	})
+	ndjson, err := encodeFOCUSNDJSON(rows)
 	if err != nil {
 		_ = s.markCURReportStatus(d.AccountID, d.Region, d.ReportName, "ERROR")
 		d.ReportStatus = "ERROR"
 		return
 	}
-	ndjson := append(line, '\n')
 	if _, err := s.PutObject(d.AccountID, d.S3Bucket, stagingKey, PutObjectMeta{
 		Data:        ndjson,
 		PlainSize:   int64(len(ndjson)),

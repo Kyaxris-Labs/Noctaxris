@@ -43,6 +43,9 @@ func (s *Store) StartAthenaDuckQueryExecution(accountID string, in AthenaStartIn
 	if run == nil {
 		return AthenaQueryExecution{}, fmt.Errorf("%w: DuckDB runner is required", ErrAthenaBadRequest)
 	}
+	if err := s.applyAthenaWorkGroupStart(accountID, &in); err != nil {
+		return AthenaQueryExecution{}, err
+	}
 	q := strings.TrimSpace(in.QueryString)
 	if q == "" {
 		return AthenaQueryExecution{}, fmt.Errorf("%w: QueryString is required", ErrAthenaBadRequest)

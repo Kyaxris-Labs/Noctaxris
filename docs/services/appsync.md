@@ -2,23 +2,23 @@
 
 **Status:** shipped (lab core)
 
-GraphQL API CRUD lite, schema store, Lambda data sources with optional `serviceRoleArn`, Query and nested object field resolvers, and minimal GraphQL evaluation that Invokes Lambda. No GraphQL library dependency (selection-set parser with nesting depth limit 3).
+GraphQL API CRUD lite, schema store with creation status, Lambda data sources with optional `serviceRoleArn`, Query and nested object field resolvers, management SAR (API keys / data sources / resolvers), and minimal GraphQL evaluation that Invokes Lambda. No GraphQL library dependency (selection-set parser with nesting depth limit 3).
 
 ## Implemented
 
 | Area | Actions |
 |------|---------|
 | API | `CreateGraphqlApi`, `GetGraphqlApi`, `ListGraphqlApis`, `DeleteGraphqlApi` |
-| Schema | `StartSchemaCreation` (stores SDL immediately; used to map field return types for nested resolve) |
-| Auth prep | `CreateApiKey` (API_KEY APIs only) |
-| Data plane | `CreateDataSource` (AWS_LAMBDA, optional `serviceRoleArn`), `CreateResolver` (`typeName` + `fieldName`) |
+| Schema | `StartSchemaCreation` (stores SDL immediately), `GetSchemaCreationStatus` (`NOT_APPLICABLE` until start; `SUCCESS` after) |
+| Auth prep | `CreateApiKey`, `ListApiKeys`, `DeleteApiKey` (API_KEY APIs only) |
+| Data plane | `Create`/`Update`/`Get`/`List`/`DeleteDataSource` (AWS_LAMBDA, optional `serviceRoleArn`); `Create`/`Update`/`Get`/`List`/`DeleteResolver` (`typeName` + `fieldName`) |
 | Runtime | `POST /appsync/{apiId}/graphql` (multi-field Query + nested selections) |
 
 ### Auth shape
 
 | authenticationType | Runtime auth | Notes |
 |--------------------|--------------|-------|
-| `API_KEY` | Header `x-api-key` | CreateApiKey returns the plaintext key once; only an HMAC-SHA256 hash (master key) is stored at rest |
+| `API_KEY` | Header `x-api-key` | CreateApiKey returns the plaintext key once as `apiKey.id`; only an HMAC-SHA256 hash (master key) is stored at rest. ListApiKeys returns opaque row UUIDs (not recoverable secrets). DeleteApiKey accepts the Create plaintext or a List UUID. |
 | `AWS_IAM` | SigV4 service `appsync` + `appsync:GraphQL` | Unsigned requests rejected |
 | `AMAZON_COGNITO_USER_POOLS` | Bearer JWT | `userPoolConfig` with `userPoolId`, `clientId` (audience), optional `issuer` (lab Cognito shape by default). Verifies via shared jose helper against lab Cognito JWKS. Requires `token_use=id`. Enforces `exp` and `nbf`. Non-lab issuers require `NOCTAXRIS_ALLOW_REMOTE_JWKS` |
 
@@ -28,10 +28,12 @@ Identity `EvaluateFull` on management `appsync:*`. GraphQL IAM path requires Sig
 
 Lambda data-source invoke has two lab paths:
 
-| CreateDataSource | Invoke authorization |
-|------------------|----------------------|
+| Create/UpdateDataSource | Invoke authorization |
+|-------------------------|----------------------|
 | No `serviceRoleArn` | Resource policy only: function must Allow `appsync.amazonaws.com` (`lambda:AddPermission`) |
 | `serviceRoleArn` set | Configure-time PassRole + `appsync.amazonaws.com` trust (API ARN as `aws:SourceArn`); invoke mints a role session and requires `lambda:InvokeFunction` Allow on that session |
+
+`DeleteDataSource` fails closed when resolvers still reference the data source. `ListResolvers` requires `typeName`.
 
 ### GraphQL runtime limits
 
@@ -59,13 +61,19 @@ aws lambda add-permission --function-name user-email --statement-id appsync \
 aws appsync create-graphql-api --name lab --authentication-type API_KEY --endpoint-url "$EP"
 aws appsync start-schema-creation --api-id "$API" --definition \
   'type Query { getUser: User } type User { name: String email: String }' --endpoint-url "$EP"
+aws appsync get-schema-creation-status --api-id "$API" --endpoint-url "$EP"
 aws appsync create-api-key --api-id "$API" --endpoint-url "$EP"
+aws appsync list-api-keys --api-id "$API" --endpoint-url "$EP"
 aws appsync create-data-source --api-id "$API" --name GetUserDS --type AWS_LAMBDA \
   --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000001:function:get-user --endpoint-url "$EP"
+aws appsync list-data-sources --api-id "$API" --endpoint-url "$EP"
+aws appsync get-data-source --api-id "$API" --name GetUserDS --endpoint-url "$EP"
 aws appsync create-data-source --api-id "$API" --name EmailDS --type AWS_LAMBDA \
   --lambda-config lambdaFunctionArn=arn:aws:lambda:us-east-1:000000000001:function:user-email --endpoint-url "$EP"
 aws appsync create-resolver --api-id "$API" --type-name Query --field-name getUser \
   --data-source-name GetUserDS --endpoint-url "$EP"
+aws appsync list-resolvers --api-id "$API" --type-name Query --endpoint-url "$EP"
+aws appsync get-resolver --api-id "$API" --type-name Query --field-name getUser --endpoint-url "$EP"
 aws appsync create-resolver --api-id "$API" --type-name User --field-name email \
   --data-source-name EmailDS --endpoint-url "$EP"
 curl -s -H "x-api-key: $KEY" -H "content-type: application/json" \
@@ -74,7 +82,7 @@ curl -s -H "x-api-key: $KEY" -H "content-type: application/json" \
 
 Flat multi-field Query still works: `{ hello world }` Invokes each Query resolver independently. Nested `{ getUser { name email } }` Invokes `Query.getUser`, projects `name` from the parent object when no `User.name` resolver exists, and Invokes `User.email` when that resolver is registered.
 
-PassRole path: create an IAM role trusted by `appsync.amazonaws.com` with `lambda:InvokeFunction`, then pass `--service-role-arn` on `create-data-source` (resource policy on the function is not required for same-account role-session invoke). Nested field resolvers use the same PassRole / resource-policy rules per data source.
+PassRole path: create an IAM role trusted by `appsync.amazonaws.com` with `lambda:InvokeFunction`, then pass `--service-role-arn` on `create-data-source` / `update-data-source` (resource policy on the function is not required for same-account role-session invoke). Nested field resolvers use the same PassRole / resource-policy rules per data source.
 
 Cognito auth example: create the API with `--authentication-type AMAZON_COGNITO_USER_POOLS` and a `userPoolConfig`, obtain an **IdToken** from Cognito `InitiateAuth`, then:
 

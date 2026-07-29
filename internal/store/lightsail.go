@@ -30,8 +30,55 @@ CREATE TABLE IF NOT EXISTS lightsail_instances (
   public_ip TEXT NOT NULL DEFAULT '',
   private_ip TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL DEFAULT 'ubuntu',
+  is_static_ip INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, region, name)
+);
+CREATE TABLE IF NOT EXISTS lightsail_disks (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  availability_zone TEXT NOT NULL,
+  size_in_gb INTEGER NOT NULL,
+  iops INTEGER NOT NULL,
+  path TEXT NOT NULL DEFAULT '/dev/xvdf',
+  state TEXT NOT NULL,
+  is_attached INTEGER NOT NULL DEFAULT 0,
+  attached_to TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, name)
+);
+CREATE TABLE IF NOT EXISTS lightsail_static_ips (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  ip_address TEXT NOT NULL,
+  is_attached INTEGER NOT NULL DEFAULT 0,
+  attached_to TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, name)
+);
+CREATE TABLE IF NOT EXISTS lightsail_key_pairs (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  name TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  public_key_base64 TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, name)
+);
+CREATE TABLE IF NOT EXISTS lightsail_instance_ports (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  instance_name TEXT NOT NULL,
+  from_port INTEGER NOT NULL,
+  to_port INTEGER NOT NULL,
+  protocol TEXT NOT NULL,
+  cidrs_json TEXT NOT NULL DEFAULT '["0.0.0.0/0"]',
+  PRIMARY KEY (account_id, region, instance_name, from_port, to_port, protocol)
 );
 `
 
@@ -47,8 +94,54 @@ type LightsailInstance struct {
 	PublicIP         string
 	PrivateIP        string
 	Username         string
+	IsStaticIP       bool
 	CreatedAt        int64
 	Region           string
+}
+
+// LightsailDisk is a lab block storage disk (metadata only).
+type LightsailDisk struct {
+	Name             string
+	ARN              string
+	AvailabilityZone string
+	SizeInGb         int
+	Iops             int
+	Path             string
+	State            string
+	IsAttached       bool
+	AttachedTo       string
+	CreatedAt        int64
+	Region           string
+}
+
+// LightsailStaticIP is a lab static IP (metadata only).
+type LightsailStaticIP struct {
+	Name       string
+	ARN        string
+	IPAddress  string
+	IsAttached bool
+	AttachedTo string
+	CreatedAt  int64
+	Region     string
+}
+
+// LightsailKeyPair is a lab SSH key pair (dummy material).
+type LightsailKeyPair struct {
+	Name            string
+	ARN             string
+	Fingerprint     string
+	PublicKeyBase64 string
+	CreatedAt       int64
+	Region          string
+}
+
+// LightsailPortState is an open public port on a lab instance.
+type LightsailPortState struct {
+	FromPort int
+	ToPort   int
+	Protocol string
+	Cidrs    []string
+	State    string
 }
 
 // LightsailBlueprint is a static lab blueprint.
@@ -82,6 +175,11 @@ func EnsureLightsailSchema(db *sql.DB) error {
 	if _, err := db.Exec(lightsailSchema); err != nil {
 		return fmt.Errorf("ensure lightsail schema: %w", err)
 	}
+	if err := execMigrateStmts(db, []string{
+		`ALTER TABLE lightsail_instances ADD COLUMN is_static_ip INTEGER NOT NULL DEFAULT 0`,
+	}); err != nil {
+		return fmt.Errorf("ensure lightsail schema: migrate: %w", err)
+	}
 	return nil
 }
 
@@ -113,6 +211,27 @@ func LightsailInstanceARN(region, accountID, name string) string {
 		region = DefaultLightsailRegion
 	}
 	return fmt.Sprintf("arn:aws:lightsail:%s:%s:Instance/%s", region, accountID, name)
+}
+
+func LightsailDiskARN(region, accountID, name string) string {
+	if region == "" {
+		region = DefaultLightsailRegion
+	}
+	return fmt.Sprintf("arn:aws:lightsail:%s:%s:Disk/%s", region, accountID, name)
+}
+
+func LightsailStaticIPARN(region, accountID, name string) string {
+	if region == "" {
+		region = DefaultLightsailRegion
+	}
+	return fmt.Sprintf("arn:aws:lightsail:%s:%s:StaticIp/%s", region, accountID, name)
+}
+
+func LightsailKeyPairARN(region, accountID, name string) string {
+	if region == "" {
+		region = DefaultLightsailRegion
+	}
+	return fmt.Sprintf("arn:aws:lightsail:%s:%s:KeyPair/%s", region, accountID, name)
 }
 
 func lightsailUsername(blueprintID string) string {
@@ -180,8 +299,8 @@ func (s *Store) CreateLightsailInstances(accountID, region string, names []strin
 		_, err := s.db.Exec(
 			`INSERT INTO lightsail_instances
 			 (account_id, region, name, arn, blueprint_id, bundle_id, availability_zone,
-			  state_code, state_name, public_ip, private_ip, username, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 16, 'running', ?, ?, ?, ?)`,
+			  state_code, state_name, public_ip, private_ip, username, is_static_ip, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 16, 'running', ?, ?, ?, 0, ?)`,
 			accountID, region, name, arn, blueprintID, bundleID, az, pub, priv, lightsailUsername(blueprintID), now,
 		)
 		if err != nil {
@@ -194,7 +313,7 @@ func (s *Store) CreateLightsailInstances(accountID, region string, names []strin
 			Name: name, ARN: arn, BlueprintID: blueprintID, BundleID: bundleID,
 			AvailabilityZone: az, StateCode: 16, StateName: "running",
 			PublicIP: pub, PrivateIP: priv, Username: lightsailUsername(blueprintID),
-			CreatedAt: now, Region: region,
+			IsStaticIP: false, CreatedAt: now, Region: region,
 		})
 	}
 	return out, nil
@@ -206,19 +325,22 @@ func (s *Store) GetLightsailInstance(accountID, region, name string) (LightsailI
 		region = DefaultLightsailRegion
 	}
 	var inst LightsailInstance
+	var isStatic int
 	err := s.db.QueryRow(
 		`SELECT name, arn, blueprint_id, bundle_id, availability_zone, state_code, state_name,
-		        public_ip, private_ip, username, created_at, region
+		        public_ip, private_ip, username, is_static_ip, created_at, region
 		 FROM lightsail_instances WHERE account_id = ? AND region = ? AND name = ?`,
 		accountID, region, strings.TrimSpace(name),
 	).Scan(&inst.Name, &inst.ARN, &inst.BlueprintID, &inst.BundleID, &inst.AvailabilityZone,
-		&inst.StateCode, &inst.StateName, &inst.PublicIP, &inst.PrivateIP, &inst.Username, &inst.CreatedAt, &inst.Region)
+		&inst.StateCode, &inst.StateName, &inst.PublicIP, &inst.PrivateIP, &inst.Username,
+		&isStatic, &inst.CreatedAt, &inst.Region)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LightsailInstance{}, ErrLightsailNotFound
 	}
 	if err != nil {
 		return LightsailInstance{}, fmt.Errorf("get lightsail instance: %w", err)
 	}
+	inst.IsStaticIP = isStatic != 0
 	return inst, nil
 }
 
@@ -229,7 +351,7 @@ func (s *Store) GetLightsailInstances(accountID, region string) ([]LightsailInst
 	}
 	rows, err := s.db.Query(
 		`SELECT name, arn, blueprint_id, bundle_id, availability_zone, state_code, state_name,
-		        public_ip, private_ip, username, created_at, region
+		        public_ip, private_ip, username, is_static_ip, created_at, region
 		 FROM lightsail_instances WHERE account_id = ? AND region = ? ORDER BY created_at, name`,
 		accountID, region,
 	)
@@ -240,10 +362,13 @@ func (s *Store) GetLightsailInstances(accountID, region string) ([]LightsailInst
 	var out []LightsailInstance
 	for rows.Next() {
 		var inst LightsailInstance
+		var isStatic int
 		if err := rows.Scan(&inst.Name, &inst.ARN, &inst.BlueprintID, &inst.BundleID, &inst.AvailabilityZone,
-			&inst.StateCode, &inst.StateName, &inst.PublicIP, &inst.PrivateIP, &inst.Username, &inst.CreatedAt, &inst.Region); err != nil {
+			&inst.StateCode, &inst.StateName, &inst.PublicIP, &inst.PrivateIP, &inst.Username,
+			&isStatic, &inst.CreatedAt, &inst.Region); err != nil {
 			return nil, fmt.Errorf("list lightsail scan: %w", err)
 		}
+		inst.IsStaticIP = isStatic != 0
 		out = append(out, inst)
 	}
 	return out, rows.Err()
@@ -281,14 +406,15 @@ func (s *Store) RebootLightsailInstance(accountID, region, name string) (Lightsa
 	return s.setLightsailState(accountID, region, name, "running", 16)
 }
 
-// DeleteLightsailInstance deletes an instance.
+// DeleteLightsailInstance deletes an instance and detaches disks/static IPs/ports.
 func (s *Store) DeleteLightsailInstance(accountID, region, name string) error {
 	if region == "" {
 		region = DefaultLightsailRegion
 	}
+	name = strings.TrimSpace(name)
 	res, err := s.db.Exec(
 		`DELETE FROM lightsail_instances WHERE account_id = ? AND region = ? AND name = ?`,
-		accountID, region, strings.TrimSpace(name),
+		accountID, region, name,
 	)
 	if err != nil {
 		return fmt.Errorf("delete lightsail instance: %w", err)
@@ -300,5 +426,19 @@ func (s *Store) DeleteLightsailInstance(accountID, region, name string) error {
 	if n == 0 {
 		return ErrLightsailNotFound
 	}
+	_, _ = s.db.Exec(
+		`UPDATE lightsail_disks SET is_attached = 0, attached_to = '', state = 'available'
+		 WHERE account_id = ? AND region = ? AND attached_to = ?`,
+		accountID, region, name,
+	)
+	_, _ = s.db.Exec(
+		`UPDATE lightsail_static_ips SET is_attached = 0, attached_to = ''
+		 WHERE account_id = ? AND region = ? AND attached_to = ?`,
+		accountID, region, name,
+	)
+	_, _ = s.db.Exec(
+		`DELETE FROM lightsail_instance_ports WHERE account_id = ? AND region = ? AND instance_name = ?`,
+		accountID, region, name,
+	)
 	return nil
 }

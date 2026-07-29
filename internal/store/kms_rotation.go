@@ -319,16 +319,17 @@ func (s *Store) getKeyRaw(keyID string) (Key, error) {
 	var rotation int
 	var period sql.NullInt64
 	err := s.db.QueryRow(
-		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
+		`SELECT key_id, account_id, arn, key_state, key_usage, COALESCE(key_spec, ''), key_policy, creation_date,
 		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0),
 		        COALESCE(last_rotation_date, ''), COALESCE(rotation_period_days, 0)
 		 FROM kms_keys WHERE key_id = ?`,
 		keyID,
-	).Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
+	).Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeySpec, &k.KeyPolicy, &k.CreationDate,
 		&k.DeletionDate, &rotation, &k.LastRotationDate, &period)
 	if err != nil {
 		return Key{}, err
 	}
+	k.KeySpec = normalizeStoredKeySpec(k.KeySpec, k.KeyUsage)
 	k.KeyRotationEnabled = rotation != 0
 	if period.Valid {
 		k.RotationPeriodDays = int(period.Int64)

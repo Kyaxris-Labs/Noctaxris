@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete customer-managed keys: sealed CMK material, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey*, ReEncrypt, grants, aliases (including lab `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs`), deletion lifecycle with post-DeletionDate purge, and key-material rotation (not flags only).
+Lab-complete customer-managed keys: sealed CMK material, key policies with explicit allow, Encrypt/Decrypt/GenerateDataKey*, ReEncrypt, RSA_2048 Sign/Verify/GetPublicKey, grants, aliases (including lab `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs`), deletion lifecycle with post-DeletionDate purge, and key-material rotation (not flags only).
 
 ## Implemented
 
@@ -10,15 +10,16 @@ Lab-complete customer-managed keys: sealed CMK material, key policies with expli
 |------|---------|
 | Keys | `CreateKey`, `DescribeKey`, `ListKeys`, `EnableKey`, `DisableKey` |
 | Lifecycle | `ScheduleKeyDeletion`, `CancelKeyDeletion` (`PendingDeletion` state. Cancel sets `Disabled`, matching AWS. On-read sweeper hard-deletes keys after `DeletionDate`, including aliases and grants) |
-| Rotation | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` (enable rotates sealed material immediately. Prior generations remain for Decrypt. Lab auto-rotate after `rotation_period_days`, default 365) |
+| Rotation | `EnableKeyRotation`, `DisableKeyRotation`, `GetKeyRotationStatus` (enable rotates sealed material immediately. Prior generations remain for Decrypt. Lab auto-rotate after `rotation_period_days`, default 365). Symmetric `ENCRYPT_DECRYPT` only |
 | Key policy | `GetKeyPolicy`, `PutKeyPolicy` |
 | Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` (optional `EncryptionContext` bound as GCM AAD; decrypt/re-encrypt must supply the same map) |
+| Asymmetric | `Sign`, `Verify`, `GetPublicKey` for `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` with `KeyUsage` `SIGN_VERIFY` (PKCS8 private material sealed at rest). Primary algorithm `RSASSA_PSS_SHA_256`; also accepts `RSASSA_PKCS1_V1_5_SHA_256`. `GetPublicKey` returns PEM-encoded SPKI (base64). Symmetric keys reject Sign/Verify with `InvalidKeyUsageException` |
 | Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
 | Aliases | `CreateAlias`, `ListAliases`, `DeleteAlias`, `UpdateAlias` |
 | Tags | `ListResourceTags`, `TagResource`, `UntagResource`; `CreateKey` accepts `Tags` |
 | Lab convenience aliases | Per-account `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs` (lab CMK approximations, not AWS-owned keys) |
 
-CreateKey seeds a default key policy that allows the account root (and the IAM user creator when applicable). CMK material is sealed at rest under the data volume. Lab convenience aliases are created on first use per account.
+CreateKey seeds a default key policy that allows the account root (and the IAM user creator when applicable). CMK material is sealed at rest under the data volume. Lab convenience aliases are created on first use per account. Omitting `KeyUsage` with `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` creates a `SIGN_VERIFY` key.
 
 ### Authz notes
 
@@ -39,6 +40,19 @@ KEY_ID=$(echo "$KEY_JSON" | python3 -c 'import sys,json; print(json.load(sys.std
 aws kms encrypt --key-id "$KEY_ID" --plaintext "$(echo -n hello | base64)" --endpoint-url "$EP"
 aws kms generate-data-key --key-id "$KEY_ID" --key-spec AES_256 --endpoint-url "$EP"
 aws kms create-alias --alias-name alias/lab --target-key-id "$KEY_ID" --endpoint-url "$EP"
+```
+
+Asymmetric Sign / Verify / GetPublicKey:
+
+```bash
+ASYM=$(aws kms create-key --key-spec RSA_2048 --key-usage SIGN_VERIFY --endpoint-url "$EP" --output json)
+ASYM_ID=$(echo "$ASYM" | python3 -c 'import sys,json; print(json.load(sys.stdin)["KeyMetadata"]["KeyId"])')
+MSG=$(echo -n hello-sign | base64)
+SIG=$(aws kms sign --key-id "$ASYM_ID" --message "$MSG" --message-type RAW \
+  --signing-algorithm RSASSA_PSS_SHA_256 --endpoint-url "$EP" --query Signature --output text)
+aws kms verify --key-id "$ASYM_ID" --message "$MSG" --message-type RAW \
+  --signature "$SIG" --signing-algorithm RSASSA_PSS_SHA_256 --endpoint-url "$EP"
+aws kms get-public-key --key-id "$ASYM_ID" --endpoint-url "$EP"
 ```
 
 Deletion lifecycle and rotation flags:
@@ -65,8 +79,9 @@ aws kms encrypt --key-id "$KEY_ARN" --plaintext "$(echo -n hello-xa | base64)" \
 
 ## Out of lab scope
 
-- Full KMS SAR beyond the lab set (Sign/Verify, MAC, GetPublicKey, asymmetric and HMAC key specs, ImportKeyMaterial, custom key stores, multi-Region replica keys, full pagination parity, `RotateKeyOnDemand` API shape) (out of lab scope; symmetric CMK lab core is shipped, including tags)
+- Full KMS SAR beyond the lab set (MAC, HMAC key specs, ECC/SM2, asymmetric ENCRYPT_DECRYPT, ImportKeyMaterial, custom key stores, multi-Region replica keys, full pagination parity, `RotateKeyOnDemand` API shape) (out of lab scope; symmetric CMK lab core and RSA_2048 Sign/Verify are shipped, including tags)
 - Grant `Constraints` / distinct `GrantToken` / `GrantTokens` on crypto APIs (out of lab scope)
 - Cross-account grant flows beyond key policy dual eval (out of lab scope)
 - True AWS-owned managed key types beyond the lab convenience aliases above (out of lab scope)
 - AWS-faithful annual rotation calendar and multi-Region material replication (out of lab scope)
+- AWS GetPublicKey DER-only SPKI blob shape (lab returns PEM-encoded SPKI as the PublicKey blob)

@@ -114,8 +114,9 @@ func writeFileIfMissing(path string, data []byte, mode os.FileMode) error {
 }
 
 func defaultMQTTACL() string {
-	return "# Lab MQTT: authenticated users (cert CN) may read/write shadow topics.\n" +
-		"pattern readwrite $aws/things/+/shadow/#\n"
+	return "# Lab MQTT: authenticated users (cert CN) may read/write shadow and application topics.\n" +
+		"pattern readwrite $aws/things/+/shadow/#\n" +
+		"pattern readwrite #\n"
 }
 
 func mosquittoConfContent(mountDir string) string {

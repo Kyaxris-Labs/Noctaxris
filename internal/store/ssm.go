@@ -34,6 +34,8 @@ type Parameter struct {
 	Version      int
 	LastModified string
 	KeyID        string
+	Labels       []string
+	Selector     string // ":N" or ":label" when resolved via version/label
 }
 
 const ssmSchema = `
@@ -52,13 +54,16 @@ CREATE TABLE IF NOT EXISTS ssm_parameters (
 );
 `
 
-// EnsureSSMSchema creates the SSM parameters and Run Command tables if missing.
+// EnsureSSMSchema creates the SSM parameters, versions, and Run Command tables if missing.
 func EnsureSSMSchema(db *sql.DB) error {
 	if db == nil {
 		return fmt.Errorf("ensure ssm schema: db is nil")
 	}
 	if _, err := db.Exec(ssmSchema); err != nil {
 		return fmt.Errorf("ensure ssm schema: %w", err)
+	}
+	if err := ensureSSMVersionsSchema(db); err != nil {
+		return err
 	}
 	if err := EnsureSSMCommandSchema(db); err != nil {
 		return err
@@ -265,6 +270,21 @@ func (s *Store) PutParameter(
 		return Parameter{}, fmt.Errorf("put parameter %s: %w", name, execErr)
 	}
 
+	histRow := parameterRow{
+		Name:         name,
+		ARN:          arn,
+		Type:         paramType,
+		ValuePlain:   plain,
+		ValueSealed:  sealed,
+		Sealed:       sealedFlag == 1,
+		KMSKeyID:     kmsKeyID,
+		Version:      version,
+		LastModified: modified,
+	}
+	if err := s.insertParameterVersion(accountID, histRow, nil); err != nil {
+		return Parameter{}, err
+	}
+
 	return Parameter{
 		Name:         name,
 		ARN:          arn,
@@ -447,6 +467,9 @@ func (s *Store) DeleteParameter(accountID, name string) error {
 	}
 	if affected == 0 {
 		return ErrParameterNotFound
+	}
+	if err := s.deleteParameterVersions(accountID, name); err != nil {
+		return err
 	}
 	return nil
 }

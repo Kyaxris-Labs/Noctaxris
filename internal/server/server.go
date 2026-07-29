@@ -848,6 +848,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionKMSListResourceTags, "ListResourceTags",
 		catalog.ActionKMSTagResource, "TagResource",
 		catalog.ActionKMSUntagResource, "UntagResource",
+		catalog.ActionKMSSign, "Sign",
+		catalog.ActionKMSVerify, "Verify",
+		catalog.ActionKMSGetPublicKey, "GetPublicKey",
 		"ReEncrypt":
 		s.handleKMS(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionDynamoDBCreateTable, "CreateTable",
@@ -900,6 +903,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionSSMGetParametersByPath, "GetParametersByPath",
 		catalog.ActionSSMDeleteParameter, "DeleteParameter",
 		catalog.ActionSSMDescribeParameters, "DescribeParameters",
+		catalog.ActionSSMLabelParameterVersion, "LabelParameterVersion",
+		catalog.ActionSSMGetParameterHistory, "GetParameterHistory",
 		catalog.ActionSSMListTagsForResource,
 		catalog.ActionSSMAddTagsToResource, "AddTagsToResource",
 		catalog.ActionSSMRemoveTagsFromResource, "RemoveTagsFromResource",
@@ -1145,7 +1150,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionCodePipelineGetPipeline, "GetPipeline",
 		catalog.ActionCodePipelineDeletePipeline, "DeletePipeline",
 		catalog.ActionCodePipelineStartPipelineExecution, "StartPipelineExecution",
-		catalog.ActionCodePipelineGetPipelineState, "GetPipelineState":
+		catalog.ActionCodePipelineGetPipelineState, "GetPipelineState",
+		catalog.ActionCodePipelinePutApprovalResult, "PutApprovalResult",
+		catalog.ActionCodePipelineGetPipelineExecution, "GetPipelineExecution",
+		catalog.ActionCodePipelineListPipelineExecutions, "ListPipelineExecutions":
 		s.handleCodePipeline(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionFirehoseCreateDeliveryStream, "CreateDeliveryStream",
 		catalog.ActionFirehoseDeleteDeliveryStream, "DeleteDeliveryStream",
@@ -1169,7 +1177,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionWAFListWebACLs, "ListWebACLs",
 		catalog.ActionWAFCreateRuleGroup, "CreateRuleGroup",
 		catalog.ActionWAFAssociateWebACL, "AssociateWebACL",
-		catalog.ActionWAFEvaluate, "Evaluate":
+		catalog.ActionWAFEvaluate, "Evaluate",
+		catalog.ActionWAFCreateIPSet, "CreateIPSet",
+		catalog.ActionWAFGetIPSet, "GetIPSet",
+		catalog.ActionWAFUpdateIPSet, "UpdateIPSet",
+		catalog.ActionWAFDeleteIPSet, "DeleteIPSet",
+		catalog.ActionWAFListIPSets, "ListIPSets":
 		s.handleWAFv2(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionConfigPutConfigurationRecorder, "PutConfigurationRecorder",
 		catalog.ActionConfigPutDeliveryChannel, "PutDeliveryChannel",
@@ -1229,7 +1242,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case catalog.ActionAthenaStartQueryExecution,
 		catalog.ActionAthenaGetQueryExecution,
 		catalog.ActionAthenaGetQueryResults,
-		catalog.ActionAthenaStopQueryExecution:
+		catalog.ActionAthenaStopQueryExecution,
+		catalog.ActionAthenaCreateWorkGroup,
+		catalog.ActionAthenaGetWorkGroup,
+		catalog.ActionAthenaListWorkGroups,
+		catalog.ActionAthenaDeleteWorkGroup,
+		catalog.ActionAthenaUpdateWorkGroup:
 		s.handleAthena(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionOpenSearchCreateDomain,
 		catalog.ActionOpenSearchDescribeDomain,
@@ -1309,9 +1327,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionAppSyncGetGraphqlApi, "GetGraphqlApi",
 		catalog.ActionAppSyncListGraphqlApis, "ListGraphqlApis",
 		catalog.ActionAppSyncStartSchemaCreation, "StartSchemaCreation",
+		catalog.ActionAppSyncGetSchemaCreationStatus, "GetSchemaCreationStatus",
 		catalog.ActionAppSyncCreateApiKey, "CreateApiKey",
+		catalog.ActionAppSyncListApiKeys, "ListApiKeys",
+		catalog.ActionAppSyncDeleteApiKey, "DeleteApiKey",
 		catalog.ActionAppSyncCreateDataSource, "CreateDataSource",
-		catalog.ActionAppSyncCreateResolver, "CreateResolver":
+		catalog.ActionAppSyncUpdateDataSource, "UpdateDataSource",
+		catalog.ActionAppSyncDeleteDataSource, "DeleteDataSource",
+		catalog.ActionAppSyncGetDataSource, "GetDataSource",
+		catalog.ActionAppSyncListDataSources, "ListDataSources",
+		catalog.ActionAppSyncCreateResolver, "CreateResolver",
+		catalog.ActionAppSyncUpdateResolver, "UpdateResolver",
+		catalog.ActionAppSyncDeleteResolver, "DeleteResolver",
+		catalog.ActionAppSyncGetResolver, "GetResolver",
+		catalog.ActionAppSyncListResolvers, "ListResolvers":
 		s.handleAppSync(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCognitoCreateUserPool, "CreateUserPool",
 		catalog.ActionCognitoDescribeUserPool, "DescribeUserPool",
@@ -1386,7 +1415,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIoTListThingPrincipals,
 		catalog.ActionIoTDataUpdateThingShadow,
 		catalog.ActionIoTDataGetThingShadow,
-		catalog.ActionIoTDataDeleteThingShadow:
+		catalog.ActionIoTDataDeleteThingShadow,
+		catalog.ActionIoTCreateTopicRule,
+		catalog.ActionIoTGetTopicRule,
+		catalog.ActionIoTListTopicRules,
+		catalog.ActionIoTReplaceTopicRule,
+		catalog.ActionIoTDeleteTopicRule,
+		catalog.ActionIoTEnableTopicRule,
+		catalog.ActionIoTDisableTopicRule:
 		s.handleIoT(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudWatchPutMetricData,
 		catalog.ActionCloudWatchListMetrics,
@@ -1416,7 +1452,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionASGDescribeAutoScalingGroups,
 		catalog.ActionASGUpdateAutoScalingGroup,
 		catalog.ActionASGDeleteAutoScalingGroup,
-		catalog.ActionASGSetDesiredCapacity:
+		catalog.ActionASGSetDesiredCapacity,
+		catalog.ActionASGPutScalingPolicy,
+		catalog.ActionASGDescribePolicies,
+		catalog.ActionASGDeletePolicy,
+		catalog.ActionASGPutLifecycleHook,
+		catalog.ActionASGDescribeLifecycleHooks,
+		catalog.ActionASGDeleteLifecycleHook,
+		catalog.ActionASGAttachInstances,
+		catalog.ActionASGDetachInstances,
+		catalog.ActionASGDescribeAutoScalingInstances,
+		catalog.ActionASGAttachLoadBalancerTargetGroups,
+		catalog.ActionASGDetachLoadBalancerTargetGroups,
+		catalog.ActionASGDescribeLoadBalancerTargetGroups:
 		s.handleAutoScaling(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionBeanstalkCreateApplication,
 		catalog.ActionBeanstalkDescribeApplications,
@@ -1492,7 +1540,16 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionEMRTerminateJobFlows, "TerminateJobFlows",
 		catalog.ActionEMRAddJobFlowSteps, "AddJobFlowSteps",
 		catalog.ActionEMRDescribeStep, "DescribeStep",
-		catalog.ActionEMRListSteps, "ListSteps":
+		catalog.ActionEMRListSteps, "ListSteps",
+		catalog.ActionEMRCancelSteps, "CancelSteps",
+		catalog.ActionEMRListInstanceGroups, "ListInstanceGroups",
+		catalog.ActionEMRListInstanceFleets, "ListInstanceFleets",
+		catalog.ActionEMRAddTags, "AddTags",
+		catalog.ActionEMRRemoveTags, "RemoveTags",
+		catalog.ActionEMRCreateSecurityConfiguration, "CreateSecurityConfiguration",
+		catalog.ActionEMRDescribeSecurityConfiguration, "DescribeSecurityConfiguration",
+		catalog.ActionEMRDeleteSecurityConfiguration, "DeleteSecurityConfiguration",
+		catalog.ActionEMRListSecurityConfigurations, "ListSecurityConfigurations":
 		s.handleEMR(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionLabFreezeClock, "FreezeClock",
 		catalog.ActionLabUnfreezeClock, "UnfreezeClock",
@@ -2357,6 +2414,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionKMSTagResource
 	case "UntagResource":
 		return catalog.ActionKMSUntagResource
+	case "Sign":
+		return catalog.ActionKMSSign
+	case "Verify":
+		return catalog.ActionKMSVerify
+	case "GetPublicKey":
+		return catalog.ActionKMSGetPublicKey
 	case "CreateTable":
 		return catalog.ActionDynamoDBCreateTable
 	case "DescribeTable":
@@ -2467,6 +2530,10 @@ func normalizeAction(action string) string {
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "LabelParameterVersion":
+		return catalog.ActionSSMLabelParameterVersion
+	case "GetParameterHistory":
+		return catalog.ActionSSMGetParameterHistory
 	case "AddTagsToResource":
 		return catalog.ActionSSMAddTagsToResource
 	case "RemoveTagsFromResource":
@@ -2675,6 +2742,12 @@ func normalizeAction(action string) string {
 		return catalog.ActionSFNDescribeExecution
 	case "GetExecutionHistory":
 		return catalog.ActionSFNGetExecutionHistory
+	case "SendTaskSuccess":
+		return catalog.ActionSFNSendTaskSuccess
+	case "SendTaskFailure":
+		return catalog.ActionSFNSendTaskFailure
+	case "SendTaskHeartbeat":
+		return catalog.ActionSFNSendTaskHeartbeat
 	default:
 		return action
 	}

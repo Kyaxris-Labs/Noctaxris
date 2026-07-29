@@ -19,7 +19,7 @@ var (
 	ErrSFNStateMachineNotFound = errors.New("StateMachineDoesNotExist")
 	ErrSFNExecutionNotFound    = errors.New("ExecutionDoesNotExist")
 	ErrSFNInvalidDefinition    = errors.New("InvalidDefinition")
-	ErrSFNRoleArnRequired = errors.New("ValidationException: roleArn is required when definition contains Task")
+	ErrSFNRoleArnRequired      = errors.New("ValidationException: roleArn is required when definition contains Task")
 )
 
 const (
@@ -228,7 +228,8 @@ func (s *Store) getSFNTaskInvoker() SFNTaskInvoker {
 	return s.sfnTaskInvoker
 }
 
-// StartSFNExecution runs the ASL subset to completion (sync lab).
+// StartSFNExecution runs the ASL subset. Completes sync unless a Task pauses on waitForTaskToken
+// (status stays RUNNING until SendTaskSuccess / SendTaskFailure).
 func (s *Store) StartSFNExecution(accountID, region, stateMachineARN, name, input string, invoke SFNTaskInvoker) (SFNExecution, error) {
 	sm, err := s.GetSFNStateMachine(accountID, stateMachineARN)
 	if err != nil {
@@ -260,9 +261,16 @@ func (s *Store) StartSFNExecution(accountID, region, stateMachineARN, name, inpu
 	_ = s.appendSFNHistory(execARN, "ExecutionStarted", map[string]any{"input": input, "roleArn": sm.RoleARN})
 
 	wrapped := s.wrapSFNTaskInvoker(accountID, sm.RoleARN, sm.StateMachineARN, invoke)
-	output, status, errCode, cause, hist := runSFNDefinition(sm.Definition, input, wrapped)
+	output, status, errCode, cause, hist, wait := runSFNDefinition(sm.Definition, input, wrapped)
 	for _, h := range hist {
 		_ = s.appendSFNHistory(execARN, h.Type, h.DetailsMap)
+	}
+	if wait != nil {
+		if err := s.saveSFNTaskWait(accountID, execARN, sm.Definition, sm.StateMachineARN, sm.RoleARN, wait); err != nil {
+			return SFNExecution{}, err
+		}
+		exec.Status = "RUNNING"
+		return exec, nil
 	}
 	stop := time.Now().UTC().UnixMilli()
 	_, err = s.db.Exec(
@@ -368,6 +376,7 @@ type sfnState struct {
 	Next        string            `json:"Next"`
 	End         bool              `json:"End"`
 	Resource    string            `json:"Resource"`
+	Parameters  json.RawMessage   `json:"Parameters"`
 	Result      json.RawMessage   `json:"Result"`
 	ResultPath  string            `json:"ResultPath"`
 	OutputPath  string            `json:"OutputPath"`
@@ -591,21 +600,21 @@ func sfnStatesHaveTask(states map[string]json.RawMessage) bool {
 	return false
 }
 
-func runSFNDefinition(definition, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist) {
+func runSFNDefinition(definition, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist, wait *sfnTaskWait) {
 	var def sfnDef
 	if err := json.Unmarshal([]byte(definition), &def); err != nil {
-		return "", "FAILED", "InvalidDefinition", err.Error(), nil
+		return "", "FAILED", "InvalidDefinition", err.Error(), nil, nil
 	}
 	return runSFNStates(def.States, def.StartAt, input, invoke)
 }
 
-func runSFNStates(states map[string]json.RawMessage, startAt, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist) {
+func runSFNStates(states map[string]json.RawMessage, startAt, input string, invoke SFNTaskInvoker) (output, status, errCode, cause string, hist []sfnHist, wait *sfnTaskWait) {
 	current := input
 	stateName := startAt
 	for i := 0; i < 100; i++ {
 		raw, ok := states[stateName]
 		if !ok {
-			return current, "FAILED", "States.Runtime", "Unknown state "+stateName, hist
+			return current, "FAILED", "States.Runtime", "Unknown state "+stateName, hist, nil
 		}
 		var st sfnState
 		_ = json.Unmarshal(raw, &st)
@@ -616,7 +625,7 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			effective, err := sfnApplyInputPath(current, st.InputPath)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
 			}
 			out := effective
 			if len(st.Result) > 0 {
@@ -625,19 +634,19 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			out, err = sfnApplyResultPath(current, out, st.ResultPath)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "PassStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-				return current, "SUCCEEDED", "", "", hist
+				return current, "SUCCEEDED", "", "", hist, nil
 			}
 			stateName = st.Next
 		case "Succeed":
 			hist = append(hist, sfnHist{Type: "SucceedStateEntered", DetailsMap: map[string]any{"name": stateName}})
 			hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-			return current, "SUCCEEDED", "", "", hist
+			return current, "SUCCEEDED", "", "", hist, nil
 		case "Fail":
 			errCode = st.Error
 			if errCode == "" {
@@ -646,17 +655,35 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			cause = st.Cause
 			hist = append(hist, sfnHist{Type: "FailStateEntered", DetailsMap: map[string]any{"name": stateName, "error": errCode, "cause": cause}})
 			hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": errCode, "cause": cause}})
-			return "", "FAILED", errCode, cause, hist
+			return "", "FAILED", errCode, cause, hist, nil
 		case "Task":
-			if invoke == nil {
-				hist = append(hist, sfnHist{Type: "TaskFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": "Task invoker unavailable"}})
-				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": "Task invoker unavailable"}})
-				return "", "FAILED", "States.TaskFailed", "Task invoker unavailable", hist
-			}
 			effective, err := sfnApplyInputPath(current, st.InputPath)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
+			}
+			if sfnIsWaitForTaskToken(st) {
+				token := sfnNewTaskToken()
+				paramsJSON := sfnResolveParameters(st.Parameters, effective, token)
+				hist = append(hist, sfnHist{Type: "TaskScheduled", DetailsMap: map[string]any{
+					"resource": st.Resource, "parameters": paramsJSON, "taskToken": token,
+				}})
+				hist = append(hist, sfnHist{Type: "TaskStarted", DetailsMap: map[string]any{"taskToken": token}})
+				return current, "RUNNING", "", "", hist, &sfnTaskWait{
+					TaskToken:  token,
+					StateName:  stateName,
+					Next:       st.Next,
+					End:        st.End || st.Next == "",
+					StateInput: current,
+					ResultPath: st.ResultPath,
+					Resource:   st.Resource,
+					Parameters: paramsJSON,
+				}
+			}
+			if invoke == nil {
+				hist = append(hist, sfnHist{Type: "TaskFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": "Task invoker unavailable"}})
+				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": "Task invoker unavailable"}})
+				return "", "FAILED", "States.TaskFailed", "Task invoker unavailable", hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "TaskScheduled", DetailsMap: map[string]any{"resource": st.Resource, "parameters": effective}})
 			hist = append(hist, sfnHist{Type: "TaskStarted", DetailsMap: map[string]any{}})
@@ -665,7 +692,7 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 				cause = err.Error()
 				hist = append(hist, sfnHist{Type: "TaskFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": cause}})
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.TaskFailed", "cause": cause}})
-				return "", "FAILED", "States.TaskFailed", cause, hist
+				return "", "FAILED", "States.TaskFailed", cause, hist, nil
 			}
 			if out == "" {
 				out = "{}"
@@ -673,21 +700,21 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			out, err = sfnApplyResultPath(current, out, st.ResultPath)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "TaskSucceeded", DetailsMap: map[string]any{"output": out}})
 			hist = append(hist, sfnHist{Type: "TaskStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-				return current, "SUCCEEDED", "", "", hist
+				return current, "SUCCEEDED", "", "", hist, nil
 			}
 			stateName = st.Next
 		case "Choice":
 			next, ok := sfnEvalChoice(st, current)
 			if !ok {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.NoChoiceMatched", "cause": "no Choice matched and no Default"}})
-				return "", "FAILED", "States.NoChoiceMatched", "no Choice matched and no Default", hist
+				return "", "FAILED", "States.NoChoiceMatched", "no Choice matched and no Default", hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "ChoiceStateExited", DetailsMap: map[string]any{"name": stateName, "output": current, "next": next}})
 			stateName = next
@@ -695,7 +722,7 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			secs, err := sfnWaitSeconds(st, current)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
 			}
 			if secs > 0 {
 				time.Sleep(time.Duration(secs) * time.Second)
@@ -703,7 +730,7 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			hist = append(hist, sfnHist{Type: "WaitStateExited", DetailsMap: map[string]any{"name": stateName, "output": current}})
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-				return current, "SUCCEEDED", "", "", hist
+				return current, "SUCCEEDED", "", "", hist, nil
 			}
 			stateName = st.Next
 		case "Parallel":
@@ -713,15 +740,20 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 				if err := json.Unmarshal(brRaw, &br); err != nil {
 					cause = fmt.Sprintf("Parallel branch %d invalid: %v", bi, err)
 					hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": cause}})
-					return "", "FAILED", "States.Runtime", cause, hist
+					return "", "FAILED", "States.Runtime", cause, hist, nil
 				}
 				brDef, _ := json.Marshal(sfnDef{StartAt: br.StartAt, States: br.States})
-				bout, bstatus, berr, bcause, bhist := runSFNDefinition(string(brDef), current, invoke)
+				bout, bstatus, berr, bcause, bhist, bwait := runSFNDefinition(string(brDef), current, invoke)
 				for _, h := range bhist {
 					if h.Type == "ExecutionSucceeded" || h.Type == "ExecutionFailed" {
 						continue
 					}
 					hist = append(hist, h)
+				}
+				if bwait != nil {
+					cause = fmt.Sprintf("Parallel branch %d: waitForTaskToken is not supported inside Parallel", bi)
+					hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": cause}})
+					return "", "FAILED", "States.Runtime", cause, hist, nil
 				}
 				if bstatus != "SUCCEEDED" {
 					if berr == "" {
@@ -731,7 +763,7 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 						bcause = fmt.Sprintf("Parallel branch %d failed", bi)
 					}
 					hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": berr, "cause": bcause}})
-					return "", "FAILED", berr, bcause, hist
+					return "", "FAILED", berr, bcause, hist, nil
 				}
 				if bout == "" {
 					bout = "{}"
@@ -744,33 +776,33 @@ func runSFNStates(states map[string]json.RawMessage, startAt, input string, invo
 			out, err = sfnApplyResultPath(current, out, st.ResultPath)
 			if err != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": err.Error()}})
-				return "", "FAILED", "States.Runtime", err.Error(), hist
+				return "", "FAILED", "States.Runtime", err.Error(), hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "ParallelStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-				return current, "SUCCEEDED", "", "", hist
+				return current, "SUCCEEDED", "", "", hist, nil
 			}
 			stateName = st.Next
 		case "Map":
 			out, mapErr := sfnRunMap(st, current, invoke, &hist)
 			if mapErr != nil {
 				hist = append(hist, sfnHist{Type: "ExecutionFailed", DetailsMap: map[string]any{"error": "States.Runtime", "cause": mapErr.Error()}})
-				return "", "FAILED", "States.Runtime", mapErr.Error(), hist
+				return "", "FAILED", "States.Runtime", mapErr.Error(), hist, nil
 			}
 			hist = append(hist, sfnHist{Type: "MapStateExited", DetailsMap: map[string]any{"name": stateName, "output": out}})
 			current = out
 			if st.End || st.Next == "" {
 				hist = append(hist, sfnHist{Type: "ExecutionSucceeded", DetailsMap: map[string]any{"output": current}})
-				return current, "SUCCEEDED", "", "", hist
+				return current, "SUCCEEDED", "", "", hist, nil
 			}
 			stateName = st.Next
 		default:
-			return current, "FAILED", "States.Runtime", "unsupported type", hist
+			return current, "FAILED", "States.Runtime", "unsupported type", hist, nil
 		}
 	}
-	return current, "FAILED", "States.Runtime", "too many transitions", hist
+	return current, "FAILED", "States.Runtime", "too many transitions", hist, nil
 }
 
 func sfnEvalChoice(st sfnState, inputJSON string) (next string, ok bool) {
@@ -894,12 +926,15 @@ func sfnRunMap(st sfnState, inputJSON string, invoke SFNTaskInvoker, hist *[]sfn
 	for i, item := range items {
 		itemInput := string(item)
 		itDef, _ := json.Marshal(sfnDef{StartAt: it.StartAt, States: it.States})
-		bout, bstatus, berr, bcause, bhist := runSFNDefinition(string(itDef), itemInput, invoke)
+		bout, bstatus, berr, bcause, bhist, bwait := runSFNDefinition(string(itDef), itemInput, invoke)
 		for _, h := range bhist {
 			if h.Type == "ExecutionSucceeded" || h.Type == "ExecutionFailed" {
 				continue
 			}
 			*hist = append(*hist, h)
+		}
+		if bwait != nil {
+			return "", fmt.Errorf("Map item %d: waitForTaskToken is not supported inside Map", i)
 		}
 		if bstatus != "SUCCEEDED" {
 			if bcause == "" {

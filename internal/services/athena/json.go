@@ -90,6 +90,50 @@ func GetQueryResultsJSON(e store.AthenaQueryExecution) ([]byte, error) {
 // StopQueryExecutionJSON is an empty OK body.
 func StopQueryExecutionJSON() ([]byte, error) { return []byte(`{}`), nil }
 
+// CreateWorkGroupJSON is an empty OK body.
+func CreateWorkGroupJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// DeleteWorkGroupJSON is an empty OK body.
+func DeleteWorkGroupJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// UpdateWorkGroupJSON is an empty OK body.
+func UpdateWorkGroupJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// GetWorkGroupJSON builds GetWorkGroup response.
+func GetWorkGroupJSON(wg store.AthenaWorkGroup) ([]byte, error) {
+	return json.Marshal(map[string]any{"WorkGroup": workGroupDetail(wg)})
+}
+
+// ListWorkGroupsJSON builds ListWorkGroups response.
+func ListWorkGroupsJSON(groups []store.AthenaWorkGroup) ([]byte, error) {
+	summaries := make([]map[string]any, 0, len(groups))
+	for _, wg := range groups {
+		summaries = append(summaries, map[string]any{
+			"Name":         wg.Name,
+			"State":        wg.State,
+			"Description":  wg.Description,
+			"CreationTime": float64(wg.CreatedMS) / 1000.0,
+		})
+	}
+	return json.Marshal(map[string]any{"WorkGroups": summaries})
+}
+
+func workGroupDetail(wg store.AthenaWorkGroup) map[string]any {
+	cfg := map[string]any{
+		"EnforceWorkGroupConfiguration": wg.EnforceWorkGroupConfig,
+		"ResultConfiguration": map[string]any{
+			"OutputLocation": wg.OutputLocation,
+		},
+	}
+	return map[string]any{
+		"Name":          wg.Name,
+		"State":         wg.State,
+		"Description":   wg.Description,
+		"CreationTime":  float64(wg.CreatedMS) / 1000.0,
+		"Configuration": cfg,
+	}
+}
+
 func maxInt64(a, b int64) int64 {
 	if a > b {
 		return a

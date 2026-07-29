@@ -2,7 +2,7 @@
 
 **Status:** shipped
 
-Lab-complete Parameter Store core: String, StringList, and SecureString parameters, Put/Get/GetParameters/Delete/Describe, KMS encryption for SecureString via KeyId or lab `alias/aws/ssm`, and identity-only authz.
+Lab-complete Parameter Store core: String, StringList, and SecureString parameters, Put/Get/GetParameters/Delete/Describe, version history with labels (`LabelParameterVersion` / `GetParameterHistory`), KMS encryption for SecureString via KeyId or lab `alias/aws/ssm`, and identity-only authz.
 
 Run Command lite: `SendCommand` / `GetCommandInvocation` / `ListCommandInvocations` for document `AWS-RunShellScript` against lab EC2 instances backed by nested DinD containers (`docker exec` via the compute client; no host `docker.sock`).
 
@@ -11,6 +11,7 @@ Run Command lite: `SendCommand` / `GetCommandInvocation` / `ListCommandInvocatio
 | Area | Actions |
 |------|---------|
 | Parameters | `PutParameter`, `GetParameter`, `GetParameters`, `GetParametersByPath`, `DeleteParameter`, `DescribeParameters` |
+| Version labels | `LabelParameterVersion`, `GetParameterHistory`; Get by `Name:version` / `Name:label` or `Version` / `Label` fields |
 | Tags | `ListTagsForResource`, `AddTagsToResource`, `RemoveTagsFromResource` (Parameter resources) |
 | Types | `String` / `StringList` (plaintext at rest; StringList Value is comma-separated), `SecureString` (sealed under KMS) |
 | Hierarchy | `GetParametersByPath` with `Path`, optional `Recursive`, and `WithDecryption` |
@@ -18,7 +19,18 @@ Run Command lite: `SendCommand` / `GetCommandInvocation` / `ListCommandInvocatio
 | Describe filters | `ParameterFilters` with `Key=Name`, `Option=Equals` (exact name) or `BeginsWith` (optional; prefix), and `Values` |
 | Run Command lite | `SendCommand`, `GetCommandInvocation`, `ListCommandInvocations` |
 
-Parameter metadata lives in SQLite. SecureString values are sealed under the resolved CMK. Names normalize with a leading `/` when omitted.
+Parameter metadata lives in SQLite. Each `PutParameter` (including overwrite) appends a version row. SecureString values are sealed under the resolved CMK. Names normalize with a leading `/` when omitted.
+
+### Version labels
+
+| Item | Behavior |
+|------|----------|
+| Attach | `LabelParameterVersion` with `Name`, `Labels`, optional `ParameterVersion` (defaults to latest) |
+| Cap | Max 10 labels per version (`ParameterVersionLabelLimitExceeded`) |
+| Move | Re-attaching an existing label moves it to the target version (AWS-like lite) |
+| Invalid | Labels that fail AWS rules (leading digit, `aws`/`ssm` prefix, bad chars) return in `InvalidLabels` without failing the call |
+| Resolve | `GetParameter` / `GetParameters` accept `name:version`, `name:label`, or request fields `Version` / `Label`; response includes `Selector` when used |
+| History | `GetParameterHistory` lists versions oldest-first with `Labels` (and values when `WithDecryption` allows) |
 
 ### Run Command lite
 
@@ -115,6 +127,45 @@ aws ssm delete-parameter --name "$PARAM" --endpoint-url "$EP"
 aws ssm delete-parameter --name "$SECURE" --endpoint-url "$EP"
 ```
 
+Version labels and history:
+
+```bash
+LABEL="/noctaxris-label-$RANDOM"
+aws ssm put-parameter \
+  --name "$LABEL" \
+  --value ami-v1 \
+  --type String \
+  --endpoint-url "$EP"
+
+aws ssm put-parameter \
+  --name "$LABEL" \
+  --value ami-v2 \
+  --type String \
+  --overwrite \
+  --endpoint-url "$EP"
+
+aws ssm label-parameter-version \
+  --name "$LABEL" \
+  --parameter-version 1 \
+  --labels Test \
+  --endpoint-url "$EP"
+
+aws ssm label-parameter-version \
+  --name "$LABEL" \
+  --labels Production \
+  --endpoint-url "$EP"
+
+aws ssm get-parameter \
+  --name "$LABEL:Production" \
+  --endpoint-url "$EP"
+
+aws ssm get-parameter-history \
+  --name "$LABEL" \
+  --endpoint-url "$EP"
+
+aws ssm delete-parameter --name "$LABEL" --endpoint-url "$EP"
+```
+
 Run Command lite (requires a running lab EC2 instance with a nested container):
 
 ```bash
@@ -144,6 +195,6 @@ aws ssm get-command-invocation \
 
 ## Out of lab scope
 
-- Full SSM SAR beyond the lab set (parameter policies, labels, tags beyond Parameter resources, documents catalog, sessions, automation, associations, OpsCenter, full pagination parity)
+- Full SSM SAR beyond the lab set (parameter policies, UnlabelParameterVersion, tags beyond Parameter resources, documents catalog, sessions, automation, associations, OpsCenter, full pagination parity)
 - Cross-account parameter access beyond same-account lab paths (out of lab scope)
 - True AWS-owned `alias/aws/ssm` key (out of lab scope; lab convenience alias is a per-account CMK approximation)

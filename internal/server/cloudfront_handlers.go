@@ -33,10 +33,20 @@ func (s *Server) handleCloudFront(
 		s.cfCreateDistribution(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCloudFrontGetDistribution:
 		s.cfGetDistribution(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudFrontGetDistributionConfig:
+		s.cfGetDistributionConfig(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudFrontUpdateDistribution:
+		s.cfUpdateDistribution(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCloudFrontListDistributions:
 		s.cfListDistributions(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCloudFrontDeleteDistribution:
 		s.cfDeleteDistribution(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudFrontCreateInvalidation:
+		s.cfCreateInvalidation(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudFrontGetInvalidation:
+		s.cfGetInvalidation(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCloudFrontListInvalidations:
+		s.cfListInvalidations(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This CloudFront action is not implemented.", readOnly, eventID, verified)
@@ -52,13 +62,91 @@ func cloudfrontAction(action string) string {
 		return catalog.ActionCloudFrontCreateDistribution
 	case "GetDistribution":
 		return catalog.ActionCloudFrontGetDistribution
+	case "GetDistributionConfig":
+		return catalog.ActionCloudFrontGetDistributionConfig
+	case "UpdateDistribution":
+		return catalog.ActionCloudFrontUpdateDistribution
 	case "ListDistributions":
 		return catalog.ActionCloudFrontListDistributions
 	case "DeleteDistribution":
 		return catalog.ActionCloudFrontDeleteDistribution
+	case "CreateInvalidation":
+		return catalog.ActionCloudFrontCreateInvalidation
+	case "GetInvalidation":
+		return catalog.ActionCloudFrontGetInvalidation
+	case "ListInvalidations":
+		return catalog.ActionCloudFrontListInvalidations
 	default:
 		return action
 	}
+}
+
+func cloudFrontHasOrigins(params map[string]any) bool {
+	cfg, _ := params["DistributionConfig"].(map[string]any)
+	if cfg == nil {
+		cfg = params
+	}
+	if originsBlock, ok := cfg["Origins"].(map[string]any); ok {
+		if _, ok := originsBlock["Items"]; ok {
+			return true
+		}
+	}
+	if _, ok := params["Origins"].([]any); ok {
+		return true
+	}
+	return false
+}
+
+func cloudFrontHasBehaviors(params map[string]any) bool {
+	cfg, _ := params["DistributionConfig"].(map[string]any)
+	if cfg == nil {
+		cfg = params
+	}
+	if _, ok := cfg["DefaultCacheBehavior"].(map[string]any); ok {
+		return true
+	}
+	if behaviorsBlock, ok := cfg["CacheBehaviors"].(map[string]any); ok {
+		if _, ok := behaviorsBlock["Items"]; ok {
+			return true
+		}
+	}
+	if _, ok := params["CacheBehaviors"].([]any); ok {
+		return true
+	}
+	return false
+}
+
+func parseCloudFrontInvalidationPaths(params map[string]any) (caller string, paths []string) {
+	batch, _ := params["InvalidationBatch"].(map[string]any)
+	if batch == nil {
+		batch = params
+	}
+	caller, _ = batch["CallerReference"].(string)
+	pathsBlock, _ := batch["Paths"].(map[string]any)
+	rawItems, _ := pathsBlock["Items"].([]any)
+	if rawItems == nil {
+		if flat, ok := batch["Paths"].([]any); ok {
+			rawItems = flat
+		}
+	}
+	for _, item := range rawItems {
+		switch v := item.(type) {
+		case string:
+			paths = append(paths, v)
+		case map[string]any:
+			if p, ok := v["Path"].(string); ok {
+				paths = append(paths, p)
+			}
+		}
+	}
+	return caller, paths
+}
+
+func cloudFrontIfMatch(r *http.Request, params map[string]any) string {
+	if m, ok := params["IfMatch"].(string); ok && strings.TrimSpace(m) != "" {
+		return m
+	}
+	return r.Header.Get("If-Match")
 }
 
 func parseCloudFrontOrigins(params map[string]any) []store.CloudFrontOrigin {
@@ -229,6 +317,205 @@ func (s *Server) cfGetDistribution(
 	payload, _ := cfsvc.GetDistributionJSON(d)
 	s.writeCloudFrontOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "GetDistribution", readOnly)
+}
+
+func (s *Server) cfGetDistributionConfig(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	id, _ := params["Id"].(string)
+	if !s.authorize(verified, catalog.ActionCloudFrontGetDistributionConfig, "*") {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform cloudfront:GetDistributionConfig.", readOnly, eventID, verified)
+		return
+	}
+	d, err := s.store.GetCloudFrontDistribution(verified.AccountID, id)
+	if errors.Is(err, store.ErrCloudFrontNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchDistribution",
+			"Distribution not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get distribution config.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cfsvc.GetDistributionConfigJSON(d)
+	w.Header().Set("ETag", d.ETag)
+	s.writeCloudFrontOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "GetDistributionConfig", readOnly)
+}
+
+func (s *Server) cfUpdateDistribution(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	id, _ := params["Id"].(string)
+	if !s.authorize(verified, catalog.ActionCloudFrontUpdateDistribution, "*") {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform cloudfront:UpdateDistribution.", readOnly, eventID, verified)
+		return
+	}
+	cfg, _ := params["DistributionConfig"].(map[string]any)
+	if cfg == nil {
+		cfg = params
+	}
+	in := store.UpdateCloudFrontDistributionInput{
+		IfMatch:      cloudFrontIfMatch(r, params),
+		HasOrigins:   cloudFrontHasOrigins(params),
+		HasBehaviors: cloudFrontHasBehaviors(params),
+	}
+	if in.HasOrigins {
+		in.Origins = parseCloudFrontOrigins(params)
+	}
+	if in.HasBehaviors {
+		in.Behaviors = parseCloudFrontBehaviors(params)
+	}
+	if comment, ok := cfg["Comment"].(string); ok {
+		in.Comment = &comment
+	}
+	if enabled, ok := cfg["Enabled"].(bool); ok {
+		in.Enabled = &enabled
+	}
+	d, err := s.store.UpdateCloudFrontDistribution(verified.AccountID, id, in)
+	if errors.Is(err, store.ErrCloudFrontNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchDistribution",
+			"Distribution not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCloudFrontPrecondition) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusBadRequest, "InvalidIfMatchVersion",
+			"The If-Match version is missing or not valid for the resource.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCloudFrontBadRequest) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgument",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to update distribution.", readOnly, eventID, verified)
+		return
+	}
+	if logging := parseCloudFrontLogging(cfg); logging.Enabled || logging.Bucket != "" {
+		if err := s.store.SetCloudFrontDistributionLogging(verified.AccountID, d.ID, logging); err != nil {
+			if errors.Is(err, store.ErrCloudFrontBadRequest) {
+				s.writeCloudFrontError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgument",
+					err.Error(), readOnly, eventID, verified)
+				return
+			}
+			s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to configure distribution logging.", readOnly, eventID, verified)
+			return
+		}
+		d, err = s.store.GetCloudFrontDistribution(verified.AccountID, d.ID)
+		if err != nil {
+			s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load distribution.", readOnly, eventID, verified)
+			return
+		}
+	}
+	payload, _ := cfsvc.UpdateDistributionJSON(d)
+	w.Header().Set("ETag", d.ETag)
+	s.writeCloudFrontOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "UpdateDistribution", readOnly)
+}
+
+func (s *Server) cfCreateInvalidation(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	distID, _ := params["DistributionId"].(string)
+	if distID == "" {
+		distID, _ = params["Id"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionCloudFrontCreateInvalidation, "*") {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform cloudfront:CreateInvalidation.", readOnly, eventID, verified)
+		return
+	}
+	caller, paths := parseCloudFrontInvalidationPaths(params)
+	inv, err := s.store.CreateCloudFrontInvalidation(verified.AccountID, distID, caller, paths)
+	if errors.Is(err, store.ErrCloudFrontNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchDistribution",
+			"Distribution not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCloudFrontBadRequest) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusBadRequest, "InvalidArgument",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to create invalidation.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cfsvc.CreateInvalidationJSON(inv)
+	s.writeCloudFrontOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "CreateInvalidation", readOnly)
+}
+
+func (s *Server) cfGetInvalidation(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	distID, _ := params["DistributionId"].(string)
+	id, _ := params["Id"].(string)
+	if !s.authorize(verified, catalog.ActionCloudFrontGetInvalidation, "*") {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform cloudfront:GetInvalidation.", readOnly, eventID, verified)
+		return
+	}
+	inv, err := s.store.GetCloudFrontInvalidation(verified.AccountID, distID, id)
+	if errors.Is(err, store.ErrCloudFrontNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchDistribution",
+			"Distribution not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCloudFrontInvalidationNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchInvalidation",
+			"Invalidation not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get invalidation.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cfsvc.GetInvalidationJSON(inv)
+	s.writeCloudFrontOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "GetInvalidation", readOnly)
+}
+
+func (s *Server) cfListInvalidations(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	distID, _ := params["DistributionId"].(string)
+	if distID == "" {
+		distID, _ = params["Id"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionCloudFrontListInvalidations, "*") {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform cloudfront:ListInvalidations.", readOnly, eventID, verified)
+		return
+	}
+	invs, err := s.store.ListCloudFrontInvalidations(verified.AccountID, distID)
+	if errors.Is(err, store.ErrCloudFrontNotFound) {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusNotFound, "NoSuchDistribution",
+			"Distribution not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCloudFrontError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list invalidations.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cfsvc.ListInvalidationsJSON(invs)
+	s.writeCloudFrontOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, cloudfrontEventSource, "ListInvalidations", readOnly)
 }
 
 func (s *Server) cfListDistributions(

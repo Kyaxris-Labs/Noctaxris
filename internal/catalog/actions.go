@@ -221,6 +221,9 @@ const (
 	ActionKMSGetKeyRotationStatus            = "kms:GetKeyRotationStatus"
 	ActionKMSReEncryptFrom                   = "kms:ReEncryptFrom"
 	ActionKMSReEncryptTo                     = "kms:ReEncryptTo"
+	ActionKMSSign                            = "kms:Sign"
+	ActionKMSVerify                          = "kms:Verify"
+	ActionKMSGetPublicKey                    = "kms:GetPublicKey"
 	ActionKMSListResourceTags                = "kms:ListResourceTags"
 	ActionKMSTagResource                     = "kms:TagResource"
 	ActionKMSUntagResource                   = "kms:UntagResource"
@@ -254,6 +257,13 @@ const (
 	ActionS3GetBucketNotification         = "s3:GetBucketNotification"
 	ActionS3PutBucketLogging              = "s3:PutBucketLogging"
 	ActionS3GetBucketLogging              = "s3:GetBucketLogging"
+	ActionS3PutBucketCors                 = "s3:PutBucketCors"
+	ActionS3GetBucketCors                 = "s3:GetBucketCors"
+	ActionS3DeleteBucketCors              = "s3:DeleteBucketCors"
+	ActionS3PutLifecycleConfiguration     = "s3:PutLifecycleConfiguration"
+	ActionS3GetLifecycleConfiguration     = "s3:GetLifecycleConfiguration"
+	ActionS3DeleteLifecycleConfiguration  = "s3:DeleteLifecycleConfiguration"
+	ActionS3SelectObjectContent           = "s3:SelectObjectContent"
 )
 
 // DynamoDB lab actions.
@@ -427,6 +437,8 @@ const (
 	ActionSSMSendCommand            = "ssm:SendCommand"
 	ActionSSMGetCommandInvocation   = "ssm:GetCommandInvocation"
 	ActionSSMListCommandInvocations = "ssm:ListCommandInvocations"
+	ActionSSMLabelParameterVersion  = "ssm:LabelParameterVersion"
+	ActionSSMGetParameterHistory    = "ssm:GetParameterHistory"
 )
 
 // SNS lab actions.
@@ -724,6 +736,9 @@ const (
 	ActionSFNStartExecution       = "states:StartExecution"
 	ActionSFNDescribeExecution    = "states:DescribeExecution"
 	ActionSFNGetExecutionHistory  = "states:GetExecutionHistory"
+	ActionSFNSendTaskSuccess      = "states:SendTaskSuccess"
+	ActionSFNSendTaskFailure      = "states:SendTaskFailure"
+	ActionSFNSendTaskHeartbeat    = "states:SendTaskHeartbeat"
 	ActionSFNPutResourcePolicy    = "states:PutResourcePolicy"
 	ActionSFNGetResourcePolicy    = "states:GetResourcePolicy"
 	ActionSFNDeleteResourcePolicy = "states:DeleteResourcePolicy"
@@ -751,6 +766,9 @@ const (
 	ActionCodePipelineDeletePipeline         = "codepipeline:DeletePipeline"
 	ActionCodePipelineStartPipelineExecution = "codepipeline:StartPipelineExecution"
 	ActionCodePipelineGetPipelineState       = "codepipeline:GetPipelineState"
+	ActionCodePipelinePutApprovalResult      = "codepipeline:PutApprovalResult"
+	ActionCodePipelineGetPipelineExecution   = "codepipeline:GetPipelineExecution"
+	ActionCodePipelineListPipelineExecutions = "codepipeline:ListPipelineExecutions"
 )
 
 // Firehose lab actions.
@@ -778,6 +796,17 @@ const (
 	ActionGlueGetCrawler     = "glue:GetCrawler"
 	ActionGlueDeleteCrawler  = "glue:DeleteCrawler"
 	ActionGlueListCrawlers   = "glue:ListCrawlers"
+	ActionGlueCreateRegistry = "glue:CreateRegistry"
+	ActionGlueGetRegistry    = "glue:GetRegistry"
+	ActionGlueListRegistries = "glue:ListRegistries"
+	ActionGlueDeleteRegistry = "glue:DeleteRegistry"
+	ActionGlueCreateSchema   = "glue:CreateSchema"
+	ActionGlueGetSchema      = "glue:GetSchema"
+	ActionGlueListSchemas    = "glue:ListSchemas"
+	ActionGlueDeleteSchema   = "glue:DeleteSchema"
+	ActionGlueRegisterSchemaVersion = "glue:RegisterSchemaVersion"
+	ActionGlueGetSchemaVersion      = "glue:GetSchemaVersion"
+	ActionGlueListSchemaVersions    = "glue:ListSchemaVersions"
 )
 
 // Athena lab actions.
@@ -786,6 +815,11 @@ const (
 	ActionAthenaGetQueryExecution   = "athena:GetQueryExecution"
 	ActionAthenaGetQueryResults     = "athena:GetQueryResults"
 	ActionAthenaStopQueryExecution  = "athena:StopQueryExecution"
+	ActionAthenaCreateWorkGroup     = "athena:CreateWorkGroup"
+	ActionAthenaGetWorkGroup        = "athena:GetWorkGroup"
+	ActionAthenaListWorkGroups      = "athena:ListWorkGroups"
+	ActionAthenaDeleteWorkGroup     = "athena:DeleteWorkGroup"
+	ActionAthenaUpdateWorkGroup     = "athena:UpdateWorkGroup"
 )
 
 // OpenSearch Service lab actions. IAM uses es: prefix.
@@ -805,6 +839,11 @@ const (
 	ActionWAFCreateRuleGroup = "wafv2:CreateRuleGroup"
 	ActionWAFAssociateWebACL = "wafv2:AssociateWebACL"
 	ActionWAFEvaluate        = "wafv2:Evaluate"
+	ActionWAFCreateIPSet     = "wafv2:CreateIPSet"
+	ActionWAFGetIPSet        = "wafv2:GetIPSet"
+	ActionWAFUpdateIPSet     = "wafv2:UpdateIPSet"
+	ActionWAFDeleteIPSet     = "wafv2:DeleteIPSet"
+	ActionWAFListIPSets      = "wafv2:ListIPSets"
 )
 
 // AWS Config lab actions.
@@ -870,8 +909,19 @@ const (
 	ActionAppSyncListGraphqlApis     = "appsync:ListGraphqlApis"
 	ActionAppSyncStartSchemaCreation = "appsync:StartSchemaCreation"
 	ActionAppSyncCreateApiKey        = "appsync:CreateApiKey"
+	ActionAppSyncListApiKeys         = "appsync:ListApiKeys"
+	ActionAppSyncDeleteApiKey        = "appsync:DeleteApiKey"
 	ActionAppSyncCreateDataSource    = "appsync:CreateDataSource"
+	ActionAppSyncUpdateDataSource    = "appsync:UpdateDataSource"
+	ActionAppSyncDeleteDataSource    = "appsync:DeleteDataSource"
+	ActionAppSyncGetDataSource       = "appsync:GetDataSource"
+	ActionAppSyncListDataSources     = "appsync:ListDataSources"
 	ActionAppSyncCreateResolver      = "appsync:CreateResolver"
+	ActionAppSyncUpdateResolver      = "appsync:UpdateResolver"
+	ActionAppSyncDeleteResolver      = "appsync:DeleteResolver"
+	ActionAppSyncGetResolver         = "appsync:GetResolver"
+	ActionAppSyncListResolvers       = "appsync:ListResolvers"
+	ActionAppSyncGetSchemaCreationStatus = "appsync:GetSchemaCreationStatus"
 	ActionAppSyncGraphQL             = "appsync:GraphQL"
 )
 
@@ -892,6 +942,21 @@ const (
 	ActionAPIGatewayCreateDeployment = "apigateway:CreateDeployment"
 	ActionAPIGatewayCreateStage      = "apigateway:CreateStage"
 	ActionAPIGatewayGetStage         = "apigateway:GetStage"
+	ActionAPIGatewayCreateAuthorizer = "apigateway:CreateAuthorizer"
+	ActionAPIGatewayGetAuthorizer    = "apigateway:GetAuthorizer"
+	ActionAPIGatewayGetAuthorizers   = "apigateway:GetAuthorizers"
+	ActionAPIGatewayDeleteAuthorizer = "apigateway:DeleteAuthorizer"
+	ActionAPIGatewayCreateApiKey     = "apigateway:CreateApiKey"
+	ActionAPIGatewayGetApiKey        = "apigateway:GetApiKey"
+	ActionAPIGatewayGetApiKeys       = "apigateway:GetApiKeys"
+	ActionAPIGatewayDeleteApiKey     = "apigateway:DeleteApiKey"
+	ActionAPIGatewayCreateUsagePlan  = "apigateway:CreateUsagePlan"
+	ActionAPIGatewayGetUsagePlan     = "apigateway:GetUsagePlan"
+	ActionAPIGatewayGetUsagePlans    = "apigateway:GetUsagePlans"
+	ActionAPIGatewayDeleteUsagePlan  = "apigateway:DeleteUsagePlan"
+	ActionAPIGatewayCreateUsagePlanKey = "apigateway:CreateUsagePlanKey"
+	ActionAPIGatewayGetUsagePlanKeys   = "apigateway:GetUsagePlanKeys"
+	ActionAPIGatewayDeleteUsagePlanKey = "apigateway:DeleteUsagePlanKey"
 )
 
 // API Gateway HTTP API (v2) lab actions.
@@ -1010,6 +1075,13 @@ const (
 	ActionIoTDataUpdateThingShadow    = "iot-data:UpdateThingShadow"
 	ActionIoTDataGetThingShadow       = "iot-data:GetThingShadow"
 	ActionIoTDataDeleteThingShadow    = "iot-data:DeleteThingShadow"
+	ActionIoTCreateTopicRule          = "iot:CreateTopicRule"
+	ActionIoTGetTopicRule             = "iot:GetTopicRule"
+	ActionIoTListTopicRules           = "iot:ListTopicRules"
+	ActionIoTReplaceTopicRule         = "iot:ReplaceTopicRule"
+	ActionIoTDeleteTopicRule          = "iot:DeleteTopicRule"
+	ActionIoTEnableTopicRule          = "iot:EnableTopicRule"
+	ActionIoTDisableTopicRule         = "iot:DisableTopicRule"
 )
 
 // CloudWatch Metrics and Alarms lab actions.
@@ -1035,6 +1107,25 @@ const (
 	ActionLightsailStopInstance    = "lightsail:StopInstance"
 	ActionLightsailRebootInstance  = "lightsail:RebootInstance"
 	ActionLightsailDeleteInstance  = "lightsail:DeleteInstance"
+	ActionLightsailCreateDisk      = "lightsail:CreateDisk"
+	ActionLightsailGetDisk         = "lightsail:GetDisk"
+	ActionLightsailGetDisks        = "lightsail:GetDisks"
+	ActionLightsailDeleteDisk      = "lightsail:DeleteDisk"
+	ActionLightsailAttachDisk      = "lightsail:AttachDisk"
+	ActionLightsailDetachDisk      = "lightsail:DetachDisk"
+	ActionLightsailAllocateStaticIp = "lightsail:AllocateStaticIp"
+	ActionLightsailGetStaticIp      = "lightsail:GetStaticIp"
+	ActionLightsailGetStaticIps     = "lightsail:GetStaticIps"
+	ActionLightsailReleaseStaticIp  = "lightsail:ReleaseStaticIp"
+	ActionLightsailAttachStaticIp   = "lightsail:AttachStaticIp"
+	ActionLightsailDetachStaticIp   = "lightsail:DetachStaticIp"
+	ActionLightsailCreateKeyPair    = "lightsail:CreateKeyPair"
+	ActionLightsailGetKeyPair       = "lightsail:GetKeyPair"
+	ActionLightsailGetKeyPairs      = "lightsail:GetKeyPairs"
+	ActionLightsailDeleteKeyPair    = "lightsail:DeleteKeyPair"
+	ActionLightsailOpenInstancePublicPorts  = "lightsail:OpenInstancePublicPorts"
+	ActionLightsailCloseInstancePublicPorts = "lightsail:CloseInstancePublicPorts"
+	ActionLightsailGetInstancePortStates    = "lightsail:GetInstancePortStates"
 )
 
 // Auto Scaling lab actions.
@@ -1047,6 +1138,18 @@ const (
 	ActionASGUpdateAutoScalingGroup       = "autoscaling:UpdateAutoScalingGroup"
 	ActionASGDeleteAutoScalingGroup       = "autoscaling:DeleteAutoScalingGroup"
 	ActionASGSetDesiredCapacity           = "autoscaling:SetDesiredCapacity"
+	ActionASGPutScalingPolicy             = "autoscaling:PutScalingPolicy"
+	ActionASGDescribePolicies             = "autoscaling:DescribePolicies"
+	ActionASGDeletePolicy                 = "autoscaling:DeletePolicy"
+	ActionASGPutLifecycleHook             = "autoscaling:PutLifecycleHook"
+	ActionASGDescribeLifecycleHooks       = "autoscaling:DescribeLifecycleHooks"
+	ActionASGDeleteLifecycleHook          = "autoscaling:DeleteLifecycleHook"
+	ActionASGAttachInstances              = "autoscaling:AttachInstances"
+	ActionASGDetachInstances              = "autoscaling:DetachInstances"
+	ActionASGDescribeAutoScalingInstances = "autoscaling:DescribeAutoScalingInstances"
+	ActionASGAttachLoadBalancerTargetGroups = "autoscaling:AttachLoadBalancerTargetGroups"
+	ActionASGDetachLoadBalancerTargetGroups = "autoscaling:DetachLoadBalancerTargetGroups"
+	ActionASGDescribeLoadBalancerTargetGroups = "autoscaling:DescribeLoadBalancerTargetGroups"
 )
 
 // Elastic Beanstalk lab actions.
@@ -1073,8 +1176,15 @@ const (
 	ActionBackupDeleteBackupPlan                = "backup:DeleteBackupPlan"
 	ActionBackupStartBackupJob                  = "backup:StartBackupJob"
 	ActionBackupDescribeBackupJob               = "backup:DescribeBackupJob"
+	ActionBackupListBackupJobs                  = "backup:ListBackupJobs"
+	ActionBackupStopBackupJob                   = "backup:StopBackupJob"
 	ActionBackupDescribeRecoveryPoint           = "backup:DescribeRecoveryPoint"
 	ActionBackupListRecoveryPointsByBackupVault = "backup:ListRecoveryPointsByBackupVault"
+	ActionBackupDeleteRecoveryPoint             = "backup:DeleteRecoveryPoint"
+	ActionBackupCreateBackupSelection           = "backup:CreateBackupSelection"
+	ActionBackupGetBackupSelection              = "backup:GetBackupSelection"
+	ActionBackupListBackupSelections            = "backup:ListBackupSelections"
+	ActionBackupDeleteBackupSelection           = "backup:DeleteBackupSelection"
 )
 
 // CodeDeploy lab actions.
@@ -1088,10 +1198,15 @@ const (
 
 // CloudFront lab actions.
 const (
-	ActionCloudFrontCreateDistribution = "cloudfront:CreateDistribution"
-	ActionCloudFrontGetDistribution    = "cloudfront:GetDistribution"
-	ActionCloudFrontListDistributions  = "cloudfront:ListDistributions"
-	ActionCloudFrontDeleteDistribution = "cloudfront:DeleteDistribution"
+	ActionCloudFrontCreateDistribution     = "cloudfront:CreateDistribution"
+	ActionCloudFrontGetDistribution        = "cloudfront:GetDistribution"
+	ActionCloudFrontGetDistributionConfig  = "cloudfront:GetDistributionConfig"
+	ActionCloudFrontUpdateDistribution     = "cloudfront:UpdateDistribution"
+	ActionCloudFrontListDistributions      = "cloudfront:ListDistributions"
+	ActionCloudFrontDeleteDistribution     = "cloudfront:DeleteDistribution"
+	ActionCloudFrontCreateInvalidation     = "cloudfront:CreateInvalidation"
+	ActionCloudFrontGetInvalidation        = "cloudfront:GetInvalidation"
+	ActionCloudFrontListInvalidations      = "cloudfront:ListInvalidations"
 )
 
 // Elastic Load Balancing v2 lab actions.
@@ -1110,6 +1225,8 @@ const (
 	ActionELBv2CreateRule            = "elasticloadbalancing:CreateRule"
 	ActionELBv2DescribeRules         = "elasticloadbalancing:DescribeRules"
 	ActionELBv2DeleteRule            = "elasticloadbalancing:DeleteRule"
+	ActionELBv2ModifyListener        = "elasticloadbalancing:ModifyListener"
+	ActionELBv2ModifyRule            = "elasticloadbalancing:ModifyRule"
 )
 
 // S3 Vectors lab actions.
@@ -1152,6 +1269,15 @@ const (
 	ActionEMRAddJobFlowSteps   = "elasticmapreduce:AddJobFlowSteps"
 	ActionEMRDescribeStep      = "elasticmapreduce:DescribeStep"
 	ActionEMRListSteps         = "elasticmapreduce:ListSteps"
+	ActionEMRCancelSteps       = "elasticmapreduce:CancelSteps"
+	ActionEMRListInstanceGroups = "elasticmapreduce:ListInstanceGroups"
+	ActionEMRListInstanceFleets = "elasticmapreduce:ListInstanceFleets"
+	ActionEMRAddTags            = "elasticmapreduce:AddTags"
+	ActionEMRRemoveTags         = "elasticmapreduce:RemoveTags"
+	ActionEMRDescribeSecurityConfiguration = "elasticmapreduce:DescribeSecurityConfiguration"
+	ActionEMRCreateSecurityConfiguration   = "elasticmapreduce:CreateSecurityConfiguration"
+	ActionEMRDeleteSecurityConfiguration   = "elasticmapreduce:DeleteSecurityConfiguration"
+	ActionEMRListSecurityConfigurations    = "elasticmapreduce:ListSecurityConfigurations"
 )
 
 // CodeBuild lab actions.
@@ -1368,6 +1494,9 @@ func KnownAction(action string) bool {
 		ActionKMSGetKeyRotationStatus,
 		ActionKMSReEncryptFrom,
 		ActionKMSReEncryptTo,
+		ActionKMSSign,
+		ActionKMSVerify,
+		ActionKMSGetPublicKey,
 		ActionKMSListResourceTags,
 		ActionKMSTagResource,
 		ActionKMSUntagResource,
@@ -1397,6 +1526,13 @@ func KnownAction(action string) bool {
 		ActionS3GetBucketNotification,
 		ActionS3PutBucketLogging,
 		ActionS3GetBucketLogging,
+		ActionS3PutBucketCors,
+		ActionS3GetBucketCors,
+		ActionS3DeleteBucketCors,
+		ActionS3PutLifecycleConfiguration,
+		ActionS3GetLifecycleConfiguration,
+		ActionS3DeleteLifecycleConfiguration,
+		ActionS3SelectObjectContent,
 		ActionDynamoDBCreateTable,
 		ActionDynamoDBDescribeTable,
 		ActionDynamoDBDeleteTable,
@@ -1545,6 +1681,8 @@ func KnownAction(action string) bool {
 		ActionSSMSendCommand,
 		ActionSSMGetCommandInvocation,
 		ActionSSMListCommandInvocations,
+		ActionSSMLabelParameterVersion,
+		ActionSSMGetParameterHistory,
 		ActionSecretsCreateSecret,
 		ActionSecretsGetSecretValue,
 		ActionSecretsPutSecretValue,
@@ -1758,6 +1896,9 @@ func KnownAction(action string) bool {
 		ActionSFNStartExecution,
 		ActionSFNDescribeExecution,
 		ActionSFNGetExecutionHistory,
+		ActionSFNSendTaskSuccess,
+		ActionSFNSendTaskFailure,
+		ActionSFNSendTaskHeartbeat,
 		ActionSFNPutResourcePolicy,
 		ActionSFNGetResourcePolicy,
 		ActionSFNDeleteResourcePolicy,
@@ -1805,6 +1946,9 @@ func KnownAction(action string) bool {
 		ActionCodePipelineDeletePipeline,
 		ActionCodePipelineStartPipelineExecution,
 		ActionCodePipelineGetPipelineState,
+		ActionCodePipelinePutApprovalResult,
+		ActionCodePipelineGetPipelineExecution,
+		ActionCodePipelineListPipelineExecutions,
 		ActionFirehoseCreateDeliveryStream,
 		ActionFirehoseDeleteDeliveryStream,
 		ActionFirehoseDescribeDeliveryStream,
@@ -1824,10 +1968,26 @@ func KnownAction(action string) bool {
 		ActionGlueGetCrawler,
 		ActionGlueDeleteCrawler,
 		ActionGlueListCrawlers,
+		ActionGlueCreateRegistry,
+		ActionGlueGetRegistry,
+		ActionGlueListRegistries,
+		ActionGlueDeleteRegistry,
+		ActionGlueCreateSchema,
+		ActionGlueGetSchema,
+		ActionGlueListSchemas,
+		ActionGlueDeleteSchema,
+		ActionGlueRegisterSchemaVersion,
+		ActionGlueGetSchemaVersion,
+		ActionGlueListSchemaVersions,
 		ActionAthenaStartQueryExecution,
 		ActionAthenaGetQueryExecution,
 		ActionAthenaGetQueryResults,
 		ActionAthenaStopQueryExecution,
+		ActionAthenaCreateWorkGroup,
+		ActionAthenaGetWorkGroup,
+		ActionAthenaListWorkGroups,
+		ActionAthenaDeleteWorkGroup,
+		ActionAthenaUpdateWorkGroup,
 		ActionOpenSearchCreateDomain,
 		ActionOpenSearchDescribeDomain,
 		ActionOpenSearchListDomainNames,
@@ -1839,6 +1999,11 @@ func KnownAction(action string) bool {
 		ActionWAFCreateRuleGroup,
 		ActionWAFAssociateWebACL,
 		ActionWAFEvaluate,
+		ActionWAFCreateIPSet,
+		ActionWAFGetIPSet,
+		ActionWAFUpdateIPSet,
+		ActionWAFDeleteIPSet,
+		ActionWAFListIPSets,
 		ActionConfigPutConfigurationRecorder,
 		ActionConfigPutDeliveryChannel,
 		ActionConfigStartConfigurationRecorder,
@@ -1874,8 +2039,19 @@ func KnownAction(action string) bool {
 		ActionAppSyncListGraphqlApis,
 		ActionAppSyncStartSchemaCreation,
 		ActionAppSyncCreateApiKey,
+		ActionAppSyncListApiKeys,
+		ActionAppSyncDeleteApiKey,
 		ActionAppSyncCreateDataSource,
+		ActionAppSyncUpdateDataSource,
+		ActionAppSyncDeleteDataSource,
+		ActionAppSyncGetDataSource,
+		ActionAppSyncListDataSources,
 		ActionAppSyncCreateResolver,
+		ActionAppSyncUpdateResolver,
+		ActionAppSyncDeleteResolver,
+		ActionAppSyncGetResolver,
+		ActionAppSyncListResolvers,
+		ActionAppSyncGetSchemaCreationStatus,
 		ActionAppSyncGraphQL,
 		ActionAPIGatewayCreateRestApi,
 		ActionAPIGatewayGetRestApi,
@@ -1892,6 +2068,21 @@ func KnownAction(action string) bool {
 		ActionAPIGatewayCreateDeployment,
 		ActionAPIGatewayCreateStage,
 		ActionAPIGatewayGetStage,
+		ActionAPIGatewayCreateAuthorizer,
+		ActionAPIGatewayGetAuthorizer,
+		ActionAPIGatewayGetAuthorizers,
+		ActionAPIGatewayDeleteAuthorizer,
+		ActionAPIGatewayCreateApiKey,
+		ActionAPIGatewayGetApiKey,
+		ActionAPIGatewayGetApiKeys,
+		ActionAPIGatewayDeleteApiKey,
+		ActionAPIGatewayCreateUsagePlan,
+		ActionAPIGatewayGetUsagePlan,
+		ActionAPIGatewayGetUsagePlans,
+		ActionAPIGatewayDeleteUsagePlan,
+		ActionAPIGatewayCreateUsagePlanKey,
+		ActionAPIGatewayGetUsagePlanKeys,
+		ActionAPIGatewayDeleteUsagePlanKey,
 		ActionAPIGatewayV2CreateApi,
 		ActionAPIGatewayV2GetApi,
 		ActionAPIGatewayV2UpdateApi,
@@ -1974,6 +2165,13 @@ func KnownAction(action string) bool {
 		ActionIoTDataUpdateThingShadow,
 		ActionIoTDataGetThingShadow,
 		ActionIoTDataDeleteThingShadow,
+		ActionIoTCreateTopicRule,
+		ActionIoTGetTopicRule,
+		ActionIoTListTopicRules,
+		ActionIoTReplaceTopicRule,
+		ActionIoTDeleteTopicRule,
+		ActionIoTEnableTopicRule,
+		ActionIoTDisableTopicRule,
 		ActionCloudWatchPutMetricData,
 		ActionCloudWatchListMetrics,
 		ActionCloudWatchGetMetricStatistics,
@@ -1991,6 +2189,25 @@ func KnownAction(action string) bool {
 		ActionLightsailStopInstance,
 		ActionLightsailRebootInstance,
 		ActionLightsailDeleteInstance,
+		ActionLightsailCreateDisk,
+		ActionLightsailGetDisk,
+		ActionLightsailGetDisks,
+		ActionLightsailDeleteDisk,
+		ActionLightsailAttachDisk,
+		ActionLightsailDetachDisk,
+		ActionLightsailAllocateStaticIp,
+		ActionLightsailGetStaticIp,
+		ActionLightsailGetStaticIps,
+		ActionLightsailReleaseStaticIp,
+		ActionLightsailAttachStaticIp,
+		ActionLightsailDetachStaticIp,
+		ActionLightsailCreateKeyPair,
+		ActionLightsailGetKeyPair,
+		ActionLightsailGetKeyPairs,
+		ActionLightsailDeleteKeyPair,
+		ActionLightsailOpenInstancePublicPorts,
+		ActionLightsailCloseInstancePublicPorts,
+		ActionLightsailGetInstancePortStates,
 		ActionASGCreateLaunchConfiguration,
 		ActionASGDescribeLaunchConfigurations,
 		ActionASGDeleteLaunchConfiguration,
@@ -1999,6 +2216,18 @@ func KnownAction(action string) bool {
 		ActionASGUpdateAutoScalingGroup,
 		ActionASGDeleteAutoScalingGroup,
 		ActionASGSetDesiredCapacity,
+		ActionASGPutScalingPolicy,
+		ActionASGDescribePolicies,
+		ActionASGDeletePolicy,
+		ActionASGPutLifecycleHook,
+		ActionASGDescribeLifecycleHooks,
+		ActionASGDeleteLifecycleHook,
+		ActionASGAttachInstances,
+		ActionASGDetachInstances,
+		ActionASGDescribeAutoScalingInstances,
+		ActionASGAttachLoadBalancerTargetGroups,
+		ActionASGDetachLoadBalancerTargetGroups,
+		ActionASGDescribeLoadBalancerTargetGroups,
 		ActionBeanstalkCreateApplication,
 		ActionBeanstalkDescribeApplications,
 		ActionBeanstalkDeleteApplication,
@@ -2017,8 +2246,15 @@ func KnownAction(action string) bool {
 		ActionBackupDeleteBackupPlan,
 		ActionBackupStartBackupJob,
 		ActionBackupDescribeBackupJob,
+		ActionBackupListBackupJobs,
+		ActionBackupStopBackupJob,
 		ActionBackupDescribeRecoveryPoint,
 		ActionBackupListRecoveryPointsByBackupVault,
+		ActionBackupDeleteRecoveryPoint,
+		ActionBackupCreateBackupSelection,
+		ActionBackupGetBackupSelection,
+		ActionBackupListBackupSelections,
+		ActionBackupDeleteBackupSelection,
 		ActionCodeDeployCreateApplication,
 		ActionCodeDeployCreateDeploymentGroup,
 		ActionCodeDeployCreateDeployment,
@@ -2026,8 +2262,13 @@ func KnownAction(action string) bool {
 		ActionCodeDeployListDeployments,
 		ActionCloudFrontCreateDistribution,
 		ActionCloudFrontGetDistribution,
+		ActionCloudFrontGetDistributionConfig,
+		ActionCloudFrontUpdateDistribution,
 		ActionCloudFrontListDistributions,
 		ActionCloudFrontDeleteDistribution,
+		ActionCloudFrontCreateInvalidation,
+		ActionCloudFrontGetInvalidation,
+		ActionCloudFrontListInvalidations,
 		ActionELBv2CreateLoadBalancer,
 		ActionELBv2DescribeLoadBalancers,
 		ActionELBv2DeleteLoadBalancer,
@@ -2042,6 +2283,8 @@ func KnownAction(action string) bool {
 		ActionELBv2CreateRule,
 		ActionELBv2DescribeRules,
 		ActionELBv2DeleteRule,
+		ActionELBv2ModifyListener,
+		ActionELBv2ModifyRule,
 		ActionS3VectorsCreateVectorBucket,
 		ActionS3VectorsListVectorBuckets,
 		ActionS3VectorsDeleteVectorBucket,
@@ -2063,7 +2306,16 @@ func KnownAction(action string) bool {
 		ActionEMRTerminateJobFlows,
 		ActionEMRAddJobFlowSteps,
 		ActionEMRDescribeStep,
-		ActionEMRListSteps:
+		ActionEMRListSteps,
+		ActionEMRCancelSteps,
+		ActionEMRListInstanceGroups,
+		ActionEMRListInstanceFleets,
+		ActionEMRAddTags,
+		ActionEMRRemoveTags,
+		ActionEMRDescribeSecurityConfiguration,
+		ActionEMRCreateSecurityConfiguration,
+		ActionEMRDeleteSecurityConfiguration,
+		ActionEMRListSecurityConfigurations:
 		return true
 	default:
 		return false

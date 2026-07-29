@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS backup_recovery_points (
   creation_date INTEGER NOT NULL,
   PRIMARY KEY (account_id, region, recovery_point_arn)
 );
+CREATE TABLE IF NOT EXISTS backup_selections (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  selection_id TEXT NOT NULL,
+  selection_name TEXT NOT NULL,
+  iam_role_arn TEXT NOT NULL DEFAULT '',
+  resources_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, selection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_backup_selections_plan
+  ON backup_selections (account_id, region, plan_id);
 `
 
 // BackupVault is a vault row.
@@ -113,6 +126,25 @@ type BackupRecoveryPoint struct {
 	Status           string
 	CreationDate     int64
 	Region           string
+}
+
+// BackupSelection assigns resources to a backup plan (stored metadata only).
+type BackupSelection struct {
+	BackupPlanID  string
+	SelectionID   string
+	SelectionName string
+	IamRoleARN    string
+	ResourcesJSON string
+	CreatedAt     int64
+	Region        string
+}
+
+// BackupJobListFilter narrows ListBackupJobs results.
+type BackupJobListFilter struct {
+	BackupVaultName string
+	ResourceARN     string
+	ResourceType    string
+	State           string
 }
 
 // EnsureBackupSchema creates Backup tables if missing.
@@ -329,11 +361,26 @@ func (s *Store) ListBackupPlans(accountID, region string) ([]BackupPlan, error) 
 	return out, rows.Err()
 }
 
-// DeleteBackupPlan deletes a plan.
+// DeleteBackupPlan deletes a plan and its selections.
 func (s *Store) DeleteBackupPlan(accountID, region, planID string) error {
-	res, err := s.db.Exec(
+	planID = strings.TrimSpace(planID)
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete backup plan: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		`DELETE FROM backup_selections WHERE account_id = ? AND region = ? AND plan_id = ?`,
+		accountID, region, planID,
+	); err != nil {
+		return fmt.Errorf("delete backup plan selections: %w", err)
+	}
+	res, err := tx.Exec(
 		`DELETE FROM backup_plans WHERE account_id = ? AND region = ? AND plan_id = ?`,
-		accountID, region, strings.TrimSpace(planID),
+		accountID, region, planID,
 	)
 	if err != nil {
 		return fmt.Errorf("delete backup plan: %w", err)
@@ -344,6 +391,9 @@ func (s *Store) DeleteBackupPlan(accountID, region, planID string) error {
 	}
 	if n == 0 {
 		return ErrBackupNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete backup plan: %w", err)
 	}
 	return nil
 }
@@ -470,4 +520,231 @@ func (s *Store) ListRecoveryPointsByBackupVault(accountID, region, vaultName str
 		out = append(out, rp)
 	}
 	return out, rows.Err()
+}
+
+// ListBackupJobs lists jobs with optional vault/resource/state/type filters.
+func (s *Store) ListBackupJobs(accountID, region string, filter BackupJobListFilter) ([]BackupJob, error) {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	rows, err := s.db.Query(
+		`SELECT job_id, vault_name, resource_arn, iam_role_arn, state, recovery_point_arn, percent_done, created_at, completion_date, region
+		 FROM backup_jobs WHERE account_id = ? AND region = ? ORDER BY created_at, job_id`,
+		accountID, region,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list backup jobs: %w", err)
+	}
+	defer rows.Close()
+	vaultFilter := strings.TrimSpace(filter.BackupVaultName)
+	resourceFilter := strings.TrimSpace(filter.ResourceARN)
+	stateFilter := strings.TrimSpace(filter.State)
+	typeFilter := strings.TrimSpace(filter.ResourceType)
+	var out []BackupJob
+	for rows.Next() {
+		var j BackupJob
+		if err := rows.Scan(&j.BackupJobID, &j.BackupVaultName, &j.ResourceARN, &j.IamRoleARN, &j.State, &j.RecoveryPointARN,
+			&j.PercentDone, &j.CreatedAt, &j.CompletionDate, &j.Region); err != nil {
+			return nil, fmt.Errorf("list backup jobs scan: %w", err)
+		}
+		if vaultFilter != "" && j.BackupVaultName != vaultFilter {
+			continue
+		}
+		if resourceFilter != "" && j.ResourceARN != resourceFilter {
+			continue
+		}
+		if stateFilter != "" && !strings.EqualFold(j.State, stateFilter) {
+			continue
+		}
+		if typeFilter != "" && !strings.EqualFold(backupResourceType(j.ResourceARN), typeFilter) {
+			continue
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// StopBackupJob aborts a non-terminal job. COMPLETED/ABORTED/FAILED is a no-op.
+func (s *Store) StopBackupJob(accountID, region, jobID string) error {
+	job, err := s.DescribeBackupJob(accountID, region, jobID)
+	if err != nil {
+		return err
+	}
+	switch strings.ToUpper(job.State) {
+	case "COMPLETED", "ABORTED", "FAILED", "EXPIRED":
+		return nil
+	}
+	now := time.Now().UTC().UnixMilli()
+	_, err = s.db.Exec(
+		`UPDATE backup_jobs SET state = 'ABORTED', percent_done = '100.0', completion_date = ?
+		 WHERE account_id = ? AND region = ? AND job_id = ?`,
+		now, accountID, region, strings.TrimSpace(jobID),
+	)
+	if err != nil {
+		return fmt.Errorf("stop backup job: %w", err)
+	}
+	return nil
+}
+
+// DeleteRecoveryPoint removes recovery-point metadata and decrements the vault count.
+func (s *Store) DeleteRecoveryPoint(accountID, region, vaultName, recoveryPointARN string) error {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	vaultName = strings.TrimSpace(vaultName)
+	recoveryPointARN = strings.TrimSpace(recoveryPointARN)
+	if vaultName == "" || recoveryPointARN == "" {
+		return fmt.Errorf("%w: BackupVaultName and RecoveryPointArn required", ErrBackupBadRequest)
+	}
+	if _, err := s.DescribeRecoveryPoint(accountID, region, vaultName, recoveryPointARN); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete recovery point: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(
+		`DELETE FROM backup_recovery_points WHERE account_id = ? AND region = ? AND vault_name = ? AND recovery_point_arn = ?`,
+		accountID, region, vaultName, recoveryPointARN,
+	)
+	if err != nil {
+		return fmt.Errorf("delete recovery point: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete recovery point: %w", err)
+	}
+	if n == 0 {
+		return ErrBackupNotFound
+	}
+	if _, err := tx.Exec(
+		`UPDATE backup_vaults SET number_of_recovery_points = CASE
+			WHEN number_of_recovery_points > 0 THEN number_of_recovery_points - 1 ELSE 0 END
+		 WHERE account_id = ? AND region = ? AND name = ?`,
+		accountID, region, vaultName,
+	); err != nil {
+		return fmt.Errorf("decrement vault recovery points: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete recovery point: %w", err)
+	}
+	return nil
+}
+
+func backupResourcesJSON(resources []string) (string, error) {
+	if resources == nil {
+		resources = []string{}
+	}
+	raw, err := json.Marshal(resources)
+	if err != nil {
+		return "", fmt.Errorf("%w: Resources", ErrBackupBadRequest)
+	}
+	return string(raw), nil
+}
+
+// CreateBackupSelection stores a selection under a plan (IamRoleArn + Resources).
+func (s *Store) CreateBackupSelection(accountID, region, planID, selectionName, iamRoleARN string, resources []string) (BackupSelection, error) {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	planID = strings.TrimSpace(planID)
+	selectionName = strings.TrimSpace(selectionName)
+	iamRoleARN = strings.TrimSpace(iamRoleARN)
+	if planID == "" || selectionName == "" || iamRoleARN == "" {
+		return BackupSelection{}, fmt.Errorf("%w: BackupPlanId, SelectionName, and IamRoleArn required", ErrBackupBadRequest)
+	}
+	if _, err := s.GetBackupPlan(accountID, region, planID); err != nil {
+		return BackupSelection{}, err
+	}
+	resourcesJSON, err := backupResourcesJSON(resources)
+	if err != nil {
+		return BackupSelection{}, err
+	}
+	now := time.Now().UTC().UnixMilli()
+	selectionID := uuid.NewString()
+	_, err = s.db.Exec(
+		`INSERT INTO backup_selections
+		 (account_id, region, plan_id, selection_id, selection_name, iam_role_arn, resources_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, region, planID, selectionID, selectionName, iamRoleARN, resourcesJSON, now,
+	)
+	if err != nil {
+		return BackupSelection{}, fmt.Errorf("create backup selection: %w", err)
+	}
+	return BackupSelection{
+		BackupPlanID: planID, SelectionID: selectionID, SelectionName: selectionName,
+		IamRoleARN: iamRoleARN, ResourcesJSON: resourcesJSON, CreatedAt: now, Region: region,
+	}, nil
+}
+
+// GetBackupSelection returns a selection by plan and selection id.
+func (s *Store) GetBackupSelection(accountID, region, planID, selectionID string) (BackupSelection, error) {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	var sel BackupSelection
+	err := s.db.QueryRow(
+		`SELECT plan_id, selection_id, selection_name, iam_role_arn, resources_json, created_at, region
+		 FROM backup_selections WHERE account_id = ? AND region = ? AND plan_id = ? AND selection_id = ?`,
+		accountID, region, strings.TrimSpace(planID), strings.TrimSpace(selectionID),
+	).Scan(&sel.BackupPlanID, &sel.SelectionID, &sel.SelectionName, &sel.IamRoleARN, &sel.ResourcesJSON, &sel.CreatedAt, &sel.Region)
+	if errors.Is(err, sql.ErrNoRows) {
+		return BackupSelection{}, ErrBackupNotFound
+	}
+	if err != nil {
+		return BackupSelection{}, fmt.Errorf("get backup selection: %w", err)
+	}
+	return sel, nil
+}
+
+// ListBackupSelections lists selections for a plan.
+func (s *Store) ListBackupSelections(accountID, region, planID string) ([]BackupSelection, error) {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	planID = strings.TrimSpace(planID)
+	if _, err := s.GetBackupPlan(accountID, region, planID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT plan_id, selection_id, selection_name, iam_role_arn, resources_json, created_at, region
+		 FROM backup_selections WHERE account_id = ? AND region = ? AND plan_id = ? ORDER BY created_at, selection_id`,
+		accountID, region, planID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list backup selections: %w", err)
+	}
+	defer rows.Close()
+	var out []BackupSelection
+	for rows.Next() {
+		var sel BackupSelection
+		if err := rows.Scan(&sel.BackupPlanID, &sel.SelectionID, &sel.SelectionName, &sel.IamRoleARN, &sel.ResourcesJSON, &sel.CreatedAt, &sel.Region); err != nil {
+			return nil, fmt.Errorf("list backup selections scan: %w", err)
+		}
+		out = append(out, sel)
+	}
+	return out, rows.Err()
+}
+
+// DeleteBackupSelection deletes a selection.
+func (s *Store) DeleteBackupSelection(accountID, region, planID, selectionID string) error {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM backup_selections WHERE account_id = ? AND region = ? AND plan_id = ? AND selection_id = ?`,
+		accountID, region, strings.TrimSpace(planID), strings.TrimSpace(selectionID),
+	)
+	if err != nil {
+		return fmt.Errorf("delete backup selection: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete backup selection: %w", err)
+	}
+	if n == 0 {
+		return ErrBackupNotFound
+	}
+	return nil
 }

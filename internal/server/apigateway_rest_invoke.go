@@ -103,9 +103,60 @@ func (s *Server) handleRestAPIInvoke(w http.ResponseWriter, r *http.Request, bod
 			return
 		}
 		verified = v
+	case store.APIGatewayRESTAuthCUSTOM, store.APIGatewayRESTAuthTOKEN, store.APIGatewayRESTAuthREQUEST:
+		authzRow, err := s.store.GetRestAuthorizer(accountID, apiID, method.AuthorizerID)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch method.AuthorizationType {
+		case store.APIGatewayRESTAuthTOKEN:
+			if authzRow.Type != store.APIGatewayAuthorizerTOKEN {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		case store.APIGatewayRESTAuthREQUEST:
+			if authzRow.Type != store.APIGatewayAuthorizerREQUEST {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		default: // CUSTOM
+			if authzRow.Type != store.APIGatewayAuthorizerTOKEN && authzRow.Type != store.APIGatewayAuthorizerREQUEST {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		allowed, denyMsg := s.invokeRestAPILambdaAuthorizer(
+			r.Context(), r, accountID, apiID, stage, routePath, resource.Path, resource.ResourceID, requestID, authzRow,
+		)
+		if !allowed {
+			switch denyMsg {
+			case "compute unavailable":
+				http.Error(w, "compute unavailable", http.StatusServiceUnavailable)
+			case "Forbidden":
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			default:
+				http.Error(w, "Unauthorized", http.StatusForbidden)
+			}
+			return
+		}
+		verified = &authn.Verified{AccountID: accountID, Region: region, Service: "execute-api"}
 	default:
 		http.Error(w, "unsupported authorization", http.StatusBadRequest)
 		return
+	}
+
+	requiresKey := method.APIKeyRequired
+	if !requiresKey {
+		if hasPlan, err := s.store.RestStageHasUsagePlan(accountID, apiID, stage); err == nil && hasPlan {
+			requiresKey = true
+		}
+	}
+	if requiresKey {
+		if !s.store.ValidateRestAPIKeyForStage(accountID, apiID, stage, r.Header.Get("x-api-key")) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	in, err := s.store.GetRestIntegration(accountID, apiID, resource.ResourceID, method.HTTPMethod)

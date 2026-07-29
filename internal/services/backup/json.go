@@ -23,10 +23,10 @@ func CreateBackupVaultJSON(v store.BackupVault) ([]byte, error) {
 // DescribeBackupVaultJSON builds DescribeBackupVault response.
 func DescribeBackupVaultJSON(v store.BackupVault) ([]byte, error) {
 	out := map[string]any{
-		"BackupVaultName":          v.BackupVaultName,
-		"BackupVaultArn":           v.BackupVaultARN,
-		"CreationDate":             isoMilli(v.CreatedAt),
-		"NumberOfRecoveryPoints":   v.NumberOfRecoveryPoints,
+		"BackupVaultName":        v.BackupVaultName,
+		"BackupVaultArn":         v.BackupVaultARN,
+		"CreationDate":           isoMilli(v.CreatedAt),
+		"NumberOfRecoveryPoints": v.NumberOfRecoveryPoints,
 	}
 	if v.EncryptionKeyARN != "" {
 		out["EncryptionKeyArn"] = v.EncryptionKeyARN
@@ -102,14 +102,14 @@ func StartBackupJobJSON(j store.BackupJob) ([]byte, error) {
 // DescribeBackupJobJSON builds DescribeBackupJob response.
 func DescribeBackupJobJSON(j store.BackupJob) ([]byte, error) {
 	out := map[string]any{
-		"BackupJobId":       j.BackupJobID,
-		"BackupVaultName":   j.BackupVaultName,
-		"ResourceArn":       j.ResourceARN,
-		"IamRoleArn":        j.IamRoleARN,
-		"State":             j.State,
-		"PercentDone":       j.PercentDone,
-		"CreationDate":      isoMilli(j.CreatedAt),
-		"RecoveryPointArn":  j.RecoveryPointARN,
+		"BackupJobId":      j.BackupJobID,
+		"BackupVaultName":  j.BackupVaultName,
+		"ResourceArn":      j.ResourceARN,
+		"IamRoleArn":       j.IamRoleARN,
+		"State":            j.State,
+		"PercentDone":      j.PercentDone,
+		"CreationDate":     isoMilli(j.CreatedAt),
+		"RecoveryPointArn": j.RecoveryPointARN,
 	}
 	if j.CompletionDate > 0 {
 		out["CompletionDate"] = isoMilli(j.CompletionDate)
@@ -144,4 +144,75 @@ func ListRecoveryPointsJSON(points []store.BackupRecoveryPoint) ([]byte, error) 
 		})
 	}
 	return json.Marshal(map[string]any{"RecoveryPoints": items})
+}
+
+// ListBackupJobsJSON builds ListBackupJobs response.
+func ListBackupJobsJSON(jobs []store.BackupJob) ([]byte, error) {
+	items := make([]map[string]any, 0, len(jobs))
+	for _, j := range jobs {
+		item := map[string]any{
+			"BackupJobId":      j.BackupJobID,
+			"BackupVaultName":  j.BackupVaultName,
+			"ResourceArn":      j.ResourceARN,
+			"IamRoleArn":       j.IamRoleARN,
+			"State":            j.State,
+			"PercentDone":      j.PercentDone,
+			"CreationDate":     isoMilli(j.CreatedAt),
+			"RecoveryPointArn": j.RecoveryPointARN,
+		}
+		if j.CompletionDate > 0 {
+			item["CompletionDate"] = isoMilli(j.CompletionDate)
+		}
+		items = append(items, item)
+	}
+	return json.Marshal(map[string]any{"BackupJobs": items})
+}
+
+func backupSelectionResources(sel store.BackupSelection) []string {
+	var resources []string
+	if sel.ResourcesJSON != "" {
+		_ = json.Unmarshal([]byte(sel.ResourcesJSON), &resources)
+	}
+	if resources == nil {
+		resources = []string{}
+	}
+	return resources
+}
+
+// CreateBackupSelectionJSON builds CreateBackupSelection response.
+func CreateBackupSelectionJSON(sel store.BackupSelection) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"BackupPlanId": sel.BackupPlanID,
+		"SelectionId":  sel.SelectionID,
+		"CreationDate": isoMilli(sel.CreatedAt),
+	})
+}
+
+// GetBackupSelectionJSON builds GetBackupSelection response.
+func GetBackupSelectionJSON(sel store.BackupSelection) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"BackupPlanId": sel.BackupPlanID,
+		"SelectionId":  sel.SelectionID,
+		"CreationDate": isoMilli(sel.CreatedAt),
+		"BackupSelection": map[string]any{
+			"SelectionName": sel.SelectionName,
+			"IamRoleArn":    sel.IamRoleARN,
+			"Resources":     backupSelectionResources(sel),
+		},
+	})
+}
+
+// ListBackupSelectionsJSON builds ListBackupSelections response.
+func ListBackupSelectionsJSON(selections []store.BackupSelection) ([]byte, error) {
+	items := make([]map[string]any, 0, len(selections))
+	for _, sel := range selections {
+		items = append(items, map[string]any{
+			"BackupPlanId":  sel.BackupPlanID,
+			"SelectionId":   sel.SelectionID,
+			"SelectionName": sel.SelectionName,
+			"IamRoleArn":    sel.IamRoleARN,
+			"CreationDate":  isoMilli(sel.CreatedAt),
+		})
+	}
+	return json.Marshal(map[string]any{"BackupSelectionsList": items})
 }

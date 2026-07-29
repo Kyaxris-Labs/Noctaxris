@@ -46,6 +46,12 @@ func (s *Server) handleSFN(
 		s.sfnDescribeExecution(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSFNGetExecutionHistory:
 		s.sfnGetExecutionHistory(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNSendTaskSuccess:
+		s.sfnSendTaskSuccess(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNSendTaskFailure:
+		s.sfnSendTaskFailure(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSFNSendTaskHeartbeat:
+		s.sfnSendTaskHeartbeat(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSFNPutResourcePolicy:
 		s.sfnPutResourcePolicy(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSFNGetResourcePolicy:
@@ -77,6 +83,12 @@ func sfnAction(action string) string {
 		return catalog.ActionSFNDescribeExecution
 	case "GetExecutionHistory":
 		return catalog.ActionSFNGetExecutionHistory
+	case "SendTaskSuccess":
+		return catalog.ActionSFNSendTaskSuccess
+	case "SendTaskFailure":
+		return catalog.ActionSFNSendTaskFailure
+	case "SendTaskHeartbeat":
+		return catalog.ActionSFNSendTaskHeartbeat
 	case "PutResourcePolicy":
 		return catalog.ActionSFNPutResourcePolicy
 	case "GetResourcePolicy":
@@ -382,6 +394,99 @@ func (s *Server) sfnGetExecutionHistory(
 	payload, _ := sfnsvc.GetExecutionHistoryJSON(events)
 	s.writeSFNOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "GetExecutionHistory", readOnly)
+}
+
+func (s *Server) sfnSendTaskSuccess(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	token, _ := params["taskToken"].(string)
+	output, _ := params["output"].(string)
+	if strings.TrimSpace(token) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"taskToken is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNSendTaskSuccess, "*") {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:SendTaskSuccess.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.SFNSendTaskSuccess(token, output)
+	if errors.Is(err, store.ErrSFNInvalidToken) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"Invalid Token: "+token, readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeSFNOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "SendTaskSuccess", readOnly)
+}
+
+func (s *Server) sfnSendTaskFailure(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	token, _ := params["taskToken"].(string)
+	errorCode, _ := params["error"].(string)
+	cause, _ := params["cause"].(string)
+	if strings.TrimSpace(token) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"taskToken is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNSendTaskFailure, "*") {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:SendTaskFailure.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.SFNSendTaskFailure(token, errorCode, cause)
+	if errors.Is(err, store.ErrSFNInvalidToken) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"Invalid Token: "+token, readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	s.writeSFNOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "SendTaskFailure", readOnly)
+}
+
+func (s *Server) sfnSendTaskHeartbeat(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	token, _ := params["taskToken"].(string)
+	if strings.TrimSpace(token) == "" {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"taskToken is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionSFNSendTaskHeartbeat, "*") {
+		s.writeSFNError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform states:SendTaskHeartbeat.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.SFNSendTaskHeartbeat(token)
+	if errors.Is(err, store.ErrSFNInvalidToken) {
+		s.writeSFNError(w, r, body, requestID, http.StatusBadRequest, "InvalidToken",
+			"Invalid Token: "+token, readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSFNError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to send task heartbeat.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSFNOK(w, requestID, []byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, sfnEventSource, "SendTaskHeartbeat", readOnly)
 }
 
 func (s *Server) sfnPutResourcePolicy(

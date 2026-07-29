@@ -8,10 +8,12 @@ Distribution CRUD lite plus a loopback fake-edge fetch path. Origins must resolv
 
 | Area | Actions / paths |
 |------|-----------------|
-| Distribution | `CreateDistribution`, `GetDistribution`, `ListDistributions`, `DeleteDistribution` |
+| Distribution | `CreateDistribution`, `GetDistribution`, `GetDistributionConfig`, `UpdateDistribution`, `ListDistributions`, `DeleteDistribution` |
+| Config / ETag | `GetDistributionConfig` returns `DistributionConfig` + `ETag` (also `ETag` response header). `UpdateDistribution` requires matching `IfMatch` / `If-Match`; mutates modeled `Enabled`, origins, and cache behaviors; bumps `ETag` |
+| Invalidations | `CreateInvalidation`, `GetInvalidation`, `ListInvalidations` (paths stored; `Status=Completed` immediately; theatre only, no cache purge) |
 | Origins | `OriginType` `s3` or `apigateway` (DomainName must exist in-account; fail closed) |
 | Cache behaviors | Optional `DefaultCacheBehavior.TargetOriginId` (`*` path) plus `CacheBehaviors.Items` with `PathPattern` → `TargetOriginId` (matched in list order; prefix `*` suffix lite) |
-| Logging | Optional `Logging` on create (`Bucket` / `Prefix` / `Enabled`); edge GET appends tab-separated access-log lite lines to an in-account S3 bucket |
+| Logging | Optional `Logging` on create/update (`Bucket` / `Prefix` / `Enabled`); edge GET appends tab-separated access-log lite lines to an in-account S3 bucket |
 | Fake-edge | SigV4 `GET /cloudfront/{distributionId}/{objectKey...}` on `:4566` (origin selected by path pattern; first origin when no behaviors) |
 | Edge fetch | S3 → in-store `GetObject`; apigateway → internal `/http-api/...` invoke (never dials arbitrary hosts) |
 
@@ -27,6 +29,19 @@ Shared Compose and env setup: [index.md](index.md#shared-verification).
 aws cloudfront create-distribution \
   --distribution-config file://dist.json \
   --endpoint-url "$EP"
+
+aws cloudfront get-distribution-config --id "$DIST_ID" --endpoint-url "$EP"
+
+aws cloudfront update-distribution \
+  --id "$DIST_ID" \
+  --if-match "$ETAG" \
+  --distribution-config file://dist-updated.json \
+  --endpoint-url "$EP"
+
+aws cloudfront create-invalidation \
+  --distribution-id "$DIST_ID" \
+  --paths "/index.html" "/images/*" \
+  --endpoint-url "$EP"
 ```
 
 Fake-edge fetch (SigV4; substitute distribution id and object key):
@@ -36,7 +51,7 @@ Fake-edge fetch (SigV4; substitute distribution id and object key):
 # GET $EP/cloudfront/<DistributionId>/path/to/object
 ```
 
-Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName, SigV4-required edge, S3 origin bytes, path-pattern origin selection, and disabled-distribution 403).
+Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName, GetDistributionConfig ETag, UpdateDistribution IfMatch, invalidation Completed theatre, SigV4-required edge, S3 origin bytes, path-pattern origin selection, and disabled-distribution 403).
 
 ## Not yet / deferred
 
@@ -44,3 +59,4 @@ Skip live smoke when Docker is unavailable (unit tests cover Deployed DomainName
 - Mid-path wildcards beyond trailing `*` prefix (e.g. `images/*.jpg`)
 - Signed cookies / URLs depth
 - Custom domain ACM linkage beyond string fields
+- Actual edge cache purge from invalidations (status theatre only)

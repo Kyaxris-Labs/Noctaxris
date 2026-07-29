@@ -121,3 +121,116 @@ func StageJSON(st store.RestStage) ([]byte, error) {
 		"createdDate":  createdDateUnix(st.CreatedAt),
 	})
 }
+
+// AuthorizerJSON builds CreateAuthorizer / GetAuthorizer response.
+func AuthorizerJSON(a store.RestAuthorizer) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"id":                    a.AuthorizerID,
+		"name":                  a.Name,
+		"type":                  a.Type,
+		"authorizerUri":         a.AuthorizerURI,
+		"identitySource":        a.IdentitySource,
+		"authorizerCredentials": a.AuthorizerCredentials,
+	})
+}
+
+// AuthorizersJSON builds GetAuthorizers response.
+func AuthorizersJSON(items []store.RestAuthorizer) ([]byte, error) {
+	out := make([]map[string]any, 0, len(items))
+	for _, a := range items {
+		out = append(out, map[string]any{
+			"id":                    a.AuthorizerID,
+			"name":                  a.Name,
+			"type":                  a.Type,
+			"authorizerUri":         a.AuthorizerURI,
+			"identitySource":        a.IdentitySource,
+			"authorizerCredentials": a.AuthorizerCredentials,
+		})
+	}
+	return json.Marshal(map[string]any{"item": out})
+}
+
+// ApiKeyJSON builds CreateApiKey / GetApiKey response. Value is omitted when empty.
+func ApiKeyJSON(k store.RestAPIKey) ([]byte, error) {
+	m := map[string]any{
+		"id":          k.ID,
+		"name":        k.Name,
+		"enabled":     k.Enabled,
+		"createdDate": createdDateUnix(k.CreatedAt),
+	}
+	if k.Value != "" {
+		m["value"] = k.Value
+	}
+	return json.Marshal(m)
+}
+
+// ApiKeysJSON builds GetApiKeys response.
+func ApiKeysJSON(keys []store.RestAPIKey) ([]byte, error) {
+	items := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, map[string]any{
+			"id":          k.ID,
+			"name":        k.Name,
+			"enabled":     k.Enabled,
+			"createdDate": createdDateUnix(k.CreatedAt),
+		})
+	}
+	return json.Marshal(map[string]any{"item": items})
+}
+
+// UsagePlanJSON builds CreateUsagePlan / GetUsagePlan response.
+func UsagePlanJSON(p store.RestUsagePlan) ([]byte, error) {
+	stages := make([]map[string]any, 0, len(p.APIStages))
+	for _, st := range p.APIStages {
+		stages = append(stages, map[string]any{"apiId": st.APIID, "stage": st.Stage})
+	}
+	return json.Marshal(map[string]any{
+		"id":          p.ID,
+		"name":        p.Name,
+		"description": p.Description,
+		"apiStages":   stages,
+		"createdDate": createdDateUnix(p.CreatedAt),
+	})
+}
+
+// UsagePlansJSON builds GetUsagePlans response.
+func UsagePlansJSON(plans []store.RestUsagePlan) ([]byte, error) {
+	items := make([]map[string]any, 0, len(plans))
+	for _, p := range plans {
+		stages := make([]map[string]any, 0, len(p.APIStages))
+		for _, st := range p.APIStages {
+			stages = append(stages, map[string]any{"apiId": st.APIID, "stage": st.Stage})
+		}
+		items = append(items, map[string]any{
+			"id":          p.ID,
+			"name":        p.Name,
+			"description": p.Description,
+			"apiStages":   stages,
+			"createdDate": createdDateUnix(p.CreatedAt),
+		})
+	}
+	return json.Marshal(map[string]any{"item": items})
+}
+
+// UsagePlanKeyJSON builds CreateUsagePlanKey response.
+func UsagePlanKeyJSON(k store.RestUsagePlanKey) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"id":    k.ID,
+		"type":  k.Type,
+		"value": k.Value,
+	})
+}
+
+// UsagePlanKeysJSON builds GetUsagePlanKeys response.
+func UsagePlanKeysJSON(keys []store.RestUsagePlanKey) ([]byte, error) {
+	items := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, map[string]any{
+			"id":    k.ID,
+			"type":  k.Type,
+			"value": k.Value,
+		})
+	}
+	return json.Marshal(map[string]any{"item": items})
+}
+

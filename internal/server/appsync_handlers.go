@@ -55,12 +55,34 @@ func (s *Server) handleAppSync(
 		s.appsyncListAPIs(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAppSyncStartSchemaCreation:
 		s.appsyncStartSchema(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncGetSchemaCreationStatus:
+		s.appsyncGetSchemaStatus(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAppSyncCreateApiKey:
 		s.appsyncCreateAPIKey(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncListApiKeys:
+		s.appsyncListAPIKeys(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncDeleteApiKey:
+		s.appsyncDeleteAPIKey(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAppSyncCreateDataSource:
 		s.appsyncCreateDataSource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncUpdateDataSource:
+		s.appsyncUpdateDataSource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncDeleteDataSource:
+		s.appsyncDeleteDataSource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncGetDataSource:
+		s.appsyncGetDataSource(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncListDataSources:
+		s.appsyncListDataSources(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAppSyncCreateResolver:
 		s.appsyncCreateResolver(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncUpdateResolver:
+		s.appsyncUpdateResolver(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncDeleteResolver:
+		s.appsyncDeleteResolver(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncGetResolver:
+		s.appsyncGetResolver(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAppSyncListResolvers:
+		s.appsyncListResolvers(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeAppSyncError(w, r, body, requestID, http.StatusNotImplemented, "BadRequestException",
 			"This AppSync action is not implemented.", readOnly, eventID, verified)
@@ -82,12 +104,34 @@ func appsyncAction(action string) string {
 		return catalog.ActionAppSyncListGraphqlApis
 	case "StartSchemaCreation":
 		return catalog.ActionAppSyncStartSchemaCreation
+	case "GetSchemaCreationStatus":
+		return catalog.ActionAppSyncGetSchemaCreationStatus
 	case "CreateApiKey":
 		return catalog.ActionAppSyncCreateApiKey
+	case "ListApiKeys":
+		return catalog.ActionAppSyncListApiKeys
+	case "DeleteApiKey":
+		return catalog.ActionAppSyncDeleteApiKey
 	case "CreateDataSource":
 		return catalog.ActionAppSyncCreateDataSource
+	case "UpdateDataSource":
+		return catalog.ActionAppSyncUpdateDataSource
+	case "DeleteDataSource":
+		return catalog.ActionAppSyncDeleteDataSource
+	case "GetDataSource":
+		return catalog.ActionAppSyncGetDataSource
+	case "ListDataSources":
+		return catalog.ActionAppSyncListDataSources
 	case "CreateResolver":
 		return catalog.ActionAppSyncCreateResolver
+	case "UpdateResolver":
+		return catalog.ActionAppSyncUpdateResolver
+	case "DeleteResolver":
+		return catalog.ActionAppSyncDeleteResolver
+	case "GetResolver":
+		return catalog.ActionAppSyncGetResolver
+	case "ListResolvers":
+		return catalog.ActionAppSyncListResolvers
 	default:
 		return action
 	}
@@ -258,6 +302,35 @@ func (s *Server) appsyncStartSchema(
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "StartSchemaCreation", readOnly)
 }
 
+func (s *Server) appsyncGetSchemaStatus(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAppSyncGetSchemaCreationStatus, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:GetSchemaCreationStatus.", readOnly, eventID, verified)
+		return
+	}
+	st, err := s.store.GetAppSyncSchemaCreationStatus(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get schema creation status.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.GetSchemaCreationStatusJSON(st)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GetSchemaCreationStatus", readOnly)
+}
+
 func (s *Server) appsyncCreateAPIKey(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -294,28 +367,111 @@ func (s *Server) appsyncCreateAPIKey(
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateApiKey", readOnly)
 }
 
+func (s *Server) appsyncListAPIKeys(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAppSyncListApiKeys, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:ListApiKeys.", readOnly, eventID, verified)
+		return
+	}
+	keys, err := s.store.ListAppSyncAPIKeys(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list API keys.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.ListApiKeysJSON(keys)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "ListApiKeys", readOnly)
+}
+
+func (s *Server) appsyncDeleteAPIKey(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	id, _ := params["id"].(string)
+	if id == "" {
+		id, _ = params["Id"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAppSyncDeleteApiKey, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:DeleteApiKey.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteAppSyncAPIKey(verified.AccountID, apiID, id)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"API key not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAppSyncBadRequest) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete API key.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.DeleteApiKeyJSON()
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "DeleteApiKey", readOnly)
+}
+
 func (s *Server) checkAppSyncPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
 	return s.checkEdgePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalAppSync, "AppSync")
+}
+
+func appsyncParseDataSourceParams(params map[string]any) (apiID, name, dsType, lambdaARN, serviceRoleArn string) {
+	apiID, _ = params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	name, _ = params["name"].(string)
+	if name == "" {
+		name, _ = params["Name"].(string)
+	}
+	dsType, _ = params["type"].(string)
+	if dsType == "" {
+		dsType, _ = params["Type"].(string)
+	}
+	if cfg, ok := params["lambdaConfig"].(map[string]any); ok {
+		lambdaARN, _ = cfg["lambdaFunctionArn"].(string)
+		if lambdaARN == "" {
+			lambdaARN, _ = cfg["LambdaFunctionArn"].(string)
+		}
+	}
+	if lambdaARN == "" {
+		lambdaARN, _ = params["lambdaFunctionArn"].(string)
+	}
+	serviceRoleArn, _ = params["serviceRoleArn"].(string)
+	if serviceRoleArn == "" {
+		serviceRoleArn, _ = params["ServiceRoleArn"].(string)
+	}
+	return apiID, name, dsType, lambdaARN, serviceRoleArn
 }
 
 func (s *Server) appsyncCreateDataSource(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	apiID, _ := params["apiId"].(string)
-	name, _ := params["name"].(string)
-	dsType, _ := params["type"].(string)
-	lambdaARN := ""
-	if cfg, ok := params["lambdaConfig"].(map[string]any); ok {
-		lambdaARN, _ = cfg["lambdaFunctionArn"].(string)
-	}
-	if lambdaARN == "" {
-		lambdaARN, _ = params["lambdaFunctionArn"].(string)
-	}
-	serviceRoleArn, _ := params["serviceRoleArn"].(string)
-	if serviceRoleArn == "" {
-		serviceRoleArn, _ = params["ServiceRoleArn"].(string)
-	}
+	apiID, name, dsType, lambdaARN, serviceRoleArn := appsyncParseDataSourceParams(params)
 	if !s.authorize(verified, catalog.ActionAppSyncCreateDataSource, "*") {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appsync:CreateDataSource.", readOnly, eventID, verified)
@@ -350,32 +506,166 @@ func (s *Server) appsyncCreateDataSource(
 			err.Error(), readOnly, eventID, verified)
 		return
 	}
-	payload, _ := appsyncCreateDataSourceJSON(ds)
+	payload, _ := appsyncsvc.CreateDataSourceJSON(ds)
 	s.writeAppSyncOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateDataSource", readOnly)
 }
 
-func appsyncCreateDataSourceJSON(ds store.AppSyncDataSource) ([]byte, error) {
-	src := map[string]any{
-		"name":          ds.Name,
-		"type":          ds.Type,
-		"lambdaConfig":  map[string]any{"lambdaFunctionArn": ds.LambdaFunctionARN},
-		"dataSourceArn": "arn:aws:appsync:us-east-1:000000000001:apis/" + ds.APIID + "/datasources/" + ds.Name,
+func (s *Server) appsyncUpdateDataSource(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, name, dsType, lambdaARN, serviceRoleArn := appsyncParseDataSourceParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncUpdateDataSource, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:UpdateDataSource.", readOnly, eventID, verified)
+		return
 	}
-	if ds.ServiceRoleArn != "" {
-		src["serviceRoleArn"] = ds.ServiceRoleArn
+	api, err := s.store.GetAppSyncGraphqlAPI(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
 	}
-	return json.Marshal(map[string]any{"dataSource": src})
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get GraphQL API.", readOnly, eventID, verified)
+		return
+	}
+	if strings.TrimSpace(serviceRoleArn) != "" {
+		if err := s.checkAppSyncPassRole(verified, serviceRoleArn, api.ARN); err != nil {
+			s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	ds, err := s.store.UpdateAppSyncDataSource(verified.AccountID, apiID, name, dsType, lambdaARN, serviceRoleArn)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Data source not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.UpdateDataSourceJSON(ds)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "UpdateDataSource", readOnly)
+}
+
+func (s *Server) appsyncGetDataSource(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, name, _, _, _ := appsyncParseDataSourceParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncGetDataSource, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:GetDataSource.", readOnly, eventID, verified)
+		return
+	}
+	ds, err := s.store.GetAppSyncDataSource(verified.AccountID, apiID, name)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Data source not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get data source.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.GetDataSourceJSON(ds)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GetDataSource", readOnly)
+}
+
+func (s *Server) appsyncListDataSources(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, _ := params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	if !s.authorize(verified, catalog.ActionAppSyncListDataSources, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:ListDataSources.", readOnly, eventID, verified)
+		return
+	}
+	sources, err := s.store.ListAppSyncDataSources(verified.AccountID, apiID)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list data sources.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.ListDataSourcesJSON(sources)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "ListDataSources", readOnly)
+}
+
+func (s *Server) appsyncDeleteDataSource(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, name, _, _, _ := appsyncParseDataSourceParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncDeleteDataSource, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:DeleteDataSource.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteAppSyncDataSource(verified.AccountID, apiID, name)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Data source not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAppSyncBadRequest) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete data source.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.DeleteDataSourceJSON()
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "DeleteDataSource", readOnly)
+}
+
+func appsyncParseResolverParams(params map[string]any) (apiID, typeName, fieldName, dsName string) {
+	apiID, _ = params["apiId"].(string)
+	if apiID == "" {
+		apiID, _ = params["ApiId"].(string)
+	}
+	typeName, _ = params["typeName"].(string)
+	if typeName == "" {
+		typeName, _ = params["TypeName"].(string)
+	}
+	fieldName, _ = params["fieldName"].(string)
+	if fieldName == "" {
+		fieldName, _ = params["FieldName"].(string)
+	}
+	dsName, _ = params["dataSourceName"].(string)
+	if dsName == "" {
+		dsName, _ = params["DataSourceName"].(string)
+	}
+	return apiID, typeName, fieldName, dsName
 }
 
 func (s *Server) appsyncCreateResolver(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	apiID, _ := params["apiId"].(string)
-	typeName, _ := params["typeName"].(string)
-	fieldName, _ := params["fieldName"].(string)
-	dsName, _ := params["dataSourceName"].(string)
+	apiID, typeName, fieldName, dsName := appsyncParseResolverParams(params)
 	if !s.authorize(verified, catalog.ActionAppSyncCreateResolver, "*") {
 		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appsync:CreateResolver.", readOnly, eventID, verified)
@@ -395,6 +685,120 @@ func (s *Server) appsyncCreateResolver(
 	payload, _ := appsyncsvc.CreateResolverJSON(res)
 	s.writeAppSyncOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "CreateResolver", readOnly)
+}
+
+func (s *Server) appsyncUpdateResolver(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, typeName, fieldName, dsName := appsyncParseResolverParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncUpdateResolver, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:UpdateResolver.", readOnly, eventID, verified)
+		return
+	}
+	res, err := s.store.UpdateAppSyncResolver(verified.AccountID, apiID, typeName, fieldName, dsName)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Resolver or data source not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.UpdateResolverJSON(res)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "UpdateResolver", readOnly)
+}
+
+func (s *Server) appsyncGetResolver(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, typeName, fieldName, _ := appsyncParseResolverParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncGetResolver, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:GetResolver.", readOnly, eventID, verified)
+		return
+	}
+	res, err := s.store.GetAppSyncResolver(verified.AccountID, apiID, typeName, fieldName)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Resolver not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get resolver.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.GetResolverJSON(res)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "GetResolver", readOnly)
+}
+
+func (s *Server) appsyncListResolvers(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, typeName, _, _ := appsyncParseResolverParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncListResolvers, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:ListResolvers.", readOnly, eventID, verified)
+		return
+	}
+	resolvers, err := s.store.ListAppSyncResolvers(verified.AccountID, apiID, typeName)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"GraphQL API not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAppSyncBadRequest) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list resolvers.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.ListResolversJSON(resolvers)
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "ListResolvers", readOnly)
+}
+
+func (s *Server) appsyncDeleteResolver(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	apiID, typeName, fieldName, _ := appsyncParseResolverParams(params)
+	if !s.authorize(verified, catalog.ActionAppSyncDeleteResolver, "*") {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appsync:DeleteResolver.", readOnly, eventID, verified)
+		return
+	}
+	err := s.store.DeleteAppSyncResolver(verified.AccountID, apiID, typeName, fieldName)
+	if errors.Is(err, store.ErrAppSyncNotFound) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusNotFound, "NotFoundException",
+			"Resolver not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrAppSyncBadRequest) {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusBadRequest, "BadRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeAppSyncError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete resolver.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := appsyncsvc.DeleteResolverJSON()
+	s.writeAppSyncOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, appsyncEventSource, "DeleteResolver", readOnly)
 }
 
 // handleAppSyncGraphQLRuntime serves POST /appsync/{apiId}/graphql with API_KEY, AWS_IAM, or Cognito auth.

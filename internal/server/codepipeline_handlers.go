@@ -42,6 +42,12 @@ func (s *Server) handleCodePipeline(
 		s.cpStartExecution(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCodePipelineGetPipelineState:
 		s.cpGetState(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodePipelinePutApprovalResult:
+		s.cpPutApprovalResult(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodePipelineGetPipelineExecution:
+		s.cpGetExecution(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCodePipelineListPipelineExecutions:
+		s.cpListExecutions(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeCodePipelineError(w, r, body, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This CodePipeline action is not implemented.", readOnly, eventID, verified)
@@ -63,8 +69,44 @@ func codepipelineAction(action string) string {
 		return catalog.ActionCodePipelineStartPipelineExecution
 	case "GetPipelineState":
 		return catalog.ActionCodePipelineGetPipelineState
+	case "PutApprovalResult":
+		return catalog.ActionCodePipelinePutApprovalResult
+	case "GetPipelineExecution":
+		return catalog.ActionCodePipelineGetPipelineExecution
+	case "ListPipelineExecutions":
+		return catalog.ActionCodePipelineListPipelineExecutions
 	default:
 		return action
+	}
+}
+
+func (s *Server) codePipelineBuildRunner(r *http.Request, verified *authn.Verified) store.CodePipelineBuildRunner {
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultCodeBuildRegion
+	}
+	return func(projectName string) (buildID, status string, err error) {
+		b, err := s.store.StartCodeBuildBuild(verified.AccountID, region, store.StartCodeBuildBuildOpts{
+			ProjectName: projectName,
+		})
+		if err != nil {
+			return "", "Failed", err
+		}
+		if strings.TrimSpace(s.cfg.DockerHost) == "" {
+			end := time.Now().UTC().Format(time.RFC3339)
+			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
+			return b.ID, store.CodeBuildStatusFailed, errors.New("compute unavailable")
+		}
+		if err := s.startCodeBuildContainer(r.Context(), verified.AccountID, b); err != nil {
+			end := time.Now().UTC().Format(time.RFC3339)
+			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
+			return b.ID, store.CodeBuildStatusFailed, err
+		}
+		builds, getErr := s.store.BatchGetCodeBuildBuilds(verified.AccountID, []string{b.ID})
+		if getErr != nil || len(builds) == 0 {
+			return b.ID, store.CodeBuildStatusSucceeded, nil
+		}
+		return builds[0].ID, builds[0].BuildStatus, nil
 	}
 }
 
@@ -230,34 +272,7 @@ func (s *Server) cpStartExecution(
 			"User is not authorized to perform codepipeline:StartPipelineExecution.", readOnly, eventID, verified)
 		return
 	}
-	region := verified.Region
-	if region == "" {
-		region = store.DefaultCodeBuildRegion
-	}
-	runBuild := func(projectName string) (buildID, status string, err error) {
-		b, err := s.store.StartCodeBuildBuild(verified.AccountID, region, store.StartCodeBuildBuildOpts{
-			ProjectName: projectName,
-		})
-		if err != nil {
-			return "", "Failed", err
-		}
-		if strings.TrimSpace(s.cfg.DockerHost) == "" {
-			end := time.Now().UTC().Format(time.RFC3339)
-			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
-			return b.ID, store.CodeBuildStatusFailed, errors.New("compute unavailable")
-		}
-		if err := s.startCodeBuildContainer(r.Context(), verified.AccountID, b); err != nil {
-			end := time.Now().UTC().Format(time.RFC3339)
-			_ = s.store.SetCodeBuildBuildRuntime(verified.AccountID, b.ID, "", store.CodeBuildStatusFailed, end)
-			return b.ID, store.CodeBuildStatusFailed, err
-		}
-		builds, getErr := s.store.BatchGetCodeBuildBuilds(verified.AccountID, []string{b.ID})
-		if getErr != nil || len(builds) == 0 {
-			return b.ID, store.CodeBuildStatusSucceeded, nil
-		}
-		return builds[0].ID, builds[0].BuildStatus, nil
-	}
-	e, err := s.store.StartCodePipelineExecution(verified.AccountID, name, runBuild)
+	e, err := s.store.StartCodePipelineExecution(verified.AccountID, name, s.codePipelineBuildRunner(r, verified))
 	if errors.Is(err, store.ErrCodePipelineNotFound) {
 		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
 			"Pipeline not found.", readOnly, eventID, verified)
@@ -302,6 +317,124 @@ func (s *Server) cpGetState(
 	payload, _ := cpsvc.GetPipelineStateJSON(name, e)
 	s.writeCodePipelineOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, codepipelineEventSource, "GetPipelineState", readOnly)
+}
+
+func (s *Server) cpPutApprovalResult(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	pipelineName, _ := params["pipelineName"].(string)
+	stageName, _ := params["stageName"].(string)
+	actionName, _ := params["actionName"].(string)
+	token, _ := params["token"].(string)
+	result, _ := params["result"].(map[string]any)
+	status, _ := result["status"].(string)
+	if strings.TrimSpace(pipelineName) == "" || strings.TrimSpace(stageName) == "" ||
+		strings.TrimSpace(actionName) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(status) == "" {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"pipelineName, stageName, actionName, token, and result.status are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionCodePipelinePutApprovalResult, "*") {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codepipeline:PutApprovalResult.", readOnly, eventID, verified)
+		return
+	}
+	approvedAt, err := s.store.PutCodePipelineApprovalResult(
+		verified.AccountID, pipelineName, stageName, actionName, token, status,
+		s.codePipelineBuildRunner(r, verified),
+	)
+	if errors.Is(err, store.ErrCodePipelineNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
+			"Pipeline not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCodePipelineInvalidApproval) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "InvalidApprovalTokenException",
+			"Approval token is invalid or the action is not waiting.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCodePipelineBadReq) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to put approval result.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cpsvc.PutApprovalResultJSON(approvedAt)
+	s.writeCodePipelineOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codepipelineEventSource, "PutApprovalResult", readOnly)
+}
+
+func (s *Server) cpGetExecution(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	pipelineName, _ := params["pipelineName"].(string)
+	executionID, _ := params["pipelineExecutionId"].(string)
+	if strings.TrimSpace(pipelineName) == "" || strings.TrimSpace(executionID) == "" {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"pipelineName and pipelineExecutionId are required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionCodePipelineGetPipelineExecution, "*") {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codepipeline:GetPipelineExecution.", readOnly, eventID, verified)
+		return
+	}
+	e, err := s.store.GetCodePipelineExecution(verified.AccountID, pipelineName, executionID)
+	if errors.Is(err, store.ErrCodePipelineNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
+			"Pipeline not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrCodePipelineExecNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineExecutionNotFoundException",
+			"Pipeline execution not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get pipeline execution.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cpsvc.GetPipelineExecutionJSON(e)
+	s.writeCodePipelineOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codepipelineEventSource, "GetPipelineExecution", readOnly)
+}
+
+func (s *Server) cpListExecutions(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	pipelineName, _ := params["pipelineName"].(string)
+	if strings.TrimSpace(pipelineName) == "" {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"pipelineName is required.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionCodePipelineListPipelineExecutions, "*") {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform codepipeline:ListPipelineExecutions.", readOnly, eventID, verified)
+		return
+	}
+	execs, err := s.store.ListCodePipelineExecutions(verified.AccountID, pipelineName)
+	if errors.Is(err, store.ErrCodePipelineNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
+			"Pipeline not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list pipeline executions.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := cpsvc.ListPipelineExecutionsJSON(execs)
+	s.writeCodePipelineOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, codepipelineEventSource, "ListPipelineExecutions", readOnly)
 }
 
 func (s *Server) writeCodePipelineOK(w http.ResponseWriter, payload []byte) {

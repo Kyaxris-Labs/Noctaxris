@@ -41,6 +41,10 @@ func (s *Server) handleSSM(
 		s.ssmDeleteParameter(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMDescribeParameters:
 		s.ssmDescribeParameters(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMLabelParameterVersion:
+		s.ssmLabelParameterVersion(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionSSMGetParameterHistory:
+		s.ssmGetParameterHistory(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMListTagsForResource:
 		s.ssmListTagsForResource(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionSSMAddTagsToResource:
@@ -76,6 +80,10 @@ func ssmAction(action string) string {
 		return catalog.ActionSSMDeleteParameter
 	case "DescribeParameters":
 		return catalog.ActionSSMDescribeParameters
+	case "LabelParameterVersion":
+		return catalog.ActionSSMLabelParameterVersion
+	case "GetParameterHistory":
+		return catalog.ActionSSMGetParameterHistory
 	case "ListTagsForResource":
 		return catalog.ActionSSMListTagsForResource
 	case "AddTagsToResource":
@@ -220,18 +228,24 @@ func (s *Server) ssmGetParameter(
 		return
 	}
 	withDecryption := ssmBoolParam(params["WithDecryption"], false)
+	sel := store.ParseParameterSelector(name, ssmIntParam(params["Version"], 0), ssmStringParam(params["Label"]))
 
-	arn := s.ssmParameterARN(verified, name)
+	arn := s.ssmParameterARN(verified, sel.Name)
 	if !s.authorizeSSM(verified, catalog.ActionSSMGetParameter, arn) {
 		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform ssm:GetParameter.", readOnly, eventID, verified)
 		return
 	}
 
-	p, err := s.store.GetParameter(verified.AccountID, name, false)
+	p, err := s.store.GetParameterResolved(verified.AccountID, sel, false)
 	if errors.Is(err, store.ErrParameterNotFound) {
 		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterNotFound",
 			"Parameter not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrParameterVersionNotFound) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterVersionNotFound",
+			"Parameter version not found.", readOnly, eventID, verified)
 		return
 	}
 	if err != nil {
@@ -244,7 +258,7 @@ func (s *Server) ssmGetParameter(
 		if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, p.KeyID, catalog.ActionKMSDecrypt, encCtx) {
 			return
 		}
-		p, err = s.store.GetParameter(verified.AccountID, name, true)
+		p, err = s.store.GetParameterResolved(verified.AccountID, sel, true)
 		if err != nil {
 			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to get parameter.", readOnly, eventID, verified)
@@ -288,7 +302,8 @@ func (s *Server) ssmGetParameters(
 	withDecryption := ssmBoolParam(params["WithDecryption"], false)
 
 	for _, name := range names {
-		arn := s.ssmParameterARN(verified, name)
+		sel := store.ParseParameterSelector(name, 0, "")
+		arn := s.ssmParameterARN(verified, sel.Name)
 		if !s.authorizeSSM(verified, catalog.ActionSSMGetParameters, arn) {
 			s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform ssm:GetParameters.", readOnly, eventID, verified)
@@ -296,7 +311,7 @@ func (s *Server) ssmGetParameters(
 		}
 	}
 
-	found, err := s.store.GetParameters(verified.AccountID, names, false)
+	found, err := s.store.GetParametersResolved(verified.AccountID, names, false)
 	if err != nil {
 		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 			"Unable to get parameters.", readOnly, eventID, verified)
@@ -312,7 +327,7 @@ func (s *Server) ssmGetParameters(
 				return
 			}
 		}
-		found, err = s.store.GetParameters(verified.AccountID, names, true)
+		found, err = s.store.GetParametersResolved(verified.AccountID, names, true)
 		if err != nil {
 			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to get parameters.", readOnly, eventID, verified)
@@ -320,13 +335,22 @@ func (s *Server) ssmGetParameters(
 		}
 	}
 
-	foundSet := map[string]struct{}{}
+	foundKeys := map[string]struct{}{}
 	for _, p := range found {
-		foundSet[p.Name] = struct{}{}
+		key := p.Name
+		if p.Selector != "" {
+			key = p.Name + p.Selector
+		}
+		foundKeys[key] = struct{}{}
 	}
 	invalid := make([]string, 0)
 	for _, name := range names {
-		if _, ok := foundSet[ssmNormalizeName(name)]; !ok {
+		sel := store.ParseParameterSelector(name, 0, "")
+		key := sel.Name
+		if sel.Selector != "" {
+			key = sel.Name + sel.Selector
+		}
+		if _, ok := foundKeys[key]; !ok {
 			invalid = append(invalid, name)
 		}
 	}
@@ -488,6 +512,136 @@ func (s *Server) ssmDescribeParameters(
 	}
 	s.writeSSMOK(w, requestID, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "DescribeParameters", readOnly)
+}
+
+func (s *Server) ssmLabelParameterVersion(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Name is required.", readOnly, eventID, verified)
+		return
+	}
+	labels := stringSliceParam(params["Labels"])
+	if len(labels) == 0 {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Labels is required.", readOnly, eventID, verified)
+		return
+	}
+	version := ssmIntParam(params["ParameterVersion"], 0)
+
+	arn := s.ssmParameterARN(verified, name)
+	if !s.authorizeSSM(verified, catalog.ActionSSMLabelParameterVersion, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:LabelParameterVersion.", readOnly, eventID, verified)
+		return
+	}
+
+	result, err := s.store.LabelParameterVersion(verified.AccountID, name, version, labels)
+	if errors.Is(err, store.ErrParameterNotFound) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterNotFound",
+			"Parameter not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrParameterVersionNotFound) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterVersionNotFound",
+			"Parameter version not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrParameterVersionLabelLimitExceeded) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterVersionLabelLimitExceeded",
+			"A parameter version can have a maximum of ten labels.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "ValidationException") {
+			s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to label parameter version.", readOnly, eventID, verified)
+		return
+	}
+
+	payload, err := ssmsvc.LabelParameterVersionJSON(result.ParameterVersion, result.InvalidLabels)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "LabelParameterVersion", readOnly)
+}
+
+func (s *Server) ssmGetParameterHistory(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID, eventID string,
+	verified *authn.Verified,
+	readOnly bool,
+	params map[string]any,
+) {
+	name, _ := params["Name"].(string)
+	if strings.TrimSpace(name) == "" {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"Name is required.", readOnly, eventID, verified)
+		return
+	}
+	withDecryption := ssmBoolParam(params["WithDecryption"], false)
+
+	arn := s.ssmParameterARN(verified, name)
+	if !s.authorizeSSM(verified, catalog.ActionSSMGetParameterHistory, arn) {
+		s.writeSSMError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform ssm:GetParameterHistory.", readOnly, eventID, verified)
+		return
+	}
+
+	history, err := s.store.GetParameterHistory(verified.AccountID, name, false)
+	if errors.Is(err, store.ErrParameterNotFound) {
+		s.writeSSMError(w, r, body, requestID, http.StatusBadRequest, "ParameterNotFound",
+			"Parameter not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to get parameter history.", readOnly, eventID, verified)
+		return
+	}
+	if withDecryption {
+		for _, h := range history {
+			if h.Type != store.ParamTypeSecureString {
+				continue
+			}
+			encCtx := store.SSMEncryptionContext(h.ARN)
+			if !s.ssmAuthorizeKMS(w, r, body, requestID, eventID, verified, readOnly, h.KeyID, catalog.ActionKMSDecrypt, encCtx) {
+				return
+			}
+		}
+		history, err = s.store.GetParameterHistory(verified.AccountID, name, true)
+		if err != nil {
+			s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get parameter history.", readOnly, eventID, verified)
+			return
+		}
+	}
+
+	payload, err := ssmsvc.GetParameterHistoryJSON(history, withDecryption)
+	if err != nil {
+		s.writeSSMError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeSSMOK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ssmEventSource, "GetParameterHistory", readOnly)
 }
 
 func (s *Server) ssmResolveParameterARN(
@@ -677,6 +831,13 @@ func ssmBoolParam(v any, def bool) bool {
 		return b
 	}
 	return def
+}
+
+func ssmStringParam(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 func ssmNormalizeName(name string) string {

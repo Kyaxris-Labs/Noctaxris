@@ -53,6 +53,36 @@ func (s *Server) handleAPIGatewayREST(
 		s.apigwRESTCreateStage(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionAPIGatewayGetStage:
 		s.apigwRESTGetStage(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayCreateAuthorizer:
+		s.apigwRESTCreateAuthorizer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetAuthorizer:
+		s.apigwRESTGetAuthorizer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetAuthorizers:
+		s.apigwRESTGetAuthorizers(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayDeleteAuthorizer:
+		s.apigwRESTDeleteAuthorizer(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayCreateApiKey:
+		s.apigwRESTCreateApiKey(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetApiKey:
+		s.apigwRESTGetApiKey(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetApiKeys:
+		s.apigwRESTGetApiKeys(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayDeleteApiKey:
+		s.apigwRESTDeleteApiKey(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayCreateUsagePlan:
+		s.apigwRESTCreateUsagePlan(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetUsagePlan:
+		s.apigwRESTGetUsagePlan(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetUsagePlans:
+		s.apigwRESTGetUsagePlans(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayDeleteUsagePlan:
+		s.apigwRESTDeleteUsagePlan(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayCreateUsagePlanKey:
+		s.apigwRESTCreateUsagePlanKey(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayGetUsagePlanKeys:
+		s.apigwRESTGetUsagePlanKeys(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionAPIGatewayDeleteUsagePlanKey:
+		s.apigwRESTDeleteUsagePlanKey(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeAPIGatewayError(w, r, body, requestID, http.StatusNotImplemented, "BadRequestException",
 			"This API Gateway REST action is not implemented.", readOnly, eventID, verified)
@@ -94,6 +124,36 @@ func apiGatewayRESTAction(action string) string {
 		return catalog.ActionAPIGatewayCreateStage
 	case "GetStage":
 		return catalog.ActionAPIGatewayGetStage
+	case "CreateAuthorizer":
+		return catalog.ActionAPIGatewayCreateAuthorizer
+	case "GetAuthorizer":
+		return catalog.ActionAPIGatewayGetAuthorizer
+	case "GetAuthorizers":
+		return catalog.ActionAPIGatewayGetAuthorizers
+	case "DeleteAuthorizer":
+		return catalog.ActionAPIGatewayDeleteAuthorizer
+	case "CreateApiKey":
+		return catalog.ActionAPIGatewayCreateApiKey
+	case "GetApiKey":
+		return catalog.ActionAPIGatewayGetApiKey
+	case "GetApiKeys":
+		return catalog.ActionAPIGatewayGetApiKeys
+	case "DeleteApiKey":
+		return catalog.ActionAPIGatewayDeleteApiKey
+	case "CreateUsagePlan":
+		return catalog.ActionAPIGatewayCreateUsagePlan
+	case "GetUsagePlan":
+		return catalog.ActionAPIGatewayGetUsagePlan
+	case "GetUsagePlans":
+		return catalog.ActionAPIGatewayGetUsagePlans
+	case "DeleteUsagePlan":
+		return catalog.ActionAPIGatewayDeleteUsagePlan
+	case "CreateUsagePlanKey":
+		return catalog.ActionAPIGatewayCreateUsagePlanKey
+	case "GetUsagePlanKeys":
+		return catalog.ActionAPIGatewayGetUsagePlanKeys
+	case "DeleteUsagePlanKey":
+		return catalog.ActionAPIGatewayDeleteUsagePlanKey
 	default:
 		return action
 	}
@@ -116,7 +176,22 @@ func isAPIGatewayRESTAction(action string) bool {
 		catalog.ActionAPIGatewayGetIntegration,
 		catalog.ActionAPIGatewayCreateDeployment,
 		catalog.ActionAPIGatewayCreateStage,
-		catalog.ActionAPIGatewayGetStage:
+		catalog.ActionAPIGatewayGetStage,
+		catalog.ActionAPIGatewayCreateAuthorizer,
+		catalog.ActionAPIGatewayGetAuthorizer,
+		catalog.ActionAPIGatewayGetAuthorizers,
+		catalog.ActionAPIGatewayDeleteAuthorizer,
+		catalog.ActionAPIGatewayCreateApiKey,
+		catalog.ActionAPIGatewayGetApiKey,
+		catalog.ActionAPIGatewayGetApiKeys,
+		catalog.ActionAPIGatewayDeleteApiKey,
+		catalog.ActionAPIGatewayCreateUsagePlan,
+		catalog.ActionAPIGatewayGetUsagePlan,
+		catalog.ActionAPIGatewayGetUsagePlans,
+		catalog.ActionAPIGatewayDeleteUsagePlan,
+		catalog.ActionAPIGatewayCreateUsagePlanKey,
+		catalog.ActionAPIGatewayGetUsagePlanKeys,
+		catalog.ActionAPIGatewayDeleteUsagePlanKey:
 		return true
 	default:
 		return false
@@ -127,20 +202,36 @@ func isAPIGatewayRESTAction(action string) bool {
 func isAPIGatewayRESTMgmtPath(path string) bool {
 	path = strings.TrimSuffix(path, "/")
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) == 0 || parts[0] != "restapis" {
+	if len(parts) == 0 {
 		return false
 	}
-	if len(parts) >= 4 && parts[3] == "_user_request_" {
+	switch parts[0] {
+	case "apikeys", "usageplans":
+		return true
+	case "restapis":
+		if len(parts) >= 4 && parts[3] == "_user_request_" {
+			return false
+		}
+		return true
+	default:
 		return false
 	}
-	return true
 }
 
-// resolveAPIGatewayREST maps /restapis/... control-plane paths used by aws apigateway.
+// resolveAPIGatewayREST maps /restapis/... /apikeys /usageplans control-plane paths used by aws apigateway.
 func resolveAPIGatewayREST(r *http.Request, body []byte) (action string, outBody []byte) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) < 1 || parts[0] != "restapis" {
+	if len(parts) < 1 {
+		return "", body
+	}
+	if parts[0] == "apikeys" {
+		return resolveAPIGatewayAPIKeys(r, body, parts)
+	}
+	if parts[0] == "usageplans" {
+		return resolveAPIGatewayUsagePlans(r, body, parts)
+	}
+	if parts[0] != "restapis" {
 		return "", body
 	}
 	if len(parts) >= 4 && parts[3] == "_user_request_" {
@@ -158,6 +249,9 @@ func resolveAPIGatewayREST(r *http.Request, body []byte) (action string, outBody
 		if len(parts) == 3 && parts[2] == "stages" {
 			return catalog.ActionAPIGatewayCreateStage, injectJSONStringField(body, "restApiId", parts[1])
 		}
+		if len(parts) == 3 && parts[2] == "authorizers" {
+			return catalog.ActionAPIGatewayCreateAuthorizer, injectJSONStringField(body, "restApiId", parts[1])
+		}
 		if len(parts) == 4 && parts[2] == "resources" {
 			body = injectJSONStringField(body, "restApiId", parts[1])
 			return catalog.ActionAPIGatewayCreateResource, injectJSONStringField(body, "parentId", parts[3])
@@ -171,6 +265,13 @@ func resolveAPIGatewayREST(r *http.Request, body []byte) (action string, outBody
 		}
 		if len(parts) == 3 && parts[2] == "resources" {
 			return catalog.ActionAPIGatewayGetResources, injectJSONStringField(body, "restApiId", parts[1])
+		}
+		if len(parts) == 3 && parts[2] == "authorizers" {
+			return catalog.ActionAPIGatewayGetAuthorizers, injectJSONStringField(body, "restApiId", parts[1])
+		}
+		if len(parts) == 4 && parts[2] == "authorizers" {
+			body = injectJSONStringField(body, "restApiId", parts[1])
+			return catalog.ActionAPIGatewayGetAuthorizer, injectJSONStringField(body, "authorizerId", parts[3])
 		}
 		if len(parts) == 4 && parts[2] == "stages" {
 			body = injectJSONStringField(body, "restApiId", parts[1])
@@ -211,10 +312,66 @@ func resolveAPIGatewayREST(r *http.Request, body []byte) (action string, outBody
 			body = injectJSONStringField(body, "restApiId", parts[1])
 			return catalog.ActionAPIGatewayDeleteResource, injectJSONStringField(body, "resourceId", parts[3])
 		}
+		if len(parts) == 4 && parts[2] == "authorizers" {
+			body = injectJSONStringField(body, "restApiId", parts[1])
+			return catalog.ActionAPIGatewayDeleteAuthorizer, injectJSONStringField(body, "authorizerId", parts[3])
+		}
 		if len(parts) == 6 && parts[2] == "resources" && parts[4] == "methods" {
 			body = injectJSONStringField(body, "restApiId", parts[1])
 			body = injectJSONStringField(body, "resourceId", parts[3])
 			return catalog.ActionAPIGatewayDeleteMethod, injectJSONStringField(body, "pathHttpMethod", parts[5])
+		}
+	}
+	return "", body
+}
+
+func resolveAPIGatewayAPIKeys(r *http.Request, body []byte, parts []string) (action string, outBody []byte) {
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) == 1 {
+			return catalog.ActionAPIGatewayCreateApiKey, body
+		}
+	case http.MethodGet:
+		if len(parts) == 1 {
+			return catalog.ActionAPIGatewayGetApiKeys, body
+		}
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayGetApiKey, injectJSONStringField(body, "apiKey", parts[1])
+		}
+	case http.MethodDelete:
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayDeleteApiKey, injectJSONStringField(body, "apiKey", parts[1])
+		}
+	}
+	return "", body
+}
+
+func resolveAPIGatewayUsagePlans(r *http.Request, body []byte, parts []string) (action string, outBody []byte) {
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) == 1 {
+			return catalog.ActionAPIGatewayCreateUsagePlan, body
+		}
+		if len(parts) == 3 && parts[2] == "keys" {
+			return catalog.ActionAPIGatewayCreateUsagePlanKey, injectJSONStringField(body, "usagePlanId", parts[1])
+		}
+	case http.MethodGet:
+		if len(parts) == 1 {
+			return catalog.ActionAPIGatewayGetUsagePlans, body
+		}
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayGetUsagePlan, injectJSONStringField(body, "usagePlanId", parts[1])
+		}
+		if len(parts) == 3 && parts[2] == "keys" {
+			return catalog.ActionAPIGatewayGetUsagePlanKeys, injectJSONStringField(body, "usagePlanId", parts[1])
+		}
+	case http.MethodDelete:
+		if len(parts) == 2 {
+			return catalog.ActionAPIGatewayDeleteUsagePlan, injectJSONStringField(body, "usagePlanId", parts[1])
+		}
+		if len(parts) == 4 && parts[2] == "keys" {
+			body = injectJSONStringField(body, "usagePlanId", parts[1])
+			return catalog.ActionAPIGatewayDeleteUsagePlanKey, injectJSONStringField(body, "keyId", parts[3])
 		}
 	}
 	return "", body

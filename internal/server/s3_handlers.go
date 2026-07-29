@@ -235,6 +235,18 @@ func (s *Server) handleS3(
 		s.s3GetBucketEncryption(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodDelete && bucket != "" && key == "" && q.Has("encryption"):
 		s.s3DeleteBucketEncryption(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("cors"):
+		s.s3PutBucketCors(w, r, body, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("cors"):
+		s.s3GetBucketCors(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodDelete && bucket != "" && key == "" && q.Has("cors"):
+		s.s3DeleteBucketCors(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("lifecycle"):
+		s.s3PutLifecycleConfiguration(w, r, body, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("lifecycle"):
+		s.s3GetLifecycleConfiguration(w, r, requestID, eventID, verified, readOnly, bucket)
+	case r.Method == http.MethodDelete && bucket != "" && key == "" && q.Has("lifecycle"):
+		s.s3DeleteLifecycleConfiguration(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodPut && bucket != "" && key == "" && q.Has("policy"):
 		s.s3PutBucketPolicy(w, r, body, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodGet && bucket != "" && key == "" && q.Has("policy"):
@@ -256,6 +268,8 @@ func (s *Server) handleS3(
 		s.s3ListObjectsV2(w, r, requestID, eventID, verified, readOnly, bucket)
 	case r.Method == http.MethodPost && bucket != "" && key != "" && q.Has("uploads"):
 		s.s3CreateMultipartUpload(w, r, requestID, eventID, verified, readOnly, bucket, key)
+	case r.Method == http.MethodPost && bucket != "" && key != "" && q.Has("select"):
+		s.s3SelectObjectContent(w, r, body, requestID, eventID, verified, readOnly, bucket, key)
 	case r.Method == http.MethodPut && bucket != "" && key != "" && uploadID != "" && q.Has("partNumber"):
 		s.s3UploadPart(w, r, body, requestID, eventID, verified, readOnly, bucket, key, uploadID)
 	case r.Method == http.MethodPost && bucket != "" && key != "" && uploadID != "":

@@ -55,6 +55,21 @@ CREATE TABLE IF NOT EXISTS wafv2_rule_groups (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, name, scope)
 );
+CREATE TABLE IF NOT EXISTS wafv2_ip_sets (
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  arn TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  ip_address_version TEXT NOT NULL,
+  addresses_json TEXT NOT NULL DEFAULT '[]',
+  lock_token TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, name, scope)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_waf_ipset_id ON wafv2_ip_sets(account_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_waf_ipset_arn ON wafv2_ip_sets(account_id, arn);
 `
 
 // WAFWebACL is a WAFv2 Web ACL row.
@@ -98,9 +113,24 @@ type WAFSizeConstraintStatement struct {
 	Size               int64  `json:"Size"`
 }
 
-// WAFIPSetReferenceStatement is a lab lite IP set match (inline CIDRs on the rule).
+// WAFIPSet is a persisted WAFv2 IP set resource.
+type WAFIPSet struct {
+	Name             string
+	ID               string
+	Scope            string
+	ARN              string
+	Description      string
+	IPAddressVersion string // IPV4 or IPV6
+	Addresses        []string
+	AddressesJSON    string
+	LockToken        string
+	CreatedAt        int64
+}
+
+// WAFIPSetReferenceStatement is a lab IP set match: ARN of a stored IPSet and/or inline CIDRs.
 type WAFIPSetReferenceStatement struct {
-	Addresses []string `json:"Addresses"` // CIDR or host (host becomes /32 or /128)
+	ARN       string   `json:"ARN,omitempty"`       // IPSet ARN; unknown ARNs fail closed on evaluate
+	Addresses []string `json:"Addresses,omitempty"` // inline CIDR or host (host becomes /32 or /128)
 }
 
 // WAFRequestView carries invoke-path fields used for statement evaluation.
@@ -144,6 +174,15 @@ func WAFWebACLARN(region, accountID, scope, name, id string) string {
 	}
 	scope = strings.ToLower(scope)
 	return fmt.Sprintf("arn:aws:wafv2:%s:%s:%s/webacl/%s/%s", region, accountID, scope, name, id)
+}
+
+// WAFIPSetARN builds arn:aws:wafv2:REGION:ACCOUNT:SCOPE/ipset/NAME/ID
+func WAFIPSetARN(region, accountID, scope, name, id string) string {
+	if region == "" {
+		region = DefaultWAFRegion
+	}
+	scope = strings.ToLower(scope)
+	return fmt.Sprintf("arn:aws:wafv2:%s:%s:%s/ipset/%s/%s", region, accountID, scope, name, id)
 }
 
 // CreateWAFWebACL creates a Web ACL.
@@ -305,6 +344,211 @@ func wafRegionOrDefault(region string) string {
 		return DefaultWAFRegion
 	}
 	return region
+}
+
+func normalizeWAFIPSetAddresses(addresses []string) []string {
+	if addresses == nil {
+		return []string{}
+	}
+	out := make([]string, 0, len(addresses))
+	for _, a := range addresses {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func decodeWAFIPSetAddresses(addressesJSON string) []string {
+	var addrs []string
+	if addressesJSON == "" {
+		return []string{}
+	}
+	_ = json.Unmarshal([]byte(addressesJSON), &addrs)
+	return normalizeWAFIPSetAddresses(addrs)
+}
+
+func scanWAFIPSet(row interface {
+	Scan(dest ...any) error
+}) (WAFIPSet, error) {
+	var ip WAFIPSet
+	err := row.Scan(
+		&ip.Name, &ip.ID, &ip.Scope, &ip.ARN, &ip.Description,
+		&ip.IPAddressVersion, &ip.AddressesJSON, &ip.LockToken, &ip.CreatedAt,
+	)
+	if err != nil {
+		return WAFIPSet{}, err
+	}
+	ip.Addresses = decodeWAFIPSetAddresses(ip.AddressesJSON)
+	return ip, nil
+}
+
+// CreateWAFIPSet creates a persisted IP set.
+func (s *Store) CreateWAFIPSet(accountID, region, name, scope, description, ipAddressVersion string, addresses []string) (WAFIPSet, error) {
+	name = strings.TrimSpace(name)
+	scope = strings.ToUpper(strings.TrimSpace(scope))
+	ipAddressVersion = strings.ToUpper(strings.TrimSpace(ipAddressVersion))
+	if name == "" || (scope != "REGIONAL" && scope != "CLOUDFRONT") {
+		return WAFIPSet{}, fmt.Errorf("%w: Name and Scope (REGIONAL|CLOUDFRONT) required", ErrWAFBadRequest)
+	}
+	if ipAddressVersion != "IPV4" && ipAddressVersion != "IPV6" {
+		return WAFIPSet{}, fmt.Errorf("%w: IPAddressVersion must be IPV4 or IPV6", ErrWAFBadRequest)
+	}
+	addresses = normalizeWAFIPSetAddresses(addresses)
+	for _, addr := range addresses {
+		if _, err := wafParseCIDR(addr); err != nil {
+			return WAFIPSet{}, fmt.Errorf("%w: invalid address %q", ErrWAFBadRequest, addr)
+		}
+	}
+	addrJSON, err := json.Marshal(addresses)
+	if err != nil {
+		return WAFIPSet{}, fmt.Errorf("create ip set: marshal addresses: %w", err)
+	}
+	id := uuid.NewString()
+	lock := uuid.NewString()
+	arn := WAFIPSetARN(region, accountID, scope, name, id)
+	now := time.Now().UTC().UnixMilli()
+	_, err = s.db.Exec(
+		`INSERT INTO wafv2_ip_sets (account_id, name, id, scope, arn, description, ip_address_version, addresses_json, lock_token, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, name, id, scope, arn, description, ipAddressVersion, string(addrJSON), lock, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			return WAFIPSet{}, ErrWAFAlreadyExists
+		}
+		return WAFIPSet{}, fmt.Errorf("create ip set: %w", err)
+	}
+	return WAFIPSet{
+		Name: name, ID: id, Scope: scope, ARN: arn, Description: description,
+		IPAddressVersion: ipAddressVersion, Addresses: addresses, AddressesJSON: string(addrJSON),
+		LockToken: lock, CreatedAt: now,
+	}, nil
+}
+
+// GetWAFIPSet returns an IP set by name+scope or id.
+func (s *Store) GetWAFIPSet(accountID, name, scope, id string) (WAFIPSet, error) {
+	scope = strings.ToUpper(strings.TrimSpace(scope))
+	var (
+		ip  WAFIPSet
+		err error
+	)
+	if id != "" {
+		ip, err = scanWAFIPSet(s.db.QueryRow(
+			`SELECT name, id, scope, arn, description, ip_address_version, addresses_json, lock_token, created_at
+			 FROM wafv2_ip_sets WHERE account_id = ? AND id = ?`,
+			accountID, id,
+		))
+	} else {
+		ip, err = scanWAFIPSet(s.db.QueryRow(
+			`SELECT name, id, scope, arn, description, ip_address_version, addresses_json, lock_token, created_at
+			 FROM wafv2_ip_sets WHERE account_id = ? AND name = ? AND scope = ?`,
+			accountID, name, scope,
+		))
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return WAFIPSet{}, ErrWAFNotFound
+	}
+	if err != nil {
+		return WAFIPSet{}, fmt.Errorf("get ip set: %w", err)
+	}
+	return ip, nil
+}
+
+// GetWAFIPSetByARN returns an IP set by ARN within the account.
+func (s *Store) GetWAFIPSetByARN(accountID, arn string) (WAFIPSet, error) {
+	arn = strings.TrimSpace(arn)
+	if arn == "" {
+		return WAFIPSet{}, ErrWAFNotFound
+	}
+	ip, err := scanWAFIPSet(s.db.QueryRow(
+		`SELECT name, id, scope, arn, description, ip_address_version, addresses_json, lock_token, created_at
+		 FROM wafv2_ip_sets WHERE account_id = ? AND arn = ?`,
+		accountID, arn,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return WAFIPSet{}, ErrWAFNotFound
+	}
+	if err != nil {
+		return WAFIPSet{}, fmt.Errorf("get ip set by arn: %w", err)
+	}
+	return ip, nil
+}
+
+// UpdateWAFIPSet replaces Addresses when LockToken matches.
+func (s *Store) UpdateWAFIPSet(accountID, name, scope, id, lockToken string, addresses []string) (WAFIPSet, error) {
+	ip, err := s.GetWAFIPSet(accountID, name, scope, id)
+	if err != nil {
+		return WAFIPSet{}, err
+	}
+	if lockToken != "" && lockToken != ip.LockToken {
+		return WAFIPSet{}, fmt.Errorf("%w: lock token mismatch", ErrWAFBadRequest)
+	}
+	addresses = normalizeWAFIPSetAddresses(addresses)
+	for _, addr := range addresses {
+		if _, err := wafParseCIDR(addr); err != nil {
+			return WAFIPSet{}, fmt.Errorf("%w: invalid address %q", ErrWAFBadRequest, addr)
+		}
+	}
+	addrJSON, err := json.Marshal(addresses)
+	if err != nil {
+		return WAFIPSet{}, fmt.Errorf("update ip set: marshal addresses: %w", err)
+	}
+	newLock := uuid.NewString()
+	_, err = s.db.Exec(
+		`UPDATE wafv2_ip_sets SET addresses_json = ?, lock_token = ? WHERE account_id = ? AND id = ?`,
+		string(addrJSON), newLock, accountID, ip.ID,
+	)
+	if err != nil {
+		return WAFIPSet{}, fmt.Errorf("update ip set: %w", err)
+	}
+	ip.Addresses = addresses
+	ip.AddressesJSON = string(addrJSON)
+	ip.LockToken = newLock
+	return ip, nil
+}
+
+// DeleteWAFIPSet deletes an IP set when LockToken matches.
+func (s *Store) DeleteWAFIPSet(accountID, name, scope, id, lockToken string) error {
+	ip, err := s.GetWAFIPSet(accountID, name, scope, id)
+	if err != nil {
+		return err
+	}
+	if lockToken != "" && lockToken != ip.LockToken {
+		return fmt.Errorf("%w: lock token mismatch", ErrWAFBadRequest)
+	}
+	_, err = s.db.Exec(
+		`DELETE FROM wafv2_ip_sets WHERE account_id = ? AND id = ?`,
+		accountID, ip.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete ip set: %w", err)
+	}
+	return nil
+}
+
+// ListWAFIPSets lists IP sets for a scope.
+func (s *Store) ListWAFIPSets(accountID, scope string) ([]WAFIPSet, error) {
+	scope = strings.ToUpper(strings.TrimSpace(scope))
+	rows, err := s.db.Query(
+		`SELECT name, id, scope, arn, description, ip_address_version, addresses_json, lock_token, created_at
+		 FROM wafv2_ip_sets WHERE account_id = ? AND scope = ? ORDER BY name`,
+		accountID, scope,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list ip sets: %w", err)
+	}
+	defer rows.Close()
+	var out []WAFIPSet
+	for rows.Next() {
+		ip, err := scanWAFIPSet(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list ip sets scan: %w", err)
+		}
+		out = append(out, ip)
+	}
+	return out, rows.Err()
 }
 
 // IsWAFAssociableResourceARN reports whether ResourceArn is a lab-accepted
@@ -488,7 +732,7 @@ func (s *Store) EvaluateWAFRequestWithView(accountID, webACLARN, requestLabel st
 		return rules[i].Name < rules[j].Name
 	})
 	for _, rule := range rules {
-		matched, matchErr := wafRuleMatches(rule, requestLabel, view)
+		matched, matchErr := s.wafRuleMatches(accountID, rule, requestLabel, view)
 		if matchErr != nil {
 			return "", matchErr
 		}
@@ -506,7 +750,7 @@ func (s *Store) EvaluateWAFRequestWithView(accountID, webACLARN, requestLabel st
 	return "Allow", nil
 }
 
-func wafRuleMatches(rule WAFRule, requestLabel string, view *WAFRequestView) (bool, error) {
+func (s *Store) wafRuleMatches(accountID string, rule WAFRule, requestLabel string, view *WAFRequestView) (bool, error) {
 	if rule.ByteMatchStatement != nil {
 		return evaluateWAFByteMatch(rule.ByteMatchStatement, view)
 	}
@@ -514,7 +758,7 @@ func wafRuleMatches(rule WAFRule, requestLabel string, view *WAFRequestView) (bo
 		return evaluateWAFSizeConstraint(rule.SizeConstraintStatement, view)
 	}
 	if rule.IPSetReferenceStatement != nil {
-		return evaluateWAFIPSet(rule.IPSetReferenceStatement, view)
+		return s.evaluateWAFIPSet(accountID, rule.IPSetReferenceStatement, view)
 	}
 	if rule.Label != "" {
 		return rule.Label == requestLabel, nil
@@ -593,7 +837,7 @@ func evaluateWAFSizeConstraint(sc *WAFSizeConstraintStatement, view *WAFRequestV
 	}
 }
 
-func evaluateWAFIPSet(ipset *WAFIPSetReferenceStatement, view *WAFRequestView) (bool, error) {
+func (s *Store) evaluateWAFIPSet(accountID string, ipset *WAFIPSetReferenceStatement, view *WAFRequestView) (bool, error) {
 	if ipset == nil {
 		return false, fmt.Errorf("evaluate waf ipset: statement is nil")
 	}
@@ -608,10 +852,14 @@ func evaluateWAFIPSet(ipset *WAFIPSetReferenceStatement, view *WAFRequestView) (
 	if ip == nil {
 		return false, nil
 	}
-	if len(ipset.Addresses) == 0 {
-		return false, fmt.Errorf("evaluate waf ipset: Addresses required")
+	addresses, err := s.resolveWAFIPSetAddresses(accountID, ipset)
+	if err != nil {
+		return false, err
 	}
-	for _, addr := range ipset.Addresses {
+	if len(addresses) == 0 {
+		return false, nil
+	}
+	for _, addr := range addresses {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			continue
@@ -625,6 +873,27 @@ func evaluateWAFIPSet(ipset *WAFIPSetReferenceStatement, view *WAFRequestView) (
 		}
 	}
 	return false, nil
+}
+
+// resolveWAFIPSetAddresses returns CIDRs from ARN (fail closed if unknown) and/or inline Addresses.
+func (s *Store) resolveWAFIPSetAddresses(accountID string, ipset *WAFIPSetReferenceStatement) ([]string, error) {
+	var addresses []string
+	arn := strings.TrimSpace(ipset.ARN)
+	if arn != "" {
+		resolved, err := s.GetWAFIPSetByARN(accountID, arn)
+		if err != nil {
+			if errors.Is(err, ErrWAFNotFound) {
+				return nil, fmt.Errorf("evaluate waf ipset: unknown IPSet ARN %q", arn)
+			}
+			return nil, fmt.Errorf("evaluate waf ipset: resolve ARN: %w", err)
+		}
+		addresses = append(addresses, resolved.Addresses...)
+	}
+	addresses = append(addresses, normalizeWAFIPSetAddresses(ipset.Addresses)...)
+	if arn == "" && len(addresses) == 0 {
+		return nil, fmt.Errorf("evaluate waf ipset: ARN or Addresses required")
+	}
+	return addresses, nil
 }
 
 func wafParseCIDR(addr string) (*net.IPNet, error) {

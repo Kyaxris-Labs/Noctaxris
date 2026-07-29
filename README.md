@@ -89,7 +89,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 | API edge | API Gateway REST, HTTP API, WebSocket lab lite |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
 | Billing | Pricing, BCM Data Exports, Cost and Usage Reports, Cost Explorer, Budgets |
-| Devices | IoT Core / IoT Data (HTTP shadows) |
+| Devices | IoT Core / IoT Data (HTTP shadows + Topic Rules; opt-in MQTT) |
 | Control plane labs | Lightsail, Auto Scaling, Elastic Beanstalk, AWS Backup |
 
 Open the service matrix for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
@@ -131,14 +131,14 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="1" align="center" valign="middle">Crypto</td>
       <td>KMS</td>
-      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ListResourceTags/TagResource/UntagResource and CreateKey Tags, ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
-      <td>Out of lab scope: Sign/Verify, MAC, asymmetric/HMAC specs, import, multi-Region, RotateKeyOnDemand API shape, cross-account grant flows, true AWS-owned managed keys. (Resource tags ship: ListResourceTags / TagResource / UntagResource / CreateKey Tags.)</td>
+      <td>Customer-managed keys, key policies (same-account key-policy-required, cross-account identity and key policy both Allow), Encrypt/Decrypt/GenerateDataKey*/ReEncrypt, RSA_2048 Sign/Verify/GetPublicKey (PEM SPKI; PSS primary), grants, aliases (including lab alias/aws/s3|dynamodb|sqs), ListResourceTags/TagResource/UntagResource and CreateKey Tags, ScheduleKeyDeletion/CancelKeyDeletion (cancel leaves Disabled), on-read sweeper after DeletionDate, key-material rotation (enable rotates sealed material, lab auto-rotate by period).</td>
+      <td>Out of lab scope: MAC, HMAC/ECC/SM2 specs, asymmetric ENCRYPT_DECRYPT, import, multi-Region, RotateKeyOnDemand API shape, cross-account grant flows, true AWS-owned managed keys. (Resource tags ship: ListResourceTags / TagResource / UntagResource / CreateKey Tags.)</td>
     </tr>
     <tr>
       <td rowspan="17" align="center" valign="middle">Data</td>
       <td>S3</td>
-      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put/Delete with delete markers, ListObjectVersions including DeleteMarker), Object Lock lite (CreateBucket ObjectLockEnabled + retain-until; GOVERNANCE bypass header), Put/GetBucketLogging server access logs, Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked). Get/Delete CloudTrail resources + versionId.</td>
-      <td>Out of lab scope: lifecycle, CORS/website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
+      <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put/Delete with delete markers, ListObjectVersions including DeleteMarker), Object Lock lite (CreateBucket ObjectLockEnabled + retain-until; GOVERNANCE bypass header), Put/GetBucketLogging server access logs, Put/Get/DeleteBucketCors, Put/Get/DeleteLifecycleConfiguration (stored; no sweeper), SelectObjectContent lite (CSV/JSON <code>SELECT * FROM s3object [LIMIT n]</code>), Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked). Get/Delete CloudTrail resources + versionId.</td>
+      <td>Out of lab scope: website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, lifecycle expiry sweeper, CORS OPTIONS evaluation, Select WHERE/projection/Parquet/event-stream framing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
@@ -157,8 +157,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>SSM / Parameter Store</td>
-      <td>String, StringList, and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz. Run Command lite: SendCommand/GetCommandInvocation/ListCommandInvocations for AWS-RunShellScript on nested DinD EC2 instances (Parameters.commands).</td>
-      <td>Out of lab scope: parameter policies, labels, full document catalog/sessions/automation, agent message queue, CancelCommand/ListCommands, Output S3, cross-account parameter access.</td>
+      <td>String, StringList, and SecureString parameters, Put/Get/GetParameters/GetParametersByPath/Delete/Describe, version labels (LabelParameterVersion/GetParameterHistory; Get by Name:version/Name:label or Version/Label), path hierarchy with Recursive, KMS via KeyId or alias/aws/ssm, identity EvaluateFull authz. Run Command lite: SendCommand/GetCommandInvocation/ListCommandInvocations for AWS-RunShellScript on nested DinD EC2 instances (Parameters.commands).</td>
+      <td>Out of lab scope: parameter policies, UnlabelParameterVersion, full document catalog/sessions/automation, agent message queue, CancelCommand/ListCommands, Output S3, cross-account parameter access.</td>
     </tr>
     <tr>
       <td>Secrets Manager</td>
@@ -320,13 +320,13 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>Glue</td>
-      <td>Data Catalog database and table CRUD over sqlite (Create/Get/GetDatabases/GetTables/Delete*). Tables store PartitionKeys plus StorageDescriptor SerDe/InputFormat fields for Athena. Crawler lite: Create/Start/Get/Delete/ListCrawlers sync-infers CSV/JSON tables from S3 prefixes. Identity authz.</td>
-      <td>ETL jobs, Lake Formation, partition value registration, nested Spark.</td>
+      <td>Data Catalog database and table CRUD over sqlite (Create/Get/GetDatabases/GetTables/Delete*). Tables store PartitionKeys plus StorageDescriptor SerDe/InputFormat fields for Athena. Schema Registry lite: registries/schemas/versions (AVRO/JSON); GetTable resolves empty Columns from SchemaReference. Crawler lite: Create/Start/Get/Delete/ListCrawlers sync-infers CSV/JSON tables from S3 prefixes. Identity authz.</td>
+      <td>ETL jobs, Lake Formation, partition value registration, nested Spark, Schema Registry PROTOBUF and full compatibility matrix.</td>
     </tr>
     <tr>
       <td>WAF v2</td>
-      <td>Create/Update/Get/List WebACL, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / AppSync / Lambda function ARNs / ALB <code>loadbalancer/app/...</code> with an invoke gate (REST API, NLB, Cognito rejected), invoke-path DefaultAction gate, ByteMatch on UriPath/SingleHeader (CONTAINS/EXACTLY), SizeConstraint (UriPath/SingleHeader size compare), inline IPSetReference (CIDR vs SourceIP), labeled Evaluate helper. No real edge PoP.</td>
-      <td>Real PoP / CAPTCHA / Bot Control, full statement catalog, managed IPSet resources beyond inline Addresses.</td>
+      <td>Create/Update/Get/List WebACL, IPSet CRUD, CreateRuleGroup, AssociateWebACL to lab HTTP API / execute-api / AppSync / Lambda function ARNs / ALB <code>loadbalancer/app/...</code> with an invoke gate (REST API, NLB, Cognito rejected), invoke-path DefaultAction gate, ByteMatch on UriPath/SingleHeader (CONTAINS/EXACTLY), SizeConstraint (UriPath/SingleHeader size compare), IPSetReference (ARN or inline CIDR vs SourceIP; unknown ARN fail closed), labeled Evaluate helper. No real edge PoP.</td>
+      <td>Real PoP / CAPTCHA / Bot Control, full statement catalog, IPSetForwardedIPConfig.</td>
     </tr>
     <tr>
       <td>Config</td>
@@ -350,12 +350,12 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>CloudFront</td>
-      <td>CreateDistribution/GetDistribution/ListDistributions/DeleteDistribution. Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. Optional DefaultCacheBehavior / CacheBehaviors PathPattern → TargetOriginId (list order; trailing <code>*</code> prefix; <code>*</code> default). Optional Logging bucket/prefix writes tab-separated access-log lite lines on edge GET. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> selects origin by path pattern (first origin when no behaviors). No real PoP.</td>
+      <td>CreateDistribution/GetDistribution/GetDistributionConfig/UpdateDistribution/ListDistributions/DeleteDistribution plus CreateInvalidation/GetInvalidation/ListInvalidations. GetDistributionConfig returns config + ETag; UpdateDistribution requires IfMatch and mutates Enabled/origins/cache behaviors. Invalidations store paths with Status Completed immediately (no real cache purge). Origins must be existing lab S3 buckets or HTTP API ids. Create returns Deployed plus lab DomainName. Optional DefaultCacheBehavior / CacheBehaviors PathPattern → TargetOriginId (list order; trailing <code>*</code> prefix; <code>*</code> default). Optional Logging bucket/prefix writes tab-separated access-log lite lines on edge GET. SigV4 edge GET <code>/cloudfront/{id}/{key...}</code> selects origin by path pattern (first origin when no behaviors). No real PoP.</td>
       <td>Real CDN, signed cookies depth, mid-path wildcards and full cache policy / TTL matrix.</td>
     </tr>
     <tr>
       <td>ELB v2</td>
-      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/Describe*/Delete*. Type <code>application</code> or <code>network</code> (other values rejected). Target types lambda, ip, or instance (lab-opaque <code>i-*</code>; instance forward when EC2 private IP exists). ALB: HTTP/HTTPS listeners; path-pattern and host-header rules; lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). NLB: TCP/TLS listeners; lab HTTP shim <code>/nlb/{account}/{name}/{port}/...</code> to registered ip/instance targets (not true L4). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission for Lambda. DescribeTargetHealth healthy when a listener or rule forwards (Lambda also needs permission Allows).</td>
+      <td>CreateLoadBalancer/CreateTargetGroup/CreateListener/CreateRule/ModifyListener/ModifyRule/Describe*/Delete*. Type <code>application</code> or <code>network</code> (other values rejected). Target types lambda, ip, or instance (lab-opaque <code>i-*</code>; instance forward when EC2 private IP exists). ALB: HTTP/HTTPS listeners; path-pattern, host-header, http-header, query-string, and source-ip rules; lab listener <code>/alb/{account}/{name}/{port}/...</code> (loopback open dataplane gate). NLB: TCP/TLS listeners; lab HTTP shim <code>/nlb/{account}/{name}/{port}/...</code> to registered ip/instance targets (not true L4). Optional access_logs.s3.* attributes append ALB access-log lite lines to in-account S3. RegisterTargets requires function resolve and elasticloadbalancing.amazonaws.com permission for Lambda. DescribeTargetHealth healthy when a listener or rule forwards (Lambda also needs permission Allows).</td>
       <td>ALB Cognito auth action, HTTP-header / query-string conditions, NLB L4 TCP/TLS / UDP, multi-target selection, Gateway LB.</td>
     </tr>
     <tr>
@@ -401,8 +401,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>CodePipeline</td>
-      <td>CreatePipeline/GetPipeline/DeletePipeline, StartPipelineExecution, GetPipelineState. Requires at least one CodeBuild action. StartPipelineExecution calls nested CodeBuild StartBuild for each ProjectName. Optional PassRole for codepipeline.amazonaws.com.</td>
-      <td>Full action catalog, approvals, cross-region.</td>
+      <td>CreatePipeline/GetPipeline/DeletePipeline, StartPipelineExecution, GetPipelineState, Get/ListPipelineExecutions, PutApprovalResult. Manual Approval pauses InProgress until Approved (then CodeBuild) or Rejected. Requires at least one CodeBuild action. Optional PassRole for codepipeline.amazonaws.com.</td>
+      <td>Full action catalog, cross-region, stop/retry/rollback.</td>
     </tr>
     <tr>
       <td>CodeDeploy</td>
@@ -416,14 +416,14 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>AppSync</td>
-      <td>Create/Get/List/DeleteGraphqlApi, schema store, CreateApiKey, Lambda data sources with optional serviceRoleArn (PassRole + appsync.amazonaws.com trust), multi-field Query and nested object field resolvers (selection depth ≤ 3), GraphQL POST that Invokes Lambda. Auth API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS (Bearer JWT via lab Cognito JWKS).</td>
+      <td>Create/Get/List/DeleteGraphqlApi, StartSchemaCreation + GetSchemaCreationStatus, ApiKey Create/List/Delete, DataSource and Resolver Create/Update/Get/List/Delete (Lambda + optional serviceRoleArn PassRole), multi-field Query and nested object field resolvers (selection depth ≤ 3), GraphQL POST that Invokes Lambda. Auth API_KEY, AWS_IAM, or AMAZON_COGNITO_USER_POOLS (Bearer JWT via lab Cognito JWKS).</td>
       <td>Amplify, subscriptions/MQTT, AppSync JS/VTL runtimes, OIDC beyond Cognito, field arguments/aliases/fragments.</td>
     </tr>
     <tr>
       <td rowspan="2" align="center" valign="middle">API edge</td>
       <td>API Gateway REST API</td>
-      <td>CreateRestApi/GetRestApi/GetRestApis/DeleteRestApi, CreateResource/GetResources/DeleteResource, PutMethod/GetMethod/DeleteMethod, PutIntegration/GetIntegration (<code>AWS_PROXY</code> Lambda + <code>MOCK</code>), CreateDeployment/CreateStage/GetStage. Method auth NONE or AWS_IAM. Invoke on <code>/restapis/{apiId}/{stage}/_user_request_/{path}</code> (Floci shape).</td>
-      <td>REQUEST/TOKEN authorizers, usage plans, API keys, OpenAPI import/export, method response maps beyond MOCK default. HTTP_PROXY / VPC link default-deny (opt-in allowlist when enabled).</td>
+      <td>CreateRestApi/GetRestApi/GetRestApis/DeleteRestApi, CreateResource/GetResources/DeleteResource, PutMethod/GetMethod/DeleteMethod, PutIntegration/GetIntegration (<code>AWS_PROXY</code> Lambda + <code>MOCK</code>), CreateDeployment/CreateStage/GetStage. Method auth NONE, AWS_IAM, or CUSTOM/TOKEN/REQUEST Lambda authorizers. Authorizer CRUD; usage plans and API keys lite with <code>x-api-key</code> when required. Invoke on <code>/restapis/{apiId}/{stage}/_user_request_/{path}</code> (Floci shape).</td>
+      <td>Authorizer result caching, Cognito user-pool authorizers, usage-plan throttle/quota metering, OpenAPI import/export, method response maps beyond MOCK default. HTTP_PROXY / VPC link default-deny (opt-in allowlist when enabled).</td>
     </tr>
     <tr>
       <td>API Gateway HTTP API / WebSocket</td>
@@ -433,8 +433,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="6" align="center" valign="middle">Analytics and AI</td>
       <td>Athena</td>
-      <td>StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / <code>!=</code> / <code>&lt;&gt;</code> / <code>&lt;</code>/<code>&gt;</code>/<code>&lt;=</code>/<code>&gt;=</code> / <code>BETWEEN</code> / <code>IN (...)</code> / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. Optional nested DuckDB on <code>noctaxris-data</code> (<code>floci/floci-duck</code>-compatible <code>/query</code>, or <code>NOCTAXRIS_DUCKDB_URL</code>) with Glue view injection for Parquet/CSV/JSON; <code>NOCTAXRIS_ATHENA_ENGINE=duckdb\|auto\|inprocess</code>. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
-      <td>Full SQL without DuckDB (outer joins, NOT IN, multi-aggregate GROUP BY, subqueries), CTAS, federated catalogs, nested Trino/Presto/Spark, in-process Parquet decode.</td>
+      <td>WorkGroup Create/Get/List/Update/Delete (seeded <code>primary</code>; DISABLED rejects Start; enforce/default OutputLocation). StartQueryExecution / GetQueryExecution / GetQueryResults / StopQueryExecution. In-process SELECT subset over Glue catalog plus lab S3 CSV/JSON, including WHERE equality / <code>!=</code> / <code>&lt;&gt;</code> / <code>&lt;</code>/<code>&gt;</code>/<code>&lt;=</code>/<code>&gt;=</code> / <code>BETWEEN</code> / <code>IN (...)</code> / LIKE / json_extract lite, COUNT(*), INNER JOIN, GROUP BY + COUNT(*), ORDER BY. Optional nested DuckDB on <code>noctaxris-data</code> (<code>floci/floci-duck</code>-compatible <code>/query</code>, or <code>NOCTAXRIS_DUCKDB_URL</code>) with Glue view injection for Parquet/CSV/JSON; <code>NOCTAXRIS_ATHENA_ENGINE=duckdb\|auto\|inprocess</code>. CloudTrail delivery objects: unwrap Records[], gzip read. Missing S3 location buckets fail closed. Optional ResultConfiguration OutputLocation.</td>
+      <td>Full SQL without DuckDB (outer joins, NOT IN, multi-aggregate GROUP BY, subqueries), CTAS, federated catalogs, nested Trino/Presto/Spark, in-process Parquet decode; ListQueryExecutions / catalog list APIs.</td>
     </tr>
     <tr>
       <td>OpenSearch</td>
@@ -443,8 +443,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>EMR</td>
-      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows <strong>control-plane stub</strong>. AddJobFlowSteps / DescribeStep / ListSteps (SQLite step rows, immediate <code>COMPLETED</code>). No host Spark/Hadoop.</td>
-      <td>CancelSteps, instance groups/fleets, security configs, nested Spark engines, EMR Serverless and Studio.</td>
+      <td>RunJobFlow / DescribeCluster / ListClusters / TerminateJobFlows <strong>control-plane stub</strong>. AddJobFlowSteps / DescribeStep / ListSteps / CancelSteps (SQLite; immediate <code>COMPLETED</code>, CancelSteps marks <code>CANCELLED</code>). Persist InstanceGroups/Fleets from RunJobFlow; cluster tags; security configs as stored JSON. No host Spark/Hadoop.</td>
+      <td>Nested Spark engines, EMR Serverless and Studio, AddInstanceGroups/Fleet after create.</td>
     </tr>
     <tr>
       <td>Bedrock Runtime</td>
@@ -474,8 +474,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>Cost and Usage Reports</td>
-      <td>Put/Modify/Describe/DeleteReportDefinition. Optional CSV PutObject to S3Bucket/S3Prefix; Format=Parquet stages NDJSON then COPY via nested DuckDB (<code>noctaxris-lab-duck</code> / <code>NOCTAXRIS_DUCKDB_URL</code>), fail-closed without engine. Identity authz.</td>
-      <td>FOCUS projectors from live usage enumerators, scheduled daily emit.</td>
+      <td>Put/Modify/Describe/DeleteReportDefinition. Optional CSV PutObject to S3Bucket/S3Prefix; FOCUS lite from S3/Lambda usage enumerators when Format is Parquet/FOCUS or AdditionalSchemaElements includes FOCUS; Format=Parquet stages FOCUS NDJSON then COPY via nested DuckDB (<code>noctaxris-lab-duck</code> / <code>NOCTAXRIS_DUCKDB_URL</code>), fail-closed without engine. Identity authz.</td>
+      <td>Broader service enumerators, scheduled daily emit.</td>
     </tr>
     <tr>
       <td>Cost Explorer</td>
@@ -490,19 +490,19 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="1" align="center" valign="middle">Devices</td>
       <td>IoT Core / Data</td>
-      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; HTTP shadows; opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>). Identity authz on HTTP APIs.</td>
-      <td>IoT Rules engine depth, Jobs, fleet indexing, operator BYO CA APIs, retained MQTT APIs.</td>
+      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows; opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs.</td>
+      <td>Jobs, fleet indexing, operator BYO CA APIs, retained MQTT APIs, WAN ATS hostnames.</td>
     </tr>
     <tr>
       <td rowspan="4" align="center" valign="middle">Control plane labs</td>
       <td>Lightsail</td>
-      <td>GetBlueprints/GetBundles; CreateInstances/GetInstance/GetInstances; Start/Stop/Reboot/DeleteInstance (state machine only).</td>
-      <td>Real VMs; disks/static IPs/key pairs; container services and managed databases.</td>
+      <td>GetBlueprints/GetBundles; instances; disks; static IPs; key pairs; public ports (stored-state only).</td>
+      <td>Real VMs; container services and managed databases; ImportKeyPair/DownloadDefaultKeyPair.</td>
     </tr>
     <tr>
       <td>Auto Scaling</td>
-      <td>Launch configuration CRUD; AutoScalingGroup CRUD; SetDesiredCapacity reconciles lab EC2 (Pending without engine; InService when running); ForceDelete terminates members.</td>
-      <td>Nested EC2 launch reconcile; lifecycle hooks; scaling policies; target group attach.</td>
+      <td>Launch configuration CRUD; AutoScalingGroup CRUD; SetDesiredCapacity reconciles lab EC2 (Pending without engine; InService when running); ForceDelete terminates members; scaling policies; lifecycle hooks; Attach/Detach/Describe instances (no DinD); ELBv2 target-group attach (ARN validated).</td>
+      <td>Mixed instances / launch templates; classic ELB attach; CompleteLifecycleAction enforcement; auto-register InService members into attached TGs.</td>
     </tr>
     <tr>
       <td>Elastic Beanstalk</td>
@@ -511,8 +511,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>AWS Backup</td>
-      <td>Vault/plan CRUD; StartBackupJob completes with recovery-point metadata for S3/DDB ARN strings.</td>
-      <td>Real snapshot engine; selections; async job delay.</td>
+      <td>Vault/plan/selection CRUD; StartBackupJob completes with recovery-point metadata for S3/DDB ARN strings; ListBackupJobs filters; StopBackupJob; DeleteRecoveryPoint.</td>
+      <td>Real snapshot engine; async job delay.</td>
     </tr>
   </tbody>
 </table>

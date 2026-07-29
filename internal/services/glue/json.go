@@ -27,24 +27,46 @@ func tableInput(t store.GlueTable) map[string]any {
 	if t.SerDeInfo.Parameters != nil {
 		serdeParams = t.SerDeInfo.Parameters
 	}
-	return map[string]any{
-		"Name":         t.Name,
-		"DatabaseName": t.DatabaseName,
-		"Description":  t.Description,
-		"StorageDescriptor": map[string]any{
-			"Location":     t.StorageLocation,
-			"Columns":      cols,
-			"InputFormat":  t.InputFormat,
-			"OutputFormat": t.OutputFormat,
-			"SerdeInfo": map[string]any{
-				"Name":                 t.SerDeInfo.Name,
-				"SerializationLibrary": t.SerDeInfo.SerializationLibrary,
-				"Parameters":           serdeParams,
-			},
+	params := map[string]string{}
+	if t.Parameters != nil {
+		params = t.Parameters
+	}
+	sd := map[string]any{
+		"Location":     t.StorageLocation,
+		"Columns":      cols,
+		"InputFormat":  t.InputFormat,
+		"OutputFormat": t.OutputFormat,
+		"SerdeInfo": map[string]any{
+			"Name":                 t.SerDeInfo.Name,
+			"SerializationLibrary": t.SerDeInfo.SerializationLibrary,
+			"Parameters":           serdeParams,
 		},
-		"PartitionKeys": pks,
-		"CreateTime":    float64(t.CreatedAt) / 1000.0,
-		"UpdateTime":    float64(t.UpdatedAt) / 1000.0,
+	}
+	if t.SchemaReference.SchemaVersionID != "" || t.SchemaReference.RegistryName != "" || t.SchemaReference.SchemaName != "" {
+		ref := map[string]any{}
+		if t.SchemaReference.SchemaVersionID != "" {
+			ref["SchemaVersionId"] = t.SchemaReference.SchemaVersionID
+		}
+		if t.SchemaReference.SchemaVersionNumber > 0 {
+			ref["SchemaVersionNumber"] = t.SchemaReference.SchemaVersionNumber
+		}
+		if t.SchemaReference.RegistryName != "" || t.SchemaReference.SchemaName != "" {
+			ref["SchemaId"] = map[string]any{
+				"RegistryName": t.SchemaReference.RegistryName,
+				"SchemaName":   t.SchemaReference.SchemaName,
+			}
+		}
+		sd["SchemaReference"] = ref
+	}
+	return map[string]any{
+		"Name":              t.Name,
+		"DatabaseName":      t.DatabaseName,
+		"Description":       t.Description,
+		"StorageDescriptor": sd,
+		"PartitionKeys":     pks,
+		"Parameters":        params,
+		"CreateTime":        float64(t.CreatedAt) / 1000.0,
+		"UpdateTime":        float64(t.UpdatedAt) / 1000.0,
 	}
 }
 

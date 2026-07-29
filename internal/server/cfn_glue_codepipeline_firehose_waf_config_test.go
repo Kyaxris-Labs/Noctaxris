@@ -176,6 +176,163 @@ func TestCodePipelineStart(t *testing.T) {
 	}
 }
 
+func TestCodePipelineManualApproval(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const cbTrust = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	mustCreateIAMRole(t, handler, "cp-appr-cb-role", cbTrust, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cp-appr-cb-role"
+
+	createProj := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "appr-proj",
+		"serviceRole": roleARN,
+		"source": map[string]any{
+			"type":      "NO_SOURCE",
+			"buildspec": "version: 0.2\nphases:\n  build:\n    commands:\n      - echo ok\n",
+		},
+		"environment": map[string]any{
+			"type":        "LINUX_CONTAINER",
+			"image":       "alpine:3.20",
+			"computeType": "BUILD_GENERAL1_SMALL",
+		},
+		"artifacts": map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if createProj.Code != http.StatusOK {
+		t.Fatalf("CreateProject status=%d body=%q", createProj.Code, createProj.Body.String())
+	}
+
+	create := mustJSONTarget(t, handler, "CodePipeline_20150709.CreatePipeline", "codepipeline", map[string]any{
+		"pipeline": map[string]any{
+			"name": "appr-pipe",
+			"stages": []map[string]any{
+				{
+					"name": "Approve",
+					"actions": []map[string]any{{
+						"name": "ManualGate",
+						"actionTypeId": map[string]any{
+							"category": "Approval", "owner": "AWS", "provider": "Manual", "version": "1",
+						},
+					}},
+				},
+				{
+					"name": "Build",
+					"actions": []map[string]any{{
+						"name": "Build",
+						"actionTypeId": map[string]any{
+							"category": "Build", "owner": "AWS", "provider": "CodeBuild", "version": "1",
+						},
+						"configuration": map[string]string{"ProjectName": "appr-proj"},
+					}},
+				},
+			},
+		},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreatePipeline status=%d body=%q", create.Code, create.Body.String())
+	}
+
+	start := mustJSONTarget(t, handler, "CodePipeline_20150709.StartPipelineExecution", "codepipeline", map[string]any{
+		"name": "appr-pipe",
+	}, now)
+	if start.Code != http.StatusOK {
+		t.Fatalf("StartPipelineExecution status=%d body=%q", start.Code, start.Body.String())
+	}
+	var startOut map[string]any
+	_ = json.Unmarshal(start.Body.Bytes(), &startOut)
+	execID, _ := startOut["pipelineExecutionId"].(string)
+	if execID == "" {
+		t.Fatalf("missing pipelineExecutionId in %q", start.Body.String())
+	}
+
+	state := mustJSONTarget(t, handler, "CodePipeline_20150709.GetPipelineState", "codepipeline", map[string]any{
+		"name": "appr-pipe",
+	}, now)
+	if state.Code != http.StatusOK {
+		t.Fatalf("GetPipelineState status=%d body=%q", state.Code, state.Body.String())
+	}
+	var stateOut map[string]any
+	_ = json.Unmarshal(state.Body.Bytes(), &stateOut)
+	token := extractApprovalToken(t, stateOut)
+	latest, _ := stateOut["latestExecution"].(map[string]any)
+	if latest["status"] != "InProgress" {
+		t.Fatalf("expected InProgress while waiting, got %#v", latest)
+	}
+
+	getExec := mustJSONTarget(t, handler, "CodePipeline_20150709.GetPipelineExecution", "codepipeline", map[string]any{
+		"pipelineName": "appr-pipe", "pipelineExecutionId": execID,
+	}, now)
+	if getExec.Code != http.StatusOK {
+		t.Fatalf("GetPipelineExecution status=%d body=%q", getExec.Code, getExec.Body.String())
+	}
+	if !strings.Contains(getExec.Body.String(), `"status":"InProgress"`) {
+		t.Fatalf("expected InProgress execution in %q", getExec.Body.String())
+	}
+
+	listBefore := mustJSONTarget(t, handler, "CodePipeline_20150709.ListPipelineExecutions", "codepipeline", map[string]any{
+		"pipelineName": "appr-pipe",
+	}, now)
+	if listBefore.Code != http.StatusOK || !strings.Contains(listBefore.Body.String(), execID) {
+		t.Fatalf("ListPipelineExecutions status=%d body=%q", listBefore.Code, listBefore.Body.String())
+	}
+
+	buildsBefore := mustCodeBuildJSON(t, handler, "ListBuilds", map[string]any{"projectName": "appr-proj"}, now)
+	var buildsBeforeOut map[string]any
+	_ = json.Unmarshal(buildsBefore.Body.Bytes(), &buildsBeforeOut)
+	beforeIDs, _ := buildsBeforeOut["ids"].([]any)
+	if len(beforeIDs) != 0 {
+		t.Fatalf("CodeBuild must not run before approval, got %q", buildsBefore.Body.String())
+	}
+
+	approve := mustJSONTarget(t, handler, "CodePipeline_20150709.PutApprovalResult", "codepipeline", map[string]any{
+		"pipelineName": "appr-pipe",
+		"stageName":    "Approve",
+		"actionName":   "ManualGate",
+		"token":        token,
+		"result":       map[string]any{"status": "Approved", "summary": "ok"},
+	}, now)
+	if approve.Code != http.StatusOK {
+		t.Fatalf("PutApprovalResult status=%d body=%q", approve.Code, approve.Body.String())
+	}
+	if !strings.Contains(approve.Body.String(), "approvedAt") {
+		t.Fatalf("missing approvedAt in %q", approve.Body.String())
+	}
+
+	getAfter := mustJSONTarget(t, handler, "CodePipeline_20150709.GetPipelineExecution", "codepipeline", map[string]any{
+		"pipelineName": "appr-pipe", "pipelineExecutionId": execID,
+	}, now)
+	if getAfter.Code != http.StatusOK {
+		t.Fatalf("GetPipelineExecution after approve status=%d body=%q", getAfter.Code, getAfter.Body.String())
+	}
+	// Without DinD, CodeBuild fails closed so overall may be Failed; approval must have continued into Build.
+	buildsAfter := mustCodeBuildJSON(t, handler, "ListBuilds", map[string]any{"projectName": "appr-proj"}, now)
+	var buildsAfterOut map[string]any
+	_ = json.Unmarshal(buildsAfter.Body.Bytes(), &buildsAfterOut)
+	afterIDs, _ := buildsAfterOut["ids"].([]any)
+	if len(afterIDs) < 1 {
+		t.Fatalf("expected CodeBuild after Approved, got %q; execution=%q", buildsAfter.Body.String(), getAfter.Body.String())
+	}
+}
+
+func extractApprovalToken(t *testing.T, stateOut map[string]any) string {
+	t.Helper()
+	stages, _ := stateOut["stageStates"].([]any)
+	for _, st := range stages {
+		sm, _ := st.(map[string]any)
+		actions, _ := sm["actionStates"].([]any)
+		for _, a := range actions {
+			am, _ := a.(map[string]any)
+			latest, _ := am["latestExecution"].(map[string]any)
+			if token, _ := latest["token"].(string); token != "" {
+				return token
+			}
+		}
+	}
+	t.Fatalf("no approval token in state %#v", stateOut)
+	return ""
+}
+
 func TestFirehosePutRecord(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()

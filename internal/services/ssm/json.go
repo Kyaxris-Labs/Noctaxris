@@ -24,6 +24,50 @@ func GetParameterJSON(p store.Parameter, includeValue bool) ([]byte, error) {
 	return json.Marshal(map[string]any{"Parameter": entry})
 }
 
+// LabelParameterVersionJSON builds a LabelParameterVersion response.
+func LabelParameterVersionJSON(version int, invalid []string) ([]byte, error) {
+	if invalid == nil {
+		invalid = []string{}
+	}
+	return json.Marshal(map[string]any{
+		"ParameterVersion": version,
+		"InvalidLabels":    invalid,
+	})
+}
+
+// GetParameterHistoryJSON builds a GetParameterHistory response.
+func GetParameterHistoryJSON(history []store.ParameterHistory, withDecryption bool) ([]byte, error) {
+	entries := make([]map[string]any, 0, len(history))
+	for _, h := range history {
+		includeValue := store.ParameterValueIncluded(h.Type, withDecryption)
+		ts, err := lastModifiedUnix(h.LastModified)
+		if err != nil {
+			return nil, err
+		}
+		labels := h.Labels
+		if labels == nil {
+			labels = []string{}
+		}
+		entry := map[string]any{
+			"Name":             h.Name,
+			"Type":             h.Type,
+			"Version":          h.Version,
+			"LastModifiedDate": ts,
+			"Labels":           labels,
+			"DataType":         "text",
+			"Tier":             "Standard",
+		}
+		if includeValue && h.Value != "" {
+			entry["Value"] = h.Value
+		}
+		if h.KeyID != "" && includeValue {
+			entry["KeyId"] = h.KeyID
+		}
+		entries = append(entries, entry)
+	}
+	return json.Marshal(map[string]any{"Parameters": entries})
+}
+
 // GetParametersJSON builds a GetParameters response.
 func GetParametersJSON(params []store.Parameter, invalid []string, withDecryption bool) ([]byte, error) {
 	entries := make([]map[string]any, 0, len(params))
@@ -192,6 +236,9 @@ func parameterJSON(p store.Parameter, includeValue bool) (map[string]any, error)
 	}
 	if p.KeyID != "" && includeValue {
 		out["KeyId"] = p.KeyID
+	}
+	if p.Selector != "" {
+		out["Selector"] = p.Selector
 	}
 	return out, nil
 }

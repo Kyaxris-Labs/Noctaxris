@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -459,4 +460,134 @@ func TestSFNMapIterator(t *testing.T) {
 	if !sawMap {
 		t.Fatalf("expected Map history events, got %+v", hist)
 	}
+}
+
+func TestSFNWaitForTaskTokenSuccess(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "callback-sm-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := `{
+  "StartAt": "WaitCb",
+  "States": {
+    "WaitCb": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "review",
+        "Payload": {
+          "TaskToken.$": "$$.Task.Token"
+        }
+      },
+      "ResultPath": "$.callback",
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "callback-sm", def, roleARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-cb", `{"n":1}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "RUNNING" {
+		t.Fatalf("want RUNNING while waiting for token, got %+v", exec)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := sfnTaskTokenFromHistory(t, hist)
+	if err := st.SFNSendTaskHeartbeat(token); err != nil {
+		t.Fatalf("SendTaskHeartbeat: %v", err)
+	}
+	if err := st.SFNSendTaskSuccess(token, `{"approved":true}`); err != nil {
+		t.Fatalf("SendTaskSuccess: %v", err)
+	}
+	done, err := st.DescribeSFNExecution(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Status != "SUCCEEDED" {
+		t.Fatalf("want SUCCEEDED got %+v", done)
+	}
+	if !strings.Contains(done.Output, `"approved"`) || !strings.Contains(done.Output, `"n"`) {
+		t.Fatalf("want ResultPath merge with callback output, got %s", done.Output)
+	}
+	if err := st.SFNSendTaskHeartbeat(token); !errors.Is(err, store.ErrSFNInvalidToken) {
+		t.Fatalf("consumed token heartbeat want InvalidToken got %v", err)
+	}
+}
+
+func TestSFNWaitForTaskTokenFailure(t *testing.T) {
+	st := openSFNStore(t)
+	account := "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"states.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(account, "callback-fail-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := `{
+  "StartAt": "WaitCb",
+  "States": {
+    "WaitCb": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "WaitForTaskToken": true,
+        "MessageBody": {"token.$": "$$.Task.Token"}
+      },
+      "End": true
+    }
+  }
+}`
+	sm, err := st.CreateSFNStateMachine(account, "us-east-1", "callback-fail-sm", def, roleARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := st.StartSFNExecution(account, "us-east-1", sm.StateMachineARN, "run-fail-cb", `{}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.Status != "RUNNING" {
+		t.Fatalf("want RUNNING got %+v", exec)
+	}
+	hist, err := st.GetSFNExecutionHistory(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := sfnTaskTokenFromHistory(t, hist)
+	if err := st.SFNSendTaskFailure(token, "ManualReject", "reviewer denied"); err != nil {
+		t.Fatal(err)
+	}
+	done, err := st.DescribeSFNExecution(exec.ExecutionARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Status != "FAILED" || done.Error != "ManualReject" {
+		t.Fatalf("want FAILED ManualReject got %+v", done)
+	}
+}
+
+func sfnTaskTokenFromHistory(t *testing.T, hist []store.SFNHistoryEvent) string {
+	t.Helper()
+	for _, ev := range hist {
+		var details map[string]any
+		if err := json.Unmarshal([]byte(ev.Details), &details); err != nil {
+			continue
+		}
+		if tok, ok := details["taskToken"].(string); ok && tok != "" {
+			return tok
+		}
+	}
+	t.Fatalf("taskToken not found in history: %+v", hist)
+	return ""
 }

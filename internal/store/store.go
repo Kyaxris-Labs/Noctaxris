@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS kms_keys (
   arn TEXT NOT NULL,
   key_state TEXT NOT NULL,
   key_usage TEXT NOT NULL DEFAULT 'ENCRYPT_DECRYPT',
+  key_spec TEXT NOT NULL DEFAULT 'SYMMETRIC_DEFAULT',
   sealed_material BLOB NOT NULL,
   key_policy TEXT NOT NULL,
   creation_date TEXT NOT NULL,
@@ -367,6 +368,9 @@ type Store struct {
 	curDuckMu     sync.Mutex
 	curDuckRunner CURDuckRunner
 
+	curEnumMu           sync.Mutex
+	curExtraEnumerators []ResourceUsageEnumerator
+
 	// sqsMu serializes receive/send so claim+CAS and FIFO sequence stay atomic
 	// under concurrent goroutines without global BEGIN IMMEDIATE (nested writers).
 	sqsMu sync.Mutex
@@ -532,6 +536,7 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"appconfig", EnsureAppConfigSchema},
 		{"sfn", EnsureSFNSchema},
 		{"sfn resource policy", EnsureSFNResourcePolicySchema},
+		{"sfn task tokens", EnsureSFNTaskTokenSchema},
 		{"kms key material", EnsureKMSKeyMaterialSchema},
 		{"codebuild", EnsureCodeBuildSchema},
 		{"batch", EnsureBatchSchema},
@@ -544,6 +549,7 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"s3 versioning", EnsureS3VersioningSchema},
 		{"s3 notifications", EnsureS3NotificationsSchema},
 		{"s3 forensics", EnsureS3ForensicsSchema},
+		{"s3 cors lifecycle", EnsureS3CORSLifecycleSchema},
 		{"dynamodb streams", EnsureDynamoDBStreamsSchema},
 		{"dynamodb transact", EnsureDynamoDBTransactSchema},
 		{"scheduler", EnsureSchedulerSchema},
@@ -705,6 +711,7 @@ func (s *Store) migrateSchema() error {
 		`ALTER TABLE kms_keys ADD COLUMN key_rotation_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE kms_keys ADD COLUMN last_rotation_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE kms_keys ADD COLUMN rotation_period_days INTEGER NOT NULL DEFAULT 365`,
+		`ALTER TABLE kms_keys ADD COLUMN key_spec TEXT NOT NULL DEFAULT 'SYMMETRIC_DEFAULT'`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dynamodb_tables ADD COLUMN gsi_hash_key_type TEXT NOT NULL DEFAULT ''`,

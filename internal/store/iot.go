@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS iot_shadows (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, region, thing_name, shadow_name)
 );
+CREATE TABLE IF NOT EXISTS iot_topic_rules (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  rule_name TEXT NOT NULL,
+  rule_arn TEXT NOT NULL,
+  sql_text TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  rule_disabled INTEGER NOT NULL DEFAULT 0,
+  actions_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, rule_name)
+);
 `
 
 // IoTThing is a lab IoT thing.

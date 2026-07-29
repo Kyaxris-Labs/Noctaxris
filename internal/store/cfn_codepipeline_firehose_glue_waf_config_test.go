@@ -102,6 +102,148 @@ func TestCodePipelineRequiresCodeBuild(t *testing.T) {
 	}
 }
 
+func TestCodePipelineApprovalPauseAndContinue(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	builds := 0
+	runBuild := func(projectName string) (string, string, error) {
+		builds++
+		return "build-" + projectName, "Succeeded", nil
+	}
+	p, err := st.CreateCodePipeline(account, "us-east-1", store.CodePipelineDeclaration{
+		Name: "approve-pipe",
+		Stages: []store.CodePipelineStageDecl{
+			{
+				Name: "Approve",
+				Actions: []store.CodePipelineActionDecl{{
+					Name: "ManualGate",
+					ActionTypeID: store.CodePipelineActionTypeID{
+						Category: "Approval", Owner: "AWS", Provider: "Manual", Version: "1",
+					},
+				}},
+			},
+			{
+				Name: "Build",
+				Actions: []store.CodePipelineActionDecl{{
+					Name: "Build",
+					ActionTypeID: store.CodePipelineActionTypeID{
+						Category: "Build", Owner: "AWS", Provider: "CodeBuild", Version: "1",
+					},
+					Configuration: map[string]string{"ProjectName": "lab-proj"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e, err := st.StartCodePipelineExecution(account, p.Name, runBuild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Status != "InProgress" {
+		t.Fatalf("expected InProgress while waiting on approval, got %q", e.Status)
+	}
+	if builds != 0 {
+		t.Fatalf("CodeBuild must not run before approval, builds=%d", builds)
+	}
+
+	token := approvalTokenFromStages(t, e.StageStates, "Approve", "ManualGate")
+	got, err := st.GetCodePipelineExecution(account, p.Name, e.ExecutionID)
+	if err != nil || got.Status != "InProgress" {
+		t.Fatalf("GetExecution: %v %#v", err, got)
+	}
+	list, err := st.ListCodePipelineExecutions(account, p.Name)
+	if err != nil || len(list) != 1 || list[0].ExecutionID != e.ExecutionID {
+		t.Fatalf("ListExecutions: %v %#v", err, list)
+	}
+
+	_, err = st.PutCodePipelineApprovalResult(account, p.Name, "Approve", "ManualGate", token, "Approved", runBuild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if builds != 1 {
+		t.Fatalf("expected CodeBuild after approve, builds=%d", builds)
+	}
+	got, err = st.GetCodePipelineExecution(account, p.Name, e.ExecutionID)
+	if err != nil || got.Status != "Succeeded" {
+		t.Fatalf("after approve: %v %#v", err, got)
+	}
+}
+
+func TestCodePipelineApprovalRejected(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	p, err := st.CreateCodePipeline(account, "us-east-1", store.CodePipelineDeclaration{
+		Name: "reject-pipe",
+		Stages: []store.CodePipelineStageDecl{
+			{
+				Name: "Approve",
+				Actions: []store.CodePipelineActionDecl{{
+					Name: "Gate",
+					ActionTypeID: store.CodePipelineActionTypeID{
+						Category: "Approval", Owner: "AWS", Provider: "Manual", Version: "1",
+					},
+				}},
+			},
+			{
+				Name: "Build",
+				Actions: []store.CodePipelineActionDecl{{
+					Name: "Build",
+					ActionTypeID: store.CodePipelineActionTypeID{
+						Category: "Build", Owner: "AWS", Provider: "CodeBuild", Version: "1",
+					},
+					Configuration: map[string]string{"ProjectName": "lab-proj"},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.StartCodePipelineExecution(account, p.Name, nil)
+	if err != nil || e.Status != "InProgress" {
+		t.Fatalf("start: %v %#v", err, e)
+	}
+	token := approvalTokenFromStages(t, e.StageStates, "Approve", "Gate")
+	_, err = st.PutCodePipelineApprovalResult(account, p.Name, "Approve", "Gate", token, "Rejected", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetCodePipelineExecution(account, p.Name, e.ExecutionID)
+	if err != nil || got.Status != "Failed" {
+		t.Fatalf("after reject: %v %#v", err, got)
+	}
+}
+
+func approvalTokenFromStages(t *testing.T, stageStates, stageName, actionName string) string {
+	t.Helper()
+	var stages []map[string]any
+	if err := json.Unmarshal([]byte(stageStates), &stages); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range stages {
+		if st["stageName"] != stageName {
+			continue
+		}
+		actions, _ := st["actionStates"].([]any)
+		for _, a := range actions {
+			am, _ := a.(map[string]any)
+			if am["actionName"] != actionName {
+				continue
+			}
+			token, _ := am["token"].(string)
+			if token == "" {
+				t.Fatal("missing approval token")
+			}
+			return token
+		}
+	}
+	t.Fatalf("approval action %s/%s not found in %s", stageName, actionName, stageStates)
+	return ""
+}
+
 func TestFirehosePutToS3(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"

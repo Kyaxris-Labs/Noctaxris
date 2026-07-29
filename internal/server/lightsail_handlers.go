@@ -47,6 +47,44 @@ func (s *Server) handleLightsail(
 		s.lightsailMutateInstance(w, r, body, requestID, eventID, verified, readOnly, params, "reboot")
 	case catalog.ActionLightsailDeleteInstance:
 		s.lightsailMutateInstance(w, r, body, requestID, eventID, verified, readOnly, params, "delete")
+	case catalog.ActionLightsailCreateDisk:
+		s.lightsailCreateDisk(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetDisk:
+		s.lightsailGetDisk(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetDisks:
+		s.lightsailGetDisks(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionLightsailDeleteDisk:
+		s.lightsailDeleteDisk(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailAttachDisk:
+		s.lightsailAttachDisk(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailDetachDisk:
+		s.lightsailDetachDisk(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailAllocateStaticIp:
+		s.lightsailAllocateStaticIP(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetStaticIp:
+		s.lightsailGetStaticIP(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetStaticIps:
+		s.lightsailGetStaticIPs(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionLightsailReleaseStaticIp:
+		s.lightsailReleaseStaticIP(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailAttachStaticIp:
+		s.lightsailAttachStaticIP(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailDetachStaticIp:
+		s.lightsailDetachStaticIP(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailCreateKeyPair:
+		s.lightsailCreateKeyPair(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetKeyPair:
+		s.lightsailGetKeyPair(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetKeyPairs:
+		s.lightsailGetKeyPairs(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionLightsailDeleteKeyPair:
+		s.lightsailDeleteKeyPair(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailOpenInstancePublicPorts:
+		s.lightsailOpenInstancePublicPorts(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailCloseInstancePublicPorts:
+		s.lightsailCloseInstancePublicPorts(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionLightsailGetInstancePortStates:
+		s.lightsailGetInstancePortStates(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeLightsailError(w, r, body, requestID, http.StatusNotImplemented, "UnsupportedOperationException",
 			"This Lightsail action is not implemented.", readOnly, eventID, verified)
@@ -76,6 +114,44 @@ func lightsailAction(action string) string {
 		return catalog.ActionLightsailRebootInstance
 	case "DeleteInstance":
 		return catalog.ActionLightsailDeleteInstance
+	case "CreateDisk":
+		return catalog.ActionLightsailCreateDisk
+	case "GetDisk":
+		return catalog.ActionLightsailGetDisk
+	case "GetDisks":
+		return catalog.ActionLightsailGetDisks
+	case "DeleteDisk":
+		return catalog.ActionLightsailDeleteDisk
+	case "AttachDisk":
+		return catalog.ActionLightsailAttachDisk
+	case "DetachDisk":
+		return catalog.ActionLightsailDetachDisk
+	case "AllocateStaticIp":
+		return catalog.ActionLightsailAllocateStaticIp
+	case "GetStaticIp":
+		return catalog.ActionLightsailGetStaticIp
+	case "GetStaticIps":
+		return catalog.ActionLightsailGetStaticIps
+	case "ReleaseStaticIp":
+		return catalog.ActionLightsailReleaseStaticIp
+	case "AttachStaticIp":
+		return catalog.ActionLightsailAttachStaticIp
+	case "DetachStaticIp":
+		return catalog.ActionLightsailDetachStaticIp
+	case "CreateKeyPair":
+		return catalog.ActionLightsailCreateKeyPair
+	case "GetKeyPair":
+		return catalog.ActionLightsailGetKeyPair
+	case "GetKeyPairs":
+		return catalog.ActionLightsailGetKeyPairs
+	case "DeleteKeyPair":
+		return catalog.ActionLightsailDeleteKeyPair
+	case "OpenInstancePublicPorts":
+		return catalog.ActionLightsailOpenInstancePublicPorts
+	case "CloseInstancePublicPorts":
+		return catalog.ActionLightsailCloseInstancePublicPorts
+	case "GetInstancePortStates":
+		return catalog.ActionLightsailGetInstancePortStates
 	default:
 		return action
 	}
@@ -115,6 +191,60 @@ func lightsailString(params map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func lightsailInt(params map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		switch n := params[key].(type) {
+		case float64:
+			return int(n), true
+		case int:
+			return n, true
+		case int64:
+			return int(n), true
+		case json.Number:
+			i, err := n.Int64()
+			if err == nil {
+				return int(i), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func lightsailPortInfo(params map[string]any) map[string]any {
+	for _, key := range []string{"portInfo", "PortInfo"} {
+		if m, ok := params[key].(map[string]any); ok {
+			return m
+		}
+	}
+	return nil
+}
+
+func (s *Server) writeLightsailStoreErr(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID string,
+	readOnly bool, eventID string, verified *authn.Verified, err error, notFoundMsg, failMsg string,
+) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, store.ErrLightsailNotFound) {
+		s.writeLightsailError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
+			notFoundMsg, readOnly, eventID, verified)
+		return true
+	}
+	if errors.Is(err, store.ErrLightsailExists) || errors.Is(err, store.ErrLightsailBadRequest) {
+		code := "InvalidInputException"
+		if errors.Is(err, store.ErrLightsailExists) {
+			code = "InvalidResourceNameException"
+		}
+		s.writeLightsailError(w, r, body, requestID, http.StatusBadRequest, code,
+			err.Error(), readOnly, eventID, verified)
+		return true
+	}
+	s.writeLightsailError(w, r, body, requestID, http.StatusInternalServerError, "ServiceException",
+		failMsg, readOnly, eventID, verified)
+	return true
 }
 
 func (s *Server) lightsailGetBlueprints(
@@ -290,6 +420,392 @@ func (s *Server) lightsailMutateInstance(
 	payload, _ := lightsailsvc.InstanceOperationJSON(inst, opType)
 	s.writeLightsailOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, opType, readOnly)
+}
+
+func (s *Server) lightsailCreateDisk(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailCreateDisk, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:CreateDisk.", readOnly, eventID, verified)
+		return
+	}
+	size, ok := lightsailInt(params, "sizeInGb", "SizeInGb")
+	if !ok {
+		s.writeLightsailError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"sizeInGb required", readOnly, eventID, verified)
+		return
+	}
+	disk, err := s.store.CreateLightsailDisk(
+		verified.AccountID, s.lightsailRegion(verified),
+		lightsailString(params, "diskName", "DiskName"),
+		lightsailString(params, "availabilityZone", "AvailabilityZone"),
+		size,
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk not found.", "Unable to create disk.") {
+		return
+	}
+	payload, _ := lightsailsvc.DiskOperationJSON(disk, "CreateDisk")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "CreateDisk", readOnly)
+}
+
+func (s *Server) lightsailGetDisk(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetDisk, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetDisk.", readOnly, eventID, verified)
+		return
+	}
+	disk, err := s.store.GetLightsailDisk(verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "diskName", "DiskName"))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk not found.", "Unable to get disk.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetDiskJSON(disk)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetDisk", readOnly)
+}
+
+func (s *Server) lightsailGetDisks(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetDisks, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetDisks.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.GetLightsailDisks(verified.AccountID, s.lightsailRegion(verified))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk not found.", "Unable to list disks.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetDisksJSON(list)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetDisks", readOnly)
+}
+
+func (s *Server) lightsailDeleteDisk(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailDeleteDisk, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:DeleteDisk.", readOnly, eventID, verified)
+		return
+	}
+	disk, err := s.store.DeleteLightsailDisk(verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "diskName", "DiskName"))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk not found.", "Unable to delete disk.") {
+		return
+	}
+	payload, _ := lightsailsvc.DiskOperationJSON(disk, "DeleteDisk")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "DeleteDisk", readOnly)
+}
+
+func (s *Server) lightsailAttachDisk(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailAttachDisk, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:AttachDisk.", readOnly, eventID, verified)
+		return
+	}
+	disk, err := s.store.AttachLightsailDisk(
+		verified.AccountID, s.lightsailRegion(verified),
+		lightsailString(params, "diskName", "DiskName"),
+		lightsailString(params, "instanceName", "InstanceName"),
+		lightsailString(params, "diskPath", "DiskPath"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk or instance not found.", "Unable to attach disk.") {
+		return
+	}
+	payload, _ := lightsailsvc.DiskOperationJSON(disk, "AttachDisk")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "AttachDisk", readOnly)
+}
+
+func (s *Server) lightsailDetachDisk(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailDetachDisk, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:DetachDisk.", readOnly, eventID, verified)
+		return
+	}
+	disk, err := s.store.DetachLightsailDisk(verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "diskName", "DiskName"))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Disk not found.", "Unable to detach disk.") {
+		return
+	}
+	payload, _ := lightsailsvc.DiskOperationJSON(disk, "DetachDisk")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "DetachDisk", readOnly)
+}
+
+func (s *Server) lightsailAllocateStaticIP(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailAllocateStaticIp, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:AllocateStaticIp.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.AllocateLightsailStaticIP(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "staticIpName", "StaticIpName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP not found.", "Unable to allocate static IP.") {
+		return
+	}
+	payload, _ := lightsailsvc.StaticIPOperationJSON(ip, "AllocateStaticIp")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "AllocateStaticIp", readOnly)
+}
+
+func (s *Server) lightsailGetStaticIP(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetStaticIp, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetStaticIp.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.GetLightsailStaticIP(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "staticIpName", "StaticIpName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP not found.", "Unable to get static IP.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetStaticIPJSON(ip)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetStaticIp", readOnly)
+}
+
+func (s *Server) lightsailGetStaticIPs(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetStaticIps, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetStaticIps.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.GetLightsailStaticIPs(verified.AccountID, s.lightsailRegion(verified))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP not found.", "Unable to list static IPs.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetStaticIPsJSON(list)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetStaticIps", readOnly)
+}
+
+func (s *Server) lightsailReleaseStaticIP(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailReleaseStaticIp, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:ReleaseStaticIp.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.ReleaseLightsailStaticIP(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "staticIpName", "StaticIpName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP not found.", "Unable to release static IP.") {
+		return
+	}
+	payload, _ := lightsailsvc.StaticIPOperationJSON(ip, "ReleaseStaticIp")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "ReleaseStaticIp", readOnly)
+}
+
+func (s *Server) lightsailAttachStaticIP(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailAttachStaticIp, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:AttachStaticIp.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.AttachLightsailStaticIP(
+		verified.AccountID, s.lightsailRegion(verified),
+		lightsailString(params, "staticIpName", "StaticIpName"),
+		lightsailString(params, "instanceName", "InstanceName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP or instance not found.", "Unable to attach static IP.") {
+		return
+	}
+	payload, _ := lightsailsvc.StaticIPOperationJSON(ip, "AttachStaticIp")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "AttachStaticIp", readOnly)
+}
+
+func (s *Server) lightsailDetachStaticIP(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailDetachStaticIp, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:DetachStaticIp.", readOnly, eventID, verified)
+		return
+	}
+	ip, err := s.store.DetachLightsailStaticIP(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "staticIpName", "StaticIpName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Static IP not found.", "Unable to detach static IP.") {
+		return
+	}
+	payload, _ := lightsailsvc.StaticIPOperationJSON(ip, "DetachStaticIp")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "DetachStaticIp", readOnly)
+}
+
+func (s *Server) lightsailCreateKeyPair(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailCreateKeyPair, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:CreateKeyPair.", readOnly, eventID, verified)
+		return
+	}
+	kp, priv, err := s.store.CreateLightsailKeyPair(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "keyPairName", "KeyPairName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Key pair not found.", "Unable to create key pair.") {
+		return
+	}
+	payload, _ := lightsailsvc.CreateKeyPairJSON(kp, priv)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "CreateKeyPair", readOnly)
+}
+
+func (s *Server) lightsailGetKeyPair(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetKeyPair, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetKeyPair.", readOnly, eventID, verified)
+		return
+	}
+	kp, err := s.store.GetLightsailKeyPair(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "keyPairName", "KeyPairName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Key pair not found.", "Unable to get key pair.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetKeyPairJSON(kp)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetKeyPair", readOnly)
+}
+
+func (s *Server) lightsailGetKeyPairs(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetKeyPairs, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetKeyPairs.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.GetLightsailKeyPairs(verified.AccountID, s.lightsailRegion(verified))
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Key pair not found.", "Unable to list key pairs.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetKeyPairsJSON(list)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetKeyPairs", readOnly)
+}
+
+func (s *Server) lightsailDeleteKeyPair(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailDeleteKeyPair, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:DeleteKeyPair.", readOnly, eventID, verified)
+		return
+	}
+	kp, err := s.store.DeleteLightsailKeyPair(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "keyPairName", "KeyPairName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Key pair not found.", "Unable to delete key pair.") {
+		return
+	}
+	payload, _ := lightsailsvc.KeyPairOperationJSON(kp, "DeleteKeyPair")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "DeleteKeyPair", readOnly)
+}
+
+func (s *Server) lightsailOpenInstancePublicPorts(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailOpenInstancePublicPorts, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:OpenInstancePublicPorts.", readOnly, eventID, verified)
+		return
+	}
+	inst, _, err := s.store.OpenLightsailInstancePublicPorts(
+		verified.AccountID, s.lightsailRegion(verified),
+		lightsailString(params, "instanceName", "InstanceName"),
+		lightsailPortInfo(params),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Instance not found.", "Unable to open ports.") {
+		return
+	}
+	payload, _ := lightsailsvc.PortOperationJSON(inst, "OpenInstancePublicPorts")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "OpenInstancePublicPorts", readOnly)
+}
+
+func (s *Server) lightsailCloseInstancePublicPorts(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailCloseInstancePublicPorts, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:CloseInstancePublicPorts.", readOnly, eventID, verified)
+		return
+	}
+	inst, err := s.store.CloseLightsailInstancePublicPorts(
+		verified.AccountID, s.lightsailRegion(verified),
+		lightsailString(params, "instanceName", "InstanceName"),
+		lightsailPortInfo(params),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Instance not found.", "Unable to close ports.") {
+		return
+	}
+	payload, _ := lightsailsvc.PortOperationJSON(inst, "CloseInstancePublicPorts")
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "CloseInstancePublicPorts", readOnly)
+}
+
+func (s *Server) lightsailGetInstancePortStates(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionLightsailGetInstancePortStates, "*") {
+		s.writeLightsailError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform lightsail:GetInstancePortStates.", readOnly, eventID, verified)
+		return
+	}
+	ports, err := s.store.GetLightsailInstancePortStates(
+		verified.AccountID, s.lightsailRegion(verified), lightsailString(params, "instanceName", "InstanceName"),
+	)
+	if s.writeLightsailStoreErr(w, r, body, requestID, readOnly, eventID, verified, err, "Instance not found.", "Unable to get port states.") {
+		return
+	}
+	payload, _ := lightsailsvc.GetInstancePortStatesJSON(ports)
+	s.writeLightsailOK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, lightsailEventSource, "GetInstancePortStates", readOnly)
 }
 
 func (s *Server) writeLightsailOK(w http.ResponseWriter, payload []byte) {

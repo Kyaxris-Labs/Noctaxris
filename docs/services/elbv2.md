@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Application and Network load balancer, target group, listener, and (ALB) path/host listener rule CRUD lite plus **lab dataplane** HTTP paths on `:4566`: `/alb/...` invokes Lambda on application LBs; `/nlb/...` forwards HTTP to registered `ip` targets (and `instance` targets when the instance has a private IP in EC2 state). Not true TCP L4. Target types `lambda`, `ip`, and `instance` (lab-opaque `i-*` ids). Identity authz on control-plane APIs. Compose publishes only `127.0.0.1:4566` (no open internet).
+Application and Network load balancer, target group, listener, and (ALB) path/host/http-header/query/source-ip listener rule CRUD lite plus **lab dataplane** HTTP paths on `:4566`: `/alb/...` invokes Lambda on application LBs; `/nlb/...` forwards HTTP to registered `ip` targets (and `instance` targets when the instance has a private IP in EC2 state). Not true TCP L4. Target types `lambda`, `ip`, and `instance` (lab-opaque `i-*` ids). Identity authz on control-plane APIs. Compose publishes only `127.0.0.1:4566` (no open internet).
 
 ## Implemented
 
@@ -10,8 +10,8 @@ Application and Network load balancer, target group, listener, and (ALB) path/ho
 |------|---------|
 | Load balancer | `CreateLoadBalancer`, `DescribeLoadBalancers`, `DeleteLoadBalancer` (`Type=application` or `Type=network`; other values rejected). ARNs use `loadbalancer/app/...` or `loadbalancer/net/...` |
 | Target group | `CreateTargetGroup`, `DescribeTargetGroups`, `DeleteTargetGroup` (`lambda` / `ip` / `instance`; NLB-oriented groups use `Protocol=TCP` or `TLS`) |
-| Listener | `CreateListener`, `DescribeListeners`, `DeleteListener` (forward to target group). ALB: HTTP/HTTPS. NLB: TCP/TLS; HTTP/HTTPS rejected |
-| Rules | `CreateRule`, `DescribeRules`, `DeleteRule` on application listeners only (path-pattern and/or host-header forward; priority ascending). Rejected on network listeners |
+| Listener | `CreateListener`, `DescribeListeners`, `ModifyListener`, `DeleteListener` (forward to target group; modify updates default action / port / protocol where modeled). ALB: HTTP/HTTPS. NLB: TCP/TLS; HTTP/HTTPS rejected |
+| Rules | `CreateRule`, `DescribeRules`, `ModifyRule`, `DeleteRule` on application listeners only (path-pattern, host-header, http-header, query-string, and/or source-ip forward; priority ascending). Rejected on network listeners |
 | Targets | `RegisterTargets`, `DescribeTargetHealth` (Lambda: `healthy` when a listener or rule forwards and permission Allows; IP/instance: `healthy` when a listener forwards — control-plane registration only) |
 | Access logs | `ModifyLoadBalancerAttributes` / `DescribeLoadBalancerAttributes` for `access_logs.s3.enabled` / `access_logs.s3.bucket` / `access_logs.s3.prefix`; lab `/alb/` listener appends ALB access-log lite lines to an in-account S3 bucket when enabled |
 | Lab listener | `GET`/`POST` `/alb/{accountId}/{loadBalancerName}/{port}[/{path...}]` invokes the first registered Lambda on the matched target group (ALB event shape). `GET`/`POST` `/nlb/{accountId}/{loadBalancerName}/{port}[/{path...}]` HTTP-forwards to the first registered `ip` or resolvable `instance` target (lab shim, not TCP L4) |
@@ -22,14 +22,19 @@ Application and Network load balancer, target group, listener, and (ALB) path/ho
 
 ### Listener rules lite (application only)
 
-`CreateRule` accepts `ListenerArn`, `Priority` (1–50000), `Conditions` with `Field=path-pattern` and/or `Field=host-header` plus `Values` (or `PathPatternConfig.Values` / `HostHeaderConfig.Values`), and `Actions` with `Type=forward` plus `TargetGroupArn`. At least one condition field type is required.
+`CreateRule` accepts `ListenerArn`, `Priority` (1–50000), `Conditions` with one or more of `Field=path-pattern`, `host-header`, `http-header`, `query-string`, `source-ip` (plus `Values` / typed `*Config.Values`), and `Actions` with `Type=forward` plus `TargetGroupArn`. At least one condition field type is required.
+
+`ModifyRule` replaces `Conditions` and/or forward `Actions` on an existing rule ARN (omit a property to leave it unchanged). `ModifyListener` updates default forward `DefaultActions` and/or `Port` / `Protocol` on an existing listener ARN.
 
 - Path patterns: exact `/foo` or prefix `/foo*` (single trailing `*` only).
 - Host headers: exact hostname (case-insensitive; optional `:port` on the request Host is stripped) or prefix `host*` (single trailing `*` only).
+- HTTP headers: `HttpHeaderConfig.HttpHeaderName` plus `Values` (case-insensitive name/value; exact, `x*`, `*x`, or `*contains*`).
+- Query string: `QueryStringConfig.Values` entries with optional `Key` and required `Value` (case-insensitive; same lite wildcards). Values within one condition are OR'd.
+- Source IP: `SourceIpConfig.Values` CIDR blocks (`255.255.255.255/32` rejected). Matches the TCP peer (`RemoteAddr`), not `X-Forwarded-For`.
 
-Values within one field are OR'd. Path and host field types are AND'd when both are present. Duplicate priorities return `PriorityInUse`. Unknown target groups return `TargetGroupNotFound`.
+Values within one path/host/source-ip field are OR'd. Multiple `http-header` conditions are AND'd. Distinct field types are AND'd when present. Duplicate priorities return `PriorityInUse`. Unknown target groups return `TargetGroupNotFound`.
 
-Lab invoke resolves `routePath` and the request `Host` against rules for that listener port in ascending priority order; the first match wins. If no rule matches, the listener default target group is used. Same open-dataplane gate as Function URL `NONE`.
+Lab invoke resolves `routePath`, request `Host`, headers, query string, and peer source IP against rules for that listener port in ascending priority order; the first match wins. If no rule matches, the listener default target group is used. Same open-dataplane gate as Function URL `NONE`. Traffic stays on `:4566` `/alb/` and `/nlb/` only (no host port binds for listeners).
 
 ### Authz notes
 
@@ -82,13 +87,23 @@ aws elbv2 create-rule \
   --conditions Field=host-header,Values='api.example.com' \
   --actions Type=forward,TargetGroupArn="$TG_A_ARN" \
   --endpoint-url "$EP"
+aws elbv2 modify-rule \
+  --rule-arn "$RULE_ARN" \
+  --conditions '[{"Field":"http-header","HttpHeaderConfig":{"HttpHeaderName":"X-Route","Values":["lab"]}},{"Field":"query-string","QueryStringConfig":{"Values":[{"Key":"env","Value":"lab"}]}}]' \
+  --actions Type=forward,TargetGroupArn="$TG_A_ARN" \
+  --endpoint-url "$EP"
+aws elbv2 modify-listener \
+  --listener-arn "$LISTENER_ARN" \
+  --default-actions Type=forward,TargetGroupArn="$TG_B_ARN" \
+  --endpoint-url "$EP"
 aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" --endpoint-url "$EP"
 curl -sS -X POST "http://127.0.0.1:4566/alb/$ACCOUNT/lab-alb/80/api/x" -d '{"ok":true}'
 curl -sS -H 'Host: api.example.com' -X POST "http://127.0.0.1:4566/alb/$ACCOUNT/lab-alb/80/other" -d '{"ok":true}'
+curl -sS -H 'X-Route: lab' -X POST "http://127.0.0.1:4566/alb/$ACCOUNT/lab-alb/80/?env=lab" -d '{"ok":true}'
 curl -sS -X POST "http://127.0.0.1:4566/alb/$ACCOUNT/lab-alb/80/other" -d '{"ok":true}'
 ```
 
-Expect `/api/x` and `Host: api.example.com` to hit TG-A, and unmatched requests to hit default TG-B. Live `curl` needs healthy DinD (`noctaxris-engine`); unit tests cover path/host match with an invoke hook. Skip live smoke when Docker is unavailable.
+Expect `/api/x`, matching host/header/query rules to hit TG-A, and unmatched requests to hit default TG-B. Live `curl` needs healthy DinD (`noctaxris-engine`); unit tests cover path/host/http-header/query/source-ip match plus ModifyListener/ModifyRule. Skip live smoke when Docker is unavailable.
 
 ### Network LB (control plane)
 
@@ -117,7 +132,7 @@ For a registered `ip` target, the path suffix is forwarded to `http://{target-ip
 ## Not yet / deferred
 
 - ALB Cognito authenticate action
-- HTTP-header / query-string / source-ip conditions; multi-action rules
+- http-request-method conditions; multi-action rules; regex Values
 - True NLB TCP/TLS L4 proxy (lab uses HTTP shim on `/nlb/` only)
 - NLB listener rules; multi-target load balancing
 - Weighted target groups

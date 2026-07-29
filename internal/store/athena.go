@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS athena_query_executions (
   completion_ms INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, query_execution_id)
 );
+CREATE TABLE IF NOT EXISTS athena_work_groups (
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'ENABLED',
+  description TEXT NOT NULL DEFAULT '',
+  output_location TEXT NOT NULL DEFAULT '',
+  enforce_work_group_config INTEGER NOT NULL DEFAULT 0,
+  created_ms INTEGER NOT NULL,
+  PRIMARY KEY (account_id, name)
+);
 `
 
 // AthenaQueryExecution is a persisted Athena query execution.
@@ -113,6 +123,9 @@ func (s *Store) EnsureAthenaSchema() error {
 
 // StartAthenaQueryExecution runs an in-process SELECT subset and persists the execution.
 func (s *Store) StartAthenaQueryExecution(accountID string, in AthenaStartInput) (AthenaQueryExecution, error) {
+	if err := s.applyAthenaWorkGroupStart(accountID, &in); err != nil {
+		return AthenaQueryExecution{}, err
+	}
 	q := strings.TrimSpace(in.QueryString)
 	if q == "" {
 		return AthenaQueryExecution{}, fmt.Errorf("%w: QueryString is required", ErrAthenaBadRequest)

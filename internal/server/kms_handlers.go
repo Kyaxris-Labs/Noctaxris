@@ -161,8 +161,29 @@ func (s *Server) handleKMS(
 	switch action {
 	case catalog.ActionKMSCreateKey, "CreateKey":
 		policyOverride, _ := params["Policy"].(string)
-		k, createErr := s.store.CreateKey(accountID, verified.Principal.ARN(), policyOverride)
+		keyUsage, _ := params["KeyUsage"].(string)
+		keySpec, _ := params["KeySpec"].(string)
+		if keySpec == "" {
+			keySpec, _ = params["CustomerMasterKeySpec"].(string)
+		}
+		k, createErr := s.store.CreateKeyWithParams(store.CreateKeyParams{
+			AccountID:      accountID,
+			CreatorARN:     verified.Principal.ARN(),
+			PolicyOverride: policyOverride,
+			KeyUsage:       keyUsage,
+			KeySpec:        keySpec,
+		})
 		if createErr != nil {
+			if errors.Is(createErr, store.ErrUnsupportedKeySpec) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					createErr.Error(), readOnly, eventID, verified)
+				return
+			}
+			if strings.Contains(createErr.Error(), "unsupported KeyUsage") {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					createErr.Error(), readOnly, eventID, verified)
+				return
+			}
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to create key.", readOnly, eventID, verified)
 			return
@@ -303,6 +324,11 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
+		if key.KeyUsage != store.KeyUsageEncryptDecrypt {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidKeyUsageException",
+				"KeyUsage does not allow Encrypt.", readOnly, eventID, verified)
+			return
+		}
 		if rotErr := s.store.MaybeAutoRotate(keyID, time.Time{}); rotErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
 				"Unable to auto-rotate key material.", readOnly, eventID, verified)
@@ -338,6 +364,11 @@ func (s *Server) handleKMS(
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
 			return
 		}
+		if key.KeyUsage != store.KeyUsageEncryptDecrypt {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidKeyUsageException",
+				"KeyUsage does not allow Decrypt.", readOnly, eventID, verified)
+			return
+		}
 		plain, openErr := s.store.DecryptBlobWithKeyContext(keyID, blob, encCtx)
 		if openErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidCiphertextException",
@@ -349,6 +380,11 @@ func (s *Server) handleKMS(
 		catalog.ActionKMSGenerateDataKeyWithoutPlaintext, "GenerateDataKeyWithoutPlaintext":
 		if !store.KeyUsableForCrypto(key.KeyState) {
 			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
+			return
+		}
+		if key.KeyUsage != store.KeyUsageEncryptDecrypt {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidKeyUsageException",
+				"KeyUsage does not allow GenerateDataKey.", readOnly, eventID, verified)
 			return
 		}
 		if rotErr := s.store.MaybeAutoRotate(keyID, time.Time{}); rotErr != nil {
@@ -517,6 +553,119 @@ func (s *Server) handleKMS(
 			return
 		}
 		payload, err = kmssvc.EmptyOKJSON()
+	case catalog.ActionKMSSign, "Sign":
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
+			return
+		}
+		if !store.IsAsymmetricSignVerify(key) {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidKeyUsageException",
+				"Sign requires an asymmetric SIGN_VERIFY key.", readOnly, eventID, verified)
+			return
+		}
+		msg, msgErr := kmssvc.DecodeBinaryField(params["Message"])
+		if msgErr != nil || len(msg) == 0 {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Message is required.", readOnly, eventID, verified)
+			return
+		}
+		signingAlg, _ := params["SigningAlgorithm"].(string)
+		messageType, _ := params["MessageType"].(string)
+		alg, algErr := kmssvc.NormalizeSigningAlgorithm(signingAlg)
+		if algErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				algErr.Error(), readOnly, eventID, verified)
+			return
+		}
+		priv, unsealErr := s.store.UnsealRSAPrivateKey(keyID)
+		if unsealErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load key material.", readOnly, eventID, verified)
+			return
+		}
+		sig, signErr := kmssvc.SignRSA(priv, msg, alg, messageType)
+		if signErr != nil {
+			if errors.Is(signErr, kmssvc.ErrInvalidDigestLength) || errors.Is(signErr, kmssvc.ErrInvalidMessageType) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					signErr.Error(), readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to sign.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.SignJSON(key.ARN, sig, alg)
+	case catalog.ActionKMSVerify, "Verify":
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
+			return
+		}
+		if !store.IsAsymmetricSignVerify(key) {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "InvalidKeyUsageException",
+				"Verify requires an asymmetric SIGN_VERIFY key.", readOnly, eventID, verified)
+			return
+		}
+		msg, msgErr := kmssvc.DecodeBinaryField(params["Message"])
+		if msgErr != nil || len(msg) == 0 {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Message is required.", readOnly, eventID, verified)
+			return
+		}
+		sig, sigErr := kmssvc.DecodeBinaryField(params["Signature"])
+		if sigErr != nil || len(sig) == 0 {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"Signature is required.", readOnly, eventID, verified)
+			return
+		}
+		signingAlg, _ := params["SigningAlgorithm"].(string)
+		messageType, _ := params["MessageType"].(string)
+		alg, algErr := kmssvc.NormalizeSigningAlgorithm(signingAlg)
+		if algErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				algErr.Error(), readOnly, eventID, verified)
+			return
+		}
+		priv, unsealErr := s.store.UnsealRSAPrivateKey(keyID)
+		if unsealErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load key material.", readOnly, eventID, verified)
+			return
+		}
+		valid, verifyErr := kmssvc.VerifyRSA(&priv.PublicKey, msg, sig, alg, messageType)
+		if verifyErr != nil {
+			if errors.Is(verifyErr, kmssvc.ErrInvalidDigestLength) || errors.Is(verifyErr, kmssvc.ErrInvalidMessageType) {
+				s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+					verifyErr.Error(), readOnly, eventID, verified)
+				return
+			}
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to verify.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.VerifyJSON(key.ARN, valid, alg)
+	case catalog.ActionKMSGetPublicKey, "GetPublicKey":
+		if !store.IsAsymmetricSignVerify(key) {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "UnsupportedOperationException",
+				"GetPublicKey is supported only for asymmetric SIGN_VERIFY keys.", readOnly, eventID, verified)
+			return
+		}
+		if !store.KeyUsableForCrypto(key.KeyState) {
+			s.writeKMSCryptoStateError(w, r, body, requestID, key.KeyState, readOnly, eventID, verified)
+			return
+		}
+		priv, unsealErr := s.store.UnsealRSAPrivateKey(keyID)
+		if unsealErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to load key material.", readOnly, eventID, verified)
+			return
+		}
+		pemSPKI, pemErr := kmssvc.PublicKeyPEMSPKI(&priv.PublicKey)
+		if pemErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to export public key.", readOnly, eventID, verified)
+			return
+		}
+		payload, err = kmssvc.GetPublicKeyJSON(key.ARN, pemSPKI, key.KeySpec, key.KeyUsage, kmssvc.LabSigningAlgorithms())
 	default:
 		s.writeKMSError(w, r, body, requestID, http.StatusNotImplemented, "NotImplemented",
 			"This KMS action is not implemented.", readOnly, eventID, verified)

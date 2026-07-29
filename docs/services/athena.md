@@ -9,12 +9,12 @@ SELECT over Glue Data Catalog tables and lab S3 objects. Default path is the in-
 | Area | Actions |
 |------|---------|
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
+| WorkGroup | `CreateWorkGroup`, `GetWorkGroup`, `ListWorkGroups`, `UpdateWorkGroup`, `DeleteWorkGroup`. Default `primary` is seeded (or treated as implicit ENABLED). `StartQueryExecution` rejects `DISABLED` workgroups; when `EnforceWorkGroupConfiguration` is true and the workgroup has `OutputLocation`, that location overrides the request; otherwise a workgroup `OutputLocation` fills in when the request omits `ResultConfiguration.OutputLocation` |
 | SQL subset (in-process) | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col != 'literal' \| col <> 'literal' \| col <\|<=\|>\|>= 'literal' \| col BETWEEN 'a' AND 'b' \| col IN ('a','b') \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
 | DuckDB engine | When selected or available: Glue tables become `CREATE VIEW` over `read_csv_auto` / `read_json_auto` / `read_parquet`; user SQL runs via nested `floci/floci-duck`-compatible `/query` (DinD exec to sidecar) or `NOCTAXRIS_DUCKDB_URL` |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON vs Parquet) |
 | Trail-shaped JSON | Top-level `{"Records":[...]}` objects expand one row per record; `.gz` objects decompress before parse |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
-| WorkGroup | Optional. Defaults to `primary` |
 
 Unsupported in-process SQL fails with `InvalidRequestException` or a `FAILED` query execution (not an empty success). Missing Glue tables fail with `TABLE_NOT_FOUND`. Missing S3 location buckets fail closed with `FAILED` (not empty SUCCEEDED). If a listed object under the table prefix fails `GetObject`, the query is `FAILED` (no silent skip). An empty prefix listing that succeeds may return header-only `SUCCEEDED` (intentional when no objects match).
 
@@ -133,14 +133,24 @@ QID=$(aws athena start-query-execution \
   --query-execution-context Database=labdb \
   --endpoint-url "$EP" --query QueryExecutionId --output text)
 aws athena get-query-results --query-execution-id "$QID" --endpoint-url "$EP"
+
+# WorkGroup CRUD
+aws athena create-work-group --name lab-wg \
+  --configuration "ResultConfiguration={OutputLocation=s3://athena-lab/wg-results/},EnforceWorkGroupConfiguration=true" \
+  --endpoint-url "$EP"
+aws athena get-work-group --work-group lab-wg --endpoint-url "$EP"
+aws athena list-work-groups --endpoint-url "$EP"
+aws athena update-work-group --work-group lab-wg --state DISABLED --endpoint-url "$EP"
+aws athena update-work-group --work-group lab-wg --state ENABLED --endpoint-url "$EP"
+aws athena delete-work-group --work-group lab-wg --endpoint-url "$EP"
 ```
 
-Skip live Compose smoke when Docker is unavailable. Store and server unit tests cover the in-process path and DuckDB fail-closed wiring without DinD. Soft-skip live nested DuckDB when the engine or `floci/floci-duck` image is unavailable.
+Skip live Compose smoke when Docker is unavailable. Store and server unit tests cover the in-process path, WorkGroup CRUD, and DuckDB fail-closed wiring without DinD. Soft-skip live nested DuckDB when the engine or `floci/floci-duck` image is unavailable.
 
 ## Not yet / deferred
 
 - Broader in-process SQL (`LEFT`/`RIGHT` joins, multi-column `GROUP BY`/`ORDER BY`, `NOT IN`, subqueries, aggregates beyond `COUNT(*)`), CTAS, UNLOAD, INSERT, federated catalogs
-- WorkGroup configuration matrix and result reuse
 - Nested Trino / Presto / Spark engines
 - Managed query results encryption options
 - In-process Parquet decode (Parquet requires DuckDB today)
+- WorkGroup result reuse / named queries / capacity reservations

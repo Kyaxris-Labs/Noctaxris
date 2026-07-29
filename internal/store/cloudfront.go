@@ -12,10 +12,15 @@ import (
 )
 
 var (
-	ErrCloudFrontNotFound   = errors.New("NoSuchDistribution")
-	ErrCloudFrontBadRequest = errors.New("InvalidArgument")
-	ErrCloudFrontExists     = errors.New("DistributionAlreadyExists")
+	ErrCloudFrontNotFound             = errors.New("NoSuchDistribution")
+	ErrCloudFrontBadRequest           = errors.New("InvalidArgument")
+	ErrCloudFrontExists               = errors.New("DistributionAlreadyExists")
+	ErrCloudFrontPrecondition         = errors.New("InvalidIfMatchVersion")
+	ErrCloudFrontInvalidationNotFound = errors.New("NoSuchInvalidation")
 )
+
+// CloudFrontInvalidationStatusCompleted is the lab invalidation status (theatre completes immediately).
+const CloudFrontInvalidationStatusCompleted = "Completed"
 
 const DefaultCloudFrontRegion = "us-east-1"
 
@@ -40,6 +45,19 @@ CREATE TABLE IF NOT EXISTS cloudfront_distributions (
   PRIMARY KEY (account_id, id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cf_caller ON cloudfront_distributions(account_id, caller_reference);
+
+CREATE TABLE IF NOT EXISTS cloudfront_invalidations (
+  account_id TEXT NOT NULL,
+  distribution_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  caller_reference TEXT NOT NULL,
+  paths_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, distribution_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cf_inv_caller
+  ON cloudfront_invalidations(account_id, distribution_id, caller_reference);
 `
 
 // CloudFrontOrigin is a lite origin (S3 bucket name or Gateway API id string).
@@ -68,9 +86,20 @@ type CloudFrontDistribution struct {
 	CallerReference string
 	Status          string
 	CreatedAt       int64
+	ETag            string
 	LoggingEnabled  bool
 	LoggingBucket   string
 	LoggingPrefix   string
+}
+
+// CloudFrontInvalidation is a lab invalidation batch (Completed immediately).
+type CloudFrontInvalidation struct {
+	ID              string
+	DistributionID  string
+	CallerReference string
+	PathsJSON       string
+	Status          string
+	CreatedAt       int64
 }
 
 // EnsureCloudFrontSchema creates CloudFront tables if missing.
@@ -86,6 +115,7 @@ func EnsureCloudFrontSchema(db *sql.DB) error {
 		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_bucket TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cloudfront_distributions ADD COLUMN logging_prefix TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE cloudfront_distributions ADD COLUMN behaviors_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE cloudfront_distributions ADD COLUMN etag TEXT NOT NULL DEFAULT ''`,
 	}); err != nil {
 		return fmt.Errorf("ensure cloudfront schema: migrate: %w", err)
 	}
@@ -176,6 +206,7 @@ func (s *Store) CreateCloudFrontDistributionWithBehaviors(
 	}
 	id := "E" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:13])
 	arn := CloudFrontDistributionARN(accountID, id)
+	etag := cloudFrontNewETag()
 	// Lab fake-edge host string only (no DNS / WAN PoP). Path fetch is /cloudfront/{id}/...
 	domain := fmt.Sprintf("d%s.cloudfront.noctaxris.local", strings.ToLower(id))
 	status := CloudFrontStatusDeployed
@@ -186,9 +217,9 @@ func (s *Store) CreateCloudFrontDistributionWithBehaviors(
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO cloudfront_distributions
-		 (account_id, id, arn, domain_name, comment, enabled, origins_json, behaviors_json, caller_reference, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), string(behaviorsJSON), callerReference, status, now,
+		 (account_id, id, arn, domain_name, comment, enabled, origins_json, behaviors_json, caller_reference, status, created_at, etag)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, id, arn, domain, comment, enabledInt, string(originsJSON), string(behaviorsJSON), callerReference, status, now, etag,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -199,8 +230,12 @@ func (s *Store) CreateCloudFrontDistributionWithBehaviors(
 	return CloudFrontDistribution{
 		ID: id, ARN: arn, DomainName: domain, Comment: comment, Enabled: enabled,
 		OriginsJSON: string(originsJSON), BehaviorsJSON: string(behaviorsJSON),
-		CallerReference: callerReference, Status: status, CreatedAt: now,
+		CallerReference: callerReference, Status: status, CreatedAt: now, ETag: etag,
 	}, nil
+}
+
+func cloudFrontNewETag() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 // MatchCloudFrontPathPattern reports whether requestPath matches a lite PathPattern.
@@ -290,7 +325,7 @@ func scanCloudFrontDistribution(
 	var enabledInt, loggingInt int
 	if err := scan(
 		&d.ID, &d.ARN, &d.DomainName, &d.Comment, &enabledInt, &d.OriginsJSON, &d.BehaviorsJSON,
-		&d.CallerReference, &d.Status, &d.CreatedAt,
+		&d.CallerReference, &d.Status, &d.CreatedAt, &d.ETag,
 		&loggingInt, &d.LoggingBucket, &d.LoggingPrefix,
 	); err != nil {
 		return CloudFrontDistribution{}, err
@@ -303,13 +338,29 @@ func scanCloudFrontDistribution(
 	return d, nil
 }
 
+func (s *Store) ensureCloudFrontETag(accountID string, d *CloudFrontDistribution) error {
+	if d == nil || strings.TrimSpace(d.ETag) != "" {
+		return nil
+	}
+	etag := cloudFrontNewETag()
+	_, err := s.db.Exec(
+		`UPDATE cloudfront_distributions SET etag = ? WHERE account_id = ? AND id = ? AND (etag IS NULL OR etag = '')`,
+		etag, accountID, d.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("ensure distribution etag: %w", err)
+	}
+	d.ETag = etag
+	return nil
+}
+
 // GetCloudFrontDistribution returns a distribution by ID.
 func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistribution, error) {
 	id = strings.TrimSpace(id)
 	d, err := scanCloudFrontDistribution(
 		s.db.QueryRow(
 			`SELECT id, arn, domain_name, comment, enabled, origins_json, COALESCE(behaviors_json, '[]'),
-			        caller_reference, status, created_at,
+			        caller_reference, status, created_at, COALESCE(etag, ''),
 			        logging_enabled, logging_bucket, logging_prefix
 			 FROM cloudfront_distributions WHERE account_id = ? AND id = ?`,
 			accountID, id,
@@ -321,6 +372,9 @@ func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistr
 	if err != nil {
 		return CloudFrontDistribution{}, fmt.Errorf("get distribution: %w", err)
 	}
+	if err := s.ensureCloudFrontETag(accountID, &d); err != nil {
+		return CloudFrontDistribution{}, err
+	}
 	return d, nil
 }
 
@@ -328,7 +382,7 @@ func (s *Store) GetCloudFrontDistribution(accountID, id string) (CloudFrontDistr
 func (s *Store) ListCloudFrontDistributions(accountID string) ([]CloudFrontDistribution, error) {
 	rows, err := s.db.Query(
 		`SELECT id, arn, domain_name, comment, enabled, origins_json, COALESCE(behaviors_json, '[]'),
-		        caller_reference, status, created_at,
+		        caller_reference, status, created_at, COALESCE(etag, ''),
 		        logging_enabled, logging_bucket, logging_prefix
 		 FROM cloudfront_distributions WHERE account_id = ? ORDER BY id`,
 		accountID,
@@ -343,20 +397,311 @@ func (s *Store) ListCloudFrontDistributions(accountID string) ([]CloudFrontDistr
 		if err != nil {
 			return nil, fmt.Errorf("list distributions scan: %w", err)
 		}
+		if err := s.ensureCloudFrontETag(accountID, &d); err != nil {
+			return nil, err
+		}
 		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// UpdateCloudFrontDistributionInput is the mutable lab subset for UpdateDistribution.
+type UpdateCloudFrontDistributionInput struct {
+	IfMatch      string
+	Comment      *string
+	Enabled      *bool
+	Origins      []CloudFrontOrigin
+	Behaviors    []CloudFrontCacheBehavior
+	HasOrigins   bool
+	HasBehaviors bool
+}
+
+// UpdateCloudFrontDistribution mutates Enabled/origins/cache behaviors when IfMatch matches ETag.
+func (s *Store) UpdateCloudFrontDistribution(accountID, id string, in UpdateCloudFrontDistributionInput) (CloudFrontDistribution, error) {
+	id = strings.TrimSpace(id)
+	ifMatch := strings.Trim(strings.TrimSpace(in.IfMatch), `"`)
+	if ifMatch == "" {
+		return CloudFrontDistribution{}, fmt.Errorf("%w: IfMatch required", ErrCloudFrontPrecondition)
+	}
+	existing, err := s.GetCloudFrontDistribution(accountID, id)
+	if err != nil {
+		return CloudFrontDistribution{}, err
+	}
+	if strings.Trim(strings.TrimSpace(existing.ETag), `"`) != ifMatch {
+		return CloudFrontDistribution{}, ErrCloudFrontPrecondition
+	}
+
+	comment := existing.Comment
+	if in.Comment != nil {
+		comment = *in.Comment
+	}
+	enabled := existing.Enabled
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	originsJSON := existing.OriginsJSON
+	behaviorsJSON := existing.BehaviorsJSON
+	var origins []CloudFrontOrigin
+	if in.HasOrigins {
+		if len(in.Origins) == 0 {
+			return CloudFrontDistribution{}, fmt.Errorf("%w: at least one Origin required", ErrCloudFrontBadRequest)
+		}
+		cleaned, err := s.validateCloudFrontOrigins(accountID, in.Origins)
+		if err != nil {
+			return CloudFrontDistribution{}, err
+		}
+		origins = cleaned
+		b, err := json.Marshal(cleaned)
+		if err != nil {
+			return CloudFrontDistribution{}, fmt.Errorf("marshal origins: %w", err)
+		}
+		originsJSON = string(b)
+	} else {
+		_ = json.Unmarshal([]byte(existing.OriginsJSON), &origins)
+	}
+	if in.HasBehaviors {
+		originIDs := make(map[string]struct{}, len(origins))
+		for _, o := range origins {
+			originIDs[o.ID] = struct{}{}
+		}
+		cleaned, err := validateCloudFrontBehaviors(in.Behaviors, originIDs)
+		if err != nil {
+			return CloudFrontDistribution{}, err
+		}
+		b, err := json.Marshal(cleaned)
+		if err != nil {
+			return CloudFrontDistribution{}, fmt.Errorf("marshal behaviors: %w", err)
+		}
+		behaviorsJSON = string(b)
+	}
+
+	newETag := cloudFrontNewETag()
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_distributions
+		 SET comment = ?, enabled = ?, origins_json = ?, behaviors_json = ?, etag = ?, status = ?
+		 WHERE account_id = ? AND id = ? AND etag = ?`,
+		comment, enabledInt, originsJSON, behaviorsJSON, newETag, CloudFrontStatusDeployed,
+		accountID, id, existing.ETag,
+	)
+	if err != nil {
+		return CloudFrontDistribution{}, fmt.Errorf("update distribution: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return CloudFrontDistribution{}, ErrCloudFrontPrecondition
+	}
+	return s.GetCloudFrontDistribution(accountID, id)
+}
+
+func (s *Store) validateCloudFrontOrigins(accountID string, origins []CloudFrontOrigin) ([]CloudFrontOrigin, error) {
+	out := make([]CloudFrontOrigin, len(origins))
+	copy(out, origins)
+	for i := range out {
+		out[i].ID = strings.TrimSpace(out[i].ID)
+		out[i].DomainName = strings.TrimSpace(out[i].DomainName)
+		out[i].OriginType = strings.ToLower(strings.TrimSpace(out[i].OriginType))
+		if out[i].ID == "" || out[i].DomainName == "" {
+			return nil, fmt.Errorf("%w: Origin Id and DomainName required", ErrCloudFrontBadRequest)
+		}
+		switch out[i].OriginType {
+		case "", "s3":
+			out[i].OriginType = "s3"
+		case "apigateway", "gateway":
+			out[i].OriginType = "apigateway"
+		default:
+			return nil, fmt.Errorf("%w: OriginType must be s3 or apigateway", ErrCloudFrontBadRequest)
+		}
+	}
+	for _, o := range out {
+		switch o.OriginType {
+		case "s3":
+			if _, err := s.GetBucket(accountID, o.DomainName); err != nil {
+				return nil, fmt.Errorf("%w: S3 origin DomainName must be an existing lab bucket name", ErrCloudFrontBadRequest)
+			}
+		case "apigateway":
+			if _, err := s.GetAPIGatewayAPI(accountID, o.DomainName); err != nil {
+				return nil, fmt.Errorf("%w: apigateway origin DomainName must be an existing lab HTTP API id", ErrCloudFrontBadRequest)
+			}
+		}
+	}
+	return out, nil
+}
+
+func validateCloudFrontBehaviors(behaviors []CloudFrontCacheBehavior, originIDs map[string]struct{}) ([]CloudFrontCacheBehavior, error) {
+	cleaned := make([]CloudFrontCacheBehavior, 0, len(behaviors))
+	for _, b := range behaviors {
+		pat := strings.TrimSpace(b.PathPattern)
+		target := strings.TrimSpace(b.TargetOriginId)
+		if pat == "" || target == "" {
+			return nil, fmt.Errorf("%w: CacheBehavior PathPattern and TargetOriginId required", ErrCloudFrontBadRequest)
+		}
+		if _, ok := originIDs[target]; !ok {
+			return nil, fmt.Errorf("%w: CacheBehavior TargetOriginId %q not found in Origins", ErrCloudFrontBadRequest, target)
+		}
+		cleaned = append(cleaned, CloudFrontCacheBehavior{
+			PathPattern: pat, TargetOriginId: target,
+		})
+	}
+	return cleaned, nil
+}
+
+// CreateCloudFrontInvalidation stores paths and marks Status Completed immediately.
+func (s *Store) CreateCloudFrontInvalidation(accountID, distributionID, callerReference string, paths []string) (CloudFrontInvalidation, error) {
+	distributionID = strings.TrimSpace(distributionID)
+	callerReference = strings.TrimSpace(callerReference)
+	if callerReference == "" {
+		return CloudFrontInvalidation{}, fmt.Errorf("%w: CallerReference required", ErrCloudFrontBadRequest)
+	}
+	if _, err := s.GetCloudFrontDistribution(accountID, distributionID); err != nil {
+		return CloudFrontInvalidation{}, err
+	}
+	cleaned := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		cleaned = append(cleaned, p)
+	}
+	if len(cleaned) == 0 {
+		return CloudFrontInvalidation{}, fmt.Errorf("%w: at least one Path required", ErrCloudFrontBadRequest)
+	}
+	pathsJSON, err := json.Marshal(cleaned)
+	if err != nil {
+		return CloudFrontInvalidation{}, fmt.Errorf("marshal paths: %w", err)
+	}
+	id := "I" + strings.ToUpper(strings.ReplaceAll(uuid.NewString(), "-", "")[:13])
+	now := time.Now().UTC().UnixMilli()
+	status := CloudFrontInvalidationStatusCompleted
+	_, err = s.db.Exec(
+		`INSERT INTO cloudfront_invalidations
+		 (account_id, distribution_id, id, caller_reference, paths_json, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		accountID, distributionID, id, callerReference, string(pathsJSON), status, now,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
+			existing, getErr := s.getCloudFrontInvalidationByCaller(accountID, distributionID, callerReference)
+			if getErr == nil {
+				var existingPaths []string
+				_ = json.Unmarshal([]byte(existing.PathsJSON), &existingPaths)
+				if cloudFrontPathsEqual(existingPaths, cleaned) {
+					return existing, nil
+				}
+				return CloudFrontInvalidation{}, fmt.Errorf("%w: InvalidationBatchAlreadyExists", ErrCloudFrontBadRequest)
+			}
+			return CloudFrontInvalidation{}, ErrCloudFrontExists
+		}
+		return CloudFrontInvalidation{}, fmt.Errorf("create invalidation: %w", err)
+	}
+	return CloudFrontInvalidation{
+		ID: id, DistributionID: distributionID, CallerReference: callerReference,
+		PathsJSON: string(pathsJSON), Status: status, CreatedAt: now,
+	}, nil
+}
+
+func cloudFrontPathsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) getCloudFrontInvalidationByCaller(accountID, distributionID, callerReference string) (CloudFrontInvalidation, error) {
+	var inv CloudFrontInvalidation
+	err := s.db.QueryRow(
+		`SELECT id, distribution_id, caller_reference, paths_json, status, created_at
+		 FROM cloudfront_invalidations
+		 WHERE account_id = ? AND distribution_id = ? AND caller_reference = ?`,
+		accountID, distributionID, callerReference,
+	).Scan(&inv.ID, &inv.DistributionID, &inv.CallerReference, &inv.PathsJSON, &inv.Status, &inv.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CloudFrontInvalidation{}, ErrCloudFrontInvalidationNotFound
+	}
+	if err != nil {
+		return CloudFrontInvalidation{}, fmt.Errorf("get invalidation by caller: %w", err)
+	}
+	return inv, nil
+}
+
+// GetCloudFrontInvalidation returns an invalidation by distribution and id.
+func (s *Store) GetCloudFrontInvalidation(accountID, distributionID, id string) (CloudFrontInvalidation, error) {
+	if _, err := s.GetCloudFrontDistribution(accountID, distributionID); err != nil {
+		return CloudFrontInvalidation{}, err
+	}
+	var inv CloudFrontInvalidation
+	err := s.db.QueryRow(
+		`SELECT id, distribution_id, caller_reference, paths_json, status, created_at
+		 FROM cloudfront_invalidations
+		 WHERE account_id = ? AND distribution_id = ? AND id = ?`,
+		accountID, strings.TrimSpace(distributionID), strings.TrimSpace(id),
+	).Scan(&inv.ID, &inv.DistributionID, &inv.CallerReference, &inv.PathsJSON, &inv.Status, &inv.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CloudFrontInvalidation{}, ErrCloudFrontInvalidationNotFound
+	}
+	if err != nil {
+		return CloudFrontInvalidation{}, fmt.Errorf("get invalidation: %w", err)
+	}
+	return inv, nil
+}
+
+// ListCloudFrontInvalidations lists invalidations for a distribution (newest first).
+func (s *Store) ListCloudFrontInvalidations(accountID, distributionID string) ([]CloudFrontInvalidation, error) {
+	if _, err := s.GetCloudFrontDistribution(accountID, distributionID); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(
+		`SELECT id, distribution_id, caller_reference, paths_json, status, created_at
+		 FROM cloudfront_invalidations
+		 WHERE account_id = ? AND distribution_id = ?
+		 ORDER BY created_at DESC, id DESC`,
+		accountID, strings.TrimSpace(distributionID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list invalidations: %w", err)
+	}
+	defer rows.Close()
+	var out []CloudFrontInvalidation
+	for rows.Next() {
+		var inv CloudFrontInvalidation
+		if err := rows.Scan(&inv.ID, &inv.DistributionID, &inv.CallerReference, &inv.PathsJSON, &inv.Status, &inv.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list invalidations scan: %w", err)
+		}
+		out = append(out, inv)
 	}
 	return out, rows.Err()
 }
 
 // DeleteCloudFrontDistribution deletes a distribution by ID.
 func (s *Store) DeleteCloudFrontDistribution(accountID, id string) error {
-	res, err := s.db.Exec(`DELETE FROM cloudfront_distributions WHERE account_id = ? AND id = ?`, accountID, strings.TrimSpace(id))
+	id = strings.TrimSpace(id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("delete distribution begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM cloudfront_invalidations WHERE account_id = ? AND distribution_id = ?`, accountID, id); err != nil {
+		return fmt.Errorf("delete distribution invalidations: %w", err)
+	}
+	res, err := tx.Exec(`DELETE FROM cloudfront_distributions WHERE account_id = ? AND id = ?`, accountID, id)
 	if err != nil {
 		return fmt.Errorf("delete distribution: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return ErrCloudFrontNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete distribution commit: %w", err)
 	}
 	return nil
 }

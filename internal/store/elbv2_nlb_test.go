@@ -67,7 +67,7 @@ func TestELBv2NetworkLoadBalancerCreateDescribeDelete(t *testing.T) {
 		t.Fatalf("TLS listener=%+v err=%v", tlsListener, err)
 	}
 
-	if _, err := st.CreateELBv2Rule(account, "us-east-1", listener.ListenerARN, tg.ARN, 10, []string{"/x*"}, nil); !errors.Is(err, store.ErrELBv2BadRequest) {
+	if _, err := st.CreateELBv2Rule(account, "us-east-1", listener.ListenerARN, tg.ARN, 10, store.ELBv2RuleConditions{PathPatterns: []string{"/x*"}}); !errors.Is(err, store.ErrELBv2BadRequest) {
 		t.Fatalf("CreateRule on NLB want ValidationError got %v", err)
 	}
 

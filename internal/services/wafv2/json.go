@@ -69,3 +69,55 @@ func AssociateWebACLJSON() ([]byte, error) { return []byte(`{}`), nil }
 func EvaluateJSON(action string) ([]byte, error) {
 	return json.Marshal(map[string]any{"Action": action})
 }
+
+func ipSetSummary(ip store.WAFIPSet) map[string]any {
+	return map[string]any{
+		"Name":        ip.Name,
+		"Id":          ip.ID,
+		"ARN":         ip.ARN,
+		"Description": ip.Description,
+		"LockToken":   ip.LockToken,
+	}
+}
+
+func ipSetDetail(ip store.WAFIPSet) map[string]any {
+	addrs := ip.Addresses
+	if addrs == nil {
+		addrs = []string{}
+	}
+	return map[string]any{
+		"Name":             ip.Name,
+		"Id":               ip.ID,
+		"ARN":              ip.ARN,
+		"Description":      ip.Description,
+		"IPAddressVersion": ip.IPAddressVersion,
+		"Addresses":        addrs,
+	}
+}
+
+// CreateIPSetJSON builds a CreateIPSet response.
+func CreateIPSetJSON(ip store.WAFIPSet) ([]byte, error) {
+	return json.Marshal(map[string]any{"Summary": ipSetSummary(ip)})
+}
+
+// GetIPSetJSON builds a GetIPSet response.
+func GetIPSetJSON(ip store.WAFIPSet) ([]byte, error) {
+	return json.Marshal(map[string]any{"IPSet": ipSetDetail(ip), "LockToken": ip.LockToken})
+}
+
+// UpdateIPSetJSON builds an UpdateIPSet response.
+func UpdateIPSetJSON(ip store.WAFIPSet) ([]byte, error) {
+	return json.Marshal(map[string]any{"NextLockToken": ip.LockToken})
+}
+
+// DeleteIPSetJSON is an empty OK body.
+func DeleteIPSetJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// ListIPSetsJSON builds a ListIPSets response.
+func ListIPSetsJSON(sets []store.WAFIPSet) ([]byte, error) {
+	items := make([]map[string]any, 0, len(sets))
+	for _, ip := range sets {
+		items = append(items, ipSetSummary(ip))
+	}
+	return json.Marshal(map[string]any{"IPSets": items})
+}

@@ -54,6 +54,20 @@ func (s *Server) handleBackup(
 		s.backupDescribeRecoveryPoint(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionBackupListRecoveryPointsByBackupVault:
 		s.backupListRecoveryPoints(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupListBackupJobs:
+		s.backupListJobs(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupStopBackupJob:
+		s.backupStopJob(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupDeleteRecoveryPoint:
+		s.backupDeleteRecoveryPoint(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupCreateBackupSelection:
+		s.backupCreateSelection(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupGetBackupSelection:
+		s.backupGetSelection(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupListBackupSelections:
+		s.backupListSelections(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionBackupDeleteBackupSelection:
+		s.backupDeleteSelection(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeBackupError(w, r, body, requestID, http.StatusNotImplemented, "InvalidRequestException",
 			"This Backup action is not implemented.", readOnly, eventID, verified)
@@ -89,6 +103,20 @@ func backupAction(action string) string {
 		return catalog.ActionBackupDescribeRecoveryPoint
 	case "ListRecoveryPointsByBackupVault":
 		return catalog.ActionBackupListRecoveryPointsByBackupVault
+	case "ListBackupJobs":
+		return catalog.ActionBackupListBackupJobs
+	case "StopBackupJob":
+		return catalog.ActionBackupStopBackupJob
+	case "DeleteRecoveryPoint":
+		return catalog.ActionBackupDeleteRecoveryPoint
+	case "CreateBackupSelection":
+		return catalog.ActionBackupCreateBackupSelection
+	case "GetBackupSelection":
+		return catalog.ActionBackupGetBackupSelection
+	case "ListBackupSelections":
+		return catalog.ActionBackupListBackupSelections
+	case "DeleteBackupSelection":
+		return catalog.ActionBackupDeleteBackupSelection
 	default:
 		return action
 	}
@@ -129,14 +157,19 @@ func resolveBackupREST(r *http.Request) (string, map[string]any) {
 		return catalog.ActionBackupListRecoveryPointsByBackupVault, params
 	}
 	// /backup-vaults/{name}/recovery-points/{arn...}
-	if len(parts) >= 4 && parts[0] == "backup-vaults" && parts[2] == "recovery-points" && method == http.MethodGet {
+	if len(parts) >= 4 && parts[0] == "backup-vaults" && parts[2] == "recovery-points" {
 		params["BackupVaultName"] = parts[1]
 		arnPath := strings.Join(parts[3:], "/")
 		if decoded, err := url.PathUnescape(arnPath); err == nil {
 			arnPath = decoded
 		}
 		params["RecoveryPointArn"] = arnPath
-		return catalog.ActionBackupDescribeRecoveryPoint, params
+		switch method {
+		case http.MethodGet:
+			return catalog.ActionBackupDescribeRecoveryPoint, params
+		case http.MethodDelete:
+			return catalog.ActionBackupDeleteRecoveryPoint, params
+		}
 	}
 	// /backup/plans
 	if len(parts) == 2 && parts[0] == "backup" && parts[1] == "plans" {
@@ -145,6 +178,27 @@ func resolveBackupREST(r *http.Request) (string, map[string]any) {
 			return catalog.ActionBackupCreateBackupPlan, params
 		case http.MethodGet:
 			return catalog.ActionBackupListBackupPlans, params
+		}
+	}
+	// /backup/plans/{id}/selections
+	if len(parts) == 4 && parts[0] == "backup" && parts[1] == "plans" && parts[3] == "selections" {
+		params["BackupPlanId"] = parts[2]
+		switch method {
+		case http.MethodPut:
+			return catalog.ActionBackupCreateBackupSelection, params
+		case http.MethodGet:
+			return catalog.ActionBackupListBackupSelections, params
+		}
+	}
+	// /backup/plans/{id}/selections/{selectionId}
+	if len(parts) == 5 && parts[0] == "backup" && parts[1] == "plans" && parts[3] == "selections" {
+		params["BackupPlanId"] = parts[2]
+		params["SelectionId"] = parts[4]
+		switch method {
+		case http.MethodGet:
+			return catalog.ActionBackupGetBackupSelection, params
+		case http.MethodDelete:
+			return catalog.ActionBackupDeleteBackupSelection, params
 		}
 	}
 	// /backup/plans/{id}
@@ -158,13 +212,36 @@ func resolveBackupREST(r *http.Request) (string, map[string]any) {
 		}
 	}
 	// /backup-jobs
-	if len(parts) == 1 && parts[0] == "backup-jobs" && method == http.MethodPut {
-		return catalog.ActionBackupStartBackupJob, params
+	if len(parts) == 1 && parts[0] == "backup-jobs" {
+		switch method {
+		case http.MethodPut:
+			return catalog.ActionBackupStartBackupJob, params
+		case http.MethodGet:
+			q := r.URL.Query()
+			if v := q.Get("backupVaultName"); v != "" {
+				params["ByBackupVaultName"] = v
+			}
+			if v := q.Get("resourceArn"); v != "" {
+				params["ByResourceArn"] = v
+			}
+			if v := q.Get("resourceType"); v != "" {
+				params["ByResourceType"] = v
+			}
+			if v := q.Get("state"); v != "" {
+				params["ByState"] = v
+			}
+			return catalog.ActionBackupListBackupJobs, params
+		}
 	}
 	// /backup-jobs/{id}
-	if len(parts) == 2 && parts[0] == "backup-jobs" && method == http.MethodGet {
+	if len(parts) == 2 && parts[0] == "backup-jobs" {
 		params["BackupJobId"] = parts[1]
-		return catalog.ActionBackupDescribeBackupJob, params
+		switch method {
+		case http.MethodGet:
+			return catalog.ActionBackupDescribeBackupJob, params
+		case http.MethodPost:
+			return catalog.ActionBackupStopBackupJob, params
+		}
 	}
 	return "", nil
 }
@@ -510,6 +587,236 @@ func (s *Server) backupListRecoveryPoints(
 	payload, _ := backupsvc.ListRecoveryPointsJSON(list)
 	s.writeBackupOK(w, http.StatusOK, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "ListRecoveryPointsByBackupVault", readOnly)
+}
+
+func backupStringParam(params map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := params[key].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func backupResourcesFromParams(params map[string]any) []string {
+	raw, ok := params["Resources"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func (s *Server) backupListJobs(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupListBackupJobs, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:ListBackupJobs.", readOnly, eventID, verified)
+		return
+	}
+	filter := store.BackupJobListFilter{
+		BackupVaultName: backupStringParam(params, "ByBackupVaultName", "BackupVaultName"),
+		ResourceARN:     backupStringParam(params, "ByResourceArn", "ResourceArn"),
+		ResourceType:    backupStringParam(params, "ByResourceType", "ResourceType"),
+		State:           backupStringParam(params, "ByState", "State"),
+	}
+	list, err := s.store.ListBackupJobs(verified.AccountID, s.backupRegion(verified), filter)
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to list backup jobs.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := backupsvc.ListBackupJobsJSON(list)
+	s.writeBackupOK(w, http.StatusOK, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "ListBackupJobs", readOnly)
+}
+
+func (s *Server) backupStopJob(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupStopBackupJob, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:StopBackupJob.", readOnly, eventID, verified)
+		return
+	}
+	id, _ := params["BackupJobId"].(string)
+	err := s.store.StopBackupJob(verified.AccountID, s.backupRegion(verified), id)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Backup job not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to stop backup job.", readOnly, eventID, verified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "StopBackupJob", readOnly)
+}
+
+func (s *Server) backupDeleteRecoveryPoint(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupDeleteRecoveryPoint, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:DeleteRecoveryPoint.", readOnly, eventID, verified)
+		return
+	}
+	vault, _ := params["BackupVaultName"].(string)
+	arn, _ := params["RecoveryPointArn"].(string)
+	err := s.store.DeleteRecoveryPoint(verified.AccountID, s.backupRegion(verified), vault, arn)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Recovery point not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrBackupBadRequest) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to delete recovery point.", readOnly, eventID, verified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "DeleteRecoveryPoint", readOnly)
+}
+
+func (s *Server) backupCreateSelection(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupCreateBackupSelection, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:CreateBackupSelection.", readOnly, eventID, verified)
+		return
+	}
+	planID, _ := params["BackupPlanId"].(string)
+	selectionName := ""
+	iamRole := ""
+	var resources []string
+	if sel, ok := params["BackupSelection"].(map[string]any); ok {
+		selectionName, _ = sel["SelectionName"].(string)
+		iamRole, _ = sel["IamRoleArn"].(string)
+		resources = backupResourcesFromParams(sel)
+	}
+	created, err := s.store.CreateBackupSelection(verified.AccountID, s.backupRegion(verified), planID, selectionName, iamRole, resources)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Backup plan not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrBackupBadRequest) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterValueException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to create backup selection.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := backupsvc.CreateBackupSelectionJSON(created)
+	s.writeBackupOK(w, http.StatusOK, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "CreateBackupSelection", readOnly)
+}
+
+func (s *Server) backupGetSelection(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupGetBackupSelection, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:GetBackupSelection.", readOnly, eventID, verified)
+		return
+	}
+	planID, _ := params["BackupPlanId"].(string)
+	selectionID, _ := params["SelectionId"].(string)
+	sel, err := s.store.GetBackupSelection(verified.AccountID, s.backupRegion(verified), planID, selectionID)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Backup selection not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to get backup selection.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := backupsvc.GetBackupSelectionJSON(sel)
+	s.writeBackupOK(w, http.StatusOK, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "GetBackupSelection", readOnly)
+}
+
+func (s *Server) backupListSelections(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupListBackupSelections, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:ListBackupSelections.", readOnly, eventID, verified)
+		return
+	}
+	planID, _ := params["BackupPlanId"].(string)
+	list, err := s.store.ListBackupSelections(verified.AccountID, s.backupRegion(verified), planID)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Backup plan not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to list backup selections.", readOnly, eventID, verified)
+		return
+	}
+	payload, _ := backupsvc.ListBackupSelectionsJSON(list)
+	s.writeBackupOK(w, http.StatusOK, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "ListBackupSelections", readOnly)
+}
+
+func (s *Server) backupDeleteSelection(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionBackupDeleteBackupSelection, "*") {
+		s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform backup:DeleteBackupSelection.", readOnly, eventID, verified)
+		return
+	}
+	planID, _ := params["BackupPlanId"].(string)
+	selectionID, _ := params["SelectionId"].(string)
+	err := s.store.DeleteBackupSelection(verified.AccountID, s.backupRegion(verified), planID, selectionID)
+	if errors.Is(err, store.ErrBackupNotFound) {
+		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Backup selection not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeBackupError(w, r, body, requestID, http.StatusInternalServerError, "ServiceUnavailableException",
+			"Unable to delete backup selection.", readOnly, eventID, verified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	s.writeSuccessAudit(r, requestID, eventID, verified, backupEventSource, "DeleteBackupSelection", readOnly)
 }
 
 func (s *Server) writeBackupOK(w http.ResponseWriter, status int, payload []byte) {

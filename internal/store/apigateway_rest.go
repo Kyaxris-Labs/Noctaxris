@@ -16,6 +16,7 @@ const (
 
 	APIGatewayRESTAuthNone = "NONE"
 	APIGatewayRESTAuthIAM  = "AWS_IAM"
+	// CUSTOM / TOKEN / REQUEST are Lambda authorizer method types (see apigateway_rest_authz.go).
 )
 
 const apiGatewayRESTSchema = `
@@ -142,6 +143,9 @@ func EnsureAPIGatewayRESTSchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(apiGatewayRESTSchema); err != nil {
 		return fmt.Errorf("ensure apigateway rest schema: %w", err)
+	}
+	if err := ensureAPIGatewayRESTAuthzSchema(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -273,6 +277,8 @@ func (s *Store) DeleteRestAPI(accountID, apiID string) error {
 	_, _ = tx.Exec(`DELETE FROM apigw_rest_integrations WHERE account_id = ? AND api_id = ?`, accountID, apiID)
 	_, _ = tx.Exec(`DELETE FROM apigw_rest_deployments WHERE account_id = ? AND api_id = ?`, accountID, apiID)
 	_, _ = tx.Exec(`DELETE FROM apigw_rest_stages WHERE account_id = ? AND api_id = ?`, accountID, apiID)
+	_, _ = tx.Exec(`DELETE FROM apigw_rest_authorizers WHERE account_id = ? AND api_id = ?`, accountID, apiID)
+	_, _ = tx.Exec(`DELETE FROM apigw_usage_plan_stages WHERE account_id = ? AND api_id = ?`, accountID, apiID)
 	return tx.Commit()
 }
 
@@ -402,9 +408,31 @@ func (s *Store) PutRestMethod(accountID, apiID, resourceID, httpMethod, authoriz
 	}
 	switch authorizationType {
 	case APIGatewayRESTAuthNone, APIGatewayRESTAuthIAM:
-		// lab core
+		authorizerID = ""
+	case APIGatewayRESTAuthCUSTOM, APIGatewayRESTAuthTOKEN, APIGatewayRESTAuthREQUEST:
+		if authorizerID == "" {
+			return RestMethod{}, fmt.Errorf("%w: authorizerId required for %s", ErrAPIGatewayBadRequest, authorizationType)
+		}
+		authz, err := s.GetRestAuthorizer(accountID, apiID, authorizerID)
+		if err != nil {
+			return RestMethod{}, err
+		}
+		switch authorizationType {
+		case APIGatewayRESTAuthTOKEN:
+			if authz.Type != APIGatewayAuthorizerTOKEN {
+				return RestMethod{}, fmt.Errorf("%w: authorizerId must reference a TOKEN authorizer", ErrAPIGatewayBadRequest)
+			}
+		case APIGatewayRESTAuthREQUEST:
+			if authz.Type != APIGatewayAuthorizerREQUEST {
+				return RestMethod{}, fmt.Errorf("%w: authorizerId must reference a REQUEST authorizer", ErrAPIGatewayBadRequest)
+			}
+		case APIGatewayRESTAuthCUSTOM:
+			if authz.Type != APIGatewayAuthorizerTOKEN && authz.Type != APIGatewayAuthorizerREQUEST {
+				return RestMethod{}, fmt.Errorf("%w: authorizerId must reference a TOKEN or REQUEST authorizer", ErrAPIGatewayBadRequest)
+			}
+		}
 	default:
-		return RestMethod{}, fmt.Errorf("%w: authorizationType must be NONE or AWS_IAM in lab core", ErrAPIGatewayBadRequest)
+		return RestMethod{}, fmt.Errorf("%w: authorizationType must be NONE, AWS_IAM, CUSTOM, TOKEN, or REQUEST", ErrAPIGatewayBadRequest)
 	}
 	if _, err := s.GetRestResource(accountID, apiID, resourceID); err != nil {
 		return RestMethod{}, err

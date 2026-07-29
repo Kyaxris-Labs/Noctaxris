@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS elbv2_rules (
   priority INTEGER NOT NULL,
   path_patterns TEXT NOT NULL,
   host_headers TEXT NOT NULL DEFAULT '[]',
+  http_headers TEXT NOT NULL DEFAULT '[]',
+  query_strings TEXT NOT NULL DEFAULT '[]',
+  source_ips TEXT NOT NULL DEFAULT '[]',
   target_group_arn TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, rule_arn)
@@ -115,13 +118,46 @@ type ELBv2Target struct {
 	Port int
 }
 
-// ELBv2Rule is a listener rule with path-pattern and/or host-header conditions (non-default).
+// ELBv2HTTPHeaderCond is one http-header condition (name + OR'd values).
+type ELBv2HTTPHeaderCond struct {
+	Name   string   `json:"Name"`
+	Values []string `json:"Values"`
+}
+
+// ELBv2QueryStringCond is one query-string match evaluation (key optional).
+type ELBv2QueryStringCond struct {
+	Key   string `json:"Key,omitempty"`
+	Value string `json:"Value"`
+}
+
+// ELBv2RuleConditions holds CreateRule/ModifyRule condition fields.
+type ELBv2RuleConditions struct {
+	PathPatterns []string
+	HostHeaders  []string
+	HTTPHeaders  []ELBv2HTTPHeaderCond
+	QueryStrings []ELBv2QueryStringCond
+	SourceIPs    []string
+}
+
+// ELBv2RuleMatchInput is the lab request shape used for /alb/ rule matching.
+type ELBv2RuleMatchInput struct {
+	Path     string
+	Host     string
+	Headers  map[string]string // lower-case header name -> first value
+	Query    map[string]string // lower-case query key -> first value
+	SourceIP string
+}
+
+// ELBv2Rule is a listener rule with ALB condition fields (non-default).
 type ELBv2Rule struct {
 	RuleARN        string
 	ListenerARN    string
 	Priority       int
 	PathPatterns   []string
 	HostHeaders    []string
+	HTTPHeaders    []ELBv2HTTPHeaderCond
+	QueryStrings   []ELBv2QueryStringCond
+	SourceIPs      []string
 	TargetGroupARN string
 	CreatedAt      int64
 }
@@ -144,6 +180,9 @@ func EnsureELBv2Schema(db *sql.DB) error {
 	}
 	if err := execMigrateStmts(db, []string{
 		`ALTER TABLE elbv2_rules ADD COLUMN host_headers TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE elbv2_rules ADD COLUMN http_headers TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE elbv2_rules ADD COLUMN query_strings TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE elbv2_rules ADD COLUMN source_ips TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_s3_bucket TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE elbv2_load_balancers ADD COLUMN access_logs_s3_prefix TEXT NOT NULL DEFAULT ''`,
@@ -832,17 +871,224 @@ func validateELBv2HostHeaders(hosts []string) error {
 	return nil
 }
 
-// MatchELBv2Rule reports whether a rule matches routePath and requestHost.
-// Path-pattern Values are OR'd; host-header Values are OR'd; field types are AND'd.
-// Absent field types (empty lists) are ignored so path-only and host-only rules work.
-func MatchELBv2Rule(rule ELBv2Rule, routePath, requestHost string) bool {
-	if len(rule.PathPatterns) == 0 && len(rule.HostHeaders) == 0 {
+func validateELBv2LiteWildcards(field string, values []string) error {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return fmt.Errorf("%w: %s value must be non-empty", ErrELBv2BadRequest, field)
+		}
+		stars := strings.Count(v, "*")
+		switch {
+		case stars == 0:
+			continue
+		case stars == 1 && (strings.HasPrefix(v, "*") || strings.HasSuffix(v, "*")):
+			continue
+		case stars == 2 && strings.HasPrefix(v, "*") && strings.HasSuffix(v, "*") && len(v) >= 2:
+			continue
+		default:
+			return fmt.Errorf("%w: %s supports exact, prefix x*, suffix *x, or *contains* wildcards only", ErrELBv2BadRequest, field)
+		}
+	}
+	return nil
+}
+
+func validateELBv2HTTPHeaders(conds []ELBv2HTTPHeaderCond) error {
+	for _, c := range conds {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			return fmt.Errorf("%w: http-header HttpHeaderName required", ErrELBv2BadRequest)
+		}
+		if strings.Contains(name, "*") {
+			return fmt.Errorf("%w: http-header name does not support wildcards", ErrELBv2BadRequest)
+		}
+		cleaned := cleanELBv2StringList(c.Values)
+		if len(cleaned) == 0 {
+			return fmt.Errorf("%w: http-header Values required", ErrELBv2BadRequest)
+		}
+		if err := validateELBv2LiteWildcards("http-header", cleaned); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateELBv2QueryStrings(conds []ELBv2QueryStringCond) error {
+	for _, c := range conds {
+		val := strings.TrimSpace(c.Value)
+		if val == "" {
+			return fmt.Errorf("%w: query-string Value required", ErrELBv2BadRequest)
+		}
+		if err := validateELBv2LiteWildcards("query-string", []string{val}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateELBv2SourceIPs(cidrs []string) error {
+	for _, c := range cidrs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			return fmt.Errorf("%w: source-ip value must be non-empty", ErrELBv2BadRequest)
+		}
+		if c == "255.255.255.255/32" {
+			return fmt.Errorf("%w: source-ip does not support 255.255.255.255/32", ErrELBv2BadRequest)
+		}
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return fmt.Errorf("%w: source-ip Values must be CIDR blocks", ErrELBv2BadRequest)
+		}
+	}
+	return nil
+}
+
+func cleanELBv2RuleConditions(cond ELBv2RuleConditions) (ELBv2RuleConditions, error) {
+	out := ELBv2RuleConditions{
+		PathPatterns: cleanELBv2StringList(cond.PathPatterns),
+		HostHeaders:  cleanELBv2StringList(cond.HostHeaders),
+		SourceIPs:    cleanELBv2StringList(cond.SourceIPs),
+	}
+	for _, h := range cond.HTTPHeaders {
+		name := strings.TrimSpace(h.Name)
+		vals := cleanELBv2StringList(h.Values)
+		if name == "" && len(vals) == 0 {
+			continue
+		}
+		out.HTTPHeaders = append(out.HTTPHeaders, ELBv2HTTPHeaderCond{Name: name, Values: vals})
+	}
+	for _, q := range cond.QueryStrings {
+		key := strings.TrimSpace(q.Key)
+		val := strings.TrimSpace(q.Value)
+		if key == "" && val == "" {
+			continue
+		}
+		out.QueryStrings = append(out.QueryStrings, ELBv2QueryStringCond{Key: key, Value: val})
+	}
+	if len(out.PathPatterns) == 0 && len(out.HostHeaders) == 0 &&
+		len(out.HTTPHeaders) == 0 && len(out.QueryStrings) == 0 && len(out.SourceIPs) == 0 {
+		return ELBv2RuleConditions{}, fmt.Errorf("%w: Conditions require at least one of path-pattern, host-header, http-header, query-string, source-ip", ErrELBv2BadRequest)
+	}
+	if err := validateELBv2PathPatterns(out.PathPatterns); err != nil {
+		return ELBv2RuleConditions{}, err
+	}
+	if err := validateELBv2HostHeaders(out.HostHeaders); err != nil {
+		return ELBv2RuleConditions{}, err
+	}
+	if err := validateELBv2HTTPHeaders(out.HTTPHeaders); err != nil {
+		return ELBv2RuleConditions{}, err
+	}
+	if err := validateELBv2QueryStrings(out.QueryStrings); err != nil {
+		return ELBv2RuleConditions{}, err
+	}
+	if err := validateELBv2SourceIPs(out.SourceIPs); err != nil {
+		return ELBv2RuleConditions{}, err
+	}
+	return out, nil
+}
+
+// MatchELBv2LiteWildcard reports whether value matches a lite wildcard pattern.
+// Supports exact, prefix `x*`, suffix `*x`, and `*contains*` (two stars at ends only).
+func MatchELBv2LiteWildcard(value, pattern string, caseInsensitive bool) bool {
+	pattern = strings.TrimSpace(pattern)
+	value = strings.TrimSpace(value)
+	if pattern == "" {
+		return false
+	}
+	if caseInsensitive {
+		pattern = strings.ToLower(pattern)
+		value = strings.ToLower(value)
+	}
+	stars := strings.Count(pattern, "*")
+	switch {
+	case stars == 0:
+		return value == pattern
+	case stars == 1 && strings.HasSuffix(pattern, "*"):
+		return strings.HasPrefix(value, strings.TrimSuffix(pattern, "*"))
+	case stars == 1 && strings.HasPrefix(pattern, "*"):
+		return strings.HasSuffix(value, strings.TrimPrefix(pattern, "*"))
+	case stars == 2 && strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*"):
+		inner := strings.TrimSuffix(strings.TrimPrefix(pattern, "*"), "*")
+		return strings.Contains(value, inner)
+	default:
+		return false
+	}
+}
+
+// MatchELBv2HTTPHeader reports whether request headers satisfy one http-header condition.
+func MatchELBv2HTTPHeader(headers map[string]string, cond ELBv2HTTPHeaderCond) bool {
+	name := strings.ToLower(strings.TrimSpace(cond.Name))
+	if name == "" || len(cond.Values) == 0 {
+		return false
+	}
+	got := ""
+	if headers != nil {
+		got = headers[name]
+	}
+	for _, pat := range cond.Values {
+		if MatchELBv2LiteWildcard(got, pat, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchELBv2QueryString reports whether query params satisfy one query-string evaluation.
+func MatchELBv2QueryString(query map[string]string, cond ELBv2QueryStringCond) bool {
+	valPat := strings.TrimSpace(cond.Value)
+	if valPat == "" {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(cond.Key))
+	if key != "" {
+		got := ""
+		if query != nil {
+			got = query[key]
+		}
+		return MatchELBv2LiteWildcard(got, valPat, true)
+	}
+	for _, got := range query {
+		if MatchELBv2LiteWildcard(got, valPat, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchELBv2SourceIP reports whether sourceIP is in any of the CIDR Values.
+func MatchELBv2SourceIP(sourceIP string, cidrs []string) bool {
+	ip := net.ParseIP(strings.TrimSpace(sourceIP))
+	if ip == nil {
+		return false
+	}
+	for _, c := range cidrs {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(c))
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func ruleHasAnyCondition(rule ELBv2Rule) bool {
+	return len(rule.PathPatterns) > 0 || len(rule.HostHeaders) > 0 ||
+		len(rule.HTTPHeaders) > 0 || len(rule.QueryStrings) > 0 || len(rule.SourceIPs) > 0
+}
+
+// MatchELBv2Rule reports whether a rule matches the lab request.
+// Values within path-pattern, host-header, and source-ip are OR'd.
+// Each http-header condition is AND'd with others; Values within one are OR'd.
+// Query-string evaluations on a rule are OR'd (one QueryStringConfig Values list).
+// Distinct field types are AND'd. Absent field types are ignored.
+func MatchELBv2Rule(rule ELBv2Rule, in ELBv2RuleMatchInput) bool {
+	if !ruleHasAnyCondition(rule) {
 		return false
 	}
 	if len(rule.PathPatterns) > 0 {
 		pathOK := false
 		for _, pat := range rule.PathPatterns {
-			if MatchELBv2PathPattern(routePath, pat) {
+			if MatchELBv2PathPattern(in.Path, pat) {
 				pathOK = true
 				break
 			}
@@ -854,7 +1100,7 @@ func MatchELBv2Rule(rule ELBv2Rule, routePath, requestHost string) bool {
 	if len(rule.HostHeaders) > 0 {
 		hostOK := false
 		for _, pat := range rule.HostHeaders {
-			if MatchELBv2HostHeader(requestHost, pat) {
+			if MatchELBv2HostHeader(in.Host, pat) {
 				hostOK = true
 				break
 			}
@@ -863,7 +1109,32 @@ func MatchELBv2Rule(rule ELBv2Rule, routePath, requestHost string) bool {
 			return false
 		}
 	}
+	for _, hc := range rule.HTTPHeaders {
+		if !MatchELBv2HTTPHeader(in.Headers, hc) {
+			return false
+		}
+	}
+	if len(rule.QueryStrings) > 0 {
+		qOK := false
+		for _, qc := range rule.QueryStrings {
+			if MatchELBv2QueryString(in.Query, qc) {
+				qOK = true
+				break
+			}
+		}
+		if !qOK {
+			return false
+		}
+	}
+	if len(rule.SourceIPs) > 0 && !MatchELBv2SourceIP(in.SourceIP, rule.SourceIPs) {
+		return false
+	}
 	return true
+}
+
+// MatchELBv2RulePathHost is a compatibility wrapper for path+host-only matching.
+func MatchELBv2RulePathHost(rule ELBv2Rule, routePath, requestHost string) bool {
+	return MatchELBv2Rule(rule, ELBv2RuleMatchInput{Path: routePath, Host: requestHost})
 }
 
 func getELBv2ListenerByARN(s *Store, accountID, listenerARN string) (ELBv2Listener, error) {
@@ -887,8 +1158,8 @@ func (s *Store) GetELBv2ListenerByARN(accountID, listenerARN string) (ELBv2Liste
 	return getELBv2ListenerByARN(s, accountID, listenerARN)
 }
 
-// CreateELBv2Rule creates a forward rule with path-pattern and/or host-header conditions.
-func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN string, priority int, pathPatterns, hostHeaders []string) (ELBv2Rule, error) {
+// CreateELBv2Rule creates a forward rule with ALB conditions (path/host/http-header/query/source-ip).
+func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN string, priority int, cond ELBv2RuleConditions) (ELBv2Rule, error) {
 	listenerARN = strings.TrimSpace(listenerARN)
 	targetGroupARN = strings.TrimSpace(targetGroupARN)
 	if listenerARN == "" {
@@ -900,15 +1171,8 @@ func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN s
 	if priority < 1 || priority > 50000 {
 		return ELBv2Rule{}, fmt.Errorf("%w: Priority must be between 1 and 50000", ErrELBv2BadRequest)
 	}
-	cleanedPaths := cleanELBv2StringList(pathPatterns)
-	cleanedHosts := cleanELBv2StringList(hostHeaders)
-	if len(cleanedPaths) == 0 && len(cleanedHosts) == 0 {
-		return ELBv2Rule{}, fmt.Errorf("%w: Conditions require path-pattern and/or host-header Values", ErrELBv2BadRequest)
-	}
-	if err := validateELBv2PathPatterns(cleanedPaths); err != nil {
-		return ELBv2Rule{}, err
-	}
-	if err := validateELBv2HostHeaders(cleanedHosts); err != nil {
+	cleaned, err := cleanELBv2RuleConditions(cond)
+	if err != nil {
 		return ELBv2Rule{}, err
 	}
 	listener, err := getELBv2ListenerByARN(s, accountID, listenerARN)
@@ -950,19 +1214,15 @@ func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN s
 	if !strings.Contains(ruleARN, "listener-rule") {
 		ruleARN = fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener-rule/%s", region, accountID, id)
 	}
-	patternsJSON, err := json.Marshal(cleanedPaths)
+	pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, err := encodeELBv2RuleConditions(cleaned)
 	if err != nil {
-		return ELBv2Rule{}, fmt.Errorf("create rule: encode patterns: %w", err)
-	}
-	hostsJSON, err := json.Marshal(cleanedHosts)
-	if err != nil {
-		return ELBv2Rule{}, fmt.Errorf("create rule: encode host headers: %w", err)
+		return ELBv2Rule{}, err
 	}
 	now := time.Now().UTC().UnixMilli()
 	_, err = s.db.Exec(
-		`INSERT INTO elbv2_rules (account_id, rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		accountID, ruleARN, listenerARN, priority, string(patternsJSON), string(hostsJSON), targetGroupARN, now,
+		`INSERT INTO elbv2_rules (account_id, rule_arn, listener_arn, priority, path_patterns, host_headers, http_headers, query_strings, source_ips, target_group_arn, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, ruleARN, listenerARN, priority, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, targetGroupARN, now,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint") {
@@ -972,8 +1232,73 @@ func (s *Store) CreateELBv2Rule(accountID, region, listenerARN, targetGroupARN s
 	}
 	return ELBv2Rule{
 		RuleARN: ruleARN, ListenerARN: listenerARN, Priority: priority,
-		PathPatterns: cleanedPaths, HostHeaders: cleanedHosts, TargetGroupARN: targetGroupARN, CreatedAt: now,
+		PathPatterns: cleaned.PathPatterns, HostHeaders: cleaned.HostHeaders,
+		HTTPHeaders: cleaned.HTTPHeaders, QueryStrings: cleaned.QueryStrings, SourceIPs: cleaned.SourceIPs,
+		TargetGroupARN: targetGroupARN, CreatedAt: now,
 	}, nil
+}
+
+func encodeELBv2RuleConditions(cond ELBv2RuleConditions) (pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON string, err error) {
+	b, err := json.Marshal(cond.PathPatterns)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("encode path patterns: %w", err)
+	}
+	pathsJSON = string(b)
+	b, err = json.Marshal(cond.HostHeaders)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("encode host headers: %w", err)
+	}
+	hostsJSON = string(b)
+	if cond.HTTPHeaders == nil {
+		cond.HTTPHeaders = []ELBv2HTTPHeaderCond{}
+	}
+	b, err = json.Marshal(cond.HTTPHeaders)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("encode http headers: %w", err)
+	}
+	httpJSON = string(b)
+	if cond.QueryStrings == nil {
+		cond.QueryStrings = []ELBv2QueryStringCond{}
+	}
+	b, err = json.Marshal(cond.QueryStrings)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("encode query strings: %w", err)
+	}
+	queryJSON = string(b)
+	b, err = json.Marshal(cond.SourceIPs)
+	if err != nil {
+		return "", "", "", "", "", fmt.Errorf("encode source ips: %w", err)
+	}
+	ipsJSON = string(b)
+	return pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, nil
+}
+
+func scanELBv2Rule(ruleARN, listenerARN, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN string, priority int, createdAt int64) ELBv2Rule {
+	r := ELBv2Rule{
+		RuleARN: ruleARN, ListenerARN: listenerARN, Priority: priority,
+		TargetGroupARN: tgARN, CreatedAt: createdAt,
+	}
+	_ = json.Unmarshal([]byte(pathsJSON), &r.PathPatterns)
+	if r.PathPatterns == nil {
+		r.PathPatterns = []string{}
+	}
+	_ = json.Unmarshal([]byte(hostsJSON), &r.HostHeaders)
+	if r.HostHeaders == nil {
+		r.HostHeaders = []string{}
+	}
+	_ = json.Unmarshal([]byte(httpJSON), &r.HTTPHeaders)
+	if r.HTTPHeaders == nil {
+		r.HTTPHeaders = []ELBv2HTTPHeaderCond{}
+	}
+	_ = json.Unmarshal([]byte(queryJSON), &r.QueryStrings)
+	if r.QueryStrings == nil {
+		r.QueryStrings = []ELBv2QueryStringCond{}
+	}
+	_ = json.Unmarshal([]byte(ipsJSON), &r.SourceIPs)
+	if r.SourceIPs == nil {
+		r.SourceIPs = []string{}
+	}
+	return r
 }
 
 // DescribeELBv2Rules lists non-default rules for a listener, optionally filtered by RuleArns.
@@ -996,13 +1321,17 @@ func (s *Store) DescribeELBv2Rules(accountID, listenerARN string, ruleARNs []str
 			return nil, err
 		}
 		rows, err = s.db.Query(
-			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at
+			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers,
+			        COALESCE(http_headers, '[]'), COALESCE(query_strings, '[]'), COALESCE(source_ips, '[]'),
+			        target_group_arn, created_at
 			 FROM elbv2_rules WHERE account_id = ? AND listener_arn = ? ORDER BY priority ASC`,
 			accountID, listenerARN,
 		)
 	case len(want) > 0:
 		rows, err = s.db.Query(
-			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers, target_group_arn, created_at
+			`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers,
+			        COALESCE(http_headers, '[]'), COALESCE(query_strings, '[]'), COALESCE(source_ips, '[]'),
+			        target_group_arn, created_at
 			 FROM elbv2_rules WHERE account_id = ? ORDER BY priority ASC`,
 			accountID,
 		)
@@ -1016,21 +1345,14 @@ func (s *Store) DescribeELBv2Rules(accountID, listenerARN string, ruleARNs []str
 	var out []ELBv2Rule
 	for rows.Next() {
 		var (
-			r        ELBv2Rule
-			pathsJSON string
-			hostsJSON string
+			ruleARN, listener, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN string
+			priority                                                                     int
+			createdAt                                                                    int64
 		)
-		if err := rows.Scan(&r.RuleARN, &r.ListenerARN, &r.Priority, &pathsJSON, &hostsJSON, &r.TargetGroupARN, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&ruleARN, &listener, &priority, &pathsJSON, &hostsJSON, &httpJSON, &queryJSON, &ipsJSON, &tgARN, &createdAt); err != nil {
 			return nil, fmt.Errorf("describe rules scan: %w", err)
 		}
-		_ = json.Unmarshal([]byte(pathsJSON), &r.PathPatterns)
-		if r.PathPatterns == nil {
-			r.PathPatterns = []string{}
-		}
-		_ = json.Unmarshal([]byte(hostsJSON), &r.HostHeaders)
-		if r.HostHeaders == nil {
-			r.HostHeaders = []string{}
-		}
+		r := scanELBv2Rule(ruleARN, listener, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN, priority, createdAt)
 		if len(want) > 0 {
 			if _, ok := want[r.RuleARN]; !ok {
 				continue
@@ -1047,6 +1369,184 @@ func (s *Store) DescribeELBv2Rules(accountID, listenerARN string, ruleARNs []str
 	return out, nil
 }
 
+// GetELBv2RuleByARN returns a rule by ARN.
+func (s *Store) GetELBv2RuleByARN(accountID, ruleARN string) (ELBv2Rule, error) {
+	var (
+		listener, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN string
+		priority                                                            int
+		createdAt                                                           int64
+		arn                                                                 string
+	)
+	err := s.db.QueryRow(
+		`SELECT rule_arn, listener_arn, priority, path_patterns, host_headers,
+		        COALESCE(http_headers, '[]'), COALESCE(query_strings, '[]'), COALESCE(source_ips, '[]'),
+		        target_group_arn, created_at
+		 FROM elbv2_rules WHERE account_id = ? AND rule_arn = ?`,
+		accountID, strings.TrimSpace(ruleARN),
+	).Scan(&arn, &listener, &priority, &pathsJSON, &hostsJSON, &httpJSON, &queryJSON, &ipsJSON, &tgARN, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ELBv2Rule{}, ErrELBv2RuleNotFound
+	}
+	if err != nil {
+		return ELBv2Rule{}, fmt.Errorf("get rule by arn: %w", err)
+	}
+	return scanELBv2Rule(arn, listener, pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN, priority, createdAt), nil
+}
+
+// ModifyELBv2Rule updates conditions and/or forward TargetGroupArn on an existing rule.
+// Pass nil for conditions or targetGroupARN to leave that property unchanged.
+func (s *Store) ModifyELBv2Rule(accountID, ruleARN string, conditions *ELBv2RuleConditions, targetGroupARN *string) (ELBv2Rule, error) {
+	ruleARN = strings.TrimSpace(ruleARN)
+	if ruleARN == "" {
+		return ELBv2Rule{}, fmt.Errorf("%w: RuleArn required", ErrELBv2BadRequest)
+	}
+	if conditions == nil && targetGroupARN == nil {
+		return ELBv2Rule{}, fmt.Errorf("%w: Conditions or Actions required", ErrELBv2BadRequest)
+	}
+	rule, err := s.GetELBv2RuleByARN(accountID, ruleARN)
+	if err != nil {
+		return ELBv2Rule{}, err
+	}
+	cond := ELBv2RuleConditions{
+		PathPatterns: rule.PathPatterns, HostHeaders: rule.HostHeaders,
+		HTTPHeaders: rule.HTTPHeaders, QueryStrings: rule.QueryStrings, SourceIPs: rule.SourceIPs,
+	}
+	if conditions != nil {
+		cleaned, cleanErr := cleanELBv2RuleConditions(*conditions)
+		if cleanErr != nil {
+			return ELBv2Rule{}, cleanErr
+		}
+		cond = cleaned
+	}
+	tgARN := rule.TargetGroupARN
+	if targetGroupARN != nil {
+		tgARN = strings.TrimSpace(*targetGroupARN)
+		if tgARN == "" {
+			return ELBv2Rule{}, fmt.Errorf("%w: Actions forward TargetGroupArn required", ErrELBv2BadRequest)
+		}
+		tgs, tgErr := s.DescribeELBv2TargetGroups(accountID, []string{tgARN})
+		if tgErr != nil {
+			return ELBv2Rule{}, tgErr
+		}
+		if len(tgs) == 0 {
+			return ELBv2Rule{}, ErrELBv2TGNotFound
+		}
+	}
+	pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, err := encodeELBv2RuleConditions(cond)
+	if err != nil {
+		return ELBv2Rule{}, err
+	}
+	_, err = s.db.Exec(
+		`UPDATE elbv2_rules SET path_patterns = ?, host_headers = ?, http_headers = ?, query_strings = ?, source_ips = ?, target_group_arn = ?
+		 WHERE account_id = ? AND rule_arn = ?`,
+		pathsJSON, hostsJSON, httpJSON, queryJSON, ipsJSON, tgARN, accountID, ruleARN,
+	)
+	if err != nil {
+		return ELBv2Rule{}, fmt.Errorf("modify rule: %w", err)
+	}
+	rule.PathPatterns = cond.PathPatterns
+	rule.HostHeaders = cond.HostHeaders
+	rule.HTTPHeaders = cond.HTTPHeaders
+	rule.QueryStrings = cond.QueryStrings
+	rule.SourceIPs = cond.SourceIPs
+	rule.TargetGroupARN = tgARN
+	return rule, nil
+}
+
+// ModifyELBv2Listener updates default forward TargetGroupArn and/or port/protocol where modeled.
+// Pass nil for a field to leave it unchanged.
+func (s *Store) ModifyELBv2Listener(accountID, listenerARN string, port *int, protocol *string, targetGroupARN *string) (ELBv2Listener, error) {
+	listenerARN = strings.TrimSpace(listenerARN)
+	if listenerARN == "" {
+		return ELBv2Listener{}, fmt.Errorf("%w: ListenerArn required", ErrELBv2BadRequest)
+	}
+	if port == nil && protocol == nil && targetGroupARN == nil {
+		return ELBv2Listener{}, fmt.Errorf("%w: Port, Protocol, or DefaultActions required", ErrELBv2BadRequest)
+	}
+	listener, err := getELBv2ListenerByARN(s, accountID, listenerARN)
+	if err != nil {
+		return ELBv2Listener{}, err
+	}
+	lbs, err := s.DescribeELBv2LoadBalancers(accountID, []string{listener.LoadBalancerARN})
+	if err != nil {
+		return ELBv2Listener{}, err
+	}
+	if len(lbs) == 0 {
+		return ELBv2Listener{}, ErrELBv2NotFound
+	}
+	lb := lbs[0]
+
+	newPort := listener.Port
+	if port != nil {
+		newPort = *port
+		if newPort < 1 || newPort > 65535 {
+			return ELBv2Listener{}, fmt.Errorf("%w: Port must be between 1 and 65535", ErrELBv2BadRequest)
+		}
+	}
+	newProtocol := listener.Protocol
+	if protocol != nil {
+		newProtocol = strings.ToUpper(strings.TrimSpace(*protocol))
+	}
+	newTG := listener.TargetGroupARN
+	if targetGroupARN != nil {
+		newTG = strings.TrimSpace(*targetGroupARN)
+		if newTG == "" {
+			return ELBv2Listener{}, fmt.Errorf("%w: DefaultActions forward TargetGroupArn required", ErrELBv2BadRequest)
+		}
+	}
+
+	tgs, err := s.DescribeELBv2TargetGroups(accountID, []string{newTG})
+	if err != nil {
+		return ELBv2Listener{}, err
+	}
+	if len(tgs) == 0 {
+		return ELBv2Listener{}, ErrELBv2TGNotFound
+	}
+	tg := tgs[0]
+
+	switch lb.Type {
+	case "network":
+		if newProtocol != "TCP" && newProtocol != "TLS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network load balancers support TCP or TLS listeners only", ErrELBv2BadRequest)
+		}
+		if tg.TargetType != "ip" && tg.TargetType != "instance" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network listeners require ip or instance target groups", ErrELBv2BadRequest)
+		}
+		if tg.Protocol != "TCP" && tg.Protocol != "TLS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: network listeners require TCP or TLS target groups", ErrELBv2BadRequest)
+		}
+	default:
+		if newProtocol != "HTTP" && newProtocol != "HTTPS" {
+			return ELBv2Listener{}, fmt.Errorf("%w: application load balancers support HTTP or HTTPS listeners only", ErrELBv2BadRequest)
+		}
+	}
+
+	if newPort != listener.Port {
+		var conflict int
+		if err := s.db.QueryRow(
+			`SELECT COUNT(1) FROM elbv2_listeners WHERE account_id = ? AND load_balancer_arn = ? AND port = ? AND listener_arn != ?`,
+			accountID, listener.LoadBalancerARN, newPort, listenerARN,
+		).Scan(&conflict); err != nil {
+			return ELBv2Listener{}, fmt.Errorf("modify listener: check port: %w", err)
+		}
+		if conflict > 0 {
+			return ELBv2Listener{}, fmt.Errorf("%w: a listener already exists on the specified port", ErrELBv2BadRequest)
+		}
+	}
+
+	_, err = s.db.Exec(
+		`UPDATE elbv2_listeners SET port = ?, protocol = ?, target_group_arn = ? WHERE account_id = ? AND listener_arn = ?`,
+		newPort, newProtocol, newTG, accountID, listenerARN,
+	)
+	if err != nil {
+		return ELBv2Listener{}, fmt.Errorf("modify listener: %w", err)
+	}
+	listener.Port = newPort
+	listener.Protocol = newProtocol
+	listener.TargetGroupARN = newTG
+	return listener, nil
+}
+
 // DeleteELBv2Rule deletes a non-default rule by ARN.
 func (s *Store) DeleteELBv2Rule(accountID, ruleARN string) error {
 	res, err := s.db.Exec(`DELETE FROM elbv2_rules WHERE account_id = ? AND rule_arn = ?`,
@@ -1061,15 +1561,15 @@ func (s *Store) DeleteELBv2Rule(accountID, ruleARN string) error {
 	return nil
 }
 
-// ResolveELBv2ListenerTargetGroup picks a target group for routePath and requestHost:
+// ResolveELBv2ListenerTargetGroup picks a target group for the lab request:
 // first matching rule by ascending priority, else the listener default TargetGroupArn.
-func (s *Store) ResolveELBv2ListenerTargetGroup(accountID string, listener ELBv2Listener, routePath, requestHost string) (string, error) {
+func (s *Store) ResolveELBv2ListenerTargetGroup(accountID string, listener ELBv2Listener, in ELBv2RuleMatchInput) (string, error) {
 	rules, err := s.DescribeELBv2Rules(accountID, listener.ListenerARN, nil)
 	if err != nil {
 		return "", err
 	}
 	for _, rule := range rules {
-		if MatchELBv2Rule(rule, routePath, requestHost) {
+		if MatchELBv2Rule(rule, in) {
 			return rule.TargetGroupARN, nil
 		}
 	}

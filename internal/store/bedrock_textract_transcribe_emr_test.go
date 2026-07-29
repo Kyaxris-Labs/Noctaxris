@@ -167,7 +167,9 @@ func TestEMRClusterLifecycle(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 
-	c, err := st.RunEMRJobFlow(account, "us-east-1", "lab-cluster", "emr-7.0.0", "s3://logs/")
+	c, err := st.RunEMRJobFlow(account, "us-east-1", store.EMRRunJobFlowInput{
+		Name: "lab-cluster", ReleaseLabel: "emr-7.0.0", LogURI: "s3://logs/",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +192,7 @@ func TestEMRClusterLifecycle(t *testing.T) {
 		t.Fatalf("terminated: %v %#v", err, term)
 	}
 
-	_, err = st.RunEMRJobFlow(account, "us-east-1", "", "", "")
+	_, err = st.RunEMRJobFlow(account, "us-east-1", store.EMRRunJobFlowInput{})
 	if !errors.Is(err, store.ErrEMRValidation) {
 		t.Fatalf("want validation, got %v", err)
 	}
@@ -200,7 +202,7 @@ func TestEMRStepLifecycle(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 
-	c, err := st.RunEMRJobFlow(account, "us-east-1", "steps-cluster", "emr-7.0.0", "")
+	c, err := st.RunEMRJobFlow(account, "us-east-1", store.EMRRunJobFlowInput{Name: "steps-cluster", ReleaseLabel: "emr-7.0.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,11 +231,106 @@ func TestEMRStepLifecycle(t *testing.T) {
 	if err != nil || len(filtered) != 0 {
 		t.Fatalf("filter state: %v %#v", err, filtered)
 	}
+	infos, err := st.CancelEMRSteps(account, c.ClusterID, []string{ids[0], "s-MISSING"})
+	if err != nil || len(infos) != 2 {
+		t.Fatalf("cancel: %v %#v", err, infos)
+	}
+	if infos[0].Status != "SUBMITTED" || infos[1].Status != "FAILED" {
+		t.Fatalf("cancel infos=%#v", infos)
+	}
+	cancelled, err := st.DescribeEMRStep(account, c.ClusterID, ids[0])
+	if err != nil || cancelled.State != "CANCELLED" {
+		t.Fatalf("cancelled step: %v %#v", err, cancelled)
+	}
 	if err := st.TerminateEMRJobFlows(account, []string{c.ClusterID}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = st.AddEMRJobFlowSteps(account, c.ClusterID, []store.EMRStepInput{{Name: "x"}})
 	if !errors.Is(err, store.ErrEMRNotFound) {
 		t.Fatalf("want not found on terminated cluster, got %v", err)
+	}
+}
+
+func TestEMRGroupsFleetsTagsSecurityConfig(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+
+	c, err := st.RunEMRJobFlow(account, "us-east-1", store.EMRRunJobFlowInput{
+		Name: "ig-cluster",
+		Tags: map[string]string{"env": "lab"},
+		Groups: []store.EMRInstanceGroupInput{
+			{Name: "master", InstanceGroupType: "MASTER", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{Name: "core", InstanceGroupType: "CORE", InstanceType: "m5.xlarge", InstanceCount: 2, Market: "ON_DEMAND"},
+		},
+		Fleets: []store.EMRInstanceFleetInput{
+			{Name: "master-fleet", InstanceFleetType: "MASTER", TargetOnDemandCapacity: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := st.ListEMRInstanceGroups(account, c.ClusterID)
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("groups: %v %#v", err, groups)
+	}
+	byType := map[string]store.EMRInstanceGroup{}
+	for _, g := range groups {
+		if g.State != "RUNNING" || !strings.HasPrefix(g.ID, "ig-") {
+			t.Fatalf("groups detail=%#v", groups)
+		}
+		byType[g.InstanceGroupType] = g
+	}
+	if byType["MASTER"].RequestedInstanceCount != 1 || byType["CORE"].RequestedInstanceCount != 2 {
+		t.Fatalf("groups detail=%#v", groups)
+	}
+	fleets, err := st.ListEMRInstanceFleets(account, c.ClusterID)
+	if err != nil || len(fleets) != 1 || fleets[0].ProvisionedOnDemandCapacity != 1 {
+		t.Fatalf("fleets: %v %#v", err, fleets)
+	}
+	if !strings.HasPrefix(fleets[0].ID, "if-") {
+		t.Fatalf("fleet id=%q", fleets[0].ID)
+	}
+
+	got, err := st.DescribeEMRCluster(account, c.ClusterID)
+	if err != nil || got.Tags["env"] != "lab" {
+		t.Fatalf("tags on create: %v %#v", err, got.Tags)
+	}
+	if err := st.AddEMRTags(account, c.ClusterID, map[string]string{"owner": "qa"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.DescribeEMRCluster(account, c.ClusterID)
+	if err != nil || got.Tags["owner"] != "qa" || got.Tags["env"] != "lab" {
+		t.Fatalf("after add tags: %v %#v", err, got.Tags)
+	}
+	if err := st.RemoveEMRTags(account, c.ClusterID, []string{"env"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.DescribeEMRCluster(account, c.ClusterID)
+	if err != nil || got.Tags["env"] != "" || got.Tags["owner"] != "qa" {
+		t.Fatalf("after remove tags: %v %#v", err, got.Tags)
+	}
+
+	sc, err := st.CreateEMRSecurityConfiguration(account, "lab-sec", `{"EncryptionConfiguration":{}}`)
+	if err != nil || sc.Name != "lab-sec" {
+		t.Fatalf("create sc: %v %#v", err, sc)
+	}
+	desc, err := st.DescribeEMRSecurityConfiguration(account, "lab-sec")
+	if err != nil || desc.SecurityConfiguration != `{"EncryptionConfiguration":{}}` {
+		t.Fatalf("describe sc: %v %#v", err, desc)
+	}
+	list, err := st.ListEMRSecurityConfigurations(account)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list sc: %v %#v", err, list)
+	}
+	_, err = st.CreateEMRSecurityConfiguration(account, "lab-sec", `{}`)
+	if !errors.Is(err, store.ErrEMRNotFound) {
+		t.Fatalf("want duplicate not found, got %v", err)
+	}
+	if err := st.DeleteEMRSecurityConfiguration(account, "lab-sec"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.DescribeEMRSecurityConfiguration(account, "lab-sec")
+	if !errors.Is(err, store.ErrEMRNotFound) {
+		t.Fatalf("want missing after delete, got %v", err)
 	}
 }

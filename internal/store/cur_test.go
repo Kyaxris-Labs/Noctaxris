@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -322,4 +323,229 @@ func destKeyFromCURSetup(t *testing.T, setupSQL string) string {
 		t.Fatalf("bad uri %q", uri)
 	}
 	return uri[slash+1:]
+}
+
+func TestCURFOCUSCSVEmitFromEnumerators(t *testing.T) {
+	st := openCURStore(t)
+	account := "000000000001"
+	t.Setenv("NOCTAXRIS_CUR_EMIT", "1")
+
+	if _, err := st.CreateBucket(account, "billing-focus"); err != nil {
+		t.Fatalf("CreateBucket billing-focus: %v", err)
+	}
+	if _, err := st.CreateBucket(account, "focus-src-a"); err != nil {
+		t.Fatalf("CreateBucket focus-src-a: %v", err)
+	}
+	if _, err := st.CreateBucket(account, "focus-src-b"); err != nil {
+		t.Fatalf("CreateBucket focus-src-b: %v", err)
+	}
+	zipBytes := testZip(t, map[string]string{"app.py": "def handler(e, c): return e"})
+	if _, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID:    account,
+		Region:       "us-east-1",
+		FunctionName: "focus-fn",
+		RoleARN:      "arn:aws:iam::000000000001:role/lambda-exec",
+		Runtime:      store.LambdaRuntimePython312,
+		Handler:      "app.handler",
+		Timeout:      10,
+		Memory:       128,
+		Zip:          zipBytes,
+	}); err != nil {
+		t.Fatalf("CreateFunction: %v", err)
+	}
+
+	def, err := st.PutCURReportDefinition(account, "us-east-1", store.CURReportDefinition{
+		ReportName:               "focus-csv",
+		TimeUnit:                 "MONTHLY",
+		Format:                   "textORcsv",
+		Compression:              "GZIP",
+		S3Bucket:                 "billing-focus",
+		S3Prefix:                 "focus",
+		S3Region:                 "us-east-1",
+		AdditionalSchemaElements: []string{"FOCUS", "RESOURCES"},
+	})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if def.ReportStatus != "SUCCESS" {
+		t.Fatalf("expected SUCCESS, got %q", def.ReportStatus)
+	}
+
+	listed, err := st.ListObjectsV2(account, "billing-focus", "focus/focus-csv/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Contents) != 1 {
+		t.Fatalf("expected one CSV object, got %+v", listed.Contents)
+	}
+	objMeta, data, err := st.GetObject(account, "billing-focus", listed.Contents[0].Key)
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	_ = objMeta
+	body := string(data)
+	if !strings.Contains(body, "BillingPeriodStart") || !strings.Contains(body, "ServiceName") {
+		t.Fatalf("missing FOCUS headers: %s", body)
+	}
+	if strings.Contains(body, "identity/LineItemId") {
+		t.Fatalf("legacy CUR headers must not appear in FOCUS CSV: %s", body)
+	}
+	if !strings.Contains(body, "AmazonS3") || !strings.Contains(body, "AWSLambda") {
+		t.Fatalf("expected S3 and Lambda rows: %s", body)
+	}
+	if !strings.Contains(body, "arn:aws:s3:::focus-src-a") {
+		t.Fatalf("expected bucket resource row: %s", body)
+	}
+	if !strings.Contains(body, "arn:aws:lambda:us-east-1:000000000001:function:focus-fn") {
+		t.Fatalf("expected lambda resource row: %s", body)
+	}
+}
+
+func TestCURFormatFOCUSCSV(t *testing.T) {
+	st := openCURStore(t)
+	account := "000000000001"
+	t.Setenv("NOCTAXRIS_CUR_EMIT", "1")
+	if _, err := st.CreateBucket(account, "billing-format-focus"); err != nil {
+		t.Fatal(err)
+	}
+	def, err := st.PutCURReportDefinition(account, "us-east-1", store.CURReportDefinition{
+		ReportName:  "fmt-focus",
+		TimeUnit:    "DAILY",
+		Format:      "FOCUS",
+		Compression: "ZIP",
+		S3Bucket:    "billing-format-focus",
+		S3Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if def.ReportStatus != "SUCCESS" {
+		t.Fatalf("status=%q", def.ReportStatus)
+	}
+	listed, err := st.ListObjectsV2(account, "billing-format-focus", "fmt-focus/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Contents) != 1 {
+		t.Fatalf("expected CSV, got %+v", listed.Contents)
+	}
+	_, data, err := st.GetObject(account, "billing-format-focus", listed.Contents[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "BillingAccountId") {
+		t.Fatalf("expected FOCUS CSV: %s", data)
+	}
+}
+
+func TestCURUsageEnumeratorCounts(t *testing.T) {
+	st := openCURStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "enum-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateBucket(account, "enum-b"); err != nil {
+		t.Fatal(err)
+	}
+	zipBytes := testZip(t, map[string]string{"h.py": "def handler(e,c): return e"})
+	if _, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, Region: "us-east-1", FunctionName: "enum-fn",
+		RoleARN: "arn:aws:iam::000000000001:role/r", Runtime: store.LambdaRuntimePython312,
+		Handler: "h.handler", Timeout: 3, Memory: 128, Zip: zipBytes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := st.CollectCURUsageLines(account, "us-east-1")
+	var s3Count, lambdaCount float64
+	var s3Resources, lambdaResources int
+	for _, line := range lines {
+		switch line.Service {
+		case "AmazonS3":
+			if line.ResourceID == "" {
+				s3Count = line.Quantity
+			} else {
+				s3Resources++
+			}
+		case "AWSLambda":
+			if line.ResourceID == "" {
+				lambdaCount = line.Quantity
+			} else {
+				lambdaResources++
+			}
+		}
+	}
+	if s3Count != 2 || s3Resources != 2 {
+		t.Fatalf("S3 count=%v resources=%d want 2/2", s3Count, s3Resources)
+	}
+	if lambdaCount != 1 || lambdaResources != 1 {
+		t.Fatalf("Lambda count=%v resources=%d want 1/1", lambdaCount, lambdaResources)
+	}
+}
+
+func TestProjectFOCUSRowsLabCost(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+	rows := store.ProjectFOCUSRows([]store.UsageLine{{
+		PeriodStart: start, PeriodEnd: end,
+		Service: "AmazonS3", Region: "us-east-1",
+		UsageType: "TimedStorage-Standard", Operation: "StandardStorage",
+		RecordType: store.UsageRecordTypeUsage, LinkedAccountID: "000000000001",
+		ResourceID: "arn:aws:s3:::lab", Quantity: 2, UsageUnit: "Count",
+	}})
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	if rows[0].ServiceCategory != "Storage" || rows[0].ResourceType != "Bucket" {
+		t.Fatalf("category/type: %+v", rows[0])
+	}
+	want := 2 * 0.023
+	if rows[0].BilledCost != want {
+		t.Fatalf("BilledCost=%g want %g", rows[0].BilledCost, want)
+	}
+}
+
+func TestCURFOCUSParquetWithMockDuck(t *testing.T) {
+	st := openCURStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "billing-focus-pq"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NOCTAXRIS_CUR_EMIT", "1")
+
+	var gotSetup string
+	st.SetCURDuckRunner(func(acc, querySQL, setupSQL string) error {
+		gotSetup = setupSQL
+		dest := destKeyFromCURSetup(t, setupSQL)
+		_, err := st.PutObject(account, "billing-focus-pq", dest, store.PutObjectMeta{
+			Data: []byte("PAR1focus"), PlainSize: 9, ContentType: "application/vnd.apache.parquet",
+		})
+		return err
+	})
+
+	def, err := st.PutCURReportDefinition(account, "us-east-1", store.CURReportDefinition{
+		ReportName:  "focus-pq",
+		TimeUnit:    "MONTHLY",
+		Format:      "Parquet",
+		Compression: "Parquet",
+		S3Bucket:    "billing-focus-pq",
+		S3Prefix:    "out",
+		S3Region:    "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if def.ReportStatus != "SUCCESS" {
+		t.Fatalf("status=%q", def.ReportStatus)
+	}
+	if !strings.Contains(gotSetup, "FORMAT PARQUET") {
+		t.Fatalf("setup=%s", gotSetup)
+	}
+	listed, err := st.ListObjectsV2(account, "billing-focus-pq", "out/focus-pq/", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Contents) != 1 || !strings.HasSuffix(listed.Contents[0].Key, ".parquet") {
+		t.Fatalf("expected parquet: %+v", listed.Contents)
+	}
 }

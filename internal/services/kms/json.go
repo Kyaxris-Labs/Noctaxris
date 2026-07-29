@@ -69,19 +69,32 @@ func b64(data []byte) string {
 }
 
 func keyMetadata(k store.Key) map[string]any {
+	spec := k.KeySpec
+	if spec == "" {
+		if k.KeyUsage == store.KeyUsageSignVerify {
+			spec = store.KeySpecRSA2048
+		} else {
+			spec = store.KeySpecSymmetricDefault
+		}
+	}
 	meta := map[string]any{
-		"AWSAccountId": k.AccountID,
-		"KeyId":        k.KeyID,
-		"Arn":          k.ARN,
-		"CreationDate": parseCreationFloat(k.CreationDate),
-		"Enabled":      k.KeyState == store.KeyStateEnabled,
-		"KeyState":     k.KeyState,
-		"KeyUsage":     k.KeyUsage,
-		"KeyManager":   "CUSTOMER",
-		"Origin":       "AWS_KMS",
+		"AWSAccountId":         k.AccountID,
+		"KeyId":                k.KeyID,
+		"Arn":                  k.ARN,
+		"CreationDate":         parseCreationFloat(k.CreationDate),
+		"Enabled":              k.KeyState == store.KeyStateEnabled,
+		"KeyState":             k.KeyState,
+		"KeyUsage":             k.KeyUsage,
+		"KeySpec":              spec,
+		"CustomerMasterKeySpec": spec,
+		"KeyManager":           "CUSTOMER",
+		"Origin":               "AWS_KMS",
 	}
 	if k.DeletionDate != "" {
 		meta["DeletionDate"] = parseCreationFloat(k.DeletionDate)
+	}
+	if store.IsAsymmetricSignVerify(k) {
+		meta["SigningAlgorithms"] = LabSigningAlgorithms()
 	}
 	return meta
 }
@@ -225,6 +238,35 @@ func CancelKeyDeletionJSON(keyARN string) ([]byte, error) {
 
 func GetKeyRotationStatusJSON(enabled bool) ([]byte, error) {
 	return json.Marshal(map[string]any{"KeyRotationEnabled": enabled})
+}
+
+func SignJSON(keyID string, signature []byte, signingAlgorithm string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"KeyId":            keyID,
+		"Signature":        b64(signature),
+		"SigningAlgorithm": signingAlgorithm,
+	})
+}
+
+func VerifyJSON(keyID string, valid bool, signingAlgorithm string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"KeyId":            keyID,
+		"SignatureValid":   valid,
+		"SigningAlgorithm": signingAlgorithm,
+	})
+}
+
+func GetPublicKeyJSON(keyID string, pemSPKI []byte, keySpec, keyUsage string, signingAlgorithms []string) ([]byte, error) {
+	out := map[string]any{
+		"KeyId":     keyID,
+		"PublicKey": b64(pemSPKI),
+		"KeySpec":   keySpec,
+		"KeyUsage":  keyUsage,
+	}
+	if len(signingAlgorithms) > 0 {
+		out["SigningAlgorithms"] = signingAlgorithms
+	}
+	return json.Marshal(out)
 }
 
 // DecodeBinaryField decodes a base64 string from a JSON request field.

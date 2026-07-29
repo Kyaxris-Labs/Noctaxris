@@ -73,6 +73,20 @@ func (s *Server) handleIoT(
 		s.iotGetThingShadow(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTDataDeleteThingShadow:
 		s.iotDeleteThingShadow(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTCreateTopicRule:
+		s.iotCreateTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTGetTopicRule:
+		s.iotGetTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTListTopicRules:
+		s.iotListTopicRules(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTReplaceTopicRule:
+		s.iotReplaceTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDeleteTopicRule:
+		s.iotDeleteTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTEnableTopicRule:
+		s.iotEnableTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDisableTopicRule:
+		s.iotDisableTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeIoTError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This IoT action is not implemented.", readOnly, eventID, verified)
@@ -126,6 +140,20 @@ func iotAction(action string) string {
 		return catalog.ActionIoTDataGetThingShadow
 	case "DeleteThingShadow":
 		return catalog.ActionIoTDataDeleteThingShadow
+	case "CreateTopicRule":
+		return catalog.ActionIoTCreateTopicRule
+	case "GetTopicRule":
+		return catalog.ActionIoTGetTopicRule
+	case "ListTopicRules":
+		return catalog.ActionIoTListTopicRules
+	case "ReplaceTopicRule":
+		return catalog.ActionIoTReplaceTopicRule
+	case "DeleteTopicRule":
+		return catalog.ActionIoTDeleteTopicRule
+	case "EnableTopicRule":
+		return catalog.ActionIoTEnableTopicRule
+	case "DisableTopicRule":
+		return catalog.ActionIoTDisableTopicRule
 	default:
 		return action
 	}
@@ -836,6 +864,259 @@ func (s *Server) iotDeleteThingShadow(
 	payload, _ := iotsvc.EmptyJSON()
 	s.writeIoTOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, iotDataEventSource, "DeleteThingShadow", readOnly)
+}
+
+func iotTopicRulePayload(params map[string]any) map[string]any {
+	if p, ok := params["topicRulePayload"].(map[string]any); ok {
+		return p
+	}
+	if p, ok := params["TopicRulePayload"].(map[string]any); ok {
+		return p
+	}
+	return params
+}
+
+func iotRuleNameParam(params map[string]any) string {
+	name, _ := params["ruleName"].(string)
+	if name == "" {
+		name, _ = params["RuleName"].(string)
+	}
+	return strings.TrimSpace(name)
+}
+
+func iotActionsJSON(payload map[string]any) string {
+	raw, ok := payload["actions"]
+	if !ok {
+		raw = payload["Actions"]
+	}
+	if raw == nil {
+		return "[]"
+	}
+	if s, ok := raw.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func (s *Server) iotCreateTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTCreateTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:CreateTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	payload := iotTopicRulePayload(params)
+	sqlText, _ := payload["sql"].(string)
+	if sqlText == "" {
+		sqlText, _ = payload["Sql"].(string)
+	}
+	desc, _ := payload["description"].(string)
+	if desc == "" {
+		desc, _ = payload["Description"].(string)
+	}
+	disabled, _ := payload["ruleDisabled"].(bool)
+	if v, ok := payload["RuleDisabled"].(bool); ok {
+		disabled = v
+	}
+	rule, err := s.store.CreateIoTTopicRule(
+		verified.AccountID, s.iotRegion(verified), name, sqlText, desc, iotActionsJSON(payload), disabled,
+	)
+	if errors.Is(err, store.ErrIoTConflict) {
+		s.writeIoTError(w, r, body, requestID, http.StatusConflict, "ResourceAlreadyExistsException",
+			"Topic rule already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrIoTBadRequest) {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to create topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.CreateTopicRuleJSON(rule)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "CreateTopicRule", readOnly)
+}
+
+func (s *Server) iotGetTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTGetTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:GetTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	rule, err := s.store.GetIoTTopicRule(verified.AccountID, s.iotRegion(verified), name)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Topic rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to get topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.GetTopicRuleJSON(rule)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "GetTopicRule", readOnly)
+}
+
+func (s *Server) iotListTopicRules(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	_ = params
+	if !s.authorize(verified, catalog.ActionIoTListTopicRules, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:ListTopicRules.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.ListIoTTopicRules(verified.AccountID, s.iotRegion(verified))
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to list topic rules.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.ListTopicRulesJSON(list)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListTopicRules", readOnly)
+}
+
+func (s *Server) iotReplaceTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTReplaceTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:ReplaceTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	payload := iotTopicRulePayload(params)
+	sqlText, _ := payload["sql"].(string)
+	if sqlText == "" {
+		sqlText, _ = payload["Sql"].(string)
+	}
+	desc, _ := payload["description"].(string)
+	if desc == "" {
+		desc, _ = payload["Description"].(string)
+	}
+	disabled, _ := payload["ruleDisabled"].(bool)
+	if v, ok := payload["RuleDisabled"].(bool); ok {
+		disabled = v
+	}
+	rule, err := s.store.ReplaceIoTTopicRule(
+		verified.AccountID, s.iotRegion(verified), name, sqlText, desc, iotActionsJSON(payload), disabled,
+	)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Topic rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrIoTBadRequest) {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to replace topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.CreateTopicRuleJSON(rule)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ReplaceTopicRule", readOnly)
+}
+
+func (s *Server) iotDeleteTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDeleteTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DeleteTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	err := s.store.DeleteIoTTopicRule(verified.AccountID, s.iotRegion(verified), name)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Topic rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to delete topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DeleteTopicRule", readOnly)
+}
+
+func (s *Server) iotEnableTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTEnableTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:EnableTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	err := s.store.SetIoTTopicRuleDisabled(verified.AccountID, s.iotRegion(verified), name, false)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Topic rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to enable topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "EnableTopicRule", readOnly)
+}
+
+func (s *Server) iotDisableTopicRule(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDisableTopicRule, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DisableTopicRule.", readOnly, eventID, verified)
+		return
+	}
+	name := iotRuleNameParam(params)
+	err := s.store.SetIoTTopicRuleDisabled(verified.AccountID, s.iotRegion(verified), name, true)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Topic rule not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to disable topic rule.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DisableTopicRule", readOnly)
 }
 
 func (s *Server) writeIoTOK(w http.ResponseWriter, payload []byte) {

@@ -42,6 +42,24 @@ func (s *Server) handleEMR(
 		s.emrDescribeStep(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionEMRListSteps:
 		s.emrListSteps(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRCancelSteps:
+		s.emrCancelSteps(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRListInstanceGroups:
+		s.emrListInstanceGroups(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRListInstanceFleets:
+		s.emrListInstanceFleets(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRAddTags:
+		s.emrAddTags(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRRemoveTags:
+		s.emrRemoveTags(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRCreateSecurityConfiguration:
+		s.emrCreateSecurityConfiguration(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRDescribeSecurityConfiguration:
+		s.emrDescribeSecurityConfiguration(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRDeleteSecurityConfiguration:
+		s.emrDeleteSecurityConfiguration(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionEMRListSecurityConfigurations:
+		s.emrListSecurityConfigurations(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeEMRError(w, requestID, http.StatusNotImplemented, "InternalFailure",
 			"This EMR action is not implemented.")
@@ -67,6 +85,24 @@ func emrAction(action string) string {
 		return catalog.ActionEMRDescribeStep
 	case "ListSteps":
 		return catalog.ActionEMRListSteps
+	case "CancelSteps":
+		return catalog.ActionEMRCancelSteps
+	case "ListInstanceGroups":
+		return catalog.ActionEMRListInstanceGroups
+	case "ListInstanceFleets":
+		return catalog.ActionEMRListInstanceFleets
+	case "AddTags":
+		return catalog.ActionEMRAddTags
+	case "RemoveTags":
+		return catalog.ActionEMRRemoveTags
+	case "CreateSecurityConfiguration":
+		return catalog.ActionEMRCreateSecurityConfiguration
+	case "DescribeSecurityConfiguration":
+		return catalog.ActionEMRDescribeSecurityConfiguration
+	case "DeleteSecurityConfiguration":
+		return catalog.ActionEMRDeleteSecurityConfiguration
+	case "ListSecurityConfigurations":
+		return catalog.ActionEMRListSecurityConfigurations
 	default:
 		return action
 	}
@@ -88,10 +124,17 @@ func (s *Server) emrRunJobFlow(
 			"User is not authorized to perform elasticmapreduce:RunJobFlow.")
 		return
 	}
-	name, _ := params["Name"].(string)
-	release, _ := params["ReleaseLabel"].(string)
-	logURI, _ := params["LogUri"].(string)
-	c, err := s.store.RunEMRJobFlow(verified.AccountID, s.emrRegion(verified), name, release, logURI)
+	in := store.EMRRunJobFlowInput{
+		Name:         stringField(params, "Name"),
+		ReleaseLabel: stringField(params, "ReleaseLabel"),
+		LogURI:       stringField(params, "LogUri"),
+		Tags:         parseEMRTags(params["Tags"]),
+	}
+	if instances, ok := params["Instances"].(map[string]any); ok {
+		in.Groups = parseEMRInstanceGroups(instances["InstanceGroups"])
+		in.Fleets = parseEMRInstanceFleets(instances["InstanceFleets"])
+	}
+	c, err := s.store.RunEMRJobFlow(verified.AccountID, s.emrRegion(verified), in)
 	if errors.Is(err, store.ErrEMRValidation) {
 		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
 		return
@@ -280,6 +323,266 @@ func (s *Server) emrListSteps(
 	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "ListSteps", readOnly)
 }
 
+func (s *Server) emrCancelSteps(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRCancelSteps, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:CancelSteps.")
+		return
+	}
+	clusterID, _ := params["ClusterId"].(string)
+	infos, err := s.store.CancelEMRSteps(verified.AccountID, clusterID, emrStringList(params["StepIds"]))
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to cancel steps.")
+		return
+	}
+	payload, _ := emrsvc.CancelStepsJSON(infos)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "CancelSteps", readOnly)
+}
+
+func (s *Server) emrListInstanceGroups(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRListInstanceGroups, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:ListInstanceGroups.")
+		return
+	}
+	clusterID, _ := params["ClusterId"].(string)
+	groups, err := s.store.ListEMRInstanceGroups(verified.AccountID, clusterID)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list instance groups.")
+		return
+	}
+	payload, _ := emrsvc.ListInstanceGroupsJSON(groups)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "ListInstanceGroups", readOnly)
+}
+
+func (s *Server) emrListInstanceFleets(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRListInstanceFleets, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:ListInstanceFleets.")
+		return
+	}
+	clusterID, _ := params["ClusterId"].(string)
+	fleets, err := s.store.ListEMRInstanceFleets(verified.AccountID, clusterID)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list instance fleets.")
+		return
+	}
+	payload, _ := emrsvc.ListInstanceFleetsJSON(fleets)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "ListInstanceFleets", readOnly)
+}
+
+func (s *Server) emrAddTags(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRAddTags, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:AddTags.")
+		return
+	}
+	resourceID, _ := params["ResourceId"].(string)
+	err := s.store.AddEMRTags(verified.AccountID, resourceID, parseEMRTags(params["Tags"]))
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to add tags.")
+		return
+	}
+	w.Header().Set("Content-Type", emrJSONContentType)
+	w.Header().Set("x-amzn-RequestId", requestID)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "AddTags", readOnly)
+}
+
+func (s *Server) emrRemoveTags(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRRemoveTags, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:RemoveTags.")
+		return
+	}
+	resourceID, _ := params["ResourceId"].(string)
+	err := s.store.RemoveEMRTags(verified.AccountID, resourceID, emrStringList(params["TagKeys"]))
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to remove tags.")
+		return
+	}
+	w.Header().Set("Content-Type", emrJSONContentType)
+	w.Header().Set("x-amzn-RequestId", requestID)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "RemoveTags", readOnly)
+}
+
+func (s *Server) emrCreateSecurityConfiguration(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRCreateSecurityConfiguration, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:CreateSecurityConfiguration.")
+		return
+	}
+	name, _ := params["Name"].(string)
+	secCfg, _ := params["SecurityConfiguration"].(string)
+	sc, err := s.store.CreateEMRSecurityConfiguration(verified.AccountID, name, secCfg)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to create security configuration.")
+		return
+	}
+	payload, _ := emrsvc.CreateSecurityConfigurationJSON(sc)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "CreateSecurityConfiguration", readOnly)
+}
+
+func (s *Server) emrDescribeSecurityConfiguration(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRDescribeSecurityConfiguration, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:DescribeSecurityConfiguration.")
+		return
+	}
+	name, _ := params["Name"].(string)
+	sc, err := s.store.DescribeEMRSecurityConfiguration(verified.AccountID, name)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to describe security configuration.")
+		return
+	}
+	payload, _ := emrsvc.DescribeSecurityConfigurationJSON(sc)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "DescribeSecurityConfiguration", readOnly)
+}
+
+func (s *Server) emrDeleteSecurityConfiguration(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionEMRDeleteSecurityConfiguration, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:DeleteSecurityConfiguration.")
+		return
+	}
+	name, _ := params["Name"].(string)
+	err := s.store.DeleteEMRSecurityConfiguration(verified.AccountID, name)
+	if errors.Is(err, store.ErrEMRValidation) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrEMRNotFound) {
+		s.writeEMRError(w, requestID, http.StatusBadRequest, "InvalidRequestException", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to delete security configuration.")
+		return
+	}
+	w.Header().Set("Content-Type", emrJSONContentType)
+	w.Header().Set("x-amzn-RequestId", requestID)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{}`))
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "DeleteSecurityConfiguration", readOnly)
+}
+
+func (s *Server) emrListSecurityConfigurations(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	_ = params
+	if !s.authorize(verified, catalog.ActionEMRListSecurityConfigurations, "*") {
+		s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform elasticmapreduce:ListSecurityConfigurations.")
+		return
+	}
+	configs, err := s.store.ListEMRSecurityConfigurations(verified.AccountID)
+	if err != nil {
+		s.writeEMRError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to list security configurations.")
+		return
+	}
+	payload, _ := emrsvc.ListSecurityConfigurationsJSON(configs)
+	s.writeEMROK(w, requestID, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, emrEventSource, "ListSecurityConfigurations", readOnly)
+}
+
 func parseEMRStepInputs(raw any) []store.EMRStepInput {
 	arr, ok := raw.([]any)
 	if !ok || len(arr) == 0 {
@@ -303,6 +606,73 @@ func parseEMRStepInputs(raw any) []store.EMRStepInput {
 			in.Properties = emrProperties(jarStep["Properties"])
 		}
 		out = append(out, in)
+	}
+	return out
+}
+
+func parseEMRInstanceGroups(raw any) []store.EMRInstanceGroupInput {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]store.EMRInstanceGroupInput, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		groupType := stringField(m, "InstanceRole")
+		if groupType == "" {
+			groupType = stringField(m, "InstanceGroupType")
+		}
+		out = append(out, store.EMRInstanceGroupInput{
+			Name:              stringField(m, "Name"),
+			InstanceGroupType: groupType,
+			InstanceType:      stringField(m, "InstanceType"),
+			Market:            stringField(m, "Market"),
+			BidPrice:          stringField(m, "BidPrice"),
+			InstanceCount:     intFromJSONNumber(m["InstanceCount"]),
+		})
+	}
+	return out
+}
+
+func parseEMRInstanceFleets(raw any) []store.EMRInstanceFleetInput {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]store.EMRInstanceFleetInput, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, store.EMRInstanceFleetInput{
+			Name:                   stringField(m, "Name"),
+			InstanceFleetType:      stringField(m, "InstanceFleetType"),
+			TargetOnDemandCapacity: intFromJSONNumber(m["TargetOnDemandCapacity"]),
+			TargetSpotCapacity:     intFromJSONNumber(m["TargetSpotCapacity"]),
+		})
+	}
+	return out
+}
+
+func parseEMRTags(raw any) map[string]string {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		k := stringField(m, "Key")
+		if k != "" {
+			out[k] = stringField(m, "Value")
+		}
 	}
 	return out
 }

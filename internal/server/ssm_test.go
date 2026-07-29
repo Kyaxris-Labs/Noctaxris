@@ -304,3 +304,120 @@ func TestSSMAccessDeniedWithoutIdentityPolicy(t *testing.T) {
 		t.Fatalf("expected AccessDeniedException in %q", rec.Body.String())
 	}
 }
+
+func TestSSMLabelParameterVersionAndHistory(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	put1 := mustSSMJSON(t, handler, "PutParameter", map[string]any{
+		"Name":  "/app/ami",
+		"Value": "ami-v1",
+		"Type":  "String",
+	}, now)
+	if put1.Code != http.StatusOK {
+		t.Fatalf("PutParameter v1 status=%d body=%q", put1.Code, put1.Body.String())
+	}
+	put2 := mustSSMJSON(t, handler, "PutParameter", map[string]any{
+		"Name":      "/app/ami",
+		"Value":     "ami-v2",
+		"Type":      "String",
+		"Overwrite": true,
+	}, now)
+	if put2.Code != http.StatusOK {
+		t.Fatalf("PutParameter v2 status=%d body=%q", put2.Code, put2.Body.String())
+	}
+
+	labelRec := mustSSMJSON(t, handler, "LabelParameterVersion", map[string]any{
+		"Name":             "/app/ami",
+		"ParameterVersion": 1,
+		"Labels":           []string{"Test", "1bad"},
+	}, now)
+	if labelRec.Code != http.StatusOK {
+		t.Fatalf("LabelParameterVersion status=%d body=%q", labelRec.Code, labelRec.Body.String())
+	}
+	var labelOut map[string]any
+	if err := json.Unmarshal(labelRec.Body.Bytes(), &labelOut); err != nil {
+		t.Fatal(err)
+	}
+	if int(labelOut["ParameterVersion"].(float64)) != 1 {
+		t.Fatalf("ParameterVersion=%v", labelOut["ParameterVersion"])
+	}
+	invalid, _ := labelOut["InvalidLabels"].([]any)
+	if len(invalid) != 1 || invalid[0] != "1bad" {
+		t.Fatalf("InvalidLabels=%v", invalid)
+	}
+
+	moveRec := mustSSMJSON(t, handler, "LabelParameterVersion", map[string]any{
+		"Name":   "/app/ami",
+		"Labels": []string{"Test", "Production"},
+	}, now)
+	if moveRec.Code != http.StatusOK {
+		t.Fatalf("LabelParameterVersion latest status=%d body=%q", moveRec.Code, moveRec.Body.String())
+	}
+
+	getLabel := mustSSMJSON(t, handler, "GetParameter", map[string]any{
+		"Name": "/app/ami:Production",
+	}, now)
+	if getLabel.Code != http.StatusOK {
+		t.Fatalf("GetParameter by label status=%d body=%q", getLabel.Code, getLabel.Body.String())
+	}
+	var getOut map[string]any
+	if err := json.Unmarshal(getLabel.Body.Bytes(), &getOut); err != nil {
+		t.Fatal(err)
+	}
+	param, _ := getOut["Parameter"].(map[string]any)
+	if param["Value"] != "ami-v2" || param["Selector"] != ":Production" {
+		t.Fatalf("Parameter=%v", param)
+	}
+
+	getVer := mustSSMJSON(t, handler, "GetParameter", map[string]any{
+		"Name":    "/app/ami",
+		"Version": 1,
+	}, now)
+	if getVer.Code != http.StatusOK {
+		t.Fatalf("GetParameter by Version status=%d body=%q", getVer.Code, getVer.Body.String())
+	}
+	if err := json.Unmarshal(getVer.Body.Bytes(), &getOut); err != nil {
+		t.Fatal(err)
+	}
+	param, _ = getOut["Parameter"].(map[string]any)
+	if param["Value"] != "ami-v1" || param["Selector"] != ":1" {
+		t.Fatalf("Version Parameter=%v", param)
+	}
+
+	histRec := mustSSMJSON(t, handler, "GetParameterHistory", map[string]any{
+		"Name": "/app/ami",
+	}, now)
+	if histRec.Code != http.StatusOK {
+		t.Fatalf("GetParameterHistory status=%d body=%q", histRec.Code, histRec.Body.String())
+	}
+	var histOut map[string]any
+	if err := json.Unmarshal(histRec.Body.Bytes(), &histOut); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := histOut["Parameters"].([]any)
+	if len(params) != 2 {
+		t.Fatalf("history len=%d body=%q", len(params), histRec.Body.String())
+	}
+	v2, _ := params[1].(map[string]any)
+	labels, _ := v2["Labels"].([]any)
+	if len(labels) != 2 {
+		t.Fatalf("v2 Labels=%v", labels)
+	}
+
+	batchRec := mustSSMJSON(t, handler, "GetParameters", map[string]any{
+		"Names": []string{"/app/ami:Production", "/app/ami:1"},
+	}, now)
+	if batchRec.Code != http.StatusOK {
+		t.Fatalf("GetParameters status=%d body=%q", batchRec.Code, batchRec.Body.String())
+	}
+	var batchOut map[string]any
+	if err := json.Unmarshal(batchRec.Body.Bytes(), &batchOut); err != nil {
+		t.Fatal(err)
+	}
+	batchParams, _ := batchOut["Parameters"].([]any)
+	if len(batchParams) != 2 {
+		t.Fatalf("GetParameters len=%d body=%q", len(batchParams), batchRec.Body.String())
+	}
+}

@@ -126,3 +126,49 @@ func ListThingPrincipalsJSON(principals []string) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{"principals": principals})
 }
+
+func topicRuleActionsAny(actionsJSON string) any {
+	var actions any
+	if err := json.Unmarshal([]byte(actionsJSON), &actions); err != nil || actions == nil {
+		return []any{}
+	}
+	return actions
+}
+
+// CreateTopicRuleJSON builds CreateTopicRule / ReplaceTopicRule response.
+func CreateTopicRuleJSON(r store.IoTTopicRule) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ruleArn":  r.RuleARN,
+		"ruleName": r.RuleName,
+	})
+}
+
+// GetTopicRuleJSON builds GetTopicRule response.
+func GetTopicRuleJSON(r store.IoTTopicRule) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"ruleArn": r.RuleARN,
+		"rule": map[string]any{
+			"ruleName":     r.RuleName,
+			"sql":          r.SQL,
+			"description":  r.Description,
+			"ruleDisabled": r.RuleDisabled,
+			"actions":      topicRuleActionsAny(r.ActionsJSON),
+			"createdAt":    float64(r.CreatedAt) / 1000.0,
+		},
+	})
+}
+
+// ListTopicRulesJSON builds ListTopicRules response.
+func ListTopicRulesJSON(rules []store.IoTTopicRule) ([]byte, error) {
+	items := make([]map[string]any, 0, len(rules))
+	for _, r := range rules {
+		items = append(items, map[string]any{
+			"ruleArn":      r.RuleARN,
+			"ruleName":     r.RuleName,
+			"topicPattern": store.ExtractIoTTopicFilter(r.SQL),
+			"ruleDisabled": r.RuleDisabled,
+			"createdAt":    float64(r.CreatedAt) / 1000.0,
+		})
+	}
+	return json.Marshal(map[string]any{"rules": items})
+}

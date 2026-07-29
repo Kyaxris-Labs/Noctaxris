@@ -2,6 +2,8 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,8 +24,13 @@ const (
 	KeyStatePendingDeletion = "PendingDeletion"
 
 	KeyUsageEncryptDecrypt = "ENCRYPT_DECRYPT"
+	KeyUsageSignVerify     = "SIGN_VERIFY"
+
+	KeySpecSymmetricDefault = "SYMMETRIC_DEFAULT"
+	KeySpecRSA2048          = "RSA_2048"
 
 	cmkMaterialSize = 32
+	rsa2048Bits     = 2048
 
 	defaultPendingWindowDays = 30
 	minPendingWindowDays     = 7
@@ -44,6 +51,12 @@ var ErrInvalidKeyState = errors.New("invalid key state")
 // ErrUnsupportedKeyRotation is returned when rotation is not allowed for the key.
 var ErrUnsupportedKeyRotation = errors.New("key rotation not supported")
 
+// ErrInvalidKeyUsage is returned when an operation is incompatible with KeyUsage/KeySpec.
+var ErrInvalidKeyUsage = errors.New("invalid key usage")
+
+// ErrUnsupportedKeySpec is returned when CreateKey receives an unsupported KeySpec.
+var ErrUnsupportedKeySpec = errors.New("unsupported key spec")
+
 // Key is a customer-managed KMS key record (material remains sealed).
 type Key struct {
 	KeyID               string
@@ -51,6 +64,7 @@ type Key struct {
 	ARN                 string
 	KeyState            string
 	KeyUsage            string
+	KeySpec             string
 	KeyPolicy           string
 	CreationDate        string
 	DeletionDate        string
@@ -58,6 +72,15 @@ type Key struct {
 	KeyRotationEnabled  bool
 	LastRotationDate    string
 	RotationPeriodDays  int
+}
+
+// CreateKeyParams configures CreateKey for symmetric or asymmetric lab CMKs.
+type CreateKeyParams struct {
+	AccountID      string
+	CreatorARN     string
+	PolicyOverride string
+	KeyUsage       string
+	KeySpec        string
 }
 
 // Alias is a KMS alias pointing at a CMK.
@@ -137,14 +160,23 @@ func AliasARN(region, accountID, aliasName string) string {
 	return fmt.Sprintf("arn:aws:kms:%s:%s:alias/%s", region, accountID, name)
 }
 
-// CreateKey mints a CMK, seals 32-byte material under the store master key, and stores it.
+// CreateKey mints a symmetric ENCRYPT_DECRYPT CMK, seals 32-byte material, and stores it.
 func (s *Store) CreateKey(accountID, creatorARN, policyOverride string) (Key, error) {
+	return s.CreateKeyWithParams(CreateKeyParams{
+		AccountID:      accountID,
+		CreatorARN:     creatorARN,
+		PolicyOverride: policyOverride,
+	})
+}
+
+// CreateKeyWithParams mints a CMK (symmetric AES or RSA_2048 SIGN_VERIFY), seals material, and stores it.
+func (s *Store) CreateKeyWithParams(p CreateKeyParams) (Key, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Key{}, fmt.Errorf("create key: begin: %w", err)
 	}
 	defer tx.Rollback()
-	k, err := s.createKeyTx(tx, accountID, creatorARN, policyOverride)
+	k, err := s.createKeyTx(tx, p)
 	if err != nil {
 		return Key{}, err
 	}
@@ -165,7 +197,7 @@ func (s *Store) ListKeys(accountID string) ([]Key, error) {
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT key_id, account_id, arn, key_state, key_usage, key_policy, creation_date,
+		`SELECT key_id, account_id, arn, key_state, key_usage, COALESCE(key_spec, ''), key_policy, creation_date,
 		        COALESCE(deletion_date, ''), COALESCE(key_rotation_enabled, 0),
 		        COALESCE(last_rotation_date, ''), COALESCE(rotation_period_days, 0)
 		 FROM kms_keys WHERE account_id = ? ORDER BY creation_date, key_id`,
@@ -181,10 +213,11 @@ func (s *Store) ListKeys(accountID string) ([]Key, error) {
 		var k Key
 		var rotation int
 		var period int
-		if err := rows.Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeyPolicy, &k.CreationDate,
+		if err := rows.Scan(&k.KeyID, &k.AccountID, &k.ARN, &k.KeyState, &k.KeyUsage, &k.KeySpec, &k.KeyPolicy, &k.CreationDate,
 			&k.DeletionDate, &rotation, &k.LastRotationDate, &period); err != nil {
 			return nil, fmt.Errorf("list keys %s: %w", accountID, err)
 		}
+		k.KeySpec = normalizeStoredKeySpec(k.KeySpec, k.KeyUsage)
 		k.KeyRotationEnabled = rotation != 0
 		k.RotationPeriodDays = period
 		out = append(out, k)
@@ -386,6 +419,35 @@ func (s *Store) UnsealKeyMaterial(keyID string) ([]byte, error) {
 		return nil, fmt.Errorf("unseal key material %s: %w", keyID, err)
 	}
 	return plain, nil
+}
+
+// UnsealRSAPrivateKey returns the RSA private key for a SIGN_VERIFY RSA_2048 CMK.
+func (s *Store) UnsealRSAPrivateKey(keyID string) (*rsa.PrivateKey, error) {
+	k, err := s.GetKey(keyID)
+	if err != nil {
+		return nil, err
+	}
+	if k.KeyUsage != KeyUsageSignVerify || k.KeySpec != KeySpecRSA2048 {
+		return nil, fmt.Errorf("unseal rsa private key %s: %w", keyID, ErrInvalidKeyUsage)
+	}
+	plain, err := s.UnsealKeyMaterial(keyID)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(plain)
+	if err != nil {
+		return nil, fmt.Errorf("unseal rsa private key %s: parse pkcs8: %w", keyID, err)
+	}
+	priv, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("unseal rsa private key %s: not an RSA key", keyID)
+	}
+	return priv, nil
+}
+
+// IsAsymmetricSignVerify reports whether the key is an RSA SIGN_VERIFY lab key.
+func IsAsymmetricSignVerify(k Key) bool {
+	return k.KeyUsage == KeyUsageSignVerify && k.KeySpec == KeySpecRSA2048
 }
 
 // CreateAlias creates aliasName (must be alias/...) pointing at targetKeyID.
@@ -594,7 +656,10 @@ func (s *Store) EnsureAWSManagedConvenienceAliases(accountID string) (string, er
 
 	keyID := existingKeyID
 	if keyID == "" {
-		k, createErr := s.createKeyTx(tx, accountID, fmt.Sprintf("arn:aws:iam::%s:root", accountID), "")
+		k, createErr := s.createKeyTx(tx, CreateKeyParams{
+			AccountID:  accountID,
+			CreatorARN: fmt.Sprintf("arn:aws:iam::%s:root", accountID),
+		})
 		if createErr != nil {
 			return "", fmt.Errorf("ensure aws managed aliases: create key: %w", createErr)
 		}
@@ -636,28 +701,28 @@ func (s *Store) EnsureAWSManagedConvenienceAliases(accountID string) (string, er
 }
 
 // createKeyTx inserts a CMK within an existing transaction.
-func (s *Store) createKeyTx(tx *sql.Tx, accountID, creatorARN, policyOverride string) (Key, error) {
-	keyID := uuid.NewString()
-	material := make([]byte, cmkMaterialSize)
-	if _, err := io.ReadFull(rand.Reader, material); err != nil {
-		return Key{}, fmt.Errorf("create key: generate material: %w", err)
+func (s *Store) createKeyTx(tx *sql.Tx, p CreateKeyParams) (Key, error) {
+	usage, spec, material, err := generateKeyMaterial(p.KeyUsage, p.KeySpec)
+	if err != nil {
+		return Key{}, err
 	}
 	sealed, err := Seal(s.master, material)
 	if err != nil {
 		return Key{}, fmt.Errorf("create key: seal material: %w", err)
 	}
-	policy := strings.TrimSpace(policyOverride)
+	policy := strings.TrimSpace(p.PolicyOverride)
 	if policy == "" {
-		policy = DefaultKeyPolicy(accountID, creatorARN)
+		policy = DefaultKeyPolicy(p.AccountID, p.CreatorARN)
 	}
-	arn := KeyARN(DefaultKMSRegion, accountID, keyID)
+	keyID := uuid.NewString()
+	arn := KeyARN(DefaultKMSRegion, p.AccountID, keyID)
 	created := nowRFC3339()
 	_, err = tx.Exec(
 		`INSERT INTO kms_keys
-		 (key_id, account_id, arn, key_state, key_usage, sealed_material, key_policy, creation_date, deletion_date, key_rotation_enabled,
+		 (key_id, account_id, arn, key_state, key_usage, key_spec, sealed_material, key_policy, creation_date, deletion_date, key_rotation_enabled,
 		  last_rotation_date, rotation_period_days)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', ?)`,
-		keyID, accountID, arn, KeyStateEnabled, KeyUsageEncryptDecrypt, sealed, policy, created,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', ?)`,
+		keyID, p.AccountID, arn, KeyStateEnabled, usage, spec, sealed, policy, created,
 		DefaultLabRotationPeriodDays,
 	)
 	if err != nil {
@@ -665,13 +730,71 @@ func (s *Store) createKeyTx(tx *sql.Tx, accountID, creatorARN, policyOverride st
 	}
 	return Key{
 		KeyID:        keyID,
-		AccountID:    accountID,
+		AccountID:    p.AccountID,
 		ARN:          arn,
 		KeyState:     KeyStateEnabled,
-		KeyUsage:     KeyUsageEncryptDecrypt,
+		KeyUsage:     usage,
+		KeySpec:      spec,
 		KeyPolicy:    policy,
 		CreationDate: created,
 	}, nil
+}
+
+func generateKeyMaterial(keyUsage, keySpec string) (usage, spec string, material []byte, err error) {
+	usage = strings.TrimSpace(keyUsage)
+	spec = strings.TrimSpace(keySpec)
+	// KeySpec/CustomerMasterKeySpec RSA_2048 without KeyUsage implies SIGN_VERIFY lab keys.
+	if spec == KeySpecRSA2048 && usage == "" {
+		usage = KeyUsageSignVerify
+	}
+	if usage == "" {
+		usage = KeyUsageEncryptDecrypt
+	}
+	if spec == "" {
+		if usage == KeyUsageSignVerify {
+			spec = KeySpecRSA2048
+		} else {
+			spec = KeySpecSymmetricDefault
+		}
+	}
+
+	switch usage {
+	case KeyUsageEncryptDecrypt:
+		if spec != KeySpecSymmetricDefault {
+			return "", "", nil, fmt.Errorf("create key: %w: ENCRYPT_DECRYPT requires SYMMETRIC_DEFAULT", ErrUnsupportedKeySpec)
+		}
+		material = make([]byte, cmkMaterialSize)
+		if _, err := io.ReadFull(rand.Reader, material); err != nil {
+			return "", "", nil, fmt.Errorf("create key: generate material: %w", err)
+		}
+		return usage, spec, material, nil
+	case KeyUsageSignVerify:
+		if spec != KeySpecRSA2048 {
+			return "", "", nil, fmt.Errorf("create key: %w: SIGN_VERIFY requires RSA_2048", ErrUnsupportedKeySpec)
+		}
+		priv, genErr := rsa.GenerateKey(rand.Reader, rsa2048Bits)
+		if genErr != nil {
+			return "", "", nil, fmt.Errorf("create key: generate rsa: %w", genErr)
+		}
+		pkcs8, marshalErr := x509.MarshalPKCS8PrivateKey(priv)
+		if marshalErr != nil {
+			return "", "", nil, fmt.Errorf("create key: marshal pkcs8: %w", marshalErr)
+		}
+		return usage, spec, pkcs8, nil
+	default:
+		return "", "", nil, fmt.Errorf("create key: unsupported KeyUsage %q", usage)
+	}
+}
+
+func normalizeStoredKeySpec(spec, usage string) string {
+	spec = strings.TrimSpace(spec)
+	if spec != "" {
+		return spec
+	}
+	if usage == KeyUsageSignVerify {
+		return KeySpecRSA2048
+	}
+	return KeySpecSymmetricDefault
 }
 
 func normalizeAliasName(name string) string {
