@@ -33,6 +33,10 @@ func newAccessKeySecret() (string, error) {
 	return base64.RawStdEncoding.EncodeToString(b[:]), nil
 }
 
+func formatRFC3339(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
+}
+
 func nowRFC3339() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return formatRFC3339(time.Now())
 }

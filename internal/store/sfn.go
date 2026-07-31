@@ -859,17 +859,16 @@ func sfnApplyInputPath(inputJSON, inputPath string) (string, error) {
 	if inputPath == "" || inputPath == "$" {
 		return inputJSON, nil
 	}
-	field, ok := sfnTopLevelField(inputPath)
-	if !ok {
-		return "", fmt.Errorf("InputPath must be $.field")
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(inputJSON), &obj); err != nil {
+	var root any
+	if err := json.Unmarshal([]byte(inputJSON), &root); err != nil {
 		return "", fmt.Errorf("InputPath input is not a JSON object")
 	}
-	v, present := obj[field]
-	if !present {
-		return "null", nil
+	v, err := LabJSONPathExtract(root, inputPath, LabPathTopLevelOnly)
+	if err != nil {
+		if LabJSONPathMissingKey(err) {
+			return "null", nil
+		}
+		return "", err
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

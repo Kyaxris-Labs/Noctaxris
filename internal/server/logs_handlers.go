@@ -9,7 +9,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	logssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/logs"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -132,40 +131,11 @@ func logsAction(action string) string {
 }
 
 func (s *Server) checkLogsPassRole(verified *authn.Verified, roleARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("roleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("roleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("roleArn not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to CloudWatch Logs")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalLogs,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalLogs, "CloudWatch Logs", passRoleMsgs{
+		InvalidARN:   "roleArn must be a valid IAM role ARN",
+		WrongAccount: "roleArn must be in the same account",
+		NotFound:     "roleArn not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to CloudWatch Logs")
-	}
-	return nil
 }
 
 func (s *Server) logsRegion(verified *authn.Verified) string {

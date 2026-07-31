@@ -14,7 +14,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	sm "github.com/Kyaxris-Labs/Noctaxris/internal/services/secretsmanager"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -469,7 +468,7 @@ func (s *Server) secretsDeleteSecret(
 	}
 
 	force := secretsBoolParam(params["ForceDeleteWithoutRecovery"], false)
-	recoveryDays := intFromJSONNumber(params["RecoveryWindowInDays"])
+	recoveryDays := intParam(params["RecoveryWindowInDays"], 0)
 	sec, deletion, err := s.store.DeleteSecretWithRecovery(secretAccountID, secretID, recoveryDays, force)
 	if errors.Is(err, store.ErrSecretNotFound) {
 		s.writeSecretsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
@@ -547,41 +546,11 @@ func (s *Server) secretsRestoreSecret(
 }
 
 func (s *Server) checkSecretsManagerPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("rotation role must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("rotation role must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("rotation role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Secrets Manager")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalSecretsManager,
-		SourceArn:        sourceARN,
+	return s.checkServicePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalSecretsManager, "Secrets Manager", passRoleMsgs{
+		InvalidARN:   "rotation role must be a valid IAM role ARN",
+		WrongAccount: "rotation role must be in the same account",
+		NotFound:     "rotation role not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Secrets Manager")
-	}
-	return nil
 }
 
 func (s *Server) secretsRotateSecret(

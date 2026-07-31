@@ -169,19 +169,9 @@ func (s *Store) deliveryTargetResourcePolicyAllows(accountID, targetARN, action,
 
 // resourceOwnerAccountFromARN returns the account id segment for common ARNs.
 func resourceOwnerAccountFromARN(arn string) string {
-	arn = strings.TrimSpace(arn)
-	parts := strings.Split(arn, ":")
-	if len(parts) < 5 {
+	acct, ok := arnAccountID(arn)
+	if !ok {
 		return ""
-	}
-	acct := strings.TrimSpace(parts[4])
-	if len(acct) != 12 {
-		return ""
-	}
-	for _, r := range acct {
-		if r < '0' || r > '9' {
-			return ""
-		}
 	}
 	return acct
 }

@@ -9,10 +9,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-const (
-	ciphertextVersionV2 byte = 2
-)
-
 // EncryptUnderCMK seals plaintext with AES-256-GCM under cmk material.
 // encryptionContext is bound as GCM AAD (AWS EncryptionContext semantics).
 func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte, encryptionContext map[string]string) ([]byte, error) {
@@ -21,14 +17,7 @@ func EncryptUnderCMK(cmk []byte, keyID string, plaintext []byte, encryptionConte
 
 // KeyIDFromCiphertext extracts the embedded key id from a v2 ciphertext blob.
 func KeyIDFromCiphertext(blob []byte) (string, error) {
-	if len(blob) < 2 || blob[0] != ciphertextVersionV2 {
-		return "", fmt.Errorf("ciphertext has no embedded key id")
-	}
-	n := int(blob[1])
-	if n <= 0 || len(blob) < 2+n {
-		return "", fmt.Errorf("ciphertext key id truncated")
-	}
-	return string(blob[2 : 2+n]), nil
+	return store.KeyIDFromCiphertext(blob)
 }
 
 // DecryptUnderCMK opens a blob produced by EncryptUnderCMK (v1 or v2).

@@ -10,7 +10,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	cognitosvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/cognito"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -196,41 +195,11 @@ func cognitoLambdaConfigFromParams(params map[string]any) store.CognitoLambdaCon
 }
 
 func (s *Server) checkCognitoPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("RoleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("RoleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("RoleArn not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Cognito")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalCognitoIDP,
-		SourceArn:        sourceARN,
+	return s.checkServicePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalCognitoIDP, "Cognito", passRoleMsgs{
+		InvalidARN:   "RoleArn must be a valid IAM role ARN",
+		WrongAccount: "RoleArn must be in the same account",
+		NotFound:     "RoleArn not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Cognito")
-	}
-	return nil
 }
 
 func (s *Server) cognitoCreateUserPool(

@@ -19,7 +19,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	lambdasvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/lambda"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/google/uuid"
@@ -445,41 +444,10 @@ func lambdaImageURIFromCode(params map[string]any) (string, error) {
 }
 
 func (s *Server) checkLambdaPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("Role must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("Role must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("Role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Lambda")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalLambda,
-		SourceArn:        sourceARN,
+	return s.checkServicePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalLambda, "Lambda", passRoleMsgs{
+		InvalidARN:   "Role must be a valid IAM role ARN",
+		WrongAccount: "Role must be in the same account",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Lambda")
-	}
-	return nil
 }
 
 func lambdaVpcConfigRejectMessage() string {

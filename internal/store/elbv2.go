@@ -743,7 +743,7 @@ func (s *Store) RegisterELBv2Targets(accountID, targetGroupARN string, targets [
 			if parsed == nil {
 				return fmt.Errorf("%w: ip target Id must be a lab IP address", ErrELBv2BadRequest)
 			}
-			if elbv2LabForwardIPDenied(parsed) {
+			if LabForwardIPDenied(parsed) {
 				return fmt.Errorf("%w: ip target must not be unspecified or link-local", ErrELBv2BadRequest)
 			}
 		case "instance":

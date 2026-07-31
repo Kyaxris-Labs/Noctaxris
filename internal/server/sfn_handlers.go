@@ -12,7 +12,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	sfnsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/sfn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
 const (
@@ -108,40 +107,10 @@ func (s *Server) sfnRegion(verified *authn.Verified) string {
 }
 
 func (s *Server) checkSFNPassRole(verified *authn.Verified, roleARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("RoleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("RoleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("Role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Step Functions")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalStates,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalStates, "Step Functions", passRoleMsgs{
+		InvalidARN:   "RoleArn must be a valid IAM role ARN",
+		WrongAccount: "RoleArn must be in the same account",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Step Functions")
-	}
-	return nil
 }
 
 func (s *Server) sfnCreateStateMachine(

@@ -229,24 +229,12 @@ func (s *Store) PutParameter(
 		if err != nil {
 			return Parameter{}, fmt.Errorf("put parameter: resolve key: %w", err)
 		}
-		k, err := s.GetKey(resolvedKeyID)
-		if err != nil {
-			return Parameter{}, fmt.Errorf("put parameter: key: %w", err)
-		}
-		if !KeyUsableForCrypto(k.KeyState) {
-			return Parameter{}, fmt.Errorf("put parameter: %w", ErrInvalidKeyState)
-		}
-		cmk, err := s.UnsealKeyMaterial(resolvedKeyID)
-		if err != nil {
-			return Parameter{}, fmt.Errorf("put parameter: unseal key: %w", err)
-		}
 		encCtx := SSMEncryptionContext(arn)
-		sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, []byte(value), encCtx)
+		sealed, kmsKeyID, err = s.SealPlaintextWithKMS(accountID, resolvedKeyID, []byte(value), encCtx)
 		if err != nil {
-			return Parameter{}, fmt.Errorf("put parameter: encrypt: %w", err)
+			return Parameter{}, fmt.Errorf("put parameter: %w", err)
 		}
 		sealedFlag = 1
-		kmsKeyID = resolvedKeyID
 	}
 
 	var execErr error

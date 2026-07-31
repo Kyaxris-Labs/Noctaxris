@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +21,9 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	distreference "github.com/distribution/reference"
 	"github.com/google/uuid"
+	digestpkg "github.com/opencontainers/go-digest"
 )
 
 const (
@@ -342,6 +343,9 @@ func parseRegistryRoute(path string) (registryRoute, error) {
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return registryRoute{}, fmt.Errorf("invalid repository path")
 	}
+	if _, err := distreference.WithName(parts[1]); err != nil {
+		return registryRoute{}, fmt.Errorf("invalid repository path")
+	}
 	out := registryRoute{
 		accountID: parts[0],
 		repoName:  parts[1],
@@ -549,7 +553,7 @@ func (s *Server) writeRegistryBlobFromRequest(r *http.Request, digest string) er
 		_ = os.Remove(tmp)
 		return fmt.Errorf("blob too large")
 	}
-	gotDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	gotDigest := digestpkg.NewDigestFromBytes(digestpkg.SHA256, hasher.Sum(nil)).String()
 	if gotDigest != digest {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("digest mismatch")
@@ -668,7 +672,7 @@ func (s *Server) finalizeRegistryUpload(uploadID string, r *http.Request, digest
 		_ = os.Remove(tmp)
 		return err
 	}
-	gotDigest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	gotDigest := digestpkg.NewDigestFromBytes(digestpkg.SHA256, hasher.Sum(nil)).String()
 	if gotDigest != digest {
 		_ = os.Remove(tmp)
 		_ = os.Remove(uploadPath)
@@ -765,10 +769,9 @@ func (s *Server) putRegistryManifest(w http.ResponseWriter, r *http.Request, acc
 		s.writeRegistryError(w, http.StatusBadRequest, "MANIFEST_INVALID", "empty manifest")
 		return
 	}
-	sum := sha256.Sum256(body)
-	digest := "sha256:" + hex.EncodeToString(sum[:])
+	manifestDigest := digestpkg.SHA256.FromBytes(body).String()
 
-	relPath, err := registryManifestRelPath(accountID, repoName, digest)
+	relPath, err := registryManifestRelPath(accountID, repoName, manifestDigest)
 	if err != nil {
 		s.writeRegistryError(w, http.StatusBadRequest, "MANIFEST_INVALID", "invalid manifest digest")
 		return
@@ -784,19 +787,19 @@ func (s *Server) putRegistryManifest(w http.ResponseWriter, r *http.Request, acc
 	}
 
 	var tags []string
-	if !strings.HasPrefix(reference, "sha256:") {
+	if !isRegistryManifestDigest(reference) {
 		tags = []string{reference}
 	}
-	if _, err := s.store.PutImage(accountID, repoName, digest, tags, relPath); err != nil {
+	if _, err := s.store.PutImage(accountID, repoName, manifestDigest, tags, relPath); err != nil {
 		s.writeRegistryError(w, http.StatusInternalServerError, "UNKNOWN", "internal error")
 		return
 	}
 
 	s.registrySyncToEngine(r.Context(), accountID, repoName, reference, authToken)
 
-	loc := fmt.Sprintf("/v2/%s/%s/manifests/%s", accountID, repoName, digest)
+	loc := fmt.Sprintf("/v2/%s/%s/manifests/%s", accountID, repoName, manifestDigest)
 	w.Header().Set("Location", loc)
-	w.Header().Set("Docker-Content-Digest", digest)
+	w.Header().Set("Docker-Content-Digest", manifestDigest)
 	ct := strings.TrimSpace(r.Header.Get("Content-Type"))
 	if ct == "" {
 		ct = "application/vnd.docker.distribution.manifest.v2+json"
@@ -808,7 +811,7 @@ func (s *Server) putRegistryManifest(w http.ResponseWriter, r *http.Request, acc
 func (s *Server) getRegistryManifest(w http.ResponseWriter, r *http.Request, accountID, repoName, reference string) {
 	var relPath string
 	var digest string
-	if strings.HasPrefix(reference, "sha256:") {
+	if isRegistryManifestDigest(reference) {
 		digest = reference
 		var err error
 		relPath, err = registryManifestRelPath(accountID, repoName, digest)
@@ -850,7 +853,7 @@ func (s *Server) registrySyncToEngine(ctx context.Context, accountID, repoName, 
 	if strings.TrimSpace(s.cfg.DockerHost) == "" {
 		return
 	}
-	if strings.HasPrefix(reference, "sha256:") {
+	if isRegistryManifestDigest(reference) {
 		return
 	}
 	cli, err := s.computeClient()
@@ -888,35 +891,23 @@ func registryManifestRelPath(accountID, repoName, digest string) (string, error)
 	return filepath.Join("ecr", "manifests", accountID, repoName, algo, hexPart+".json"), nil
 }
 
-var allowedRegistryDigestAlgorithms = map[string]int{
-	"sha256": 64,
+func isRegistryManifestDigest(ref string) bool {
+	d, err := digestpkg.Parse(strings.TrimSpace(ref))
+	if err != nil {
+		return false
+	}
+	return d.Algorithm() == digestpkg.SHA256
 }
 
-func parseRegistryDigest(digest string) (algo, hexPart string, err error) {
-	digest = strings.TrimSpace(digest)
-	parts := strings.SplitN(digest, ":", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+func parseRegistryDigest(digestStr string) (algo, hexPart string, err error) {
+	d, err := digestpkg.Parse(strings.TrimSpace(digestStr))
+	if err != nil {
 		return "", "", fmt.Errorf("invalid digest")
 	}
-	algo = parts[0]
-	hexPart = parts[1]
-	if strings.Contains(algo, "..") || strings.Contains(hexPart, "..") {
+	if d.Algorithm() != digestpkg.SHA256 {
 		return "", "", fmt.Errorf("invalid digest")
 	}
-	if strings.ContainsAny(algo, `/\`) || strings.ContainsAny(hexPart, `/\`) {
-		return "", "", fmt.Errorf("invalid digest")
-	}
-	wantLen, ok := allowedRegistryDigestAlgorithms[algo]
-	if !ok || len(hexPart) != wantLen {
-		return "", "", fmt.Errorf("invalid digest")
-	}
-	for i := 0; i < len(hexPart); i++ {
-		c := hexPart[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", "", fmt.Errorf("invalid digest")
-		}
-	}
-	return algo, hexPart, nil
+	return string(d.Algorithm()), d.Encoded(), nil
 }
 
 func ensurePathWithinRoot(root, path string) error {

@@ -276,22 +276,7 @@ func (s *Store) sealSecretValue(accountID, keyID string, plaintext []byte, encCt
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve key: %w", err)
 	}
-	k, err := s.GetKey(resolvedKeyID)
-	if err != nil {
-		return nil, "", fmt.Errorf("key: %w", err)
-	}
-	if !KeyUsableForCrypto(k.KeyState) {
-		return nil, "", fmt.Errorf("%w", ErrInvalidKeyState)
-	}
-	cmk, err := s.UnsealKeyMaterial(resolvedKeyID)
-	if err != nil {
-		return nil, "", fmt.Errorf("unseal key: %w", err)
-	}
-	sealed, err := EncryptUnderCMK(cmk, resolvedKeyID, plaintext, encCtx)
-	if err != nil {
-		return nil, "", fmt.Errorf("encrypt: %w", err)
-	}
-	return sealed, resolvedKeyID, nil
+	return s.SealPlaintextWithKMS(accountID, resolvedKeyID, plaintext, encCtx)
 }
 
 func (s *Store) storeSecretValues(

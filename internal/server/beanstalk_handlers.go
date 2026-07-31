@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/awsprotocol"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	ebsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/elasticbeanstalk"
@@ -301,10 +302,8 @@ func (s *Server) writeBeanstalkError(
 	w http.ResponseWriter, r *http.Request, requestID string, status int, code, message string,
 	readOnly bool, eventID string, verified *authn.Verified,
 ) {
-	payload := []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
-		`<ErrorResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/"><Error><Type>Sender</Type><Code>` +
-		xmlEscape(code) + `</Code><Message>` + xmlEscape(message) +
-		`</Message></Error><RequestId>` + xmlEscape(requestID) + `</RequestId></ErrorResponse>`)
+	payload, _ := awsprotocol.MarshalQueryError(awsprotocol.QueryErrorIAMSender,
+		"http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/", code, message, requestID)
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(payload)

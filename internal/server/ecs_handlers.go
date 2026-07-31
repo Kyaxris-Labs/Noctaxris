@@ -13,7 +13,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	ecssvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/ecs"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -146,41 +145,11 @@ func (s *Server) authorizeECS(verified *authn.Verified, action, resource string)
 }
 
 func (s *Server) checkECSPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("RoleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("RoleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("RoleArn not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to ECS")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalECSTasks,
-		SourceArn:        sourceARN,
+	return s.checkServicePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalECSTasks, "ECS", passRoleMsgs{
+		InvalidARN:   "RoleArn must be a valid IAM role ARN",
+		WrongAccount: "RoleArn must be in the same account",
+		NotFound:     "RoleArn not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to ECS")
-	}
-	return nil
 }
 
 func containerDefinitionsFromParams(params map[string]any) []map[string]any {

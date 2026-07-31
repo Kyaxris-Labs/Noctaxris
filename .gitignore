@@ -28,17 +28,17 @@ go.work.sum
 .env
 
 # Editor/IDE
+# Local files/folders
 # .idea/
 # .vscode/
 .cursor/
 .local/
 .superpowers/
-
-# Local files
 bin/
 .DS_Store
 HANDOFF.md
 .build/
+.worktrees/
 
 # Integration suite local artifacts
 tests/**/node_modules/
@@ -56,5 +56,3 @@ __pycache__/
 
 # Go
 .gocache/
-
-.worktrees/

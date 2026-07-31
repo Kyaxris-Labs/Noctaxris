@@ -1,15 +1,14 @@
 package store
 
 import (
-	"bytes"
-	"compress/gzip"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/codec"
 )
 
 const servicePrincipalLogs = "logs.amazonaws.com"
@@ -230,51 +229,14 @@ func (s *Store) deliverLogSubscription(accountID, group string, f LogsSubscripti
 // EncodeAwslogsSubscriptionEnvelope wraps DATA_MESSAGE JSON as AWS Lambda subscription
 // shape: {"awslogs":{"data":"<base64(gzip(json))>"}}.
 func EncodeAwslogsSubscriptionEnvelope(dataMessageJSON []byte) ([]byte, error) {
-	return encodeAwslogsSubscriptionEnvelope(dataMessageJSON)
+	return codec.AwslogsEnvelopeEncode(dataMessageJSON)
 }
 
 func encodeAwslogsSubscriptionEnvelope(dataMessageJSON []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(dataMessageJSON); err != nil {
-		_ = zw.Close()
-		return nil, fmt.Errorf("awslogs gzip: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("awslogs gzip close: %w", err)
-	}
-	return json.Marshal(map[string]any{
-		"awslogs": map[string]string{
-			"data": base64.StdEncoding.EncodeToString(buf.Bytes()),
-		},
-	})
+	return codec.AwslogsEnvelopeEncode(dataMessageJSON)
 }
 
 // DecodeAwslogsSubscriptionEnvelope extracts and gunzips awslogs.data for tests.
 func DecodeAwslogsSubscriptionEnvelope(envelope []byte) ([]byte, error) {
-	var wrap struct {
-		Awslogs struct {
-			Data string `json:"data"`
-		} `json:"awslogs"`
-	}
-	if err := json.Unmarshal(envelope, &wrap); err != nil {
-		return nil, err
-	}
-	if wrap.Awslogs.Data == "" {
-		return nil, fmt.Errorf("awslogs.data missing")
-	}
-	raw, err := base64.StdEncoding.DecodeString(wrap.Awslogs.Data)
-	if err != nil {
-		return nil, err
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		return nil, err
-	}
-	defer zr.Close()
-	var out bytes.Buffer
-	if _, err := out.ReadFrom(zr); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return codec.AwslogsEnvelopeDecode(envelope)
 }

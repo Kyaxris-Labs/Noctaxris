@@ -20,8 +20,6 @@ type SecretRotationRules struct {
 }
 
 var (
-	rateDaysRE         = regexp.MustCompile(`(?i)^rate\((\d+)\s+days?\)$`)
-	rateHoursRE        = regexp.MustCompile(`(?i)^rate\((\d+)\s+hours?\)$`)
 	rotationDurationRE = regexp.MustCompile(`(?i)^(\d+)h$`)
 	secretsCronExprRE  = regexp.MustCompile(`(?i)^cron\(\s*([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s*\)$`)
 
@@ -103,14 +101,14 @@ func validateRotationDuration(rules SecretRotationRules) error {
 		return nil
 	}
 	expr := strings.TrimSpace(rules.ScheduleExpression)
-	if rules.AutomaticallyAfterDays > 0 || rateDaysRE.MatchString(expr) || secretsCronExprRE.MatchString(expr) {
+	if rules.AutomaticallyAfterDays > 0 || secretScheduleRateUnit(expr) == "day" || secretsCronExprRE.MatchString(expr) {
 		if hours > 24 {
 			return fmt.Errorf("ValidationException: Duration must not exceed 24h for day-based schedules")
 		}
 		return nil
 	}
-	if m := rateHoursRE.FindStringSubmatch(expr); m != nil {
-		n, _ := strconv.Atoi(m[1])
+	if rateHoursMatch(expr) {
+		n := secretScheduleRateValue(expr)
 		if hours > n {
 			return fmt.Errorf("ValidationException: Duration must not exceed the rate interval")
 		}
@@ -119,31 +117,53 @@ func validateRotationDuration(rules SecretRotationRules) error {
 	return fmt.Errorf("ValidationException: Duration is not valid for ScheduleExpression")
 }
 
+// secretScheduleRateUnit returns "day", "hour", or "" when expr is not a supported secrets rate().
+func secretScheduleRateUnit(expr string) string {
+	n, unit, err := ParseRateExpression(strings.TrimSpace(expr))
+	if err != nil || n < 1 {
+		return ""
+	}
+	switch unit {
+	case "day", "days":
+		return "day"
+	case "hour", "hours":
+		return "hour"
+	default:
+		return ""
+	}
+}
+
+func secretScheduleRateValue(expr string) int {
+	n, _, err := ParseRateExpression(strings.TrimSpace(expr))
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
+}
+
+func rateHoursMatch(expr string) bool {
+	return secretScheduleRateUnit(expr) == "hour"
+}
+
 func nextRotationTime(rules SecretRotationRules, from time.Time) (time.Time, error) {
 	from = from.UTC()
 	if rules.AutomaticallyAfterDays > 0 {
 		return from.Add(time.Duration(rules.AutomaticallyAfterDays) * 24 * time.Hour), nil
 	}
 	expr := strings.TrimSpace(rules.ScheduleExpression)
-	if m := rateDaysRE.FindStringSubmatch(expr); m != nil {
-		n, err := strconv.ParseInt(m[1], 10, 64)
-		if err != nil || n < 1 {
-			return time.Time{}, fmt.Errorf("ValidationException: invalid rate expression %q", expr)
-		}
+	switch secretScheduleRateUnit(expr) {
+	case "day":
+		n := secretScheduleRateValue(expr)
 		if n > 999 {
 			return time.Time{}, fmt.Errorf("ValidationException: rate days must be at most 999")
 		}
-		return from.Add(time.Duration(n) * 24 * time.Hour), nil
-	}
-	if m := rateHoursRE.FindStringSubmatch(expr); m != nil {
-		n, err := strconv.ParseInt(m[1], 10, 64)
-		if err != nil || n < 1 {
-			return time.Time{}, fmt.Errorf("ValidationException: invalid rate expression %q", expr)
-		}
+		return NextAfterRate(expr, from)
+	case "hour":
+		n := secretScheduleRateValue(expr)
 		if n < 4 {
 			return time.Time{}, fmt.Errorf("ValidationException: rate hours must be at least 4")
 		}
-		return from.Add(time.Duration(n) * time.Hour), nil
+		return NextAfterRate(expr, from)
 	}
 	if m := secretsCronExprRE.FindStringSubmatch(expr); m != nil {
 		minute, hour, dom, month, dow, year := m[1], m[2], m[3], m[4], m[5], m[6]
@@ -232,9 +252,8 @@ func (s *Store) SetSecretRotationRules(
 	}
 	days := rules.AutomaticallyAfterDays
 	if days <= 0 {
-		if m := rateDaysRE.FindStringSubmatch(strings.TrimSpace(rules.ScheduleExpression)); m != nil {
-			n, _ := strconv.ParseInt(m[1], 10, 64)
-			days = n
+		if secretScheduleRateUnit(strings.TrimSpace(rules.ScheduleExpression)) == "day" {
+			days = int64(secretScheduleRateValue(rules.ScheduleExpression))
 		}
 	}
 	next := ""

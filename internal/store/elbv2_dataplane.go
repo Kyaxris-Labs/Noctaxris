@@ -57,7 +57,7 @@ func (s *Store) resolveELBv2NLBTargetHostPort(accountID string, tg ELBv2TargetGr
 		if net.ParseIP(host) == nil {
 			return "", 0, fmt.Errorf("%w: invalid ip target", ErrELBv2BadRequest)
 		}
-		if elbv2LabForwardIPDenied(net.ParseIP(host)) {
+		if LabForwardIPDenied(net.ParseIP(host)) {
 			return "", 0, fmt.Errorf("%w: ip target not allowed for lab nlb forward", ErrELBv2BadRequest)
 		}
 	case "instance":
@@ -66,23 +66,13 @@ func (s *Store) resolveELBv2NLBTargetHostPort(accountID string, tg ELBv2TargetGr
 			return "", 0, fmt.Errorf("instance target not reachable (no private IP)")
 		}
 		host = strings.TrimSpace(inst.PrivateIP)
-		if elbv2LabForwardIPDenied(net.ParseIP(host)) {
+		if LabForwardIPDenied(net.ParseIP(host)) {
 			return "", 0, fmt.Errorf("instance target not reachable (blocked address)")
 		}
 	default:
 		return "", 0, fmt.Errorf("%w: lab nlb dataplane supports ip and instance targets only", ErrELBv2BadRequest)
 	}
 	return host, port, nil
-}
-
-// elbv2LabForwardIPDenied blocks unspecified and link-local addresses (incl. cloud metadata).
-// Loopback stays allowed for same-host lab backends when the API is loopback-bound.
-// RFC1918 private addresses stay allowed so nested DinD instance IPs can be targets.
-func elbv2LabForwardIPDenied(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	return ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
 // FetchELBv2LabHTTPForward performs a lab HTTP forward to a URL built from registered NLB targets.

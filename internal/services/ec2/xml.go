@@ -2,9 +2,9 @@ package ec2
 
 import (
 	"encoding/xml"
-	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/awsprotocol"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -211,14 +211,9 @@ func toStateChanges(changes []StateChange) []stateChangeXML {
 
 // ErrorXML builds an EC2 Query ErrorResponse.
 func ErrorXML(code, message, requestID string) []byte {
-	return []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
-		`<Response><Errors><Error><Code>` + xmlEscape(code) +
-		`</Code><Message>` + xmlEscape(message) +
-		`</Message></Error></Errors><RequestID>` + xmlEscape(requestID) +
-		`</RequestID></Response>`)
-}
-
-func xmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
-	return r.Replace(s)
+	body, err := awsprotocol.MarshalQueryError(awsprotocol.QueryErrorEC2, "", code, message, requestID)
+	if err != nil {
+		return nil
+	}
+	return body
 }

@@ -1,13 +1,10 @@
 package store
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
 	"database/sql"
 	"encoding/base32"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +13,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/jwtutil"
 	"github.com/google/uuid"
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/totp"
 )
 
 const (
@@ -76,15 +75,30 @@ type CognitoAuthOutcome struct {
 	ChallengeParameters map[string]string
 }
 
+func cognitoTOTPValidateOpts() totp.ValidateOpts {
+	return totp.ValidateOpts{
+		Period:    cognitoTOTPPeriod,
+		Skew:      cognitoTOTPSkewSteps,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	}
+}
+
 // GenerateCognitoTOTP returns the RFC 6238 TOTP for secret at t (SHA1, 30s, 6 digits).
 // Exported for tests; secrets must not be logged.
 func GenerateCognitoTOTP(secretCode string, t time.Time) (string, error) {
-	key, err := decodeTOTPSecret(secretCode)
+	secretCode, err := normalizeCognitoTOTPSecret(secretCode)
 	if err != nil {
 		return "", err
 	}
-	counter := uint64(t.UTC().Unix()) / cognitoTOTPPeriod
-	return fmt.Sprintf("%0*d", cognitoTOTPDigits, hotp(key, counter)), nil
+	return totp.GenerateCodeCustom(secretCode, t.UTC(), cognitoTOTPValidateOpts())
+}
+
+func normalizeCognitoTOTPSecret(secretCode string) (string, error) {
+	if _, err := decodeTOTPSecret(secretCode); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(strings.ToUpper(secretCode)), nil
 }
 
 func decodeTOTPSecret(secretCode string) ([]byte, error) {
@@ -105,38 +119,20 @@ func decodeTOTPSecret(secretCode string) ([]byte, error) {
 	return key, nil
 }
 
-func hotp(key []byte, counter uint64) int {
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], counter)
-	mac := hmac.New(sha1.New, key)
-	_, _ = mac.Write(buf[:])
-	sum := mac.Sum(nil)
-	offset := sum[len(sum)-1] & 0x0f
-	truncated := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
-	mod := 1
-	for i := 0; i < cognitoTOTPDigits; i++ {
-		mod *= 10
-	}
-	return int(truncated % uint32(mod))
-}
-
 func validateCognitoTOTP(secretCode, userCode string, now time.Time) bool {
 	userCode = strings.TrimSpace(userCode)
 	if len(userCode) != cognitoTOTPDigits {
 		return false
 	}
-	key, err := decodeTOTPSecret(secretCode)
+	secretCode, err := normalizeCognitoTOTPSecret(secretCode)
 	if err != nil {
 		return false
 	}
-	counter := int64(now.UTC().Unix()) / cognitoTOTPPeriod
-	for d := -cognitoTOTPSkewSteps; d <= cognitoTOTPSkewSteps; d++ {
-		c := uint64(counter + int64(d))
-		if fmt.Sprintf("%0*d", cognitoTOTPDigits, hotp(key, c)) == userCode {
-			return true
-		}
+	ok, err := totp.ValidateCustom(userCode, secretCode, now.UTC(), cognitoTOTPValidateOpts())
+	if err != nil {
+		return false
 	}
-	return false
+	return ok
 }
 
 func newCognitoMFASessionID() string {

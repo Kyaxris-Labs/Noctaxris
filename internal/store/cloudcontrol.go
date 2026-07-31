@@ -371,7 +371,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 	}
 	switch typeName {
 	case "AWS::SSM::Parameter":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Value", "Type", "KeyId"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		value := cfnStringProp(patch, "Value")
@@ -389,7 +389,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type, "Value": p.Value})
 		return s.cloudControlPersistUpdate(accountID, typeName, p.Name, props)
 	case "AWS::S3::Bucket":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "BucketEncryption", "NotificationConfiguration"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if err := s.applyCFNS3Encryption(accountID, identifier, patch); err != nil {
@@ -404,7 +404,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		}
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Events::Rule":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "EventPattern", "State", "Description", "EventBusName"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		bus, rule, ok := splitCFNEventRulePhysical(identifier)
@@ -440,7 +440,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"Name": rule, "EventBusName": bus, "Arn": r.ARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, phys, props)
 	case "AWS::IAM::Role":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "AssumeRolePolicyDocument", "Policies", "ManagedPolicyArns"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		role, err := s.GetRoleRecord(accountID, identifier)
@@ -453,7 +453,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"RoleName": role.RoleName, "Arn": role.RoleARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, role.RoleName, props)
 	case "AWS::SQS::Queue":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "VisibilityTimeout", "MessageRetentionPeriod", "DelaySeconds", "ReceiveMessageWaitTimeSeconds"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		q, err := s.GetQueueByURL(identifier)
@@ -473,7 +473,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"QueueName": q.QueueName, "QueueUrl": q.QueueURL})
 		return s.cloudControlPersistUpdate(accountID, typeName, q.QueueURL, props)
 	case "AWS::SNS::Topic":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "DisplayName", "KmsMasterKeyId"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		topic, err := s.GetTopicByARN(identifier)
@@ -489,7 +489,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"TopicName": topic.TopicName, "TopicArn": topic.TopicARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, topic.TopicARN, props)
 	case "AWS::SecretsManager::Secret":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Description", "KmsKeyId"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if err := s.modifyCFNSecret(accountID, identifier, map[string]any{}, patch); err != nil {
@@ -500,7 +500,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::DynamoDB::Table":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "SSESpecification"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if _, ok := patch["SSESpecification"]; !ok {
@@ -512,7 +512,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"TableName": identifier, "SSESpecification": patch["SSESpecification"]})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Lambda::Function":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Timeout", "MemorySize", "Environment", "Handler", "Runtime"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if _, err := s.GetFunction(accountID, identifier); err != nil {
@@ -530,7 +530,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::KMS::Key":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Description", "KeyPolicy", "EnableKeyRotation"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if err := s.modifyCFNKMSKey(identifier, map[string]any{}, patch); err != nil {
@@ -539,7 +539,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"KeyId": identifier})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Events::EventBus":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Policy", "Tags"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if _, err := s.GetEventBus(accountID, identifier); err != nil {
@@ -574,7 +574,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(out)
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::KMS::Alias":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "TargetKeyId"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		target := cfnStringProp(patch, "TargetKeyId")
@@ -587,7 +587,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"AliasName": identifier, "TargetKeyId": target})
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::Logs::LogGroup":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "RetentionInDays"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if _, err := s.getLogGroup(accountID, identifier); err != nil {
@@ -609,7 +609,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(out)
 		return s.cloudControlPersistUpdate(accountID, typeName, identifier, props)
 	case "AWS::IAM::User":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Policies", "ManagedPolicyArns", "Groups"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		u, err := s.GetUser(accountID, identifier)
@@ -631,7 +631,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"UserName": u.UserName, "Arn": u.ARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, u.UserName, props)
 	case "AWS::IAM::Group":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "Policies", "ManagedPolicyArns"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		g, err := s.GetGroup(accountID, identifier)
@@ -648,7 +648,7 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		props, _ := json.Marshal(map[string]any{"GroupName": g.GroupName, "Arn": g.ARN})
 		return s.cloudControlPersistUpdate(accountID, typeName, g.GroupName, props)
 	case "AWS::IAM::ManagedPolicy":
-		if err := cloudControlRejectUnknownPatchKeys(patch, "PolicyDocument", "Roles", "Users", "Groups", "Description"); err != nil {
+		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
 		if _, err := s.GetManagedPolicy(identifier); err != nil {

@@ -71,11 +71,7 @@ func (s *Server) taggingTagResources(
 		return
 	}
 	arns := stringSliceParam(params["ResourceARNList"])
-	tagsRaw, _ := params["Tags"].(map[string]any)
-	tags := map[string]string{}
-	for k, v := range tagsRaw {
-		tags[k] = anyToString(v)
-	}
+	tags := parseResourceGroupTagMap(params["Tags"])
 	if len(arns) == 0 || len(tags) == 0 {
 		s.writeTaggingError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			"ResourceARNList and Tags are required.", readOnly, eventID, verified)

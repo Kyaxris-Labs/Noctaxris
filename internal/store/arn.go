@@ -49,6 +49,25 @@ func iamResourceARN(accountID, resourceType, path, name string) string {
 	return fmt.Sprintf("arn:aws:iam::%s:%s/%s/%s", accountID, resourceType, trimmed, name)
 }
 
+// arnAccountID extracts the 12-digit account id from arn:aws:service:region:ACCOUNT:...
+func arnAccountID(arn string) (string, bool) {
+	arn = strings.TrimSpace(arn)
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 || parts[0] != "arn" || parts[1] != "aws" {
+		return "", false
+	}
+	acct := strings.TrimSpace(parts[4])
+	if len(acct) != 12 {
+		return "", false
+	}
+	for _, r := range acct {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return acct, true
+}
+
 func normalizeIAMPath(path string) string {
 	if path == "" {
 		return "/"

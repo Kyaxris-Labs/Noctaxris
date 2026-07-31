@@ -9,7 +9,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	cfnsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/cloudformation"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -96,40 +95,10 @@ func (s *Server) cfnRegion(verified *authn.Verified) string {
 }
 
 func (s *Server) checkCFNPassRole(verified *authn.Verified, roleARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("RoleARN must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("RoleARN must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("Role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to CloudFormation")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalCloudFormation,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalCloudFormation, "CloudFormation", passRoleMsgs{
+		InvalidARN:   "RoleARN must be a valid IAM role ARN",
+		WrongAccount: "RoleARN must be in the same account",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to CloudFormation")
-	}
-	return nil
 }
 
 func (s *Server) cfnCreateStack(

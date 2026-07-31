@@ -541,12 +541,26 @@ func TestCodeBuildCodeCommitSourceResolveAndMaterialize(t *testing.T) {
 		t.Fatalf("resolved buildspec=%q", spec)
 	}
 	cmds := store.ExtractBuildspecCommands(spec)
+	run, err := store.BuildCodeBuildCodeCommitRunScript(cmds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(run, "/codebuild/src") || !strings.Contains(run, "cat README.md") {
+		t.Fatalf("run script=%q", run)
+	}
+	var tarBuf bytes.Buffer
+	if err := store.WriteCodeBuildSourceTar(&tarBuf, dest); err != nil {
+		t.Fatal(err)
+	}
+	if tarBuf.Len() == 0 {
+		t.Fatal("expected non-empty source tar")
+	}
 	shell, err := store.BuildCodeBuildCodeCommitShell(dest, cmds)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(shell, "/codebuild/src") || !strings.Contains(shell, "base64 -d") {
-		t.Fatalf("shell=%q", shell)
+	if !strings.Contains(shell, "base64 -d") {
+		t.Fatalf("legacy shell=%q", shell)
 	}
 }
 

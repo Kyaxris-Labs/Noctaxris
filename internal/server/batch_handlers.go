@@ -13,7 +13,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	batchsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/batch"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -124,80 +123,22 @@ func (s *Server) checkBatchServicePassRole(verified *authn.Verified, roleARN str
 	if strings.TrimSpace(roleARN) == "" {
 		return nil
 	}
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("serviceRole must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("serviceRole must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("serviceRole not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Batch")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalBatch,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalBatch, "Batch", passRoleMsgs{
+		InvalidARN:   "serviceRole must be a valid IAM role ARN",
+		WrongAccount: "serviceRole must be in the same account",
+		NotFound:     "serviceRole not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Batch")
-	}
-	return nil
 }
 
 func (s *Server) checkBatchJobPassRole(verified *authn.Verified, roleARN string) error {
 	if strings.TrimSpace(roleARN) == "" {
 		return nil
 	}
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("jobRoleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("jobRoleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("jobRoleArn not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Batch")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalECSTasks,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalECSTasks, "Batch", passRoleMsgs{
+		InvalidARN:   "jobRoleArn must be a valid IAM role ARN",
+		WrongAccount: "jobRoleArn must be in the same account",
+		NotFound:     "jobRoleArn not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Batch")
-	}
-	return nil
 }
 
 func (s *Server) batchCreateComputeEnvironment(

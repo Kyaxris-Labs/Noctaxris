@@ -259,28 +259,6 @@ func ValidateFunctionName(name string) error {
 	return nil
 }
 
-func marshalEnv(env map[string]string) (string, error) {
-	if len(env) == 0 {
-		return "{}", nil
-	}
-	raw, err := json.Marshal(env)
-	if err != nil {
-		return "", fmt.Errorf("marshal env: %w", err)
-	}
-	return string(raw), nil
-}
-
-func unmarshalEnv(raw string) (map[string]string, error) {
-	out := map[string]string{}
-	if strings.TrimSpace(raw) == "" {
-		return out, nil
-	}
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("unmarshal env: %w", err)
-	}
-	return out, nil
-}
-
 func marshalLayers(layers []string) (string, error) {
 	if len(layers) == 0 {
 		return "[]", nil
@@ -431,8 +409,7 @@ func scanLambdaFunction(scan func(dest ...any) error) (LambdaFunction, error) {
 	if err != nil {
 		return LambdaFunction{}, err
 	}
-	fn.Env, err = unmarshalEnv(envJSON)
-	if err != nil {
+	if err := unmarshalJSONColumn(envJSON, &fn.Env); err != nil {
 		return LambdaFunction{}, err
 	}
 	fn.Layers, err = unmarshalLayers(layersJSON)
@@ -473,7 +450,7 @@ func (s *Store) CreateFunction(meta CreateFunctionMeta) (LambdaFunction, error) 
 			return LambdaFunction{}, err
 		}
 	}
-	envJSON, err := marshalEnv(meta.Env)
+	envJSON, err := marshalJSONColumn(meta.Env)
 	if err != nil {
 		return LambdaFunction{}, err
 	}
@@ -522,8 +499,8 @@ func (s *Store) CreateFunction(meta CreateFunctionMeta) (LambdaFunction, error) 
 		}
 		return LambdaFunction{}, fmt.Errorf("create function: %w", err)
 	}
-	envCopy, err := unmarshalEnv(envJSON)
-	if err != nil {
+	var envCopy map[string]string
+	if err := unmarshalJSONColumn(envJSON, &envCopy); err != nil {
 		return LambdaFunction{}, err
 	}
 	return LambdaFunction{
@@ -686,7 +663,7 @@ func (s *Store) UpdateFunctionConfiguration(accountID, name string, meta UpdateF
 			return LambdaFunction{}, err
 		}
 	}
-	envJSON, err := marshalEnv(meta.Env)
+	envJSON, err := marshalJSONColumn(meta.Env)
 	if err != nil {
 		return LambdaFunction{}, err
 	}
@@ -867,8 +844,7 @@ func scanLambdaVersion(scan func(dest ...any) error) (LambdaFunctionVersion, err
 	if err != nil {
 		return LambdaFunctionVersion{}, err
 	}
-	v.Env, err = unmarshalEnv(envJSON)
-	if err != nil {
+	if err := unmarshalJSONColumn(envJSON, &v.Env); err != nil {
 		return LambdaFunctionVersion{}, err
 	}
 	v.Layers, err = unmarshalLayers(layersJSON)
@@ -919,7 +895,7 @@ func (s *Store) PublishVersion(accountID, name string) (LambdaFunctionVersion, e
 			return LambdaFunctionVersion{}, copyErr
 		}
 	}
-	envJSON, err := marshalEnv(latest.Env)
+	envJSON, err := marshalJSONColumn(latest.Env)
 	if err != nil {
 		return LambdaFunctionVersion{}, err
 	}

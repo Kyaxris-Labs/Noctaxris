@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -297,28 +296,6 @@ func (s *Store) DeleteRepositoryPolicy(accountID, name string) error {
 	return nil
 }
 
-func marshalTags(tags []string) (string, error) {
-	if len(tags) == 0 {
-		return "[]", nil
-	}
-	raw, err := json.Marshal(tags)
-	if err != nil {
-		return "", fmt.Errorf("marshal tags: %w", err)
-	}
-	return string(raw), nil
-}
-
-func unmarshalTags(raw string) ([]string, error) {
-	out := []string{}
-	if strings.TrimSpace(raw) == "" {
-		return out, nil
-	}
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("unmarshal tags: %w", err)
-	}
-	return out, nil
-}
-
 func mergeTags(existing, incoming []string) []string {
 	seen := make(map[string]struct{}, len(existing)+len(incoming))
 	out := make([]string, 0, len(existing)+len(incoming))
@@ -361,8 +338,8 @@ func (s *Store) getImageRow(accountID, repoName, digest string) (imageRow, error
 }
 
 func imageFromRow(row imageRow) (Image, error) {
-	tags, err := unmarshalTags(row.TagsJSON)
-	if err != nil {
+	var tags []string
+	if err := unmarshalJSONColumn(row.TagsJSON, &tags); err != nil {
 		return Image{}, err
 	}
 	return Image{
@@ -399,8 +376,8 @@ func (s *Store) PutImage(accountID, repoName, digest string, tags []string, mani
 	merged := mergeTags(nil, tags)
 	pushedAt := nowRFC3339()
 	if exists {
-		prevTags, err := unmarshalTags(existing.TagsJSON)
-		if err != nil {
+		var prevTags []string
+		if err := unmarshalJSONColumn(existing.TagsJSON, &prevTags); err != nil {
 			return Image{}, err
 		}
 		merged = mergeTags(prevTags, tags)
@@ -408,7 +385,7 @@ func (s *Store) PutImage(accountID, repoName, digest string, tags []string, mani
 			manifestPath = existing.ManifestPath
 		}
 		pushedAt = existing.ImagePushedAt
-		tagsJSON, err := marshalTags(merged)
+		tagsJSON, err := marshalJSONColumn(merged)
 		if err != nil {
 			return Image{}, err
 		}
@@ -420,7 +397,7 @@ func (s *Store) PutImage(accountID, repoName, digest string, tags []string, mani
 			return Image{}, fmt.Errorf("put image %s@%s: %w", repoName, digest, err)
 		}
 	} else {
-		tagsJSON, err := marshalTags(merged)
+		tagsJSON, err := marshalJSONColumn(merged)
 		if err != nil {
 			return Image{}, err
 		}

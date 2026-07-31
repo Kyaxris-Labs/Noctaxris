@@ -103,28 +103,6 @@ func QueueURL(endpointHost, accountID, queueName string) string {
 	return base + "/" + accountID + "/" + queueName
 }
 
-func marshalAttributes(attrs map[string]string) (string, error) {
-	if len(attrs) == 0 {
-		return "{}", nil
-	}
-	raw, err := json.Marshal(attrs)
-	if err != nil {
-		return "", fmt.Errorf("marshal attributes: %w", err)
-	}
-	return string(raw), nil
-}
-
-func unmarshalAttributes(raw string) (map[string]string, error) {
-	out := map[string]string{}
-	if strings.TrimSpace(raw) == "" {
-		return out, nil
-	}
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil, fmt.Errorf("unmarshal attributes: %w", err)
-	}
-	return out, nil
-}
-
 func attrTruthy(attrs map[string]string, name string) bool {
 	v, ok := attrs[name]
 	return ok && strings.EqualFold(strings.TrimSpace(v), "true")
@@ -259,8 +237,8 @@ func queueAccountFromARN(arn string) (string, error) {
 	if len(parts) < 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "sqs" {
 		return "", fmt.Errorf("invalid queue arn %q", arn)
 	}
-	accountID := strings.TrimSpace(parts[4])
-	if accountID == "" {
+	accountID, ok := arnAccountID(arn)
+	if !ok {
 		return "", fmt.Errorf("invalid queue arn %q", arn)
 	}
 	return accountID, nil
@@ -282,7 +260,7 @@ func (s *Store) CreateQueue(accountID, region, endpointHost, queueName string, a
 	if err := validateFIFOQueueName(queueName, attributes); err != nil {
 		return Queue{}, err
 	}
-	attrsJSON, err := marshalAttributes(attributes)
+	attrsJSON, err := marshalJSONColumn(attributes)
 	if err != nil {
 		return Queue{}, err
 	}
@@ -301,8 +279,8 @@ func (s *Store) CreateQueue(accountID, region, endpointHost, queueName string, a
 		}
 		return Queue{}, fmt.Errorf("create queue: %w", err)
 	}
-	attrsCopy, err := unmarshalAttributes(attrsJSON)
-	if err != nil {
+	var attrsCopy map[string]string
+	if err := unmarshalJSONColumn(attrsJSON, &attrsCopy); err != nil {
 		return Queue{}, err
 	}
 	return Queue{
@@ -327,8 +305,7 @@ func scanQueue(row *sql.Row) (Queue, error) {
 	if err != nil {
 		return Queue{}, fmt.Errorf("scan queue: %w", err)
 	}
-	q.Attributes, err = unmarshalAttributes(attrs)
-	if err != nil {
+	if err := unmarshalJSONColumn(attrs, &q.Attributes); err != nil {
 		return Queue{}, err
 	}
 	return q, nil
@@ -374,8 +351,7 @@ func (s *Store) ListQueues(accountID, prefix string) ([]Queue, error) {
 		if err := rows.Scan(&q.AccountID, &q.QueueName, &q.QueueURL, &q.QueueARN, &attrs, &q.CreationDate); err != nil {
 			return nil, fmt.Errorf("list queues: %w", err)
 		}
-		q.Attributes, err = unmarshalAttributes(attrs)
-		if err != nil {
+		if err := unmarshalJSONColumn(attrs, &q.Attributes); err != nil {
 			return nil, err
 		}
 		out = append(out, q)
@@ -433,7 +409,7 @@ func (s *Store) SetQueueAttributes(accountID, queueName string, attrs map[string
 	if err := validateFIFOQueueName(queueName, merged); err != nil {
 		return err
 	}
-	attrsJSON, err := marshalAttributes(merged)
+	attrsJSON, err := marshalJSONColumn(merged)
 	if err != nil {
 		return err
 	}
@@ -816,8 +792,8 @@ func (s *Store) redriveMessageTx(tx *sql.Tx, q Queue, policy redrivePolicy, msg 
 	if dlqAccount != q.AccountID {
 		return fmt.Errorf("dead-letter queue must be in the same account")
 	}
-	dlqAttrs, err := unmarshalAttributes(attrsJSON)
-	if err != nil {
+	var dlqAttrs map[string]string
+	if err := unmarshalJSONColumn(attrsJSON, &dlqAttrs); err != nil {
 		return err
 	}
 	allow, hasAllow := parseRedriveAllowPolicy(dlqAttrs)

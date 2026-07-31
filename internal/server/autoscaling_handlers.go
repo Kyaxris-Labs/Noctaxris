@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/awsprotocol"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	asgsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/autoscaling"
@@ -227,18 +228,7 @@ func (s *Server) reconcileASGCapacity(ctx context.Context, accountID, region, na
 }
 
 func formMemberList(params url.Values, prefix string) []string {
-	var out []string
-	for i := 1; ; i++ {
-		v := strings.TrimSpace(params.Get(prefix + ".member." + strconv.Itoa(i)))
-		if v == "" {
-			v = strings.TrimSpace(params.Get(prefix + "." + strconv.Itoa(i)))
-		}
-		if v == "" {
-			break
-		}
-		out = append(out, v)
-	}
-	return out
+	return awsprotocol.MemberList(params, prefix)
 }
 
 func (s *Server) asgCreateLaunchConfiguration(
@@ -940,17 +930,11 @@ func (s *Server) writeASGError(
 	w http.ResponseWriter, r *http.Request, requestID string, status int, code, message string,
 	readOnly bool, eventID string, verified *authn.Verified,
 ) {
-	payload := []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
-		`<ErrorResponse xmlns="http://autoscaling.amazonaws.com/doc/2011-01-01/"><Error><Type>Sender</Type><Code>` +
-		xmlEscape(code) + `</Code><Message>` + xmlEscape(message) +
-		`</Message></Error><RequestId>` + xmlEscape(requestID) + `</RequestId></ErrorResponse>`)
+	payload, _ := awsprotocol.MarshalQueryError(awsprotocol.QueryErrorIAMSender,
+		"http://autoscaling.amazonaws.com/doc/2011-01-01/", code, message, requestID)
 	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, asgEventSource, code, readOnly)
 }
 
-func xmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
-	return r.Replace(s)
-}

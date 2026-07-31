@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -14,29 +13,11 @@ import (
 // HTTP lab shim on :4566 (not true TCP L4). Same open-dataplane gate as /alb/.
 
 func isELBv2NLBLabListenerPath(path string) bool {
-	path = strings.TrimSuffix(path, "/")
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	return len(parts) >= 4 && parts[0] == "nlb" && parts[1] != "" && parts[2] != "" && parts[3] != ""
+	return isELBv2LabMuxListenerPath("nlb", path)
 }
 
 func parseELBv2NLBLabListenerPath(path string) (accountID, lbName string, port int, routePath string, ok bool) {
-	path = strings.TrimSuffix(path, "/")
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) < 4 || parts[0] != "nlb" {
-		return "", "", 0, "", false
-	}
-	accountID = parts[1]
-	lbName = parts[2]
-	port, err := strconv.Atoi(parts[3])
-	if err != nil || port <= 0 || accountID == "" || lbName == "" {
-		return "", "", 0, "", false
-	}
-	if len(parts) == 4 {
-		routePath = "/"
-	} else {
-		routePath = "/" + strings.Join(parts[4:], "/")
-	}
-	return accountID, lbName, port, routePath, true
+	return parseELBv2LabMuxListenerPath("nlb", path)
 }
 
 // handleELBv2NLBLabListener serves HTTP on /nlb/{account}/{lbName}/{port}/...

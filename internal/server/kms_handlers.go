@@ -231,7 +231,7 @@ func (s *Server) handleKMS(
 		}
 		payload, err = kmssvc.EmptyOKJSON()
 	case catalog.ActionKMSScheduleKeyDeletion, "ScheduleKeyDeletion":
-		window := intFromJSONNumber(params["PendingWindowInDays"])
+		window := intParam(params["PendingWindowInDays"], 0)
 		scheduled, schedErr := s.store.ScheduleKeyDeletion(keyID, window)
 		if schedErr != nil {
 			if errors.Is(schedErr, store.ErrInvalidKeyState) {
@@ -850,61 +850,9 @@ func (s *Server) handleKMSReEncrypt(
 	s.writeSuccessAudit(r, requestID, eventID, verified, "kms.amazonaws.com", "ReEncrypt", readOnly)
 }
 
-func jsonBodyMap(body []byte) map[string]any {
-	out := map[string]any{}
-	if len(body) == 0 {
-		return out
-	}
-	_ = json.Unmarshal(body, &out)
-	return out
-}
-
-func stringSliceParam(v any) []string {
-	switch t := v.(type) {
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, item := range t {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return t
-	default:
-		return nil
-	}
-}
-
 // parseStringMapTags parses SQS/Lambda Tags maps ({"k":"v"}).
 func parseStringMapTags(v any) map[string]string {
 	return stringMapParam(v)
-}
-
-// parseKeyValueTags parses Events/SSM/Secrets Tags arrays ([{Key,Value},...]).
-func parseKeyValueTags(v any) map[string]string {
-	raw, ok := v.([]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		k, _ := m["Key"].(string)
-		val, _ := m["Value"].(string)
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		out[k] = val
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func resourceTagsToMap(tags []store.ResourceTag) map[string]string {
@@ -913,25 +861,6 @@ func resourceTagsToMap(tags []store.ResourceTag) map[string]string {
 		out[t.Key] = t.Value
 	}
 	return out
-}
-
-func intFromJSONNumber(v any) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case json.Number:
-		n, err := t.Int64()
-		if err != nil {
-			return 0
-		}
-		return int(n)
-	default:
-		return 0
-	}
 }
 
 func (s *Server) writeKMSCryptoStateError(
@@ -982,31 +911,6 @@ func (s *Server) writeKMSError(
 		accountID = verified.AccountID
 	}
 	s.auditAPIError(r, requestID, eventID, code, message, readOnly, accessKeyID, accountID, verified != nil)
-}
-
-func parseKMSTags(v any) map[string]string {
-	raw, ok := v.([]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		k, _ := m["TagKey"].(string)
-		val, _ := m["TagValue"].(string)
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		out[k] = val
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func parseKMSTagKeys(v any) []string {

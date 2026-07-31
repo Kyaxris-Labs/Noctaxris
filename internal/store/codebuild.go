@@ -946,27 +946,42 @@ func (s *Store) MaterializeCodeBuildCodeCommitSource(accountID, sourceLoc, destD
 	return repoName, nil
 }
 
+// BuildCodeBuildCodeCommitRunScript returns a /bin/sh -c script that runs build commands
+// under /codebuild/src. Source files must already be in the workspace (CopyToContainer inject).
+func BuildCodeBuildCodeCommitRunScript(cmds []string) (string, error) {
+	if len(cmds) == 0 {
+		return "", fmt.Errorf("%w: no build commands", ErrCodeBuildInvalidInput)
+	}
+	build := strings.Join(cmds, " && ")
+	return "mkdir -p /codebuild/src && cd /codebuild/src && " + build, nil
+}
+
 // BuildCodeBuildCodeCommitShell builds a /bin/sh -c script that unpacks a materialized
-// tree into /codebuild/src then runs build commands (works with RunECSTask without binds).
+// tree into /codebuild/src then runs build commands. Prefer WriteCodeBuildSourceTar with
+// compute.CopyToContainer before container start; this helper remains for unit tests.
 func BuildCodeBuildCodeCommitShell(srcDir string, cmds []string) (string, error) {
 	srcDir = filepath.Clean(strings.TrimSpace(srcDir))
 	if srcDir == "" || srcDir == "." {
 		return "", fmt.Errorf("%w: CODECOMMIT source dir required", ErrCodeBuildInvalidInput)
 	}
-	if len(cmds) == 0 {
-		return "", fmt.Errorf("%w: no build commands", ErrCodeBuildInvalidInput)
+	run, err := BuildCodeBuildCodeCommitRunScript(cmds)
+	if err != nil {
+		return "", err
 	}
 	payload, err := tarDirectoryBase64(srcDir)
 	if err != nil {
 		return "", err
 	}
-	build := strings.Join(cmds, " && ")
-	return "mkdir -p /codebuild/src && cd /codebuild/src && echo '" + payload + "' | base64 -d | tar -xf - && " + build, nil
+	return "mkdir -p /codebuild/src && cd /codebuild/src && echo '" + payload + "' | base64 -d | tar -xf - && " + strings.TrimPrefix(run, "mkdir -p /codebuild/src && cd /codebuild/src && "), nil
 }
 
-func tarDirectoryBase64(srcDir string) (string, error) {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+// WriteCodeBuildSourceTar writes a POSIX tar of srcDir (paths relative to srcDir, no top-level prefix).
+func WriteCodeBuildSourceTar(w io.Writer, srcDir string) error {
+	srcDir = filepath.Clean(strings.TrimSpace(srcDir))
+	if srcDir == "" || srcDir == "." {
+		return fmt.Errorf("%w: CODECOMMIT source dir required", ErrCodeBuildInvalidInput)
+	}
+	tw := tar.NewWriter(w)
 	err := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -1012,10 +1027,18 @@ func tarDirectoryBase64(srcDir string) (string, error) {
 	})
 	if err != nil {
 		_ = tw.Close()
-		return "", fmt.Errorf("%w: pack CODECOMMIT source: %v", ErrCodeBuildInvalidInput, err)
+		return fmt.Errorf("%w: pack CODECOMMIT source: %v", ErrCodeBuildInvalidInput, err)
 	}
 	if err := tw.Close(); err != nil {
-		return "", fmt.Errorf("%w: pack CODECOMMIT source: %v", ErrCodeBuildInvalidInput, err)
+		return fmt.Errorf("%w: pack CODECOMMIT source: %v", ErrCodeBuildInvalidInput, err)
+	}
+	return nil
+}
+
+func tarDirectoryBase64(srcDir string) (string, error) {
+	var buf bytes.Buffer
+	if err := WriteCodeBuildSourceTar(&buf, srcDir); err != nil {
+		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }

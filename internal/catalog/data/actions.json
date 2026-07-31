@@ -1,0 +1,4774 @@
+{
+  "actions": [
+    {
+      "name": "ActionSTSGetCallerIdentity",
+      "value": "sts:GetCallerIdentity"
+    },
+    {
+      "name": "ActionSTSAssumeRole",
+      "value": "sts:AssumeRole"
+    },
+    {
+      "name": "ActionSTSGetSessionToken",
+      "value": "sts:GetSessionToken"
+    },
+    {
+      "name": "ActionSTSGetFederationToken",
+      "value": "sts:GetFederationToken"
+    },
+    {
+      "name": "ActionSTSAssumeRoleWithSAML",
+      "value": "sts:AssumeRoleWithSAML"
+    },
+    {
+      "name": "ActionSTSAssumeRoleWithWebIdentity",
+      "value": "sts:AssumeRoleWithWebIdentity"
+    },
+    {
+      "name": "ActionSTSAssumeRoot",
+      "value": "sts:AssumeRoot"
+    },
+    {
+      "name": "ActionSTSDecodeAuthorizationMessage",
+      "value": "sts:DecodeAuthorizationMessage"
+    },
+    {
+      "name": "ActionSTSGetAccessKeyInfo",
+      "value": "sts:GetAccessKeyInfo"
+    },
+    {
+      "name": "ActionSTSGetDelegatedAccessToken",
+      "value": "sts:GetDelegatedAccessToken"
+    },
+    {
+      "name": "ActionSTSGetWebIdentityToken",
+      "value": "sts:GetWebIdentityToken"
+    },
+    {
+      "name": "ActionOrgsCreateAccount",
+      "value": "organizations:CreateAccount"
+    },
+    {
+      "name": "ActionOrgsDescribeCreateAccountStatus",
+      "value": "organizations:DescribeCreateAccountStatus"
+    },
+    {
+      "name": "ActionOrgsListAccounts",
+      "value": "organizations:ListAccounts"
+    },
+    {
+      "name": "ActionOrgsCreateOrganizationalUnit",
+      "value": "organizations:CreateOrganizationalUnit"
+    },
+    {
+      "name": "ActionOrgsListOrganizationalUnitsForParent",
+      "value": "organizations:ListOrganizationalUnitsForParent"
+    },
+    {
+      "name": "ActionOrgsEnablePolicyType",
+      "value": "organizations:EnablePolicyType"
+    },
+    {
+      "name": "ActionOrgsCreatePolicy",
+      "value": "organizations:CreatePolicy"
+    },
+    {
+      "name": "ActionOrgsAttachPolicy",
+      "value": "organizations:AttachPolicy"
+    },
+    {
+      "name": "ActionOrgsDetachPolicy",
+      "value": "organizations:DetachPolicy"
+    },
+    {
+      "name": "ActionOrgsDescribePolicy",
+      "value": "organizations:DescribePolicy"
+    },
+    {
+      "name": "ActionOrgsListPolicies",
+      "value": "organizations:ListPolicies"
+    },
+    {
+      "name": "ActionOrgsListPoliciesForTarget",
+      "value": "organizations:ListPoliciesForTarget"
+    },
+    {
+      "name": "ActionOrgsListParents",
+      "value": "organizations:ListParents"
+    },
+    {
+      "name": "ActionOrgsListAccountsForParent",
+      "value": "organizations:ListAccountsForParent"
+    },
+    {
+      "name": "ActionOrgsMoveAccount",
+      "value": "organizations:MoveAccount"
+    },
+    {
+      "name": "ActionControlTowerListLandingZones",
+      "value": "controltower:ListLandingZones"
+    },
+    {
+      "name": "ActionControlTowerGetLandingZone",
+      "value": "controltower:GetLandingZone"
+    },
+    {
+      "name": "ActionIAMCreateUser",
+      "value": "iam:CreateUser"
+    },
+    {
+      "name": "ActionIAMGetUser",
+      "value": "iam:GetUser"
+    },
+    {
+      "name": "ActionIAMListUsers",
+      "value": "iam:ListUsers"
+    },
+    {
+      "name": "ActionIAMDeleteUser",
+      "value": "iam:DeleteUser"
+    },
+    {
+      "name": "ActionIAMCreateAccessKey",
+      "value": "iam:CreateAccessKey"
+    },
+    {
+      "name": "ActionIAMDeleteAccessKey",
+      "value": "iam:DeleteAccessKey"
+    },
+    {
+      "name": "ActionIAMListAccessKeys",
+      "value": "iam:ListAccessKeys"
+    },
+    {
+      "name": "ActionIAMUpdateAccessKey",
+      "value": "iam:UpdateAccessKey"
+    },
+    {
+      "name": "ActionIAMGetAccessKeyLastUsed",
+      "value": "iam:GetAccessKeyLastUsed"
+    },
+    {
+      "name": "ActionIAMGenerateCredentialReport",
+      "value": "iam:GenerateCredentialReport"
+    },
+    {
+      "name": "ActionIAMGetCredentialReport",
+      "value": "iam:GetCredentialReport"
+    },
+    {
+      "name": "ActionIAMCreatePolicy",
+      "value": "iam:CreatePolicy"
+    },
+    {
+      "name": "ActionIAMGetPolicy",
+      "value": "iam:GetPolicy"
+    },
+    {
+      "name": "ActionIAMListPolicies",
+      "value": "iam:ListPolicies"
+    },
+    {
+      "name": "ActionIAMDeletePolicy",
+      "value": "iam:DeletePolicy"
+    },
+    {
+      "name": "ActionIAMCreatePolicyVersion",
+      "value": "iam:CreatePolicyVersion"
+    },
+    {
+      "name": "ActionIAMGetPolicyVersion",
+      "value": "iam:GetPolicyVersion"
+    },
+    {
+      "name": "ActionIAMListPolicyVersions",
+      "value": "iam:ListPolicyVersions"
+    },
+    {
+      "name": "ActionIAMDeletePolicyVersion",
+      "value": "iam:DeletePolicyVersion"
+    },
+    {
+      "name": "ActionIAMSetDefaultPolicyVersion",
+      "value": "iam:SetDefaultPolicyVersion"
+    },
+    {
+      "name": "ActionIAMAttachUserPolicy",
+      "value": "iam:AttachUserPolicy"
+    },
+    {
+      "name": "ActionIAMDetachUserPolicy",
+      "value": "iam:DetachUserPolicy"
+    },
+    {
+      "name": "ActionIAMAttachRolePolicy",
+      "value": "iam:AttachRolePolicy"
+    },
+    {
+      "name": "ActionIAMDetachRolePolicy",
+      "value": "iam:DetachRolePolicy"
+    },
+    {
+      "name": "ActionIAMListAttachedUserPolicies",
+      "value": "iam:ListAttachedUserPolicies"
+    },
+    {
+      "name": "ActionIAMListAttachedRolePolicies",
+      "value": "iam:ListAttachedRolePolicies"
+    },
+    {
+      "name": "ActionIAMPutUserPolicy",
+      "value": "iam:PutUserPolicy"
+    },
+    {
+      "name": "ActionIAMGetUserPolicy",
+      "value": "iam:GetUserPolicy"
+    },
+    {
+      "name": "ActionIAMDeleteUserPolicy",
+      "value": "iam:DeleteUserPolicy"
+    },
+    {
+      "name": "ActionIAMListUserPolicies",
+      "value": "iam:ListUserPolicies"
+    },
+    {
+      "name": "ActionIAMPutRolePolicy",
+      "value": "iam:PutRolePolicy"
+    },
+    {
+      "name": "ActionIAMGetRolePolicy",
+      "value": "iam:GetRolePolicy"
+    },
+    {
+      "name": "ActionIAMDeleteRolePolicy",
+      "value": "iam:DeleteRolePolicy"
+    },
+    {
+      "name": "ActionIAMListRolePolicies",
+      "value": "iam:ListRolePolicies"
+    },
+    {
+      "name": "ActionIAMCreateRole",
+      "value": "iam:CreateRole"
+    },
+    {
+      "name": "ActionIAMGetRole",
+      "value": "iam:GetRole"
+    },
+    {
+      "name": "ActionIAMListRoles",
+      "value": "iam:ListRoles"
+    },
+    {
+      "name": "ActionIAMDeleteRole",
+      "value": "iam:DeleteRole"
+    },
+    {
+      "name": "ActionIAMUpdateAssumeRolePolicy",
+      "value": "iam:UpdateAssumeRolePolicy"
+    },
+    {
+      "name": "ActionIAMCreateGroup",
+      "value": "iam:CreateGroup"
+    },
+    {
+      "name": "ActionIAMDeleteGroup",
+      "value": "iam:DeleteGroup"
+    },
+    {
+      "name": "ActionIAMGetGroup",
+      "value": "iam:GetGroup"
+    },
+    {
+      "name": "ActionIAMListGroups",
+      "value": "iam:ListGroups"
+    },
+    {
+      "name": "ActionIAMAddUserToGroup",
+      "value": "iam:AddUserToGroup"
+    },
+    {
+      "name": "ActionIAMRemoveUserFromGroup",
+      "value": "iam:RemoveUserFromGroup"
+    },
+    {
+      "name": "ActionIAMAttachGroupPolicy",
+      "value": "iam:AttachGroupPolicy"
+    },
+    {
+      "name": "ActionIAMDetachGroupPolicy",
+      "value": "iam:DetachGroupPolicy"
+    },
+    {
+      "name": "ActionIAMListAttachedGroupPolicies",
+      "value": "iam:ListAttachedGroupPolicies"
+    },
+    {
+      "name": "ActionIAMPutGroupPolicy",
+      "value": "iam:PutGroupPolicy"
+    },
+    {
+      "name": "ActionIAMGetGroupPolicy",
+      "value": "iam:GetGroupPolicy"
+    },
+    {
+      "name": "ActionIAMDeleteGroupPolicy",
+      "value": "iam:DeleteGroupPolicy"
+    },
+    {
+      "name": "ActionIAMListGroupPolicies",
+      "value": "iam:ListGroupPolicies"
+    },
+    {
+      "name": "ActionIAMPutUserPermissionsBoundary",
+      "value": "iam:PutUserPermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMGetUserPermissionsBoundary",
+      "value": "iam:GetUserPermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMDeleteUserPermissionsBoundary",
+      "value": "iam:DeleteUserPermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMPutRolePermissionsBoundary",
+      "value": "iam:PutRolePermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMGetRolePermissionsBoundary",
+      "value": "iam:GetRolePermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMDeleteRolePermissionsBoundary",
+      "value": "iam:DeleteRolePermissionsBoundary"
+    },
+    {
+      "name": "ActionIAMCreateInstanceProfile",
+      "value": "iam:CreateInstanceProfile"
+    },
+    {
+      "name": "ActionIAMDeleteInstanceProfile",
+      "value": "iam:DeleteInstanceProfile"
+    },
+    {
+      "name": "ActionIAMGetInstanceProfile",
+      "value": "iam:GetInstanceProfile"
+    },
+    {
+      "name": "ActionIAMAddRoleToInstanceProfile",
+      "value": "iam:AddRoleToInstanceProfile"
+    },
+    {
+      "name": "ActionIAMRemoveRoleFromInstanceProfile",
+      "value": "iam:RemoveRoleFromInstanceProfile"
+    },
+    {
+      "name": "ActionIAMListInstanceProfiles",
+      "value": "iam:ListInstanceProfiles"
+    },
+    {
+      "name": "ActionIAMListInstanceProfilesForRole",
+      "value": "iam:ListInstanceProfilesForRole"
+    },
+    {
+      "name": "ActionIAMCreateOpenIDConnectProvider",
+      "value": "iam:CreateOpenIDConnectProvider"
+    },
+    {
+      "name": "ActionIAMDeleteOpenIDConnectProvider",
+      "value": "iam:DeleteOpenIDConnectProvider"
+    },
+    {
+      "name": "ActionIAMListOpenIDConnectProviders",
+      "value": "iam:ListOpenIDConnectProviders"
+    },
+    {
+      "name": "ActionIAMGetOpenIDConnectProvider",
+      "value": "iam:GetOpenIDConnectProvider"
+    },
+    {
+      "name": "ActionIAMCreateSAMLProvider",
+      "value": "iam:CreateSAMLProvider"
+    },
+    {
+      "name": "ActionIAMDeleteSAMLProvider",
+      "value": "iam:DeleteSAMLProvider"
+    },
+    {
+      "name": "ActionIAMListSAMLProviders",
+      "value": "iam:ListSAMLProviders"
+    },
+    {
+      "name": "ActionIAMGetSAMLProvider",
+      "value": "iam:GetSAMLProvider"
+    },
+    {
+      "name": "ActionIAMCreateVirtualMFADevice",
+      "value": "iam:CreateVirtualMFADevice"
+    },
+    {
+      "name": "ActionIAMEnableMFADevice",
+      "value": "iam:EnableMFADevice"
+    },
+    {
+      "name": "ActionIAMListMFADevices",
+      "value": "iam:ListMFADevices"
+    },
+    {
+      "name": "ActionIAMDeactivateMFADevice",
+      "value": "iam:DeactivateMFADevice"
+    },
+    {
+      "name": "ActionKMSCreateKey",
+      "value": "kms:CreateKey"
+    },
+    {
+      "name": "ActionKMSDescribeKey",
+      "value": "kms:DescribeKey"
+    },
+    {
+      "name": "ActionKMSListKeys",
+      "value": "kms:ListKeys"
+    },
+    {
+      "name": "ActionKMSEnableKey",
+      "value": "kms:EnableKey"
+    },
+    {
+      "name": "ActionKMSDisableKey",
+      "value": "kms:DisableKey"
+    },
+    {
+      "name": "ActionKMSGetKeyPolicy",
+      "value": "kms:GetKeyPolicy"
+    },
+    {
+      "name": "ActionKMSPutKeyPolicy",
+      "value": "kms:PutKeyPolicy"
+    },
+    {
+      "name": "ActionKMSEncrypt",
+      "value": "kms:Encrypt"
+    },
+    {
+      "name": "ActionKMSDecrypt",
+      "value": "kms:Decrypt"
+    },
+    {
+      "name": "ActionKMSGenerateDataKey",
+      "value": "kms:GenerateDataKey"
+    },
+    {
+      "name": "ActionKMSGenerateDataKeyWithoutPlaintext",
+      "value": "kms:GenerateDataKeyWithoutPlaintext"
+    },
+    {
+      "name": "ActionKMSCreateGrant",
+      "value": "kms:CreateGrant"
+    },
+    {
+      "name": "ActionKMSListGrants",
+      "value": "kms:ListGrants"
+    },
+    {
+      "name": "ActionKMSRetireGrant",
+      "value": "kms:RetireGrant"
+    },
+    {
+      "name": "ActionKMSRevokeGrant",
+      "value": "kms:RevokeGrant"
+    },
+    {
+      "name": "ActionKMSCreateAlias",
+      "value": "kms:CreateAlias"
+    },
+    {
+      "name": "ActionKMSListAliases",
+      "value": "kms:ListAliases"
+    },
+    {
+      "name": "ActionKMSDeleteAlias",
+      "value": "kms:DeleteAlias"
+    },
+    {
+      "name": "ActionKMSUpdateAlias",
+      "value": "kms:UpdateAlias"
+    },
+    {
+      "name": "ActionKMSScheduleKeyDeletion",
+      "value": "kms:ScheduleKeyDeletion"
+    },
+    {
+      "name": "ActionKMSCancelKeyDeletion",
+      "value": "kms:CancelKeyDeletion"
+    },
+    {
+      "name": "ActionKMSEnableKeyRotation",
+      "value": "kms:EnableKeyRotation"
+    },
+    {
+      "name": "ActionKMSDisableKeyRotation",
+      "value": "kms:DisableKeyRotation"
+    },
+    {
+      "name": "ActionKMSGetKeyRotationStatus",
+      "value": "kms:GetKeyRotationStatus"
+    },
+    {
+      "name": "ActionKMSReEncryptFrom",
+      "value": "kms:ReEncryptFrom"
+    },
+    {
+      "name": "ActionKMSReEncryptTo",
+      "value": "kms:ReEncryptTo"
+    },
+    {
+      "name": "ActionKMSSign",
+      "value": "kms:Sign"
+    },
+    {
+      "name": "ActionKMSVerify",
+      "value": "kms:Verify"
+    },
+    {
+      "name": "ActionKMSGetPublicKey",
+      "value": "kms:GetPublicKey"
+    },
+    {
+      "name": "ActionKMSListResourceTags",
+      "value": "kms:ListResourceTags"
+    },
+    {
+      "name": "ActionKMSTagResource",
+      "value": "kms:TagResource"
+    },
+    {
+      "name": "ActionKMSUntagResource",
+      "value": "kms:UntagResource"
+    },
+    {
+      "name": "ActionS3CreateBucket",
+      "value": "s3:CreateBucket"
+    },
+    {
+      "name": "ActionS3DeleteBucket",
+      "value": "s3:DeleteBucket"
+    },
+    {
+      "name": "ActionS3ListAllMyBuckets",
+      "value": "s3:ListAllMyBuckets"
+    },
+    {
+      "name": "ActionS3ListBucket",
+      "value": "s3:ListBucket"
+    },
+    {
+      "name": "ActionS3GetBucketPolicy",
+      "value": "s3:GetBucketPolicy"
+    },
+    {
+      "name": "ActionS3PutBucketPolicy",
+      "value": "s3:PutBucketPolicy"
+    },
+    {
+      "name": "ActionS3DeleteBucketPolicy",
+      "value": "s3:DeleteBucketPolicy"
+    },
+    {
+      "name": "ActionS3GetObject",
+      "value": "s3:GetObject"
+    },
+    {
+      "name": "ActionS3PutObject",
+      "value": "s3:PutObject"
+    },
+    {
+      "name": "ActionS3DeleteObject",
+      "value": "s3:DeleteObject"
+    },
+    {
+      "name": "ActionS3CreateMultipartUpload",
+      "value": "s3:CreateMultipartUpload"
+    },
+    {
+      "name": "ActionS3UploadPart",
+      "value": "s3:UploadPart"
+    },
+    {
+      "name": "ActionS3CompleteMultipartUpload",
+      "value": "s3:CompleteMultipartUpload"
+    },
+    {
+      "name": "ActionS3AbortMultipartUpload",
+      "value": "s3:AbortMultipartUpload"
+    },
+    {
+      "name": "ActionS3ListParts",
+      "value": "s3:ListParts"
+    },
+    {
+      "name": "ActionS3ListMultipartUploads",
+      "value": "s3:ListMultipartUploads"
+    },
+    {
+      "name": "ActionS3PutEncryptionConfiguration",
+      "value": "s3:PutEncryptionConfiguration"
+    },
+    {
+      "name": "ActionS3GetEncryptionConfiguration",
+      "value": "s3:GetEncryptionConfiguration"
+    },
+    {
+      "name": "ActionS3DeleteEncryptionConfiguration",
+      "value": "s3:DeleteEncryptionConfiguration"
+    },
+    {
+      "name": "ActionS3PutBucketVersioning",
+      "value": "s3:PutBucketVersioning"
+    },
+    {
+      "name": "ActionS3GetBucketVersioning",
+      "value": "s3:GetBucketVersioning"
+    },
+    {
+      "name": "ActionS3ListBucketVersions",
+      "value": "s3:ListBucketVersions"
+    },
+    {
+      "name": "ActionS3PutBucketNotification",
+      "value": "s3:PutBucketNotification"
+    },
+    {
+      "name": "ActionS3GetBucketNotification",
+      "value": "s3:GetBucketNotification"
+    },
+    {
+      "name": "ActionS3PutBucketLogging",
+      "value": "s3:PutBucketLogging"
+    },
+    {
+      "name": "ActionS3GetBucketLogging",
+      "value": "s3:GetBucketLogging"
+    },
+    {
+      "name": "ActionS3PutBucketCors",
+      "value": "s3:PutBucketCors"
+    },
+    {
+      "name": "ActionS3GetBucketCors",
+      "value": "s3:GetBucketCors"
+    },
+    {
+      "name": "ActionS3DeleteBucketCors",
+      "value": "s3:DeleteBucketCors"
+    },
+    {
+      "name": "ActionS3PutLifecycleConfiguration",
+      "value": "s3:PutLifecycleConfiguration"
+    },
+    {
+      "name": "ActionS3GetLifecycleConfiguration",
+      "value": "s3:GetLifecycleConfiguration"
+    },
+    {
+      "name": "ActionS3DeleteLifecycleConfiguration",
+      "value": "s3:DeleteLifecycleConfiguration"
+    },
+    {
+      "name": "ActionS3SelectObjectContent",
+      "value": "s3:SelectObjectContent"
+    },
+    {
+      "name": "ActionDynamoDBCreateTable",
+      "value": "dynamodb:CreateTable"
+    },
+    {
+      "name": "ActionDynamoDBDescribeTable",
+      "value": "dynamodb:DescribeTable"
+    },
+    {
+      "name": "ActionDynamoDBDeleteTable",
+      "value": "dynamodb:DeleteTable"
+    },
+    {
+      "name": "ActionDynamoDBListTables",
+      "value": "dynamodb:ListTables"
+    },
+    {
+      "name": "ActionDynamoDBUpdateTable",
+      "value": "dynamodb:UpdateTable"
+    },
+    {
+      "name": "ActionDynamoDBPutItem",
+      "value": "dynamodb:PutItem"
+    },
+    {
+      "name": "ActionDynamoDBGetItem",
+      "value": "dynamodb:GetItem"
+    },
+    {
+      "name": "ActionDynamoDBDeleteItem",
+      "value": "dynamodb:DeleteItem"
+    },
+    {
+      "name": "ActionDynamoDBUpdateItem",
+      "value": "dynamodb:UpdateItem"
+    },
+    {
+      "name": "ActionDynamoDBQuery",
+      "value": "dynamodb:Query"
+    },
+    {
+      "name": "ActionDynamoDBScan",
+      "value": "dynamodb:Scan"
+    },
+    {
+      "name": "ActionDynamoDBBatchGetItem",
+      "value": "dynamodb:BatchGetItem"
+    },
+    {
+      "name": "ActionDynamoDBBatchWriteItem",
+      "value": "dynamodb:BatchWriteItem"
+    },
+    {
+      "name": "ActionDynamoDBTransactGetItems",
+      "value": "dynamodb:TransactGetItems"
+    },
+    {
+      "name": "ActionDynamoDBTransactWriteItems",
+      "value": "dynamodb:TransactWriteItems"
+    },
+    {
+      "name": "ActionDynamoDBConditionCheckItem",
+      "value": "dynamodb:ConditionCheckItem"
+    },
+    {
+      "name": "ActionDynamoDBPutResourcePolicy",
+      "value": "dynamodb:PutResourcePolicy"
+    },
+    {
+      "name": "ActionDynamoDBGetResourcePolicy",
+      "value": "dynamodb:GetResourcePolicy"
+    },
+    {
+      "name": "ActionDynamoDBDeleteResourcePolicy",
+      "value": "dynamodb:DeleteResourcePolicy"
+    },
+    {
+      "name": "ActionDynamoDBUpdateTimeToLive",
+      "value": "dynamodb:UpdateTimeToLive"
+    },
+    {
+      "name": "ActionDynamoDBDescribeTimeToLive",
+      "value": "dynamodb:DescribeTimeToLive"
+    },
+    {
+      "name": "ActionDynamoDBDescribeContinuousBackups",
+      "value": "dynamodb:DescribeContinuousBackups"
+    },
+    {
+      "name": "ActionDynamoDBListTagsOfResource",
+      "value": "dynamodb:ListTagsOfResource"
+    },
+    {
+      "name": "ActionDynamoDBTagResource",
+      "value": "dynamodb:TagResource"
+    },
+    {
+      "name": "ActionDynamoDBUntagResource",
+      "value": "dynamodb:UntagResource"
+    },
+    {
+      "name": "ActionDynamoDBExecuteStatement",
+      "value": "dynamodb:ExecuteStatement"
+    },
+    {
+      "name": "ActionDynamoDBBatchExecuteStatement",
+      "value": "dynamodb:BatchExecuteStatement"
+    },
+    {
+      "name": "ActionDynamoDBStreamsListStreams",
+      "value": "dynamodbstreams:ListStreams"
+    },
+    {
+      "name": "ActionDynamoDBStreamsDescribeStream",
+      "value": "dynamodbstreams:DescribeStream"
+    },
+    {
+      "name": "ActionDynamoDBStreamsGetShardIterator",
+      "value": "dynamodbstreams:GetShardIterator"
+    },
+    {
+      "name": "ActionDynamoDBStreamsGetRecords",
+      "value": "dynamodbstreams:GetRecords"
+    },
+    {
+      "name": "ActionPipesCreatePipe",
+      "value": "pipes:CreatePipe"
+    },
+    {
+      "name": "ActionPipesDescribePipe",
+      "value": "pipes:DescribePipe"
+    },
+    {
+      "name": "ActionPipesDeletePipe",
+      "value": "pipes:DeletePipe"
+    },
+    {
+      "name": "ActionPipesListPipes",
+      "value": "pipes:ListPipes"
+    },
+    {
+      "name": "ActionMQCreateBroker",
+      "value": "mq:CreateBroker"
+    },
+    {
+      "name": "ActionMQDescribeBroker",
+      "value": "mq:DescribeBroker"
+    },
+    {
+      "name": "ActionMQListBrokers",
+      "value": "mq:ListBrokers"
+    },
+    {
+      "name": "ActionMQDeleteBroker",
+      "value": "mq:DeleteBroker"
+    },
+    {
+      "name": "ActionRDSCreateDBInstance",
+      "value": "rds:CreateDBInstance"
+    },
+    {
+      "name": "ActionRDSDescribeDBInstances",
+      "value": "rds:DescribeDBInstances"
+    },
+    {
+      "name": "ActionRDSDeleteDBInstance",
+      "value": "rds:DeleteDBInstance"
+    },
+    {
+      "name": "ActionRDSDataExecuteStatement",
+      "value": "rds-data:ExecuteStatement"
+    },
+    {
+      "name": "ActionRDSDataBatchExecuteStatement",
+      "value": "rds-data:BatchExecuteStatement"
+    },
+    {
+      "name": "ActionRDSDataBeginTransaction",
+      "value": "rds-data:BeginTransaction"
+    },
+    {
+      "name": "ActionRDSDataCommitTransaction",
+      "value": "rds-data:CommitTransaction"
+    },
+    {
+      "name": "ActionRDSDataRollbackTransaction",
+      "value": "rds-data:RollbackTransaction"
+    },
+    {
+      "name": "ActionElastiCacheCreateCacheCluster",
+      "value": "elasticache:CreateCacheCluster"
+    },
+    {
+      "name": "ActionElastiCacheDescribeCacheClusters",
+      "value": "elasticache:DescribeCacheClusters"
+    },
+    {
+      "name": "ActionElastiCacheDeleteCacheCluster",
+      "value": "elasticache:DeleteCacheCluster"
+    },
+    {
+      "name": "ActionMemoryDBCreateCluster",
+      "value": "memorydb:CreateCluster"
+    },
+    {
+      "name": "ActionMemoryDBDescribeClusters",
+      "value": "memorydb:DescribeClusters"
+    },
+    {
+      "name": "ActionMemoryDBDeleteCluster",
+      "value": "memorydb:DeleteCluster"
+    },
+    {
+      "name": "ActionMemoryDBDescribeUsers",
+      "value": "memorydb:DescribeUsers"
+    },
+    {
+      "name": "ActionMemoryDBDescribeACLs",
+      "value": "memorydb:DescribeACLs"
+    },
+    {
+      "name": "ActionDocDBCreateDBCluster",
+      "value": "rds:CreateDBCluster"
+    },
+    {
+      "name": "ActionDocDBDescribeDBClusters",
+      "value": "rds:DescribeDBClusters"
+    },
+    {
+      "name": "ActionDocDBDeleteDBCluster",
+      "value": "rds:DeleteDBCluster"
+    },
+    {
+      "name": "ActionNeptuneCreateDBCluster",
+      "value": "neptune:CreateDBCluster"
+    },
+    {
+      "name": "ActionNeptuneDescribeDBClusters",
+      "value": "neptune:DescribeDBClusters"
+    },
+    {
+      "name": "ActionNeptuneDeleteDBCluster",
+      "value": "neptune:DeleteDBCluster"
+    },
+    {
+      "name": "ActionMSKCreateCluster",
+      "value": "kafka:CreateCluster"
+    },
+    {
+      "name": "ActionMSKDescribeCluster",
+      "value": "kafka:DescribeCluster"
+    },
+    {
+      "name": "ActionMSKListClusters",
+      "value": "kafka:ListClusters"
+    },
+    {
+      "name": "ActionMSKDeleteCluster",
+      "value": "kafka:DeleteCluster"
+    },
+    {
+      "name": "ActionMSKGetBootstrapBrokers",
+      "value": "kafka:GetBootstrapBrokers"
+    },
+    {
+      "name": "ActionEKSCreateCluster",
+      "value": "eks:CreateCluster"
+    },
+    {
+      "name": "ActionEKSDescribeCluster",
+      "value": "eks:DescribeCluster"
+    },
+    {
+      "name": "ActionEKSListClusters",
+      "value": "eks:ListClusters"
+    },
+    {
+      "name": "ActionEKSDeleteCluster",
+      "value": "eks:DeleteCluster"
+    },
+    {
+      "name": "ActionEKSListNodegroups",
+      "value": "eks:ListNodegroups"
+    },
+    {
+      "name": "ActionTransferCreateServer",
+      "value": "transfer:CreateServer"
+    },
+    {
+      "name": "ActionTransferDescribeServer",
+      "value": "transfer:DescribeServer"
+    },
+    {
+      "name": "ActionTransferListServers",
+      "value": "transfer:ListServers"
+    },
+    {
+      "name": "ActionTransferDeleteServer",
+      "value": "transfer:DeleteServer"
+    },
+    {
+      "name": "ActionTransferCreateUser",
+      "value": "transfer:CreateUser"
+    },
+    {
+      "name": "ActionTransferDescribeUser",
+      "value": "transfer:DescribeUser"
+    },
+    {
+      "name": "ActionTransferListUsers",
+      "value": "transfer:ListUsers"
+    },
+    {
+      "name": "ActionTransferDeleteUser",
+      "value": "transfer:DeleteUser"
+    },
+    {
+      "name": "ActionTransferImportSshPublicKey",
+      "value": "transfer:ImportSshPublicKey"
+    },
+    {
+      "name": "ActionTransferDeleteSshPublicKey",
+      "value": "transfer:DeleteSshPublicKey"
+    },
+    {
+      "name": "ActionTransferPutFile",
+      "value": "transfer:PutFile"
+    },
+    {
+      "name": "ActionTransferGetFile",
+      "value": "transfer:GetFile"
+    },
+    {
+      "name": "ActionTransferListDirectory",
+      "value": "transfer:ListDirectory"
+    },
+    {
+      "name": "ActionSQSCreateQueue",
+      "value": "sqs:CreateQueue"
+    },
+    {
+      "name": "ActionSQSGetQueueUrl",
+      "value": "sqs:GetQueueUrl"
+    },
+    {
+      "name": "ActionSQSGetQueueAttributes",
+      "value": "sqs:GetQueueAttributes"
+    },
+    {
+      "name": "ActionSQSSetQueueAttributes",
+      "value": "sqs:SetQueueAttributes"
+    },
+    {
+      "name": "ActionSQSDeleteQueue",
+      "value": "sqs:DeleteQueue"
+    },
+    {
+      "name": "ActionSQSListQueues",
+      "value": "sqs:ListQueues"
+    },
+    {
+      "name": "ActionSQSPurgeQueue",
+      "value": "sqs:PurgeQueue"
+    },
+    {
+      "name": "ActionSQSSendMessage",
+      "value": "sqs:SendMessage"
+    },
+    {
+      "name": "ActionSQSReceiveMessage",
+      "value": "sqs:ReceiveMessage"
+    },
+    {
+      "name": "ActionSQSDeleteMessage",
+      "value": "sqs:DeleteMessage"
+    },
+    {
+      "name": "ActionSQSSendMessageBatch",
+      "value": "sqs:SendMessageBatch"
+    },
+    {
+      "name": "ActionSQSDeleteMessageBatch",
+      "value": "sqs:DeleteMessageBatch"
+    },
+    {
+      "name": "ActionSQSChangeMessageVisibility",
+      "value": "sqs:ChangeMessageVisibility"
+    },
+    {
+      "name": "ActionSQSListQueueTags",
+      "value": "sqs:ListQueueTags"
+    },
+    {
+      "name": "ActionSQSTagQueue",
+      "value": "sqs:TagQueue"
+    },
+    {
+      "name": "ActionSQSUntagQueue",
+      "value": "sqs:UntagQueue"
+    },
+    {
+      "name": "ActionSSMPutParameter",
+      "value": "ssm:PutParameter"
+    },
+    {
+      "name": "ActionSSMGetParameter",
+      "value": "ssm:GetParameter"
+    },
+    {
+      "name": "ActionSSMGetParameters",
+      "value": "ssm:GetParameters"
+    },
+    {
+      "name": "ActionSSMGetParametersByPath",
+      "value": "ssm:GetParametersByPath"
+    },
+    {
+      "name": "ActionSSMDeleteParameter",
+      "value": "ssm:DeleteParameter"
+    },
+    {
+      "name": "ActionSSMDescribeParameters",
+      "value": "ssm:DescribeParameters"
+    },
+    {
+      "name": "ActionSSMListTagsForResource",
+      "value": "ssm:ListTagsForResource"
+    },
+    {
+      "name": "ActionSSMAddTagsToResource",
+      "value": "ssm:AddTagsToResource"
+    },
+    {
+      "name": "ActionSSMRemoveTagsFromResource",
+      "value": "ssm:RemoveTagsFromResource"
+    },
+    {
+      "name": "ActionSSMSendCommand",
+      "value": "ssm:SendCommand"
+    },
+    {
+      "name": "ActionSSMGetCommandInvocation",
+      "value": "ssm:GetCommandInvocation"
+    },
+    {
+      "name": "ActionSSMListCommandInvocations",
+      "value": "ssm:ListCommandInvocations"
+    },
+    {
+      "name": "ActionSSMLabelParameterVersion",
+      "value": "ssm:LabelParameterVersion"
+    },
+    {
+      "name": "ActionSSMGetParameterHistory",
+      "value": "ssm:GetParameterHistory"
+    },
+    {
+      "name": "ActionSNSCreateTopic",
+      "value": "sns:CreateTopic"
+    },
+    {
+      "name": "ActionSNSDeleteTopic",
+      "value": "sns:DeleteTopic"
+    },
+    {
+      "name": "ActionSNSListTopics",
+      "value": "sns:ListTopics"
+    },
+    {
+      "name": "ActionSNSGetTopicAttributes",
+      "value": "sns:GetTopicAttributes"
+    },
+    {
+      "name": "ActionSNSSetTopicAttributes",
+      "value": "sns:SetTopicAttributes"
+    },
+    {
+      "name": "ActionSNSPublish",
+      "value": "sns:Publish"
+    },
+    {
+      "name": "ActionSNSSubscribe",
+      "value": "sns:Subscribe"
+    },
+    {
+      "name": "ActionSNSConfirmSubscription",
+      "value": "sns:ConfirmSubscription"
+    },
+    {
+      "name": "ActionSNSUnsubscribe",
+      "value": "sns:Unsubscribe"
+    },
+    {
+      "name": "ActionSNSListSubscriptions",
+      "value": "sns:ListSubscriptions"
+    },
+    {
+      "name": "ActionSNSListSubscriptionsByTopic",
+      "value": "sns:ListSubscriptionsByTopic"
+    },
+    {
+      "name": "ActionSNSGetSubscriptionAttributes",
+      "value": "sns:GetSubscriptionAttributes"
+    },
+    {
+      "name": "ActionSNSAddPermission",
+      "value": "sns:AddPermission"
+    },
+    {
+      "name": "ActionSNSRemovePermission",
+      "value": "sns:RemovePermission"
+    },
+    {
+      "name": "ActionSNSListTagsForResource",
+      "value": "sns:ListTagsForResource"
+    },
+    {
+      "name": "ActionSNSTagResource",
+      "value": "sns:TagResource"
+    },
+    {
+      "name": "ActionSNSUntagResource",
+      "value": "sns:UntagResource"
+    },
+    {
+      "name": "ActionEventsPutEvents",
+      "value": "events:PutEvents"
+    },
+    {
+      "name": "ActionEventsCreateEventBus",
+      "value": "events:CreateEventBus"
+    },
+    {
+      "name": "ActionEventsDeleteEventBus",
+      "value": "events:DeleteEventBus"
+    },
+    {
+      "name": "ActionEventsDescribeEventBus",
+      "value": "events:DescribeEventBus"
+    },
+    {
+      "name": "ActionEventsListEventBuses",
+      "value": "events:ListEventBuses"
+    },
+    {
+      "name": "ActionEventsPutRule",
+      "value": "events:PutRule"
+    },
+    {
+      "name": "ActionEventsDescribeRule",
+      "value": "events:DescribeRule"
+    },
+    {
+      "name": "ActionEventsListRules",
+      "value": "events:ListRules"
+    },
+    {
+      "name": "ActionEventsDeleteRule",
+      "value": "events:DeleteRule"
+    },
+    {
+      "name": "ActionEventsEnableRule",
+      "value": "events:EnableRule"
+    },
+    {
+      "name": "ActionEventsDisableRule",
+      "value": "events:DisableRule"
+    },
+    {
+      "name": "ActionEventsPutTargets",
+      "value": "events:PutTargets"
+    },
+    {
+      "name": "ActionEventsRemoveTargets",
+      "value": "events:RemoveTargets"
+    },
+    {
+      "name": "ActionEventsListTargetsByRule",
+      "value": "events:ListTargetsByRule"
+    },
+    {
+      "name": "ActionEventsPutPermission",
+      "value": "events:PutPermission"
+    },
+    {
+      "name": "ActionEventsRemovePermission",
+      "value": "events:RemovePermission"
+    },
+    {
+      "name": "ActionEventsListTagsForResource",
+      "value": "events:ListTagsForResource"
+    },
+    {
+      "name": "ActionEventsTagResource",
+      "value": "events:TagResource"
+    },
+    {
+      "name": "ActionEventsUntagResource",
+      "value": "events:UntagResource"
+    },
+    {
+      "name": "ActionECRCreateRepository",
+      "value": "ecr:CreateRepository"
+    },
+    {
+      "name": "ActionECRDescribeRepositories",
+      "value": "ecr:DescribeRepositories"
+    },
+    {
+      "name": "ActionECRDeleteRepository",
+      "value": "ecr:DeleteRepository"
+    },
+    {
+      "name": "ActionECRGetAuthorizationToken",
+      "value": "ecr:GetAuthorizationToken"
+    },
+    {
+      "name": "ActionECRGetRepositoryPolicy",
+      "value": "ecr:GetRepositoryPolicy"
+    },
+    {
+      "name": "ActionECRSetRepositoryPolicy",
+      "value": "ecr:SetRepositoryPolicy"
+    },
+    {
+      "name": "ActionECRDeleteRepositoryPolicy",
+      "value": "ecr:DeleteRepositoryPolicy"
+    },
+    {
+      "name": "ActionECRPutImage",
+      "value": "ecr:PutImage"
+    },
+    {
+      "name": "ActionECRBatchGetImage",
+      "value": "ecr:BatchGetImage"
+    },
+    {
+      "name": "ActionECRListImages",
+      "value": "ecr:ListImages"
+    },
+    {
+      "name": "ActionECRBatchDeleteImage",
+      "value": "ecr:BatchDeleteImage"
+    },
+    {
+      "name": "ActionECRInitiateLayerUpload",
+      "value": "ecr:InitiateLayerUpload"
+    },
+    {
+      "name": "ActionECRUploadLayerPart",
+      "value": "ecr:UploadLayerPart"
+    },
+    {
+      "name": "ActionECRCompleteLayerUpload",
+      "value": "ecr:CompleteLayerUpload"
+    },
+    {
+      "name": "ActionECRBatchCheckLayerAvailability",
+      "value": "ecr:BatchCheckLayerAvailability"
+    },
+    {
+      "name": "ActionECRListTagsForResource",
+      "value": "ecr:ListTagsForResource"
+    },
+    {
+      "name": "ActionECRTagResource",
+      "value": "ecr:TagResource"
+    },
+    {
+      "name": "ActionECRUntagResource",
+      "value": "ecr:UntagResource"
+    },
+    {
+      "name": "ActionECSRegisterTaskDefinition",
+      "value": "ecs:RegisterTaskDefinition"
+    },
+    {
+      "name": "ActionECSDescribeTaskDefinition",
+      "value": "ecs:DescribeTaskDefinition"
+    },
+    {
+      "name": "ActionECSListTaskDefinitions",
+      "value": "ecs:ListTaskDefinitions"
+    },
+    {
+      "name": "ActionECSDeregisterTaskDefinition",
+      "value": "ecs:DeregisterTaskDefinition"
+    },
+    {
+      "name": "ActionECSRunTask",
+      "value": "ecs:RunTask"
+    },
+    {
+      "name": "ActionECSDescribeTasks",
+      "value": "ecs:DescribeTasks"
+    },
+    {
+      "name": "ActionECSListTasks",
+      "value": "ecs:ListTasks"
+    },
+    {
+      "name": "ActionECSStopTask",
+      "value": "ecs:StopTask"
+    },
+    {
+      "name": "ActionECSDescribeClusters",
+      "value": "ecs:DescribeClusters"
+    },
+    {
+      "name": "ActionECSListClusters",
+      "value": "ecs:ListClusters"
+    },
+    {
+      "name": "ActionECSCreateService",
+      "value": "ecs:CreateService"
+    },
+    {
+      "name": "ActionECSUpdateService",
+      "value": "ecs:UpdateService"
+    },
+    {
+      "name": "ActionECSDeleteService",
+      "value": "ecs:DeleteService"
+    },
+    {
+      "name": "ActionECSDescribeServices",
+      "value": "ecs:DescribeServices"
+    },
+    {
+      "name": "ActionECSListServices",
+      "value": "ecs:ListServices"
+    },
+    {
+      "name": "ActionECSListTagsForResource",
+      "value": "ecs:ListTagsForResource"
+    },
+    {
+      "name": "ActionECSTagResource",
+      "value": "ecs:TagResource"
+    },
+    {
+      "name": "ActionECSUntagResource",
+      "value": "ecs:UntagResource"
+    },
+    {
+      "name": "ActionSecretsCreateSecret",
+      "value": "secretsmanager:CreateSecret"
+    },
+    {
+      "name": "ActionSecretsGetSecretValue",
+      "value": "secretsmanager:GetSecretValue"
+    },
+    {
+      "name": "ActionSecretsPutSecretValue",
+      "value": "secretsmanager:PutSecretValue"
+    },
+    {
+      "name": "ActionSecretsDeleteSecret",
+      "value": "secretsmanager:DeleteSecret"
+    },
+    {
+      "name": "ActionSecretsRestoreSecret",
+      "value": "secretsmanager:RestoreSecret"
+    },
+    {
+      "name": "ActionSecretsRotateSecret",
+      "value": "secretsmanager:RotateSecret"
+    },
+    {
+      "name": "ActionSecretsUpdateSecretVersionStage",
+      "value": "secretsmanager:UpdateSecretVersionStage"
+    },
+    {
+      "name": "ActionSecretsDescribeSecret",
+      "value": "secretsmanager:DescribeSecret"
+    },
+    {
+      "name": "ActionSecretsListSecrets",
+      "value": "secretsmanager:ListSecrets"
+    },
+    {
+      "name": "ActionSecretsPutResourcePolicy",
+      "value": "secretsmanager:PutResourcePolicy"
+    },
+    {
+      "name": "ActionSecretsGetResourcePolicy",
+      "value": "secretsmanager:GetResourcePolicy"
+    },
+    {
+      "name": "ActionSecretsDeleteResourcePolicy",
+      "value": "secretsmanager:DeleteResourcePolicy"
+    },
+    {
+      "name": "ActionSecretsListTagsForResource",
+      "value": "secretsmanager:ListTagsForResource"
+    },
+    {
+      "name": "ActionSecretsTagResource",
+      "value": "secretsmanager:TagResource"
+    },
+    {
+      "name": "ActionSecretsUntagResource",
+      "value": "secretsmanager:UntagResource"
+    },
+    {
+      "name": "ActionCloudTrailLookupEvents",
+      "value": "cloudtrail:LookupEvents"
+    },
+    {
+      "name": "ActionCloudTrailCreateTrail",
+      "value": "cloudtrail:CreateTrail"
+    },
+    {
+      "name": "ActionCloudTrailDescribeTrails",
+      "value": "cloudtrail:DescribeTrails"
+    },
+    {
+      "name": "ActionCloudTrailDeleteTrail",
+      "value": "cloudtrail:DeleteTrail"
+    },
+    {
+      "name": "ActionCloudTrailStartLogging",
+      "value": "cloudtrail:StartLogging"
+    },
+    {
+      "name": "ActionCloudTrailStopLogging",
+      "value": "cloudtrail:StopLogging"
+    },
+    {
+      "name": "ActionCloudTrailInjectEvents",
+      "value": "cloudtrail:InjectEvents"
+    },
+    {
+      "name": "ActionCloudTrailInjectInsightsEvents",
+      "value": "cloudtrail:InjectInsightsEvents"
+    },
+    {
+      "name": "ActionCloudTrailPutEventSelectors",
+      "value": "cloudtrail:PutEventSelectors"
+    },
+    {
+      "name": "ActionCloudTrailGetEventSelectors",
+      "value": "cloudtrail:GetEventSelectors"
+    },
+    {
+      "name": "ActionCloudTrailValidateLogs",
+      "value": "cloudtrail:ValidateLogs"
+    },
+    {
+      "name": "ActionGuardDutyCreateDetector",
+      "value": "guardduty:CreateDetector"
+    },
+    {
+      "name": "ActionGuardDutyListDetectors",
+      "value": "guardduty:ListDetectors"
+    },
+    {
+      "name": "ActionGuardDutyListFindings",
+      "value": "guardduty:ListFindings"
+    },
+    {
+      "name": "ActionGuardDutyGetFindings",
+      "value": "guardduty:GetFindings"
+    },
+    {
+      "name": "ActionGuardDutyInjectFindings",
+      "value": "guardduty:InjectFindings"
+    },
+    {
+      "name": "ActionDetectiveCreateGraph",
+      "value": "detective:CreateGraph"
+    },
+    {
+      "name": "ActionDetectiveListGraphs",
+      "value": "detective:ListGraphs"
+    },
+    {
+      "name": "ActionDetectiveAcceptInvitation",
+      "value": "detective:AcceptInvitation"
+    },
+    {
+      "name": "ActionDetectiveSearchGraph",
+      "value": "detective:SearchGraph"
+    },
+    {
+      "name": "ActionMacieEnableMacie",
+      "value": "macie2:EnableMacie"
+    },
+    {
+      "name": "ActionMacieGetMacieSession",
+      "value": "macie2:GetMacieSession"
+    },
+    {
+      "name": "ActionMacieCreateClassificationJob",
+      "value": "macie2:CreateClassificationJob"
+    },
+    {
+      "name": "ActionMacieDescribeClassificationJob",
+      "value": "macie2:DescribeClassificationJob"
+    },
+    {
+      "name": "ActionMacieListClassificationJobs",
+      "value": "macie2:ListClassificationJobs"
+    },
+    {
+      "name": "ActionMacieListFindings",
+      "value": "macie2:ListFindings"
+    },
+    {
+      "name": "ActionMacieGetFindings",
+      "value": "macie2:GetFindings"
+    },
+    {
+      "name": "ActionMacieInjectFindings",
+      "value": "macie2:InjectFindings"
+    },
+    {
+      "name": "ActionEC2RunInstances",
+      "value": "ec2:RunInstances"
+    },
+    {
+      "name": "ActionEC2DescribeInstances",
+      "value": "ec2:DescribeInstances"
+    },
+    {
+      "name": "ActionEC2DescribeImages",
+      "value": "ec2:DescribeImages"
+    },
+    {
+      "name": "ActionEC2TerminateInstances",
+      "value": "ec2:TerminateInstances"
+    },
+    {
+      "name": "ActionEC2StopInstances",
+      "value": "ec2:StopInstances"
+    },
+    {
+      "name": "ActionEC2StartInstances",
+      "value": "ec2:StartInstances"
+    },
+    {
+      "name": "ActionEC2CreateVpc",
+      "value": "ec2:CreateVpc"
+    },
+    {
+      "name": "ActionEC2DeleteVpc",
+      "value": "ec2:DeleteVpc"
+    },
+    {
+      "name": "ActionEC2DescribeVpcs",
+      "value": "ec2:DescribeVpcs"
+    },
+    {
+      "name": "ActionEC2CreateSubnet",
+      "value": "ec2:CreateSubnet"
+    },
+    {
+      "name": "ActionEC2DeleteSubnet",
+      "value": "ec2:DeleteSubnet"
+    },
+    {
+      "name": "ActionEC2DescribeSubnets",
+      "value": "ec2:DescribeSubnets"
+    },
+    {
+      "name": "ActionEC2CreateSecurityGroup",
+      "value": "ec2:CreateSecurityGroup"
+    },
+    {
+      "name": "ActionEC2DeleteSecurityGroup",
+      "value": "ec2:DeleteSecurityGroup"
+    },
+    {
+      "name": "ActionEC2DescribeSecurityGroups",
+      "value": "ec2:DescribeSecurityGroups"
+    },
+    {
+      "name": "ActionEC2AuthorizeSecurityGroupIngress",
+      "value": "ec2:AuthorizeSecurityGroupIngress"
+    },
+    {
+      "name": "ActionEC2AuthorizeSecurityGroupEgress",
+      "value": "ec2:AuthorizeSecurityGroupEgress"
+    },
+    {
+      "name": "ActionEC2RevokeSecurityGroupIngress",
+      "value": "ec2:RevokeSecurityGroupIngress"
+    },
+    {
+      "name": "ActionEC2RevokeSecurityGroupEgress",
+      "value": "ec2:RevokeSecurityGroupEgress"
+    },
+    {
+      "name": "ActionEC2DescribeNetworkInterfaces",
+      "value": "ec2:DescribeNetworkInterfaces"
+    },
+    {
+      "name": "ActionEC2CreateNetworkInterface",
+      "value": "ec2:CreateNetworkInterface"
+    },
+    {
+      "name": "ActionEC2CreateFlowLogs",
+      "value": "ec2:CreateFlowLogs"
+    },
+    {
+      "name": "ActionEC2InjectFlowLogs",
+      "value": "ec2:InjectFlowLogs"
+    },
+    {
+      "name": "ActionSecurityHubBatchImportFindings",
+      "value": "securityhub:BatchImportFindings"
+    },
+    {
+      "name": "ActionSecurityHubGetFindings",
+      "value": "securityhub:GetFindings"
+    },
+    {
+      "name": "ActionLabFreezeClock",
+      "value": "noctaxris-lab:FreezeClock"
+    },
+    {
+      "name": "ActionLabUnfreezeClock",
+      "value": "noctaxris-lab:UnfreezeClock"
+    },
+    {
+      "name": "ActionLabSetClock",
+      "value": "noctaxris-lab:SetClock"
+    },
+    {
+      "name": "ActionLabBulkSeed",
+      "value": "noctaxris-lab:BulkSeed"
+    },
+    {
+      "name": "ActionLogsCreateLogGroup",
+      "value": "logs:CreateLogGroup"
+    },
+    {
+      "name": "ActionLogsCreateLogStream",
+      "value": "logs:CreateLogStream"
+    },
+    {
+      "name": "ActionLogsDeleteLogGroup",
+      "value": "logs:DeleteLogGroup"
+    },
+    {
+      "name": "ActionLogsDeleteLogStream",
+      "value": "logs:DeleteLogStream"
+    },
+    {
+      "name": "ActionLogsDescribeLogStreams",
+      "value": "logs:DescribeLogStreams"
+    },
+    {
+      "name": "ActionLogsPutLogEvents",
+      "value": "logs:PutLogEvents"
+    },
+    {
+      "name": "ActionLogsGetLogEvents",
+      "value": "logs:GetLogEvents"
+    },
+    {
+      "name": "ActionLogsFilterLogEvents",
+      "value": "logs:FilterLogEvents"
+    },
+    {
+      "name": "ActionLogsDescribeLogGroups",
+      "value": "logs:DescribeLogGroups"
+    },
+    {
+      "name": "ActionLogsPutSubscriptionFilter",
+      "value": "logs:PutSubscriptionFilter"
+    },
+    {
+      "name": "ActionLogsDeleteSubscriptionFilter",
+      "value": "logs:DeleteSubscriptionFilter"
+    },
+    {
+      "name": "ActionLogsDescribeSubscriptionFilters",
+      "value": "logs:DescribeSubscriptionFilters"
+    },
+    {
+      "name": "ActionLogsPutMetricFilter",
+      "value": "logs:PutMetricFilter"
+    },
+    {
+      "name": "ActionLogsDeleteMetricFilter",
+      "value": "logs:DeleteMetricFilter"
+    },
+    {
+      "name": "ActionLogsDescribeMetricFilters",
+      "value": "logs:DescribeMetricFilters"
+    },
+    {
+      "name": "ActionLogsPutResourcePolicy",
+      "value": "logs:PutResourcePolicy"
+    },
+    {
+      "name": "ActionLogsGetResourcePolicy",
+      "value": "logs:GetResourcePolicy"
+    },
+    {
+      "name": "ActionLogsDeleteResourcePolicy",
+      "value": "logs:DeleteResourcePolicy"
+    },
+    {
+      "name": "ActionLogsDescribeResourcePolicies",
+      "value": "logs:DescribeResourcePolicies"
+    },
+    {
+      "name": "ActionLogsPutRetentionPolicy",
+      "value": "logs:PutRetentionPolicy"
+    },
+    {
+      "name": "ActionLogsDeleteRetentionPolicy",
+      "value": "logs:DeleteRetentionPolicy"
+    },
+    {
+      "name": "ActionTaggingTagResources",
+      "value": "tag:TagResources"
+    },
+    {
+      "name": "ActionTaggingUntagResources",
+      "value": "tag:UntagResources"
+    },
+    {
+      "name": "ActionTaggingGetResources",
+      "value": "tag:GetResources"
+    },
+    {
+      "name": "ActionKinesisCreateStream",
+      "value": "kinesis:CreateStream"
+    },
+    {
+      "name": "ActionKinesisDeleteStream",
+      "value": "kinesis:DeleteStream"
+    },
+    {
+      "name": "ActionKinesisDescribeStream",
+      "value": "kinesis:DescribeStream"
+    },
+    {
+      "name": "ActionKinesisListStreams",
+      "value": "kinesis:ListStreams"
+    },
+    {
+      "name": "ActionKinesisPutRecord",
+      "value": "kinesis:PutRecord"
+    },
+    {
+      "name": "ActionKinesisPutRecords",
+      "value": "kinesis:PutRecords"
+    },
+    {
+      "name": "ActionKinesisGetShardIterator",
+      "value": "kinesis:GetShardIterator"
+    },
+    {
+      "name": "ActionKinesisGetRecords",
+      "value": "kinesis:GetRecords"
+    },
+    {
+      "name": "ActionKinesisPutResourcePolicy",
+      "value": "kinesis:PutResourcePolicy"
+    },
+    {
+      "name": "ActionKinesisGetResourcePolicy",
+      "value": "kinesis:GetResourcePolicy"
+    },
+    {
+      "name": "ActionKinesisDeleteResourcePolicy",
+      "value": "kinesis:DeleteResourcePolicy"
+    },
+    {
+      "name": "ActionKinesisRegisterStreamConsumer",
+      "value": "kinesis:RegisterStreamConsumer"
+    },
+    {
+      "name": "ActionKinesisDescribeStreamConsumer",
+      "value": "kinesis:DescribeStreamConsumer"
+    },
+    {
+      "name": "ActionKinesisListStreamConsumers",
+      "value": "kinesis:ListStreamConsumers"
+    },
+    {
+      "name": "ActionKinesisDeregisterStreamConsumer",
+      "value": "kinesis:DeregisterStreamConsumer"
+    },
+    {
+      "name": "ActionKinesisSubscribeToShard",
+      "value": "kinesis:SubscribeToShard"
+    },
+    {
+      "name": "ActionKinesisUpdateShardCount",
+      "value": "kinesis:UpdateShardCount"
+    },
+    {
+      "name": "ActionAppConfigCreateApplication",
+      "value": "appconfig:CreateApplication"
+    },
+    {
+      "name": "ActionAppConfigCreateEnvironment",
+      "value": "appconfig:CreateEnvironment"
+    },
+    {
+      "name": "ActionAppConfigCreateConfigurationProfile",
+      "value": "appconfig:CreateConfigurationProfile"
+    },
+    {
+      "name": "ActionAppConfigCreateHostedConfigurationVersion",
+      "value": "appconfig:CreateHostedConfigurationVersion"
+    },
+    {
+      "name": "ActionAppConfigGetConfiguration",
+      "value": "appconfig:GetConfiguration"
+    },
+    {
+      "name": "ActionAppConfigStartDeployment",
+      "value": "appconfig:StartDeployment"
+    },
+    {
+      "name": "ActionAppConfigGetDeployment",
+      "value": "appconfig:GetDeployment"
+    },
+    {
+      "name": "ActionAppConfigListDeployments",
+      "value": "appconfig:ListDeployments"
+    },
+    {
+      "name": "ActionAppConfigDataStartConfigurationSession",
+      "value": "appconfigdata:StartConfigurationSession"
+    },
+    {
+      "name": "ActionAppConfigDataGetLatestConfiguration",
+      "value": "appconfigdata:GetLatestConfiguration"
+    },
+    {
+      "name": "ActionSESVerifyEmailIdentity",
+      "value": "ses:VerifyEmailIdentity"
+    },
+    {
+      "name": "ActionSESCreateEmailIdentity",
+      "value": "ses:CreateEmailIdentity"
+    },
+    {
+      "name": "ActionSESGetEmailIdentity",
+      "value": "ses:GetEmailIdentity"
+    },
+    {
+      "name": "ActionSESDeleteEmailIdentity",
+      "value": "ses:DeleteEmailIdentity"
+    },
+    {
+      "name": "ActionSESListEmailIdentities",
+      "value": "ses:ListEmailIdentities"
+    },
+    {
+      "name": "ActionSESGetAccount",
+      "value": "ses:GetAccount"
+    },
+    {
+      "name": "ActionSESListIdentities",
+      "value": "ses:ListIdentities"
+    },
+    {
+      "name": "ActionSESSendEmail",
+      "value": "ses:SendEmail"
+    },
+    {
+      "name": "ActionSESSendRawEmail",
+      "value": "ses:SendRawEmail"
+    },
+    {
+      "name": "ActionSESGetSendStatistics",
+      "value": "ses:GetSendStatistics"
+    },
+    {
+      "name": "ActionSESSetIdentityNotificationTopic",
+      "value": "ses:SetIdentityNotificationTopic"
+    },
+    {
+      "name": "ActionSFNCreateStateMachine",
+      "value": "states:CreateStateMachine"
+    },
+    {
+      "name": "ActionSFNDeleteStateMachine",
+      "value": "states:DeleteStateMachine"
+    },
+    {
+      "name": "ActionSFNDescribeStateMachine",
+      "value": "states:DescribeStateMachine"
+    },
+    {
+      "name": "ActionSFNListStateMachines",
+      "value": "states:ListStateMachines"
+    },
+    {
+      "name": "ActionSFNStartExecution",
+      "value": "states:StartExecution"
+    },
+    {
+      "name": "ActionSFNDescribeExecution",
+      "value": "states:DescribeExecution"
+    },
+    {
+      "name": "ActionSFNGetExecutionHistory",
+      "value": "states:GetExecutionHistory"
+    },
+    {
+      "name": "ActionSFNSendTaskSuccess",
+      "value": "states:SendTaskSuccess"
+    },
+    {
+      "name": "ActionSFNSendTaskFailure",
+      "value": "states:SendTaskFailure"
+    },
+    {
+      "name": "ActionSFNSendTaskHeartbeat",
+      "value": "states:SendTaskHeartbeat"
+    },
+    {
+      "name": "ActionSFNPutResourcePolicy",
+      "value": "states:PutResourcePolicy"
+    },
+    {
+      "name": "ActionSFNGetResourcePolicy",
+      "value": "states:GetResourcePolicy"
+    },
+    {
+      "name": "ActionSFNDeleteResourcePolicy",
+      "value": "states:DeleteResourcePolicy"
+    },
+    {
+      "name": "ActionCFNCreateStack",
+      "value": "cloudformation:CreateStack"
+    },
+    {
+      "name": "ActionCFNDescribeStacks",
+      "value": "cloudformation:DescribeStacks"
+    },
+    {
+      "name": "ActionCFNDeleteStack",
+      "value": "cloudformation:DeleteStack"
+    },
+    {
+      "name": "ActionCFNListStacks",
+      "value": "cloudformation:ListStacks"
+    },
+    {
+      "name": "ActionCFNUpdateStack",
+      "value": "cloudformation:UpdateStack"
+    },
+    {
+      "name": "ActionCFNCreateChangeSet",
+      "value": "cloudformation:CreateChangeSet"
+    },
+    {
+      "name": "ActionCFNDescribeChangeSet",
+      "value": "cloudformation:DescribeChangeSet"
+    },
+    {
+      "name": "ActionCFNExecuteChangeSet",
+      "value": "cloudformation:ExecuteChangeSet"
+    },
+    {
+      "name": "ActionCFNDetectStackDrift",
+      "value": "cloudformation:DetectStackDrift"
+    },
+    {
+      "name": "ActionCFNDescribeStackDriftDetectionStatus",
+      "value": "cloudformation:DescribeStackDriftDetectionStatus"
+    },
+    {
+      "name": "ActionCFNDescribeStackResourceDrifts",
+      "value": "cloudformation:DescribeStackResourceDrifts"
+    },
+    {
+      "name": "ActionCodePipelineCreatePipeline",
+      "value": "codepipeline:CreatePipeline"
+    },
+    {
+      "name": "ActionCodePipelineGetPipeline",
+      "value": "codepipeline:GetPipeline"
+    },
+    {
+      "name": "ActionCodePipelineDeletePipeline",
+      "value": "codepipeline:DeletePipeline"
+    },
+    {
+      "name": "ActionCodePipelineStartPipelineExecution",
+      "value": "codepipeline:StartPipelineExecution"
+    },
+    {
+      "name": "ActionCodePipelineGetPipelineState",
+      "value": "codepipeline:GetPipelineState"
+    },
+    {
+      "name": "ActionCodePipelinePutApprovalResult",
+      "value": "codepipeline:PutApprovalResult"
+    },
+    {
+      "name": "ActionCodePipelineGetPipelineExecution",
+      "value": "codepipeline:GetPipelineExecution"
+    },
+    {
+      "name": "ActionCodePipelineListPipelineExecutions",
+      "value": "codepipeline:ListPipelineExecutions"
+    },
+    {
+      "name": "ActionFirehoseCreateDeliveryStream",
+      "value": "firehose:CreateDeliveryStream"
+    },
+    {
+      "name": "ActionFirehoseDeleteDeliveryStream",
+      "value": "firehose:DeleteDeliveryStream"
+    },
+    {
+      "name": "ActionFirehoseDescribeDeliveryStream",
+      "value": "firehose:DescribeDeliveryStream"
+    },
+    {
+      "name": "ActionFirehoseListDeliveryStreams",
+      "value": "firehose:ListDeliveryStreams"
+    },
+    {
+      "name": "ActionFirehosePutRecord",
+      "value": "firehose:PutRecord"
+    },
+    {
+      "name": "ActionFirehosePutRecordBatch",
+      "value": "firehose:PutRecordBatch"
+    },
+    {
+      "name": "ActionGlueCreateDatabase",
+      "value": "glue:CreateDatabase"
+    },
+    {
+      "name": "ActionGlueGetDatabase",
+      "value": "glue:GetDatabase"
+    },
+    {
+      "name": "ActionGlueGetDatabases",
+      "value": "glue:GetDatabases"
+    },
+    {
+      "name": "ActionGlueDeleteDatabase",
+      "value": "glue:DeleteDatabase"
+    },
+    {
+      "name": "ActionGlueCreateTable",
+      "value": "glue:CreateTable"
+    },
+    {
+      "name": "ActionGlueGetTable",
+      "value": "glue:GetTable"
+    },
+    {
+      "name": "ActionGlueGetTables",
+      "value": "glue:GetTables"
+    },
+    {
+      "name": "ActionGlueDeleteTable",
+      "value": "glue:DeleteTable"
+    },
+    {
+      "name": "ActionGlueCreateCrawler",
+      "value": "glue:CreateCrawler"
+    },
+    {
+      "name": "ActionGlueStartCrawler",
+      "value": "glue:StartCrawler"
+    },
+    {
+      "name": "ActionGlueGetCrawler",
+      "value": "glue:GetCrawler"
+    },
+    {
+      "name": "ActionGlueDeleteCrawler",
+      "value": "glue:DeleteCrawler"
+    },
+    {
+      "name": "ActionGlueListCrawlers",
+      "value": "glue:ListCrawlers"
+    },
+    {
+      "name": "ActionGlueCreateRegistry",
+      "value": "glue:CreateRegistry"
+    },
+    {
+      "name": "ActionGlueGetRegistry",
+      "value": "glue:GetRegistry"
+    },
+    {
+      "name": "ActionGlueListRegistries",
+      "value": "glue:ListRegistries"
+    },
+    {
+      "name": "ActionGlueDeleteRegistry",
+      "value": "glue:DeleteRegistry"
+    },
+    {
+      "name": "ActionGlueCreateSchema",
+      "value": "glue:CreateSchema"
+    },
+    {
+      "name": "ActionGlueGetSchema",
+      "value": "glue:GetSchema"
+    },
+    {
+      "name": "ActionGlueListSchemas",
+      "value": "glue:ListSchemas"
+    },
+    {
+      "name": "ActionGlueDeleteSchema",
+      "value": "glue:DeleteSchema"
+    },
+    {
+      "name": "ActionGlueRegisterSchemaVersion",
+      "value": "glue:RegisterSchemaVersion"
+    },
+    {
+      "name": "ActionGlueGetSchemaVersion",
+      "value": "glue:GetSchemaVersion"
+    },
+    {
+      "name": "ActionGlueListSchemaVersions",
+      "value": "glue:ListSchemaVersions"
+    },
+    {
+      "name": "ActionAthenaStartQueryExecution",
+      "value": "athena:StartQueryExecution"
+    },
+    {
+      "name": "ActionAthenaGetQueryExecution",
+      "value": "athena:GetQueryExecution"
+    },
+    {
+      "name": "ActionAthenaGetQueryResults",
+      "value": "athena:GetQueryResults"
+    },
+    {
+      "name": "ActionAthenaStopQueryExecution",
+      "value": "athena:StopQueryExecution"
+    },
+    {
+      "name": "ActionAthenaCreateWorkGroup",
+      "value": "athena:CreateWorkGroup"
+    },
+    {
+      "name": "ActionAthenaGetWorkGroup",
+      "value": "athena:GetWorkGroup"
+    },
+    {
+      "name": "ActionAthenaListWorkGroups",
+      "value": "athena:ListWorkGroups"
+    },
+    {
+      "name": "ActionAthenaDeleteWorkGroup",
+      "value": "athena:DeleteWorkGroup"
+    },
+    {
+      "name": "ActionAthenaUpdateWorkGroup",
+      "value": "athena:UpdateWorkGroup"
+    },
+    {
+      "name": "ActionOpenSearchCreateDomain",
+      "value": "es:CreateDomain"
+    },
+    {
+      "name": "ActionOpenSearchDescribeDomain",
+      "value": "es:DescribeDomain"
+    },
+    {
+      "name": "ActionOpenSearchListDomainNames",
+      "value": "es:ListDomainNames"
+    },
+    {
+      "name": "ActionOpenSearchDeleteDomain",
+      "value": "es:DeleteDomain"
+    },
+    {
+      "name": "ActionWAFCreateWebACL",
+      "value": "wafv2:CreateWebACL"
+    },
+    {
+      "name": "ActionWAFUpdateWebACL",
+      "value": "wafv2:UpdateWebACL"
+    },
+    {
+      "name": "ActionWAFGetWebACL",
+      "value": "wafv2:GetWebACL"
+    },
+    {
+      "name": "ActionWAFListWebACLs",
+      "value": "wafv2:ListWebACLs"
+    },
+    {
+      "name": "ActionWAFCreateRuleGroup",
+      "value": "wafv2:CreateRuleGroup"
+    },
+    {
+      "name": "ActionWAFAssociateWebACL",
+      "value": "wafv2:AssociateWebACL"
+    },
+    {
+      "name": "ActionWAFEvaluate",
+      "value": "wafv2:Evaluate"
+    },
+    {
+      "name": "ActionWAFCreateIPSet",
+      "value": "wafv2:CreateIPSet"
+    },
+    {
+      "name": "ActionWAFGetIPSet",
+      "value": "wafv2:GetIPSet"
+    },
+    {
+      "name": "ActionWAFUpdateIPSet",
+      "value": "wafv2:UpdateIPSet"
+    },
+    {
+      "name": "ActionWAFDeleteIPSet",
+      "value": "wafv2:DeleteIPSet"
+    },
+    {
+      "name": "ActionWAFListIPSets",
+      "value": "wafv2:ListIPSets"
+    },
+    {
+      "name": "ActionConfigPutConfigurationRecorder",
+      "value": "config:PutConfigurationRecorder"
+    },
+    {
+      "name": "ActionConfigPutDeliveryChannel",
+      "value": "config:PutDeliveryChannel"
+    },
+    {
+      "name": "ActionConfigStartConfigurationRecorder",
+      "value": "config:StartConfigurationRecorder"
+    },
+    {
+      "name": "ActionConfigDescribeComplianceByConfigRule",
+      "value": "config:DescribeComplianceByConfigRule"
+    },
+    {
+      "name": "ActionConfigGetResourceConfigHistory",
+      "value": "config:GetResourceConfigHistory"
+    },
+    {
+      "name": "ActionSchedulerCreateSchedule",
+      "value": "scheduler:CreateSchedule"
+    },
+    {
+      "name": "ActionSchedulerGetSchedule",
+      "value": "scheduler:GetSchedule"
+    },
+    {
+      "name": "ActionSchedulerUpdateSchedule",
+      "value": "scheduler:UpdateSchedule"
+    },
+    {
+      "name": "ActionSchedulerDeleteSchedule",
+      "value": "scheduler:DeleteSchedule"
+    },
+    {
+      "name": "ActionSchedulerListSchedules",
+      "value": "scheduler:ListSchedules"
+    },
+    {
+      "name": "ActionACMRequestCertificate",
+      "value": "acm:RequestCertificate"
+    },
+    {
+      "name": "ActionACMDescribeCertificate",
+      "value": "acm:DescribeCertificate"
+    },
+    {
+      "name": "ActionACMListCertificates",
+      "value": "acm:ListCertificates"
+    },
+    {
+      "name": "ActionACMDeleteCertificate",
+      "value": "acm:DeleteCertificate"
+    },
+    {
+      "name": "ActionRoute53CreateHostedZone",
+      "value": "route53:CreateHostedZone"
+    },
+    {
+      "name": "ActionRoute53DeleteHostedZone",
+      "value": "route53:DeleteHostedZone"
+    },
+    {
+      "name": "ActionRoute53ListHostedZones",
+      "value": "route53:ListHostedZones"
+    },
+    {
+      "name": "ActionRoute53ChangeResourceRecordSets",
+      "value": "route53:ChangeResourceRecordSets"
+    },
+    {
+      "name": "ActionRoute53ListResourceRecordSets",
+      "value": "route53:ListResourceRecordSets"
+    },
+    {
+      "name": "ActionRoute53InjectQueryLogs",
+      "value": "route53:InjectQueryLogs"
+    },
+    {
+      "name": "ActionSDCreatePrivateDnsNamespace",
+      "value": "servicediscovery:CreatePrivateDnsNamespace"
+    },
+    {
+      "name": "ActionSDCreateHttpNamespace",
+      "value": "servicediscovery:CreateHttpNamespace"
+    },
+    {
+      "name": "ActionSDCreateService",
+      "value": "servicediscovery:CreateService"
+    },
+    {
+      "name": "ActionSDRegisterInstance",
+      "value": "servicediscovery:RegisterInstance"
+    },
+    {
+      "name": "ActionSDDeregisterInstance",
+      "value": "servicediscovery:DeregisterInstance"
+    },
+    {
+      "name": "ActionSDDiscoverInstances",
+      "value": "servicediscovery:DiscoverInstances"
+    },
+    {
+      "name": "ActionPricingDescribeServices",
+      "value": "pricing:DescribeServices"
+    },
+    {
+      "name": "ActionPricingGetAttributeValues",
+      "value": "pricing:GetAttributeValues"
+    },
+    {
+      "name": "ActionPricingGetProducts",
+      "value": "pricing:GetProducts"
+    },
+    {
+      "name": "ActionAppSyncCreateGraphqlApi",
+      "value": "appsync:CreateGraphqlApi"
+    },
+    {
+      "name": "ActionAppSyncDeleteGraphqlApi",
+      "value": "appsync:DeleteGraphqlApi"
+    },
+    {
+      "name": "ActionAppSyncGetGraphqlApi",
+      "value": "appsync:GetGraphqlApi"
+    },
+    {
+      "name": "ActionAppSyncListGraphqlApis",
+      "value": "appsync:ListGraphqlApis"
+    },
+    {
+      "name": "ActionAppSyncStartSchemaCreation",
+      "value": "appsync:StartSchemaCreation"
+    },
+    {
+      "name": "ActionAppSyncCreateApiKey",
+      "value": "appsync:CreateApiKey"
+    },
+    {
+      "name": "ActionAppSyncListApiKeys",
+      "value": "appsync:ListApiKeys"
+    },
+    {
+      "name": "ActionAppSyncDeleteApiKey",
+      "value": "appsync:DeleteApiKey"
+    },
+    {
+      "name": "ActionAppSyncCreateDataSource",
+      "value": "appsync:CreateDataSource"
+    },
+    {
+      "name": "ActionAppSyncUpdateDataSource",
+      "value": "appsync:UpdateDataSource"
+    },
+    {
+      "name": "ActionAppSyncDeleteDataSource",
+      "value": "appsync:DeleteDataSource"
+    },
+    {
+      "name": "ActionAppSyncGetDataSource",
+      "value": "appsync:GetDataSource"
+    },
+    {
+      "name": "ActionAppSyncListDataSources",
+      "value": "appsync:ListDataSources"
+    },
+    {
+      "name": "ActionAppSyncCreateResolver",
+      "value": "appsync:CreateResolver"
+    },
+    {
+      "name": "ActionAppSyncUpdateResolver",
+      "value": "appsync:UpdateResolver"
+    },
+    {
+      "name": "ActionAppSyncDeleteResolver",
+      "value": "appsync:DeleteResolver"
+    },
+    {
+      "name": "ActionAppSyncGetResolver",
+      "value": "appsync:GetResolver"
+    },
+    {
+      "name": "ActionAppSyncListResolvers",
+      "value": "appsync:ListResolvers"
+    },
+    {
+      "name": "ActionAppSyncGetSchemaCreationStatus",
+      "value": "appsync:GetSchemaCreationStatus"
+    },
+    {
+      "name": "ActionAppSyncGraphQL",
+      "value": "appsync:GraphQL"
+    },
+    {
+      "name": "ActionAPIGatewayCreateRestApi",
+      "value": "apigateway:CreateRestApi"
+    },
+    {
+      "name": "ActionAPIGatewayGetRestApi",
+      "value": "apigateway:GetRestApi"
+    },
+    {
+      "name": "ActionAPIGatewayGetRestApis",
+      "value": "apigateway:GetRestApis"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteRestApi",
+      "value": "apigateway:DeleteRestApi"
+    },
+    {
+      "name": "ActionAPIGatewayCreateResource",
+      "value": "apigateway:CreateResource"
+    },
+    {
+      "name": "ActionAPIGatewayGetResources",
+      "value": "apigateway:GetResources"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteResource",
+      "value": "apigateway:DeleteResource"
+    },
+    {
+      "name": "ActionAPIGatewayPutMethod",
+      "value": "apigateway:PutMethod"
+    },
+    {
+      "name": "ActionAPIGatewayGetMethod",
+      "value": "apigateway:GetMethod"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteMethod",
+      "value": "apigateway:DeleteMethod"
+    },
+    {
+      "name": "ActionAPIGatewayPutIntegration",
+      "value": "apigateway:PutIntegration"
+    },
+    {
+      "name": "ActionAPIGatewayGetIntegration",
+      "value": "apigateway:GetIntegration"
+    },
+    {
+      "name": "ActionAPIGatewayCreateDeployment",
+      "value": "apigateway:CreateDeployment"
+    },
+    {
+      "name": "ActionAPIGatewayCreateStage",
+      "value": "apigateway:CreateStage"
+    },
+    {
+      "name": "ActionAPIGatewayGetStage",
+      "value": "apigateway:GetStage"
+    },
+    {
+      "name": "ActionAPIGatewayCreateAuthorizer",
+      "value": "apigateway:CreateAuthorizer"
+    },
+    {
+      "name": "ActionAPIGatewayGetAuthorizer",
+      "value": "apigateway:GetAuthorizer"
+    },
+    {
+      "name": "ActionAPIGatewayGetAuthorizers",
+      "value": "apigateway:GetAuthorizers"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteAuthorizer",
+      "value": "apigateway:DeleteAuthorizer"
+    },
+    {
+      "name": "ActionAPIGatewayCreateApiKey",
+      "value": "apigateway:CreateApiKey"
+    },
+    {
+      "name": "ActionAPIGatewayGetApiKey",
+      "value": "apigateway:GetApiKey"
+    },
+    {
+      "name": "ActionAPIGatewayGetApiKeys",
+      "value": "apigateway:GetApiKeys"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteApiKey",
+      "value": "apigateway:DeleteApiKey"
+    },
+    {
+      "name": "ActionAPIGatewayCreateUsagePlan",
+      "value": "apigateway:CreateUsagePlan"
+    },
+    {
+      "name": "ActionAPIGatewayGetUsagePlan",
+      "value": "apigateway:GetUsagePlan"
+    },
+    {
+      "name": "ActionAPIGatewayGetUsagePlans",
+      "value": "apigateway:GetUsagePlans"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteUsagePlan",
+      "value": "apigateway:DeleteUsagePlan"
+    },
+    {
+      "name": "ActionAPIGatewayCreateUsagePlanKey",
+      "value": "apigateway:CreateUsagePlanKey"
+    },
+    {
+      "name": "ActionAPIGatewayGetUsagePlanKeys",
+      "value": "apigateway:GetUsagePlanKeys"
+    },
+    {
+      "name": "ActionAPIGatewayDeleteUsagePlanKey",
+      "value": "apigateway:DeleteUsagePlanKey"
+    },
+    {
+      "name": "ActionAPIGatewayV2CreateApi",
+      "value": "apigatewayv2:CreateApi"
+    },
+    {
+      "name": "ActionAPIGatewayV2GetApi",
+      "value": "apigatewayv2:GetApi"
+    },
+    {
+      "name": "ActionAPIGatewayV2UpdateApi",
+      "value": "apigatewayv2:UpdateApi"
+    },
+    {
+      "name": "ActionAPIGatewayV2DeleteApi",
+      "value": "apigatewayv2:DeleteApi"
+    },
+    {
+      "name": "ActionAPIGatewayV2GetApis",
+      "value": "apigatewayv2:GetApis"
+    },
+    {
+      "name": "ActionAPIGatewayV2CreateIntegration",
+      "value": "apigatewayv2:CreateIntegration"
+    },
+    {
+      "name": "ActionAPIGatewayV2GetIntegrations",
+      "value": "apigatewayv2:GetIntegrations"
+    },
+    {
+      "name": "ActionAPIGatewayV2CreateAuthorizer",
+      "value": "apigatewayv2:CreateAuthorizer"
+    },
+    {
+      "name": "ActionAPIGatewayV2GetAuthorizers",
+      "value": "apigatewayv2:GetAuthorizers"
+    },
+    {
+      "name": "ActionAPIGatewayV2CreateRoute",
+      "value": "apigatewayv2:CreateRoute"
+    },
+    {
+      "name": "ActionAPIGatewayV2GetRoutes",
+      "value": "apigatewayv2:GetRoutes"
+    },
+    {
+      "name": "ActionAPIGatewayV2CreateStage",
+      "value": "apigatewayv2:CreateStage"
+    },
+    {
+      "name": "ActionExecuteAPIInvoke",
+      "value": "execute-api:Invoke"
+    },
+    {
+      "name": "ActionExecuteAPIManageConnections",
+      "value": "execute-api:ManageConnections"
+    },
+    {
+      "name": "ActionCognitoCreateUserPool",
+      "value": "cognito-idp:CreateUserPool"
+    },
+    {
+      "name": "ActionCognitoDescribeUserPool",
+      "value": "cognito-idp:DescribeUserPool"
+    },
+    {
+      "name": "ActionCognitoUpdateUserPool",
+      "value": "cognito-idp:UpdateUserPool"
+    },
+    {
+      "name": "ActionCognitoListUserPools",
+      "value": "cognito-idp:ListUserPools"
+    },
+    {
+      "name": "ActionCognitoDeleteUserPool",
+      "value": "cognito-idp:DeleteUserPool"
+    },
+    {
+      "name": "ActionCognitoCreateUserPoolClient",
+      "value": "cognito-idp:CreateUserPoolClient"
+    },
+    {
+      "name": "ActionCognitoDescribeUserPoolClient",
+      "value": "cognito-idp:DescribeUserPoolClient"
+    },
+    {
+      "name": "ActionCognitoListUserPoolClients",
+      "value": "cognito-idp:ListUserPoolClients"
+    },
+    {
+      "name": "ActionCognitoDeleteUserPoolClient",
+      "value": "cognito-idp:DeleteUserPoolClient"
+    },
+    {
+      "name": "ActionCognitoAdminCreateUser",
+      "value": "cognito-idp:AdminCreateUser"
+    },
+    {
+      "name": "ActionCognitoSignUp",
+      "value": "cognito-idp:SignUp"
+    },
+    {
+      "name": "ActionCognitoConfirmSignUp",
+      "value": "cognito-idp:ConfirmSignUp"
+    },
+    {
+      "name": "ActionCognitoForgotPassword",
+      "value": "cognito-idp:ForgotPassword"
+    },
+    {
+      "name": "ActionCognitoConfirmForgotPassword",
+      "value": "cognito-idp:ConfirmForgotPassword"
+    },
+    {
+      "name": "ActionCognitoResendConfirmationCode",
+      "value": "cognito-idp:ResendConfirmationCode"
+    },
+    {
+      "name": "ActionCognitoUpdateUserAttributes",
+      "value": "cognito-idp:UpdateUserAttributes"
+    },
+    {
+      "name": "ActionCognitoGetUserAttributeVerificationCode",
+      "value": "cognito-idp:GetUserAttributeVerificationCode"
+    },
+    {
+      "name": "ActionCognitoVerifyUserAttribute",
+      "value": "cognito-idp:VerifyUserAttribute"
+    },
+    {
+      "name": "ActionCognitoInitiateAuth",
+      "value": "cognito-idp:InitiateAuth"
+    },
+    {
+      "name": "ActionCognitoAdminInitiateAuth",
+      "value": "cognito-idp:AdminInitiateAuth"
+    },
+    {
+      "name": "ActionCognitoRevokeToken",
+      "value": "cognito-idp:RevokeToken"
+    },
+    {
+      "name": "ActionCognitoAssociateSoftwareToken",
+      "value": "cognito-idp:AssociateSoftwareToken"
+    },
+    {
+      "name": "ActionCognitoVerifySoftwareToken",
+      "value": "cognito-idp:VerifySoftwareToken"
+    },
+    {
+      "name": "ActionCognitoRespondToAuthChallenge",
+      "value": "cognito-idp:RespondToAuthChallenge"
+    },
+    {
+      "name": "ActionCloudControlCreateResource",
+      "value": "cloudcontrol:CreateResource"
+    },
+    {
+      "name": "ActionCloudControlGetResource",
+      "value": "cloudcontrol:GetResource"
+    },
+    {
+      "name": "ActionCloudControlListResources",
+      "value": "cloudcontrol:ListResources"
+    },
+    {
+      "name": "ActionCloudControlDeleteResource",
+      "value": "cloudcontrol:DeleteResource"
+    },
+    {
+      "name": "ActionCloudControlUpdateResource",
+      "value": "cloudcontrol:UpdateResource"
+    },
+    {
+      "name": "ActionCloudControlGetResourceRequestStatus",
+      "value": "cloudcontrol:GetResourceRequestStatus"
+    },
+    {
+      "name": "ActionBCMCreateExport",
+      "value": "bcm-data-exports:CreateExport"
+    },
+    {
+      "name": "ActionBCMGetExport",
+      "value": "bcm-data-exports:GetExport"
+    },
+    {
+      "name": "ActionBCMListExports",
+      "value": "bcm-data-exports:ListExports"
+    },
+    {
+      "name": "ActionBCMDeleteExport",
+      "value": "bcm-data-exports:DeleteExport"
+    },
+    {
+      "name": "ActionCEGetCostAndUsage",
+      "value": "ce:GetCostAndUsage"
+    },
+    {
+      "name": "ActionCEGetCostForecast",
+      "value": "ce:GetCostForecast"
+    },
+    {
+      "name": "ActionBudgetsCreateBudget",
+      "value": "budgets:CreateBudget"
+    },
+    {
+      "name": "ActionBudgetsDescribeBudget",
+      "value": "budgets:DescribeBudget"
+    },
+    {
+      "name": "ActionBudgetsDescribeBudgets",
+      "value": "budgets:DescribeBudgets"
+    },
+    {
+      "name": "ActionBudgetsDeleteBudget",
+      "value": "budgets:DeleteBudget"
+    },
+    {
+      "name": "ActionCURPutReportDefinition",
+      "value": "cur:PutReportDefinition"
+    },
+    {
+      "name": "ActionCURModifyReportDefinition",
+      "value": "cur:ModifyReportDefinition"
+    },
+    {
+      "name": "ActionCURDescribeReportDefinitions",
+      "value": "cur:DescribeReportDefinitions"
+    },
+    {
+      "name": "ActionCURDeleteReportDefinition",
+      "value": "cur:DeleteReportDefinition"
+    },
+    {
+      "name": "ActionCURTagResource",
+      "value": "cur:TagResource"
+    },
+    {
+      "name": "ActionCURUntagResource",
+      "value": "cur:UntagResource"
+    },
+    {
+      "name": "ActionCURListTagsForResource",
+      "value": "cur:ListTagsForResource"
+    },
+    {
+      "name": "ActionIoTCreateThing",
+      "value": "iot:CreateThing"
+    },
+    {
+      "name": "ActionIoTDescribeThing",
+      "value": "iot:DescribeThing"
+    },
+    {
+      "name": "ActionIoTListThings",
+      "value": "iot:ListThings"
+    },
+    {
+      "name": "ActionIoTUpdateThing",
+      "value": "iot:UpdateThing"
+    },
+    {
+      "name": "ActionIoTDeleteThing",
+      "value": "iot:DeleteThing"
+    },
+    {
+      "name": "ActionIoTCreateKeysAndCertificate",
+      "value": "iot:CreateKeysAndCertificate"
+    },
+    {
+      "name": "ActionIoTDescribeCertificate",
+      "value": "iot:DescribeCertificate"
+    },
+    {
+      "name": "ActionIoTListCertificates",
+      "value": "iot:ListCertificates"
+    },
+    {
+      "name": "ActionIoTUpdateCertificate",
+      "value": "iot:UpdateCertificate"
+    },
+    {
+      "name": "ActionIoTDeleteCertificate",
+      "value": "iot:DeleteCertificate"
+    },
+    {
+      "name": "ActionIoTCreatePolicy",
+      "value": "iot:CreatePolicy"
+    },
+    {
+      "name": "ActionIoTGetPolicy",
+      "value": "iot:GetPolicy"
+    },
+    {
+      "name": "ActionIoTListPolicies",
+      "value": "iot:ListPolicies"
+    },
+    {
+      "name": "ActionIoTDeletePolicy",
+      "value": "iot:DeletePolicy"
+    },
+    {
+      "name": "ActionIoTAttachPolicy",
+      "value": "iot:AttachPolicy"
+    },
+    {
+      "name": "ActionIoTDetachPolicy",
+      "value": "iot:DetachPolicy"
+    },
+    {
+      "name": "ActionIoTAttachThingPrincipal",
+      "value": "iot:AttachThingPrincipal"
+    },
+    {
+      "name": "ActionIoTListThingPrincipals",
+      "value": "iot:ListThingPrincipals"
+    },
+    {
+      "name": "ActionIoTDataUpdateThingShadow",
+      "value": "iot-data:UpdateThingShadow"
+    },
+    {
+      "name": "ActionIoTDataGetThingShadow",
+      "value": "iot-data:GetThingShadow"
+    },
+    {
+      "name": "ActionIoTDataDeleteThingShadow",
+      "value": "iot-data:DeleteThingShadow"
+    },
+    {
+      "name": "ActionIoTCreateTopicRule",
+      "value": "iot:CreateTopicRule"
+    },
+    {
+      "name": "ActionIoTGetTopicRule",
+      "value": "iot:GetTopicRule"
+    },
+    {
+      "name": "ActionIoTListTopicRules",
+      "value": "iot:ListTopicRules"
+    },
+    {
+      "name": "ActionIoTReplaceTopicRule",
+      "value": "iot:ReplaceTopicRule"
+    },
+    {
+      "name": "ActionIoTDeleteTopicRule",
+      "value": "iot:DeleteTopicRule"
+    },
+    {
+      "name": "ActionIoTEnableTopicRule",
+      "value": "iot:EnableTopicRule"
+    },
+    {
+      "name": "ActionIoTDisableTopicRule",
+      "value": "iot:DisableTopicRule"
+    },
+    {
+      "name": "ActionCloudWatchPutMetricData",
+      "value": "cloudwatch:PutMetricData"
+    },
+    {
+      "name": "ActionCloudWatchListMetrics",
+      "value": "cloudwatch:ListMetrics"
+    },
+    {
+      "name": "ActionCloudWatchGetMetricStatistics",
+      "value": "cloudwatch:GetMetricStatistics"
+    },
+    {
+      "name": "ActionCloudWatchGetMetricData",
+      "value": "cloudwatch:GetMetricData"
+    },
+    {
+      "name": "ActionCloudWatchPutMetricAlarm",
+      "value": "cloudwatch:PutMetricAlarm"
+    },
+    {
+      "name": "ActionCloudWatchDescribeAlarms",
+      "value": "cloudwatch:DescribeAlarms"
+    },
+    {
+      "name": "ActionCloudWatchDeleteAlarms",
+      "value": "cloudwatch:DeleteAlarms"
+    },
+    {
+      "name": "ActionCloudWatchSetAlarmState",
+      "value": "cloudwatch:SetAlarmState"
+    },
+    {
+      "name": "ActionLightsailGetBlueprints",
+      "value": "lightsail:GetBlueprints"
+    },
+    {
+      "name": "ActionLightsailGetBundles",
+      "value": "lightsail:GetBundles"
+    },
+    {
+      "name": "ActionLightsailCreateInstances",
+      "value": "lightsail:CreateInstances"
+    },
+    {
+      "name": "ActionLightsailGetInstance",
+      "value": "lightsail:GetInstance"
+    },
+    {
+      "name": "ActionLightsailGetInstances",
+      "value": "lightsail:GetInstances"
+    },
+    {
+      "name": "ActionLightsailStartInstance",
+      "value": "lightsail:StartInstance"
+    },
+    {
+      "name": "ActionLightsailStopInstance",
+      "value": "lightsail:StopInstance"
+    },
+    {
+      "name": "ActionLightsailRebootInstance",
+      "value": "lightsail:RebootInstance"
+    },
+    {
+      "name": "ActionLightsailDeleteInstance",
+      "value": "lightsail:DeleteInstance"
+    },
+    {
+      "name": "ActionLightsailCreateDisk",
+      "value": "lightsail:CreateDisk"
+    },
+    {
+      "name": "ActionLightsailGetDisk",
+      "value": "lightsail:GetDisk"
+    },
+    {
+      "name": "ActionLightsailGetDisks",
+      "value": "lightsail:GetDisks"
+    },
+    {
+      "name": "ActionLightsailDeleteDisk",
+      "value": "lightsail:DeleteDisk"
+    },
+    {
+      "name": "ActionLightsailAttachDisk",
+      "value": "lightsail:AttachDisk"
+    },
+    {
+      "name": "ActionLightsailDetachDisk",
+      "value": "lightsail:DetachDisk"
+    },
+    {
+      "name": "ActionLightsailAllocateStaticIp",
+      "value": "lightsail:AllocateStaticIp"
+    },
+    {
+      "name": "ActionLightsailGetStaticIp",
+      "value": "lightsail:GetStaticIp"
+    },
+    {
+      "name": "ActionLightsailGetStaticIps",
+      "value": "lightsail:GetStaticIps"
+    },
+    {
+      "name": "ActionLightsailReleaseStaticIp",
+      "value": "lightsail:ReleaseStaticIp"
+    },
+    {
+      "name": "ActionLightsailAttachStaticIp",
+      "value": "lightsail:AttachStaticIp"
+    },
+    {
+      "name": "ActionLightsailDetachStaticIp",
+      "value": "lightsail:DetachStaticIp"
+    },
+    {
+      "name": "ActionLightsailCreateKeyPair",
+      "value": "lightsail:CreateKeyPair"
+    },
+    {
+      "name": "ActionLightsailGetKeyPair",
+      "value": "lightsail:GetKeyPair"
+    },
+    {
+      "name": "ActionLightsailGetKeyPairs",
+      "value": "lightsail:GetKeyPairs"
+    },
+    {
+      "name": "ActionLightsailDeleteKeyPair",
+      "value": "lightsail:DeleteKeyPair"
+    },
+    {
+      "name": "ActionLightsailOpenInstancePublicPorts",
+      "value": "lightsail:OpenInstancePublicPorts"
+    },
+    {
+      "name": "ActionLightsailCloseInstancePublicPorts",
+      "value": "lightsail:CloseInstancePublicPorts"
+    },
+    {
+      "name": "ActionLightsailGetInstancePortStates",
+      "value": "lightsail:GetInstancePortStates"
+    },
+    {
+      "name": "ActionASGCreateLaunchConfiguration",
+      "value": "autoscaling:CreateLaunchConfiguration"
+    },
+    {
+      "name": "ActionASGDescribeLaunchConfigurations",
+      "value": "autoscaling:DescribeLaunchConfigurations"
+    },
+    {
+      "name": "ActionASGDeleteLaunchConfiguration",
+      "value": "autoscaling:DeleteLaunchConfiguration"
+    },
+    {
+      "name": "ActionASGCreateAutoScalingGroup",
+      "value": "autoscaling:CreateAutoScalingGroup"
+    },
+    {
+      "name": "ActionASGDescribeAutoScalingGroups",
+      "value": "autoscaling:DescribeAutoScalingGroups"
+    },
+    {
+      "name": "ActionASGUpdateAutoScalingGroup",
+      "value": "autoscaling:UpdateAutoScalingGroup"
+    },
+    {
+      "name": "ActionASGDeleteAutoScalingGroup",
+      "value": "autoscaling:DeleteAutoScalingGroup"
+    },
+    {
+      "name": "ActionASGSetDesiredCapacity",
+      "value": "autoscaling:SetDesiredCapacity"
+    },
+    {
+      "name": "ActionASGPutScalingPolicy",
+      "value": "autoscaling:PutScalingPolicy"
+    },
+    {
+      "name": "ActionASGDescribePolicies",
+      "value": "autoscaling:DescribePolicies"
+    },
+    {
+      "name": "ActionASGDeletePolicy",
+      "value": "autoscaling:DeletePolicy"
+    },
+    {
+      "name": "ActionASGPutLifecycleHook",
+      "value": "autoscaling:PutLifecycleHook"
+    },
+    {
+      "name": "ActionASGDescribeLifecycleHooks",
+      "value": "autoscaling:DescribeLifecycleHooks"
+    },
+    {
+      "name": "ActionASGDeleteLifecycleHook",
+      "value": "autoscaling:DeleteLifecycleHook"
+    },
+    {
+      "name": "ActionASGAttachInstances",
+      "value": "autoscaling:AttachInstances"
+    },
+    {
+      "name": "ActionASGDetachInstances",
+      "value": "autoscaling:DetachInstances"
+    },
+    {
+      "name": "ActionASGDescribeAutoScalingInstances",
+      "value": "autoscaling:DescribeAutoScalingInstances"
+    },
+    {
+      "name": "ActionASGAttachLoadBalancerTargetGroups",
+      "value": "autoscaling:AttachLoadBalancerTargetGroups"
+    },
+    {
+      "name": "ActionASGDetachLoadBalancerTargetGroups",
+      "value": "autoscaling:DetachLoadBalancerTargetGroups"
+    },
+    {
+      "name": "ActionASGDescribeLoadBalancerTargetGroups",
+      "value": "autoscaling:DescribeLoadBalancerTargetGroups"
+    },
+    {
+      "name": "ActionBeanstalkCreateApplication",
+      "value": "elasticbeanstalk:CreateApplication"
+    },
+    {
+      "name": "ActionBeanstalkDescribeApplications",
+      "value": "elasticbeanstalk:DescribeApplications"
+    },
+    {
+      "name": "ActionBeanstalkDeleteApplication",
+      "value": "elasticbeanstalk:DeleteApplication"
+    },
+    {
+      "name": "ActionBeanstalkCreateApplicationVersion",
+      "value": "elasticbeanstalk:CreateApplicationVersion"
+    },
+    {
+      "name": "ActionBeanstalkCreateEnvironment",
+      "value": "elasticbeanstalk:CreateEnvironment"
+    },
+    {
+      "name": "ActionBeanstalkDescribeEnvironments",
+      "value": "elasticbeanstalk:DescribeEnvironments"
+    },
+    {
+      "name": "ActionBeanstalkTerminateEnvironment",
+      "value": "elasticbeanstalk:TerminateEnvironment"
+    },
+    {
+      "name": "ActionBeanstalkListAvailableSolutionStacks",
+      "value": "elasticbeanstalk:ListAvailableSolutionStacks"
+    },
+    {
+      "name": "ActionBackupCreateBackupVault",
+      "value": "backup:CreateBackupVault"
+    },
+    {
+      "name": "ActionBackupDescribeBackupVault",
+      "value": "backup:DescribeBackupVault"
+    },
+    {
+      "name": "ActionBackupListBackupVaults",
+      "value": "backup:ListBackupVaults"
+    },
+    {
+      "name": "ActionBackupDeleteBackupVault",
+      "value": "backup:DeleteBackupVault"
+    },
+    {
+      "name": "ActionBackupCreateBackupPlan",
+      "value": "backup:CreateBackupPlan"
+    },
+    {
+      "name": "ActionBackupGetBackupPlan",
+      "value": "backup:GetBackupPlan"
+    },
+    {
+      "name": "ActionBackupListBackupPlans",
+      "value": "backup:ListBackupPlans"
+    },
+    {
+      "name": "ActionBackupDeleteBackupPlan",
+      "value": "backup:DeleteBackupPlan"
+    },
+    {
+      "name": "ActionBackupStartBackupJob",
+      "value": "backup:StartBackupJob"
+    },
+    {
+      "name": "ActionBackupDescribeBackupJob",
+      "value": "backup:DescribeBackupJob"
+    },
+    {
+      "name": "ActionBackupListBackupJobs",
+      "value": "backup:ListBackupJobs"
+    },
+    {
+      "name": "ActionBackupStopBackupJob",
+      "value": "backup:StopBackupJob"
+    },
+    {
+      "name": "ActionBackupDescribeRecoveryPoint",
+      "value": "backup:DescribeRecoveryPoint"
+    },
+    {
+      "name": "ActionBackupListRecoveryPointsByBackupVault",
+      "value": "backup:ListRecoveryPointsByBackupVault"
+    },
+    {
+      "name": "ActionBackupDeleteRecoveryPoint",
+      "value": "backup:DeleteRecoveryPoint"
+    },
+    {
+      "name": "ActionBackupCreateBackupSelection",
+      "value": "backup:CreateBackupSelection"
+    },
+    {
+      "name": "ActionBackupGetBackupSelection",
+      "value": "backup:GetBackupSelection"
+    },
+    {
+      "name": "ActionBackupListBackupSelections",
+      "value": "backup:ListBackupSelections"
+    },
+    {
+      "name": "ActionBackupDeleteBackupSelection",
+      "value": "backup:DeleteBackupSelection"
+    },
+    {
+      "name": "ActionCodeDeployCreateApplication",
+      "value": "codedeploy:CreateApplication"
+    },
+    {
+      "name": "ActionCodeDeployCreateDeploymentGroup",
+      "value": "codedeploy:CreateDeploymentGroup"
+    },
+    {
+      "name": "ActionCodeDeployCreateDeployment",
+      "value": "codedeploy:CreateDeployment"
+    },
+    {
+      "name": "ActionCodeDeployGetDeployment",
+      "value": "codedeploy:GetDeployment"
+    },
+    {
+      "name": "ActionCodeDeployListDeployments",
+      "value": "codedeploy:ListDeployments"
+    },
+    {
+      "name": "ActionCloudFrontCreateDistribution",
+      "value": "cloudfront:CreateDistribution"
+    },
+    {
+      "name": "ActionCloudFrontGetDistribution",
+      "value": "cloudfront:GetDistribution"
+    },
+    {
+      "name": "ActionCloudFrontGetDistributionConfig",
+      "value": "cloudfront:GetDistributionConfig"
+    },
+    {
+      "name": "ActionCloudFrontUpdateDistribution",
+      "value": "cloudfront:UpdateDistribution"
+    },
+    {
+      "name": "ActionCloudFrontListDistributions",
+      "value": "cloudfront:ListDistributions"
+    },
+    {
+      "name": "ActionCloudFrontDeleteDistribution",
+      "value": "cloudfront:DeleteDistribution"
+    },
+    {
+      "name": "ActionCloudFrontCreateInvalidation",
+      "value": "cloudfront:CreateInvalidation"
+    },
+    {
+      "name": "ActionCloudFrontGetInvalidation",
+      "value": "cloudfront:GetInvalidation"
+    },
+    {
+      "name": "ActionCloudFrontListInvalidations",
+      "value": "cloudfront:ListInvalidations"
+    },
+    {
+      "name": "ActionELBv2CreateLoadBalancer",
+      "value": "elasticloadbalancing:CreateLoadBalancer"
+    },
+    {
+      "name": "ActionELBv2DescribeLoadBalancers",
+      "value": "elasticloadbalancing:DescribeLoadBalancers"
+    },
+    {
+      "name": "ActionELBv2DeleteLoadBalancer",
+      "value": "elasticloadbalancing:DeleteLoadBalancer"
+    },
+    {
+      "name": "ActionELBv2CreateTargetGroup",
+      "value": "elasticloadbalancing:CreateTargetGroup"
+    },
+    {
+      "name": "ActionELBv2DescribeTargetGroups",
+      "value": "elasticloadbalancing:DescribeTargetGroups"
+    },
+    {
+      "name": "ActionELBv2DeleteTargetGroup",
+      "value": "elasticloadbalancing:DeleteTargetGroup"
+    },
+    {
+      "name": "ActionELBv2CreateListener",
+      "value": "elasticloadbalancing:CreateListener"
+    },
+    {
+      "name": "ActionELBv2DescribeListeners",
+      "value": "elasticloadbalancing:DescribeListeners"
+    },
+    {
+      "name": "ActionELBv2DeleteListener",
+      "value": "elasticloadbalancing:DeleteListener"
+    },
+    {
+      "name": "ActionELBv2RegisterTargets",
+      "value": "elasticloadbalancing:RegisterTargets"
+    },
+    {
+      "name": "ActionELBv2DescribeTargetHealth",
+      "value": "elasticloadbalancing:DescribeTargetHealth"
+    },
+    {
+      "name": "ActionELBv2CreateRule",
+      "value": "elasticloadbalancing:CreateRule"
+    },
+    {
+      "name": "ActionELBv2DescribeRules",
+      "value": "elasticloadbalancing:DescribeRules"
+    },
+    {
+      "name": "ActionELBv2DeleteRule",
+      "value": "elasticloadbalancing:DeleteRule"
+    },
+    {
+      "name": "ActionELBv2ModifyListener",
+      "value": "elasticloadbalancing:ModifyListener"
+    },
+    {
+      "name": "ActionELBv2ModifyRule",
+      "value": "elasticloadbalancing:ModifyRule"
+    },
+    {
+      "name": "ActionS3VectorsCreateVectorBucket",
+      "value": "s3vectors:CreateVectorBucket"
+    },
+    {
+      "name": "ActionS3VectorsListVectorBuckets",
+      "value": "s3vectors:ListVectorBuckets"
+    },
+    {
+      "name": "ActionS3VectorsDeleteVectorBucket",
+      "value": "s3vectors:DeleteVectorBucket"
+    },
+    {
+      "name": "ActionS3VectorsCreateIndex",
+      "value": "s3vectors:CreateIndex"
+    },
+    {
+      "name": "ActionS3VectorsListIndexes",
+      "value": "s3vectors:ListIndexes"
+    },
+    {
+      "name": "ActionS3VectorsDeleteIndex",
+      "value": "s3vectors:DeleteIndex"
+    },
+    {
+      "name": "ActionS3VectorsPutVectors",
+      "value": "s3vectors:PutVectors"
+    },
+    {
+      "name": "ActionS3VectorsQueryVectors",
+      "value": "s3vectors:QueryVectors"
+    },
+    {
+      "name": "ActionBedrockInvokeModel",
+      "value": "bedrock:InvokeModel"
+    },
+    {
+      "name": "ActionBedrockConverse",
+      "value": "bedrock:Converse"
+    },
+    {
+      "name": "ActionTextractDetectDocumentText",
+      "value": "textract:DetectDocumentText"
+    },
+    {
+      "name": "ActionTextractAnalyzeDocument",
+      "value": "textract:AnalyzeDocument"
+    },
+    {
+      "name": "ActionTranscribeStartTranscriptionJob",
+      "value": "transcribe:StartTranscriptionJob"
+    },
+    {
+      "name": "ActionTranscribeGetTranscriptionJob",
+      "value": "transcribe:GetTranscriptionJob"
+    },
+    {
+      "name": "ActionTranscribeListTranscriptionJobs",
+      "value": "transcribe:ListTranscriptionJobs"
+    },
+    {
+      "name": "ActionEMRRunJobFlow",
+      "value": "elasticmapreduce:RunJobFlow"
+    },
+    {
+      "name": "ActionEMRDescribeCluster",
+      "value": "elasticmapreduce:DescribeCluster"
+    },
+    {
+      "name": "ActionEMRListClusters",
+      "value": "elasticmapreduce:ListClusters"
+    },
+    {
+      "name": "ActionEMRTerminateJobFlows",
+      "value": "elasticmapreduce:TerminateJobFlows"
+    },
+    {
+      "name": "ActionEMRAddJobFlowSteps",
+      "value": "elasticmapreduce:AddJobFlowSteps"
+    },
+    {
+      "name": "ActionEMRDescribeStep",
+      "value": "elasticmapreduce:DescribeStep"
+    },
+    {
+      "name": "ActionEMRListSteps",
+      "value": "elasticmapreduce:ListSteps"
+    },
+    {
+      "name": "ActionEMRCancelSteps",
+      "value": "elasticmapreduce:CancelSteps"
+    },
+    {
+      "name": "ActionEMRListInstanceGroups",
+      "value": "elasticmapreduce:ListInstanceGroups"
+    },
+    {
+      "name": "ActionEMRListInstanceFleets",
+      "value": "elasticmapreduce:ListInstanceFleets"
+    },
+    {
+      "name": "ActionEMRAddTags",
+      "value": "elasticmapreduce:AddTags"
+    },
+    {
+      "name": "ActionEMRRemoveTags",
+      "value": "elasticmapreduce:RemoveTags"
+    },
+    {
+      "name": "ActionEMRDescribeSecurityConfiguration",
+      "value": "elasticmapreduce:DescribeSecurityConfiguration"
+    },
+    {
+      "name": "ActionEMRCreateSecurityConfiguration",
+      "value": "elasticmapreduce:CreateSecurityConfiguration"
+    },
+    {
+      "name": "ActionEMRDeleteSecurityConfiguration",
+      "value": "elasticmapreduce:DeleteSecurityConfiguration"
+    },
+    {
+      "name": "ActionEMRListSecurityConfigurations",
+      "value": "elasticmapreduce:ListSecurityConfigurations"
+    },
+    {
+      "name": "ActionCodeBuildCreateProject",
+      "value": "codebuild:CreateProject"
+    },
+    {
+      "name": "ActionCodeBuildUpdateProject",
+      "value": "codebuild:UpdateProject"
+    },
+    {
+      "name": "ActionCodeBuildDeleteProject",
+      "value": "codebuild:DeleteProject"
+    },
+    {
+      "name": "ActionCodeBuildListProjects",
+      "value": "codebuild:ListProjects"
+    },
+    {
+      "name": "ActionCodeBuildBatchGetProjects",
+      "value": "codebuild:BatchGetProjects"
+    },
+    {
+      "name": "ActionCodeBuildStartBuild",
+      "value": "codebuild:StartBuild"
+    },
+    {
+      "name": "ActionCodeBuildStartBuildBatch",
+      "value": "codebuild:StartBuildBatch"
+    },
+    {
+      "name": "ActionCodeBuildStopBuild",
+      "value": "codebuild:StopBuild"
+    },
+    {
+      "name": "ActionCodeBuildBatchGetBuilds",
+      "value": "codebuild:BatchGetBuilds"
+    },
+    {
+      "name": "ActionCodeBuildListBuilds",
+      "value": "codebuild:ListBuilds"
+    },
+    {
+      "name": "ActionCodeBuildCreateWebhook",
+      "value": "codebuild:CreateWebhook"
+    },
+    {
+      "name": "ActionCodeBuildDeleteWebhook",
+      "value": "codebuild:DeleteWebhook"
+    },
+    {
+      "name": "ActionCodeBuildListWebhooks",
+      "value": "codebuild:ListWebhooks"
+    },
+    {
+      "name": "ActionCodeCommitCreateRepository",
+      "value": "codecommit:CreateRepository"
+    },
+    {
+      "name": "ActionCodeCommitGetRepository",
+      "value": "codecommit:GetRepository"
+    },
+    {
+      "name": "ActionCodeCommitListRepositories",
+      "value": "codecommit:ListRepositories"
+    },
+    {
+      "name": "ActionCodeCommitDeleteRepository",
+      "value": "codecommit:DeleteRepository"
+    },
+    {
+      "name": "ActionCodeCommitPutFile",
+      "value": "codecommit:PutFile"
+    },
+    {
+      "name": "ActionCodeCommitGetFile",
+      "value": "codecommit:GetFile"
+    },
+    {
+      "name": "ActionCodeCommitGetFolder",
+      "value": "codecommit:GetFolder"
+    },
+    {
+      "name": "ActionBatchCreateComputeEnvironment",
+      "value": "batch:CreateComputeEnvironment"
+    },
+    {
+      "name": "ActionBatchCreateJobQueue",
+      "value": "batch:CreateJobQueue"
+    },
+    {
+      "name": "ActionBatchRegisterJobDefinition",
+      "value": "batch:RegisterJobDefinition"
+    },
+    {
+      "name": "ActionBatchSubmitJob",
+      "value": "batch:SubmitJob"
+    },
+    {
+      "name": "ActionBatchDescribeComputeEnvironments",
+      "value": "batch:DescribeComputeEnvironments"
+    },
+    {
+      "name": "ActionBatchDescribeJobQueues",
+      "value": "batch:DescribeJobQueues"
+    },
+    {
+      "name": "ActionBatchDescribeJobDefinitions",
+      "value": "batch:DescribeJobDefinitions"
+    },
+    {
+      "name": "ActionBatchDescribeJobs",
+      "value": "batch:DescribeJobs"
+    },
+    {
+      "name": "ActionLambdaCreateFunction",
+      "value": "lambda:CreateFunction"
+    },
+    {
+      "name": "ActionLambdaGetFunction",
+      "value": "lambda:GetFunction"
+    },
+    {
+      "name": "ActionLambdaDeleteFunction",
+      "value": "lambda:DeleteFunction"
+    },
+    {
+      "name": "ActionLambdaListFunctions",
+      "value": "lambda:ListFunctions"
+    },
+    {
+      "name": "ActionLambdaUpdateFunctionCode",
+      "value": "lambda:UpdateFunctionCode"
+    },
+    {
+      "name": "ActionLambdaUpdateFunctionConfiguration",
+      "value": "lambda:UpdateFunctionConfiguration"
+    },
+    {
+      "name": "ActionLambdaInvoke",
+      "value": "lambda:InvokeFunction"
+    },
+    {
+      "name": "ActionLambdaPublishVersion",
+      "value": "lambda:PublishVersion"
+    },
+    {
+      "name": "ActionLambdaListVersionsByFunction",
+      "value": "lambda:ListVersionsByFunction"
+    },
+    {
+      "name": "ActionLambdaCreateAlias",
+      "value": "lambda:CreateAlias"
+    },
+    {
+      "name": "ActionLambdaUpdateAlias",
+      "value": "lambda:UpdateAlias"
+    },
+    {
+      "name": "ActionLambdaDeleteAlias",
+      "value": "lambda:DeleteAlias"
+    },
+    {
+      "name": "ActionLambdaGetAlias",
+      "value": "lambda:GetAlias"
+    },
+    {
+      "name": "ActionLambdaListAliases",
+      "value": "lambda:ListAliases"
+    },
+    {
+      "name": "ActionLambdaPublishLayerVersion",
+      "value": "lambda:PublishLayerVersion"
+    },
+    {
+      "name": "ActionLambdaGetLayerVersion",
+      "value": "lambda:GetLayerVersion"
+    },
+    {
+      "name": "ActionLambdaListLayerVersions",
+      "value": "lambda:ListLayerVersions"
+    },
+    {
+      "name": "ActionLambdaDeleteLayerVersion",
+      "value": "lambda:DeleteLayerVersion"
+    },
+    {
+      "name": "ActionLambdaAddPermission",
+      "value": "lambda:AddPermission"
+    },
+    {
+      "name": "ActionLambdaRemovePermission",
+      "value": "lambda:RemovePermission"
+    },
+    {
+      "name": "ActionLambdaGetPolicy",
+      "value": "lambda:GetPolicy"
+    },
+    {
+      "name": "ActionLambdaCreateEventSourceMapping",
+      "value": "lambda:CreateEventSourceMapping"
+    },
+    {
+      "name": "ActionLambdaGetEventSourceMapping",
+      "value": "lambda:GetEventSourceMapping"
+    },
+    {
+      "name": "ActionLambdaListEventSourceMappings",
+      "value": "lambda:ListEventSourceMappings"
+    },
+    {
+      "name": "ActionLambdaUpdateEventSourceMapping",
+      "value": "lambda:UpdateEventSourceMapping"
+    },
+    {
+      "name": "ActionLambdaDeleteEventSourceMapping",
+      "value": "lambda:DeleteEventSourceMapping"
+    },
+    {
+      "name": "ActionLambdaCreateFunctionUrlConfig",
+      "value": "lambda:CreateFunctionUrlConfig"
+    },
+    {
+      "name": "ActionLambdaGetFunctionUrlConfig",
+      "value": "lambda:GetFunctionUrlConfig"
+    },
+    {
+      "name": "ActionLambdaDeleteFunctionUrlConfig",
+      "value": "lambda:DeleteFunctionUrlConfig"
+    },
+    {
+      "name": "ActionLambdaListFunctionUrlConfigs",
+      "value": "lambda:ListFunctionUrlConfigs"
+    },
+    {
+      "name": "ActionLambdaInvokeFunctionUrl",
+      "value": "lambda:InvokeFunctionUrl"
+    },
+    {
+      "name": "ActionLambdaListTags",
+      "value": "lambda:ListTags"
+    },
+    {
+      "name": "ActionLambdaGetFunctionCodeSigningConfig",
+      "value": "lambda:GetFunctionCodeSigningConfig"
+    },
+    {
+      "name": "ActionLambdaPutFunctionEventInvokeConfig",
+      "value": "lambda:PutFunctionEventInvokeConfig"
+    },
+    {
+      "name": "ActionLambdaGetFunctionEventInvokeConfig",
+      "value": "lambda:GetFunctionEventInvokeConfig"
+    },
+    {
+      "name": "ActionLambdaDeleteFunctionEventInvokeConfig",
+      "value": "lambda:DeleteFunctionEventInvokeConfig"
+    }
+  ],
+  "values": [
+    "acm:DeleteCertificate",
+    "acm:DescribeCertificate",
+    "acm:ListCertificates",
+    "acm:RequestCertificate",
+    "apigateway:CreateApiKey",
+    "apigateway:CreateAuthorizer",
+    "apigateway:CreateDeployment",
+    "apigateway:CreateResource",
+    "apigateway:CreateRestApi",
+    "apigateway:CreateStage",
+    "apigateway:CreateUsagePlan",
+    "apigateway:CreateUsagePlanKey",
+    "apigateway:DeleteApiKey",
+    "apigateway:DeleteAuthorizer",
+    "apigateway:DeleteMethod",
+    "apigateway:DeleteResource",
+    "apigateway:DeleteRestApi",
+    "apigateway:DeleteUsagePlan",
+    "apigateway:DeleteUsagePlanKey",
+    "apigateway:GetApiKey",
+    "apigateway:GetApiKeys",
+    "apigateway:GetAuthorizer",
+    "apigateway:GetAuthorizers",
+    "apigateway:GetIntegration",
+    "apigateway:GetMethod",
+    "apigateway:GetResources",
+    "apigateway:GetRestApi",
+    "apigateway:GetRestApis",
+    "apigateway:GetStage",
+    "apigateway:GetUsagePlan",
+    "apigateway:GetUsagePlanKeys",
+    "apigateway:GetUsagePlans",
+    "apigateway:PutIntegration",
+    "apigateway:PutMethod",
+    "apigatewayv2:CreateApi",
+    "apigatewayv2:CreateAuthorizer",
+    "apigatewayv2:CreateIntegration",
+    "apigatewayv2:CreateRoute",
+    "apigatewayv2:CreateStage",
+    "apigatewayv2:DeleteApi",
+    "apigatewayv2:GetApi",
+    "apigatewayv2:GetApis",
+    "apigatewayv2:GetAuthorizers",
+    "apigatewayv2:GetIntegrations",
+    "apigatewayv2:GetRoutes",
+    "apigatewayv2:UpdateApi",
+    "appconfig:CreateApplication",
+    "appconfig:CreateConfigurationProfile",
+    "appconfig:CreateEnvironment",
+    "appconfig:CreateHostedConfigurationVersion",
+    "appconfig:GetConfiguration",
+    "appconfig:GetDeployment",
+    "appconfig:ListDeployments",
+    "appconfig:StartDeployment",
+    "appconfigdata:GetLatestConfiguration",
+    "appconfigdata:StartConfigurationSession",
+    "appsync:CreateApiKey",
+    "appsync:CreateDataSource",
+    "appsync:CreateGraphqlApi",
+    "appsync:CreateResolver",
+    "appsync:DeleteApiKey",
+    "appsync:DeleteDataSource",
+    "appsync:DeleteGraphqlApi",
+    "appsync:DeleteResolver",
+    "appsync:GetDataSource",
+    "appsync:GetGraphqlApi",
+    "appsync:GetResolver",
+    "appsync:GetSchemaCreationStatus",
+    "appsync:GraphQL",
+    "appsync:ListApiKeys",
+    "appsync:ListDataSources",
+    "appsync:ListGraphqlApis",
+    "appsync:ListResolvers",
+    "appsync:StartSchemaCreation",
+    "appsync:UpdateDataSource",
+    "appsync:UpdateResolver",
+    "athena:CreateWorkGroup",
+    "athena:DeleteWorkGroup",
+    "athena:GetQueryExecution",
+    "athena:GetQueryResults",
+    "athena:GetWorkGroup",
+    "athena:ListWorkGroups",
+    "athena:StartQueryExecution",
+    "athena:StopQueryExecution",
+    "athena:UpdateWorkGroup",
+    "autoscaling:AttachInstances",
+    "autoscaling:AttachLoadBalancerTargetGroups",
+    "autoscaling:CreateAutoScalingGroup",
+    "autoscaling:CreateLaunchConfiguration",
+    "autoscaling:DeleteAutoScalingGroup",
+    "autoscaling:DeleteLaunchConfiguration",
+    "autoscaling:DeleteLifecycleHook",
+    "autoscaling:DeletePolicy",
+    "autoscaling:DescribeAutoScalingGroups",
+    "autoscaling:DescribeAutoScalingInstances",
+    "autoscaling:DescribeLaunchConfigurations",
+    "autoscaling:DescribeLifecycleHooks",
+    "autoscaling:DescribeLoadBalancerTargetGroups",
+    "autoscaling:DescribePolicies",
+    "autoscaling:DetachInstances",
+    "autoscaling:DetachLoadBalancerTargetGroups",
+    "autoscaling:PutLifecycleHook",
+    "autoscaling:PutScalingPolicy",
+    "autoscaling:SetDesiredCapacity",
+    "autoscaling:UpdateAutoScalingGroup",
+    "backup:CreateBackupPlan",
+    "backup:CreateBackupSelection",
+    "backup:CreateBackupVault",
+    "backup:DeleteBackupPlan",
+    "backup:DeleteBackupSelection",
+    "backup:DeleteBackupVault",
+    "backup:DeleteRecoveryPoint",
+    "backup:DescribeBackupJob",
+    "backup:DescribeBackupVault",
+    "backup:DescribeRecoveryPoint",
+    "backup:GetBackupPlan",
+    "backup:GetBackupSelection",
+    "backup:ListBackupJobs",
+    "backup:ListBackupPlans",
+    "backup:ListBackupSelections",
+    "backup:ListBackupVaults",
+    "backup:ListRecoveryPointsByBackupVault",
+    "backup:StartBackupJob",
+    "backup:StopBackupJob",
+    "batch:CreateComputeEnvironment",
+    "batch:CreateJobQueue",
+    "batch:DescribeComputeEnvironments",
+    "batch:DescribeJobDefinitions",
+    "batch:DescribeJobQueues",
+    "batch:DescribeJobs",
+    "batch:RegisterJobDefinition",
+    "batch:SubmitJob",
+    "bcm-data-exports:CreateExport",
+    "bcm-data-exports:DeleteExport",
+    "bcm-data-exports:GetExport",
+    "bcm-data-exports:ListExports",
+    "bedrock:Converse",
+    "bedrock:InvokeModel",
+    "budgets:CreateBudget",
+    "budgets:DeleteBudget",
+    "budgets:DescribeBudget",
+    "budgets:DescribeBudgets",
+    "ce:GetCostAndUsage",
+    "ce:GetCostForecast",
+    "cloudcontrol:CreateResource",
+    "cloudcontrol:DeleteResource",
+    "cloudcontrol:GetResource",
+    "cloudcontrol:GetResourceRequestStatus",
+    "cloudcontrol:ListResources",
+    "cloudcontrol:UpdateResource",
+    "cloudformation:CreateChangeSet",
+    "cloudformation:CreateStack",
+    "cloudformation:DeleteStack",
+    "cloudformation:DescribeChangeSet",
+    "cloudformation:DescribeStackDriftDetectionStatus",
+    "cloudformation:DescribeStackResourceDrifts",
+    "cloudformation:DescribeStacks",
+    "cloudformation:DetectStackDrift",
+    "cloudformation:ExecuteChangeSet",
+    "cloudformation:ListStacks",
+    "cloudformation:UpdateStack",
+    "cloudfront:CreateDistribution",
+    "cloudfront:CreateInvalidation",
+    "cloudfront:DeleteDistribution",
+    "cloudfront:GetDistribution",
+    "cloudfront:GetDistributionConfig",
+    "cloudfront:GetInvalidation",
+    "cloudfront:ListDistributions",
+    "cloudfront:ListInvalidations",
+    "cloudfront:UpdateDistribution",
+    "cloudtrail:CreateTrail",
+    "cloudtrail:DeleteTrail",
+    "cloudtrail:DescribeTrails",
+    "cloudtrail:GetEventSelectors",
+    "cloudtrail:InjectEvents",
+    "cloudtrail:InjectInsightsEvents",
+    "cloudtrail:LookupEvents",
+    "cloudtrail:PutEventSelectors",
+    "cloudtrail:StartLogging",
+    "cloudtrail:StopLogging",
+    "cloudtrail:ValidateLogs",
+    "cloudwatch:DeleteAlarms",
+    "cloudwatch:DescribeAlarms",
+    "cloudwatch:GetMetricData",
+    "cloudwatch:GetMetricStatistics",
+    "cloudwatch:ListMetrics",
+    "cloudwatch:PutMetricAlarm",
+    "cloudwatch:PutMetricData",
+    "cloudwatch:SetAlarmState",
+    "codebuild:BatchGetBuilds",
+    "codebuild:BatchGetProjects",
+    "codebuild:CreateProject",
+    "codebuild:CreateWebhook",
+    "codebuild:DeleteProject",
+    "codebuild:DeleteWebhook",
+    "codebuild:ListBuilds",
+    "codebuild:ListProjects",
+    "codebuild:ListWebhooks",
+    "codebuild:StartBuild",
+    "codebuild:StartBuildBatch",
+    "codebuild:StopBuild",
+    "codebuild:UpdateProject",
+    "codecommit:CreateRepository",
+    "codecommit:DeleteRepository",
+    "codecommit:GetFile",
+    "codecommit:GetFolder",
+    "codecommit:GetRepository",
+    "codecommit:ListRepositories",
+    "codecommit:PutFile",
+    "codedeploy:CreateApplication",
+    "codedeploy:CreateDeployment",
+    "codedeploy:CreateDeploymentGroup",
+    "codedeploy:GetDeployment",
+    "codedeploy:ListDeployments",
+    "codepipeline:CreatePipeline",
+    "codepipeline:DeletePipeline",
+    "codepipeline:GetPipeline",
+    "codepipeline:GetPipelineExecution",
+    "codepipeline:GetPipelineState",
+    "codepipeline:ListPipelineExecutions",
+    "codepipeline:PutApprovalResult",
+    "codepipeline:StartPipelineExecution",
+    "cognito-idp:AdminCreateUser",
+    "cognito-idp:AdminInitiateAuth",
+    "cognito-idp:AssociateSoftwareToken",
+    "cognito-idp:ConfirmForgotPassword",
+    "cognito-idp:ConfirmSignUp",
+    "cognito-idp:CreateUserPool",
+    "cognito-idp:CreateUserPoolClient",
+    "cognito-idp:DeleteUserPool",
+    "cognito-idp:DeleteUserPoolClient",
+    "cognito-idp:DescribeUserPool",
+    "cognito-idp:DescribeUserPoolClient",
+    "cognito-idp:ForgotPassword",
+    "cognito-idp:GetUserAttributeVerificationCode",
+    "cognito-idp:InitiateAuth",
+    "cognito-idp:ListUserPoolClients",
+    "cognito-idp:ListUserPools",
+    "cognito-idp:ResendConfirmationCode",
+    "cognito-idp:RespondToAuthChallenge",
+    "cognito-idp:RevokeToken",
+    "cognito-idp:SignUp",
+    "cognito-idp:UpdateUserAttributes",
+    "cognito-idp:UpdateUserPool",
+    "cognito-idp:VerifySoftwareToken",
+    "cognito-idp:VerifyUserAttribute",
+    "config:DescribeComplianceByConfigRule",
+    "config:GetResourceConfigHistory",
+    "config:PutConfigurationRecorder",
+    "config:PutDeliveryChannel",
+    "config:StartConfigurationRecorder",
+    "controltower:GetLandingZone",
+    "controltower:ListLandingZones",
+    "cur:DeleteReportDefinition",
+    "cur:DescribeReportDefinitions",
+    "cur:ListTagsForResource",
+    "cur:ModifyReportDefinition",
+    "cur:PutReportDefinition",
+    "cur:TagResource",
+    "cur:UntagResource",
+    "detective:AcceptInvitation",
+    "detective:CreateGraph",
+    "detective:ListGraphs",
+    "detective:SearchGraph",
+    "dynamodb:BatchExecuteStatement",
+    "dynamodb:BatchGetItem",
+    "dynamodb:BatchWriteItem",
+    "dynamodb:ConditionCheckItem",
+    "dynamodb:CreateTable",
+    "dynamodb:DeleteItem",
+    "dynamodb:DeleteResourcePolicy",
+    "dynamodb:DeleteTable",
+    "dynamodb:DescribeContinuousBackups",
+    "dynamodb:DescribeTable",
+    "dynamodb:DescribeTimeToLive",
+    "dynamodb:ExecuteStatement",
+    "dynamodb:GetItem",
+    "dynamodb:GetResourcePolicy",
+    "dynamodb:ListTables",
+    "dynamodb:ListTagsOfResource",
+    "dynamodb:PutItem",
+    "dynamodb:PutResourcePolicy",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+    "dynamodb:TagResource",
+    "dynamodb:TransactGetItems",
+    "dynamodb:TransactWriteItems",
+    "dynamodb:UntagResource",
+    "dynamodb:UpdateItem",
+    "dynamodb:UpdateTable",
+    "dynamodb:UpdateTimeToLive",
+    "dynamodbstreams:DescribeStream",
+    "dynamodbstreams:GetRecords",
+    "dynamodbstreams:GetShardIterator",
+    "dynamodbstreams:ListStreams",
+    "ec2:AuthorizeSecurityGroupEgress",
+    "ec2:AuthorizeSecurityGroupIngress",
+    "ec2:CreateFlowLogs",
+    "ec2:CreateNetworkInterface",
+    "ec2:CreateSecurityGroup",
+    "ec2:CreateSubnet",
+    "ec2:CreateVpc",
+    "ec2:DeleteSecurityGroup",
+    "ec2:DeleteSubnet",
+    "ec2:DeleteVpc",
+    "ec2:DescribeImages",
+    "ec2:DescribeInstances",
+    "ec2:DescribeNetworkInterfaces",
+    "ec2:DescribeSecurityGroups",
+    "ec2:DescribeSubnets",
+    "ec2:DescribeVpcs",
+    "ec2:InjectFlowLogs",
+    "ec2:RevokeSecurityGroupEgress",
+    "ec2:RevokeSecurityGroupIngress",
+    "ec2:RunInstances",
+    "ec2:StartInstances",
+    "ec2:StopInstances",
+    "ec2:TerminateInstances",
+    "ecr:BatchCheckLayerAvailability",
+    "ecr:BatchDeleteImage",
+    "ecr:BatchGetImage",
+    "ecr:CompleteLayerUpload",
+    "ecr:CreateRepository",
+    "ecr:DeleteRepository",
+    "ecr:DeleteRepositoryPolicy",
+    "ecr:DescribeRepositories",
+    "ecr:GetAuthorizationToken",
+    "ecr:GetRepositoryPolicy",
+    "ecr:InitiateLayerUpload",
+    "ecr:ListImages",
+    "ecr:ListTagsForResource",
+    "ecr:PutImage",
+    "ecr:SetRepositoryPolicy",
+    "ecr:TagResource",
+    "ecr:UntagResource",
+    "ecr:UploadLayerPart",
+    "ecs:CreateService",
+    "ecs:DeleteService",
+    "ecs:DeregisterTaskDefinition",
+    "ecs:DescribeClusters",
+    "ecs:DescribeServices",
+    "ecs:DescribeTaskDefinition",
+    "ecs:DescribeTasks",
+    "ecs:ListClusters",
+    "ecs:ListServices",
+    "ecs:ListTagsForResource",
+    "ecs:ListTaskDefinitions",
+    "ecs:ListTasks",
+    "ecs:RegisterTaskDefinition",
+    "ecs:RunTask",
+    "ecs:StopTask",
+    "ecs:TagResource",
+    "ecs:UntagResource",
+    "ecs:UpdateService",
+    "eks:CreateCluster",
+    "eks:DeleteCluster",
+    "eks:DescribeCluster",
+    "eks:ListClusters",
+    "eks:ListNodegroups",
+    "elasticache:CreateCacheCluster",
+    "elasticache:DeleteCacheCluster",
+    "elasticache:DescribeCacheClusters",
+    "elasticbeanstalk:CreateApplication",
+    "elasticbeanstalk:CreateApplicationVersion",
+    "elasticbeanstalk:CreateEnvironment",
+    "elasticbeanstalk:DeleteApplication",
+    "elasticbeanstalk:DescribeApplications",
+    "elasticbeanstalk:DescribeEnvironments",
+    "elasticbeanstalk:ListAvailableSolutionStacks",
+    "elasticbeanstalk:TerminateEnvironment",
+    "elasticloadbalancing:CreateListener",
+    "elasticloadbalancing:CreateLoadBalancer",
+    "elasticloadbalancing:CreateRule",
+    "elasticloadbalancing:CreateTargetGroup",
+    "elasticloadbalancing:DeleteListener",
+    "elasticloadbalancing:DeleteLoadBalancer",
+    "elasticloadbalancing:DeleteRule",
+    "elasticloadbalancing:DeleteTargetGroup",
+    "elasticloadbalancing:DescribeListeners",
+    "elasticloadbalancing:DescribeLoadBalancers",
+    "elasticloadbalancing:DescribeRules",
+    "elasticloadbalancing:DescribeTargetGroups",
+    "elasticloadbalancing:DescribeTargetHealth",
+    "elasticloadbalancing:ModifyListener",
+    "elasticloadbalancing:ModifyRule",
+    "elasticloadbalancing:RegisterTargets",
+    "elasticmapreduce:AddJobFlowSteps",
+    "elasticmapreduce:AddTags",
+    "elasticmapreduce:CancelSteps",
+    "elasticmapreduce:CreateSecurityConfiguration",
+    "elasticmapreduce:DeleteSecurityConfiguration",
+    "elasticmapreduce:DescribeCluster",
+    "elasticmapreduce:DescribeSecurityConfiguration",
+    "elasticmapreduce:DescribeStep",
+    "elasticmapreduce:ListClusters",
+    "elasticmapreduce:ListInstanceFleets",
+    "elasticmapreduce:ListInstanceGroups",
+    "elasticmapreduce:ListSecurityConfigurations",
+    "elasticmapreduce:ListSteps",
+    "elasticmapreduce:RemoveTags",
+    "elasticmapreduce:RunJobFlow",
+    "elasticmapreduce:TerminateJobFlows",
+    "es:CreateDomain",
+    "es:DeleteDomain",
+    "es:DescribeDomain",
+    "es:ListDomainNames",
+    "events:CreateEventBus",
+    "events:DeleteEventBus",
+    "events:DeleteRule",
+    "events:DescribeEventBus",
+    "events:DescribeRule",
+    "events:DisableRule",
+    "events:EnableRule",
+    "events:ListEventBuses",
+    "events:ListRules",
+    "events:ListTagsForResource",
+    "events:ListTargetsByRule",
+    "events:PutEvents",
+    "events:PutPermission",
+    "events:PutRule",
+    "events:PutTargets",
+    "events:RemovePermission",
+    "events:RemoveTargets",
+    "events:TagResource",
+    "events:UntagResource",
+    "execute-api:Invoke",
+    "execute-api:ManageConnections",
+    "firehose:CreateDeliveryStream",
+    "firehose:DeleteDeliveryStream",
+    "firehose:DescribeDeliveryStream",
+    "firehose:ListDeliveryStreams",
+    "firehose:PutRecord",
+    "firehose:PutRecordBatch",
+    "glue:CreateCrawler",
+    "glue:CreateDatabase",
+    "glue:CreateRegistry",
+    "glue:CreateSchema",
+    "glue:CreateTable",
+    "glue:DeleteCrawler",
+    "glue:DeleteDatabase",
+    "glue:DeleteRegistry",
+    "glue:DeleteSchema",
+    "glue:DeleteTable",
+    "glue:GetCrawler",
+    "glue:GetDatabase",
+    "glue:GetDatabases",
+    "glue:GetRegistry",
+    "glue:GetSchema",
+    "glue:GetSchemaVersion",
+    "glue:GetTable",
+    "glue:GetTables",
+    "glue:ListCrawlers",
+    "glue:ListRegistries",
+    "glue:ListSchemaVersions",
+    "glue:ListSchemas",
+    "glue:RegisterSchemaVersion",
+    "glue:StartCrawler",
+    "guardduty:CreateDetector",
+    "guardduty:GetFindings",
+    "guardduty:InjectFindings",
+    "guardduty:ListDetectors",
+    "guardduty:ListFindings",
+    "iam:AddRoleToInstanceProfile",
+    "iam:AddUserToGroup",
+    "iam:AttachGroupPolicy",
+    "iam:AttachRolePolicy",
+    "iam:AttachUserPolicy",
+    "iam:CreateAccessKey",
+    "iam:CreateGroup",
+    "iam:CreateInstanceProfile",
+    "iam:CreateOpenIDConnectProvider",
+    "iam:CreatePolicy",
+    "iam:CreatePolicyVersion",
+    "iam:CreateRole",
+    "iam:CreateSAMLProvider",
+    "iam:CreateUser",
+    "iam:CreateVirtualMFADevice",
+    "iam:DeactivateMFADevice",
+    "iam:DeleteAccessKey",
+    "iam:DeleteGroup",
+    "iam:DeleteGroupPolicy",
+    "iam:DeleteInstanceProfile",
+    "iam:DeleteOpenIDConnectProvider",
+    "iam:DeletePolicy",
+    "iam:DeletePolicyVersion",
+    "iam:DeleteRole",
+    "iam:DeleteRolePermissionsBoundary",
+    "iam:DeleteRolePolicy",
+    "iam:DeleteSAMLProvider",
+    "iam:DeleteUser",
+    "iam:DeleteUserPermissionsBoundary",
+    "iam:DeleteUserPolicy",
+    "iam:DetachGroupPolicy",
+    "iam:DetachRolePolicy",
+    "iam:DetachUserPolicy",
+    "iam:EnableMFADevice",
+    "iam:GenerateCredentialReport",
+    "iam:GetAccessKeyLastUsed",
+    "iam:GetCredentialReport",
+    "iam:GetGroup",
+    "iam:GetGroupPolicy",
+    "iam:GetInstanceProfile",
+    "iam:GetOpenIDConnectProvider",
+    "iam:GetPolicy",
+    "iam:GetPolicyVersion",
+    "iam:GetRole",
+    "iam:GetRolePermissionsBoundary",
+    "iam:GetRolePolicy",
+    "iam:GetSAMLProvider",
+    "iam:GetUser",
+    "iam:GetUserPermissionsBoundary",
+    "iam:GetUserPolicy",
+    "iam:ListAccessKeys",
+    "iam:ListAttachedGroupPolicies",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListAttachedUserPolicies",
+    "iam:ListGroupPolicies",
+    "iam:ListGroups",
+    "iam:ListInstanceProfiles",
+    "iam:ListInstanceProfilesForRole",
+    "iam:ListMFADevices",
+    "iam:ListOpenIDConnectProviders",
+    "iam:ListPolicies",
+    "iam:ListPolicyVersions",
+    "iam:ListRolePolicies",
+    "iam:ListRoles",
+    "iam:ListSAMLProviders",
+    "iam:ListUserPolicies",
+    "iam:ListUsers",
+    "iam:PutGroupPolicy",
+    "iam:PutRolePermissionsBoundary",
+    "iam:PutRolePolicy",
+    "iam:PutUserPermissionsBoundary",
+    "iam:PutUserPolicy",
+    "iam:RemoveRoleFromInstanceProfile",
+    "iam:RemoveUserFromGroup",
+    "iam:SetDefaultPolicyVersion",
+    "iam:UpdateAccessKey",
+    "iam:UpdateAssumeRolePolicy",
+    "iot-data:DeleteThingShadow",
+    "iot-data:GetThingShadow",
+    "iot-data:UpdateThingShadow",
+    "iot:AttachPolicy",
+    "iot:AttachThingPrincipal",
+    "iot:CreateKeysAndCertificate",
+    "iot:CreatePolicy",
+    "iot:CreateThing",
+    "iot:CreateTopicRule",
+    "iot:DeleteCertificate",
+    "iot:DeletePolicy",
+    "iot:DeleteThing",
+    "iot:DeleteTopicRule",
+    "iot:DescribeCertificate",
+    "iot:DescribeThing",
+    "iot:DetachPolicy",
+    "iot:DisableTopicRule",
+    "iot:EnableTopicRule",
+    "iot:GetPolicy",
+    "iot:GetTopicRule",
+    "iot:ListCertificates",
+    "iot:ListPolicies",
+    "iot:ListThingPrincipals",
+    "iot:ListThings",
+    "iot:ListTopicRules",
+    "iot:ReplaceTopicRule",
+    "iot:UpdateCertificate",
+    "iot:UpdateThing",
+    "kafka:CreateCluster",
+    "kafka:DeleteCluster",
+    "kafka:DescribeCluster",
+    "kafka:GetBootstrapBrokers",
+    "kafka:ListClusters",
+    "kinesis:CreateStream",
+    "kinesis:DeleteResourcePolicy",
+    "kinesis:DeleteStream",
+    "kinesis:DeregisterStreamConsumer",
+    "kinesis:DescribeStream",
+    "kinesis:DescribeStreamConsumer",
+    "kinesis:GetRecords",
+    "kinesis:GetResourcePolicy",
+    "kinesis:GetShardIterator",
+    "kinesis:ListStreamConsumers",
+    "kinesis:ListStreams",
+    "kinesis:PutRecord",
+    "kinesis:PutRecords",
+    "kinesis:PutResourcePolicy",
+    "kinesis:RegisterStreamConsumer",
+    "kinesis:SubscribeToShard",
+    "kinesis:UpdateShardCount",
+    "kms:CancelKeyDeletion",
+    "kms:CreateAlias",
+    "kms:CreateGrant",
+    "kms:CreateKey",
+    "kms:Decrypt",
+    "kms:DeleteAlias",
+    "kms:DescribeKey",
+    "kms:DisableKey",
+    "kms:DisableKeyRotation",
+    "kms:EnableKey",
+    "kms:EnableKeyRotation",
+    "kms:Encrypt",
+    "kms:GenerateDataKey",
+    "kms:GenerateDataKeyWithoutPlaintext",
+    "kms:GetKeyPolicy",
+    "kms:GetKeyRotationStatus",
+    "kms:GetPublicKey",
+    "kms:ListAliases",
+    "kms:ListGrants",
+    "kms:ListKeys",
+    "kms:ListResourceTags",
+    "kms:PutKeyPolicy",
+    "kms:ReEncryptFrom",
+    "kms:ReEncryptTo",
+    "kms:RetireGrant",
+    "kms:RevokeGrant",
+    "kms:ScheduleKeyDeletion",
+    "kms:Sign",
+    "kms:TagResource",
+    "kms:UntagResource",
+    "kms:UpdateAlias",
+    "kms:Verify",
+    "lambda:AddPermission",
+    "lambda:CreateAlias",
+    "lambda:CreateEventSourceMapping",
+    "lambda:CreateFunction",
+    "lambda:CreateFunctionUrlConfig",
+    "lambda:DeleteAlias",
+    "lambda:DeleteEventSourceMapping",
+    "lambda:DeleteFunction",
+    "lambda:DeleteFunctionEventInvokeConfig",
+    "lambda:DeleteFunctionUrlConfig",
+    "lambda:DeleteLayerVersion",
+    "lambda:GetAlias",
+    "lambda:GetEventSourceMapping",
+    "lambda:GetFunction",
+    "lambda:GetFunctionCodeSigningConfig",
+    "lambda:GetFunctionEventInvokeConfig",
+    "lambda:GetFunctionUrlConfig",
+    "lambda:GetLayerVersion",
+    "lambda:GetPolicy",
+    "lambda:InvokeFunction",
+    "lambda:InvokeFunctionUrl",
+    "lambda:ListAliases",
+    "lambda:ListEventSourceMappings",
+    "lambda:ListFunctionUrlConfigs",
+    "lambda:ListFunctions",
+    "lambda:ListLayerVersions",
+    "lambda:ListTags",
+    "lambda:ListVersionsByFunction",
+    "lambda:PublishLayerVersion",
+    "lambda:PublishVersion",
+    "lambda:PutFunctionEventInvokeConfig",
+    "lambda:RemovePermission",
+    "lambda:UpdateAlias",
+    "lambda:UpdateEventSourceMapping",
+    "lambda:UpdateFunctionCode",
+    "lambda:UpdateFunctionConfiguration",
+    "lightsail:AllocateStaticIp",
+    "lightsail:AttachDisk",
+    "lightsail:AttachStaticIp",
+    "lightsail:CloseInstancePublicPorts",
+    "lightsail:CreateDisk",
+    "lightsail:CreateInstances",
+    "lightsail:CreateKeyPair",
+    "lightsail:DeleteDisk",
+    "lightsail:DeleteInstance",
+    "lightsail:DeleteKeyPair",
+    "lightsail:DetachDisk",
+    "lightsail:DetachStaticIp",
+    "lightsail:GetBlueprints",
+    "lightsail:GetBundles",
+    "lightsail:GetDisk",
+    "lightsail:GetDisks",
+    "lightsail:GetInstance",
+    "lightsail:GetInstancePortStates",
+    "lightsail:GetInstances",
+    "lightsail:GetKeyPair",
+    "lightsail:GetKeyPairs",
+    "lightsail:GetStaticIp",
+    "lightsail:GetStaticIps",
+    "lightsail:OpenInstancePublicPorts",
+    "lightsail:RebootInstance",
+    "lightsail:ReleaseStaticIp",
+    "lightsail:StartInstance",
+    "lightsail:StopInstance",
+    "logs:CreateLogGroup",
+    "logs:CreateLogStream",
+    "logs:DeleteLogGroup",
+    "logs:DeleteLogStream",
+    "logs:DeleteMetricFilter",
+    "logs:DeleteResourcePolicy",
+    "logs:DeleteRetentionPolicy",
+    "logs:DeleteSubscriptionFilter",
+    "logs:DescribeLogGroups",
+    "logs:DescribeLogStreams",
+    "logs:DescribeMetricFilters",
+    "logs:DescribeResourcePolicies",
+    "logs:DescribeSubscriptionFilters",
+    "logs:FilterLogEvents",
+    "logs:GetLogEvents",
+    "logs:GetResourcePolicy",
+    "logs:PutLogEvents",
+    "logs:PutMetricFilter",
+    "logs:PutResourcePolicy",
+    "logs:PutRetentionPolicy",
+    "logs:PutSubscriptionFilter",
+    "macie2:CreateClassificationJob",
+    "macie2:DescribeClassificationJob",
+    "macie2:EnableMacie",
+    "macie2:GetFindings",
+    "macie2:GetMacieSession",
+    "macie2:InjectFindings",
+    "macie2:ListClassificationJobs",
+    "macie2:ListFindings",
+    "memorydb:CreateCluster",
+    "memorydb:DeleteCluster",
+    "memorydb:DescribeACLs",
+    "memorydb:DescribeClusters",
+    "memorydb:DescribeUsers",
+    "mq:CreateBroker",
+    "mq:DeleteBroker",
+    "mq:DescribeBroker",
+    "mq:ListBrokers",
+    "neptune:CreateDBCluster",
+    "neptune:DeleteDBCluster",
+    "neptune:DescribeDBClusters",
+    "noctaxris-lab:BulkSeed",
+    "noctaxris-lab:FreezeClock",
+    "noctaxris-lab:SetClock",
+    "noctaxris-lab:UnfreezeClock",
+    "organizations:AttachPolicy",
+    "organizations:CreateAccount",
+    "organizations:CreateOrganizationalUnit",
+    "organizations:CreatePolicy",
+    "organizations:DescribeCreateAccountStatus",
+    "organizations:DescribePolicy",
+    "organizations:DetachPolicy",
+    "organizations:EnablePolicyType",
+    "organizations:ListAccounts",
+    "organizations:ListAccountsForParent",
+    "organizations:ListOrganizationalUnitsForParent",
+    "organizations:ListParents",
+    "organizations:ListPolicies",
+    "organizations:ListPoliciesForTarget",
+    "organizations:MoveAccount",
+    "pipes:CreatePipe",
+    "pipes:DeletePipe",
+    "pipes:DescribePipe",
+    "pipes:ListPipes",
+    "pricing:DescribeServices",
+    "pricing:GetAttributeValues",
+    "pricing:GetProducts",
+    "rds-data:BatchExecuteStatement",
+    "rds-data:BeginTransaction",
+    "rds-data:CommitTransaction",
+    "rds-data:ExecuteStatement",
+    "rds-data:RollbackTransaction",
+    "rds:CreateDBCluster",
+    "rds:CreateDBInstance",
+    "rds:DeleteDBCluster",
+    "rds:DeleteDBInstance",
+    "rds:DescribeDBClusters",
+    "rds:DescribeDBInstances",
+    "route53:ChangeResourceRecordSets",
+    "route53:CreateHostedZone",
+    "route53:DeleteHostedZone",
+    "route53:InjectQueryLogs",
+    "route53:ListHostedZones",
+    "route53:ListResourceRecordSets",
+    "s3:AbortMultipartUpload",
+    "s3:CompleteMultipartUpload",
+    "s3:CreateBucket",
+    "s3:CreateMultipartUpload",
+    "s3:DeleteBucket",
+    "s3:DeleteBucketCors",
+    "s3:DeleteBucketPolicy",
+    "s3:DeleteEncryptionConfiguration",
+    "s3:DeleteLifecycleConfiguration",
+    "s3:DeleteObject",
+    "s3:GetBucketCors",
+    "s3:GetBucketLogging",
+    "s3:GetBucketNotification",
+    "s3:GetBucketPolicy",
+    "s3:GetBucketVersioning",
+    "s3:GetEncryptionConfiguration",
+    "s3:GetLifecycleConfiguration",
+    "s3:GetObject",
+    "s3:ListAllMyBuckets",
+    "s3:ListBucket",
+    "s3:ListBucketVersions",
+    "s3:ListMultipartUploads",
+    "s3:ListParts",
+    "s3:PutBucketCors",
+    "s3:PutBucketLogging",
+    "s3:PutBucketNotification",
+    "s3:PutBucketPolicy",
+    "s3:PutBucketVersioning",
+    "s3:PutEncryptionConfiguration",
+    "s3:PutLifecycleConfiguration",
+    "s3:PutObject",
+    "s3:SelectObjectContent",
+    "s3:UploadPart",
+    "s3vectors:CreateIndex",
+    "s3vectors:CreateVectorBucket",
+    "s3vectors:DeleteIndex",
+    "s3vectors:DeleteVectorBucket",
+    "s3vectors:ListIndexes",
+    "s3vectors:ListVectorBuckets",
+    "s3vectors:PutVectors",
+    "s3vectors:QueryVectors",
+    "scheduler:CreateSchedule",
+    "scheduler:DeleteSchedule",
+    "scheduler:GetSchedule",
+    "scheduler:ListSchedules",
+    "scheduler:UpdateSchedule",
+    "secretsmanager:CreateSecret",
+    "secretsmanager:DeleteResourcePolicy",
+    "secretsmanager:DeleteSecret",
+    "secretsmanager:DescribeSecret",
+    "secretsmanager:GetResourcePolicy",
+    "secretsmanager:GetSecretValue",
+    "secretsmanager:ListSecrets",
+    "secretsmanager:ListTagsForResource",
+    "secretsmanager:PutResourcePolicy",
+    "secretsmanager:PutSecretValue",
+    "secretsmanager:RestoreSecret",
+    "secretsmanager:RotateSecret",
+    "secretsmanager:TagResource",
+    "secretsmanager:UntagResource",
+    "secretsmanager:UpdateSecretVersionStage",
+    "securityhub:BatchImportFindings",
+    "securityhub:GetFindings",
+    "servicediscovery:CreateHttpNamespace",
+    "servicediscovery:CreatePrivateDnsNamespace",
+    "servicediscovery:CreateService",
+    "servicediscovery:DeregisterInstance",
+    "servicediscovery:DiscoverInstances",
+    "servicediscovery:RegisterInstance",
+    "ses:CreateEmailIdentity",
+    "ses:DeleteEmailIdentity",
+    "ses:GetAccount",
+    "ses:GetEmailIdentity",
+    "ses:GetSendStatistics",
+    "ses:ListEmailIdentities",
+    "ses:ListIdentities",
+    "ses:SendEmail",
+    "ses:SendRawEmail",
+    "ses:SetIdentityNotificationTopic",
+    "ses:VerifyEmailIdentity",
+    "sns:AddPermission",
+    "sns:ConfirmSubscription",
+    "sns:CreateTopic",
+    "sns:DeleteTopic",
+    "sns:GetSubscriptionAttributes",
+    "sns:GetTopicAttributes",
+    "sns:ListSubscriptions",
+    "sns:ListSubscriptionsByTopic",
+    "sns:ListTagsForResource",
+    "sns:ListTopics",
+    "sns:Publish",
+    "sns:RemovePermission",
+    "sns:SetTopicAttributes",
+    "sns:Subscribe",
+    "sns:TagResource",
+    "sns:Unsubscribe",
+    "sns:UntagResource",
+    "sqs:ChangeMessageVisibility",
+    "sqs:CreateQueue",
+    "sqs:DeleteMessage",
+    "sqs:DeleteMessageBatch",
+    "sqs:DeleteQueue",
+    "sqs:GetQueueAttributes",
+    "sqs:GetQueueUrl",
+    "sqs:ListQueueTags",
+    "sqs:ListQueues",
+    "sqs:PurgeQueue",
+    "sqs:ReceiveMessage",
+    "sqs:SendMessage",
+    "sqs:SendMessageBatch",
+    "sqs:SetQueueAttributes",
+    "sqs:TagQueue",
+    "sqs:UntagQueue",
+    "ssm:AddTagsToResource",
+    "ssm:DeleteParameter",
+    "ssm:DescribeParameters",
+    "ssm:GetCommandInvocation",
+    "ssm:GetParameter",
+    "ssm:GetParameterHistory",
+    "ssm:GetParameters",
+    "ssm:GetParametersByPath",
+    "ssm:LabelParameterVersion",
+    "ssm:ListCommandInvocations",
+    "ssm:ListTagsForResource",
+    "ssm:PutParameter",
+    "ssm:RemoveTagsFromResource",
+    "ssm:SendCommand",
+    "states:CreateStateMachine",
+    "states:DeleteResourcePolicy",
+    "states:DeleteStateMachine",
+    "states:DescribeExecution",
+    "states:DescribeStateMachine",
+    "states:GetExecutionHistory",
+    "states:GetResourcePolicy",
+    "states:ListStateMachines",
+    "states:PutResourcePolicy",
+    "states:SendTaskFailure",
+    "states:SendTaskHeartbeat",
+    "states:SendTaskSuccess",
+    "states:StartExecution",
+    "sts:AssumeRole",
+    "sts:AssumeRoleWithSAML",
+    "sts:AssumeRoleWithWebIdentity",
+    "sts:AssumeRoot",
+    "sts:DecodeAuthorizationMessage",
+    "sts:GetAccessKeyInfo",
+    "sts:GetCallerIdentity",
+    "sts:GetDelegatedAccessToken",
+    "sts:GetFederationToken",
+    "sts:GetSessionToken",
+    "sts:GetWebIdentityToken",
+    "tag:GetResources",
+    "tag:TagResources",
+    "tag:UntagResources",
+    "textract:AnalyzeDocument",
+    "textract:DetectDocumentText",
+    "transcribe:GetTranscriptionJob",
+    "transcribe:ListTranscriptionJobs",
+    "transcribe:StartTranscriptionJob",
+    "transfer:CreateServer",
+    "transfer:CreateUser",
+    "transfer:DeleteServer",
+    "transfer:DeleteSshPublicKey",
+    "transfer:DeleteUser",
+    "transfer:DescribeServer",
+    "transfer:DescribeUser",
+    "transfer:GetFile",
+    "transfer:ImportSshPublicKey",
+    "transfer:ListDirectory",
+    "transfer:ListServers",
+    "transfer:ListUsers",
+    "transfer:PutFile",
+    "wafv2:AssociateWebACL",
+    "wafv2:CreateIPSet",
+    "wafv2:CreateRuleGroup",
+    "wafv2:CreateWebACL",
+    "wafv2:DeleteIPSet",
+    "wafv2:Evaluate",
+    "wafv2:GetIPSet",
+    "wafv2:GetWebACL",
+    "wafv2:ListIPSets",
+    "wafv2:ListWebACLs",
+    "wafv2:UpdateIPSet",
+    "wafv2:UpdateWebACL"
+  ],
+  "count": 953,
+  "source": "Action* constants in actions.go",
+  "generated": "2026-07-31T12:32:55.443446+00:00"
+}

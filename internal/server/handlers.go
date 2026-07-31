@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/awsprotocol"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -1229,17 +1230,7 @@ func baseAuditRequestParams(r *http.Request) map[string]any {
 }
 
 func formParams(r *http.Request, body []byte) url.Values {
-	vals := url.Values{}
-	for k, v := range r.URL.Query() {
-		vals[k] = v
-	}
-	if len(body) > 0 {
-		if parsed, err := url.ParseQuery(string(body)); err == nil {
-			for k, v := range parsed {
-				vals[k] = v
-			}
-		}
-	}
+	vals, _ := awsprotocol.FormParams(r, body)
 	return vals
 }
 

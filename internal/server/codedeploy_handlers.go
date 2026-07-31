@@ -9,7 +9,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	cdsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/codedeploy"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -68,40 +67,10 @@ func codeDeployAction(action string) string {
 }
 
 func (s *Server) checkCodeDeployPassRole(verified *authn.Verified, roleARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("serviceRoleArn must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("serviceRoleArn must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("Role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to CodeDeploy")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalCodeDeploy,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalCodeDeploy, "CodeDeploy", passRoleMsgs{
+		InvalidARN:   "serviceRoleArn must be a valid IAM role ARN",
+		WrongAccount: "serviceRoleArn must be in the same account",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to CodeDeploy")
-	}
-	return nil
 }
 
 func jsonParamString(params map[string]any, keys ...string) string {

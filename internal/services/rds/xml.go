@@ -2,10 +2,9 @@ package rds
 
 import (
 	"encoding/xml"
-	"fmt"
-	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/awsprotocol"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -109,17 +108,9 @@ func DescribeDBInstancesXML(instances []store.RDSDBInstance, requestID string) (
 
 // ErrorXML builds a Query protocol error response.
 func ErrorXML(code, message, requestID string) []byte {
-	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<ErrorResponse xmlns="%s"><Error><Code>%s</Code><Message>%s</Message></Error><RequestId>%s</RequestId></ErrorResponse>`,
-		xmlns, xmlEscape(code), xmlEscape(message), xmlEscape(requestID))
-	return []byte(body)
-}
-
-func xmlEscape(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	s = strings.ReplaceAll(s, `"`, "&quot;")
-	s = strings.ReplaceAll(s, "'", "&apos;")
-	return s
+	body, err := awsprotocol.MarshalQueryError(awsprotocol.QueryErrorIAM, xmlns, code, message, requestID)
+	if err != nil {
+		return nil
+	}
+	return body
 }

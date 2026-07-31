@@ -631,7 +631,7 @@ func parseEMRInstanceGroups(raw any) []store.EMRInstanceGroupInput {
 			InstanceType:      stringField(m, "InstanceType"),
 			Market:            stringField(m, "Market"),
 			BidPrice:          stringField(m, "BidPrice"),
-			InstanceCount:     intFromJSONNumber(m["InstanceCount"]),
+			InstanceCount:     intParam(m["InstanceCount"], 0),
 		})
 	}
 	return out
@@ -651,28 +651,9 @@ func parseEMRInstanceFleets(raw any) []store.EMRInstanceFleetInput {
 		out = append(out, store.EMRInstanceFleetInput{
 			Name:                   stringField(m, "Name"),
 			InstanceFleetType:      stringField(m, "InstanceFleetType"),
-			TargetOnDemandCapacity: intFromJSONNumber(m["TargetOnDemandCapacity"]),
-			TargetSpotCapacity:     intFromJSONNumber(m["TargetSpotCapacity"]),
+			TargetOnDemandCapacity: intParam(m["TargetOnDemandCapacity"], 0),
+			TargetSpotCapacity:     intParam(m["TargetSpotCapacity"], 0),
 		})
-	}
-	return out
-}
-
-func parseEMRTags(raw any) map[string]string {
-	arr, ok := raw.([]any)
-	if !ok {
-		return nil
-	}
-	out := map[string]string{}
-	for _, item := range arr {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		k := stringField(m, "Key")
-		if k != "" {
-			out[k] = stringField(m, "Value")
-		}
 	}
 	return out
 }

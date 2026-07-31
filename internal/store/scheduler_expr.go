@@ -33,24 +33,8 @@ func NextScheduleRun(expression string, from time.Time) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("schedule expression is required")
 	}
 	from = from.UTC()
-	if m := rateExprRe.FindStringSubmatch(expression); len(m) == 3 {
-		n, err := strconv.Atoi(m[1])
-		if err != nil || n < 1 {
-			return time.Time{}, fmt.Errorf("invalid rate value")
-		}
-		unit := strings.ToLower(m[2])
-		var d time.Duration
-		switch unit {
-		case "minute", "minutes":
-			d = time.Duration(n) * time.Minute
-		case "hour", "hours":
-			d = time.Duration(n) * time.Hour
-		case "day", "days":
-			d = time.Duration(n) * 24 * time.Hour
-		default:
-			return time.Time{}, fmt.Errorf("unsupported rate unit")
-		}
-		return from.Add(d), nil
+	if _, _, err := ParseRateExpression(expression); err == nil {
+		return NextAfterRate(expression, from)
 	}
 	if m := atExprRe.FindStringSubmatch(expression); len(m) == 2 {
 		t, err := time.ParseInLocation("2006-01-02T15:04:05", m[1], time.UTC)
@@ -66,6 +50,40 @@ func NextScheduleRun(expression string, from time.Time) (time.Time, error) {
 		return nextCronRun(from, m[1], m[2], m[3], m[4], m[5], m[6])
 	}
 	return time.Time{}, fmt.Errorf("unsupported schedule expression %q", expression)
+}
+
+// ParseRateExpression parses rate(n minutes|hours|days). The full string must match.
+func ParseRateExpression(expression string) (n int, unit string, err error) {
+	expression = strings.TrimSpace(expression)
+	m := rateExprRe.FindStringSubmatch(expression)
+	if len(m) != 3 {
+		return 0, "", fmt.Errorf("invalid rate expression %q", expression)
+	}
+	n, err = strconv.Atoi(m[1])
+	if err != nil || n < 1 {
+		return 0, "", fmt.Errorf("invalid rate value")
+	}
+	return n, strings.ToLower(m[2]), nil
+}
+
+// NextAfterRate returns from plus the rate interval. from is normalized to UTC.
+func NextAfterRate(expression string, from time.Time) (time.Time, error) {
+	n, unit, err := ParseRateExpression(expression)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var d time.Duration
+	switch unit {
+	case "minute", "minutes":
+		d = time.Duration(n) * time.Minute
+	case "hour", "hours":
+		d = time.Duration(n) * time.Hour
+	case "day", "days":
+		d = time.Duration(n) * 24 * time.Hour
+	default:
+		return time.Time{}, fmt.Errorf("unsupported rate unit")
+	}
+	return from.UTC().Add(d), nil
 }
 
 func nextCronRun(from time.Time, minute, hour, dom, month, dow, year string) (time.Time, error) {

@@ -285,3 +285,40 @@ func DecryptUnderCMK(cmk, blob []byte, encryptionContext map[string]string) ([]b
 	aad := EncryptionContextAAD(encryptionContext)
 	return gcm.Open(nil, nonce, sealed, aad)
 }
+
+// KeyIDFromCiphertext extracts the embedded key id from a v2 ciphertext blob.
+func KeyIDFromCiphertext(blob []byte) (string, error) {
+	if len(blob) < 2 || blob[0] != ciphertextVersionV2 {
+		return "", fmt.Errorf("ciphertext has no embedded key id")
+	}
+	n := int(blob[1])
+	if n <= 0 || len(blob) < 2+n {
+		return "", fmt.Errorf("ciphertext key id truncated")
+	}
+	return string(blob[2 : 2+n]), nil
+}
+
+// SealPlaintextWithKMS resolves keyIDOrAlias, verifies the key is usable for
+// encrypt, and seals plaintext with EncryptUnderCMK (v2 blob with embedded key id).
+func (s *Store) SealPlaintextWithKMS(accountID, keyIDOrAlias string, plaintext []byte, encCtx map[string]string) (sealed []byte, resolvedKeyID string, err error) {
+	resolvedKeyID, err = s.ResolveKeyID(accountID, keyIDOrAlias)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve key: %w", err)
+	}
+	k, err := s.GetKey(resolvedKeyID)
+	if err != nil {
+		return nil, "", fmt.Errorf("key: %w", err)
+	}
+	if !KeyUsableForCrypto(k.KeyState) {
+		return nil, "", fmt.Errorf("%w", ErrInvalidKeyState)
+	}
+	cmk, err := s.UnsealKeyMaterial(resolvedKeyID)
+	if err != nil {
+		return nil, "", fmt.Errorf("unseal key: %w", err)
+	}
+	sealed, err = EncryptUnderCMK(cmk, resolvedKeyID, plaintext, encCtx)
+	if err != nil {
+		return nil, "", fmt.Errorf("encrypt: %w", err)
+	}
+	return sealed, resolvedKeyID, nil
+}

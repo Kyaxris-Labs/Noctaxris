@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -17,7 +19,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	cbsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/codebuild"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -331,40 +332,11 @@ func parseCodeBuildBatchChildren(params map[string]any) []store.CodeBuildBatchCh
 }
 
 func (s *Server) checkCodeBuildPassRole(verified *authn.Verified, roleARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("serviceRole must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("serviceRole must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("serviceRole not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to CodeBuild")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalCodeBuild,
+	return s.checkServicePassRole(verified, roleARN, "", authz.ServicePrincipalCodeBuild, "CodeBuild", passRoleMsgs{
+		InvalidARN:   "serviceRole must be a valid IAM role ARN",
+		WrongAccount: "serviceRole must be in the same account",
+		NotFound:     "serviceRole not found",
 	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to CodeBuild")
-	}
-	return nil
 }
 
 func (s *Server) codebuildCreateProject(
@@ -968,6 +940,7 @@ func (s *Server) startCodeBuildContainer(ctx context.Context, accountID string, 
 		return fmt.Errorf("%w: no build commands", store.ErrCodeBuildInvalidInput)
 	}
 	script := strings.Join(cmds, " && ")
+	var preStartTar io.Reader
 	if strings.EqualFold(b.SourceType, "CODECOMMIT") {
 		tmp, mkErr := os.MkdirTemp("", "noctaxris-codebuild-cc-*")
 		if mkErr != nil {
@@ -977,7 +950,12 @@ func (s *Server) startCodeBuildContainer(ctx context.Context, accountID string, 
 		if _, matErr := s.store.MaterializeCodeBuildCodeCommitSource(accountID, b.SourceLoc, tmp); matErr != nil {
 			return matErr
 		}
-		script, err = store.BuildCodeBuildCodeCommitShell(tmp, cmds)
+		var tarBuf bytes.Buffer
+		if err := store.WriteCodeBuildSourceTar(&tarBuf, tmp); err != nil {
+			return err
+		}
+		preStartTar = bytes.NewReader(tarBuf.Bytes())
+		script, err = store.BuildCodeBuildCodeCommitRunScript(cmds)
 		if err != nil {
 			return err
 		}
@@ -1019,7 +997,7 @@ func (s *Server) startCodeBuildContainer(ctx context.Context, accountID string, 
 	if err != nil {
 		return err
 	}
-	cid, err := cli.RunECSTask(ctx, compute.ECSRunOpts{
+	runOpts := compute.ECSRunOpts{
 		ImageURI:         pullRef,
 		Command:          []string{"/bin/sh", "-c", script},
 		EndpointURL:      endpoint,
@@ -1028,7 +1006,12 @@ func (s *Server) startCodeBuildContainer(ctx context.Context, accountID string, 
 		LabRegistryPull:  useAuth,
 		RegistryUsername: username,
 		RegistryPassword: password,
-	})
+	}
+	if preStartTar != nil {
+		runOpts.PreStartCopyDest = compute.CodeBuildWorkspaceDir
+		runOpts.PreStartCopyTar = preStartTar
+	}
+	cid, err := cli.RunECSTask(ctx, runOpts)
 	if err != nil {
 		return err
 	}
@@ -1090,11 +1073,31 @@ func (s *Server) reapCodeBuild(accountID, buildID, projectName, containerID stri
 	}
 }
 
-// harvestCodeBuildWorkspaceTar Exec+tar+/base64 of /codebuild/src before stop (never CopyFromContainer).
+// harvestCodeBuildWorkspaceTar prefers CopyFromContainer under /codebuild/src; falls back to Exec+tar+base64.
 func (s *Server) harvestCodeBuildWorkspaceTar(ctx context.Context, cli *compute.Client, containerID string) []byte {
 	if cli == nil || strings.TrimSpace(containerID) == "" {
 		return nil
 	}
+	if out := s.harvestCodeBuildWorkspaceTarCopy(ctx, cli, containerID); len(out) > 0 {
+		return out
+	}
+	return s.harvestCodeBuildWorkspaceTarExec(ctx, cli, containerID)
+}
+
+func (s *Server) harvestCodeBuildWorkspaceTarCopy(ctx context.Context, cli *compute.Client, containerID string) []byte {
+	rc, err := cli.CopyFromContainer(ctx, containerID, compute.CodeBuildWorkspaceDir)
+	if err != nil {
+		return nil
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil || !compute.WorkspaceTarHasFileEntries(data) {
+		return nil
+	}
+	return data
+}
+
+func (s *Server) harvestCodeBuildWorkspaceTarExec(ctx context.Context, cli *compute.Client, containerID string) []byte {
 	res, err := cli.Exec(ctx, compute.ExecOpts{
 		ContainerID: containerID,
 		Cmd: []string{

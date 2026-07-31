@@ -8,7 +8,6 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 	pipessvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/pipes"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -63,41 +62,7 @@ func pipesAction(action string) string {
 }
 
 func (s *Server) checkPipesPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
-	accountID, roleName, ok := sts.ParseRoleARN(roleARN)
-	if !ok {
-		return errors.New("roleARN must be a valid IAM role ARN")
-	}
-	if accountID != verified.AccountID {
-		return errors.New("roleARN must be in the same account")
-	}
-	storedARN, trust, err := s.store.GetRole(accountID, roleName)
-	if err != nil {
-		return errors.New("Role not found")
-	}
-	if storedARN != "" {
-		roleARN = storedARN
-	}
-	in, ok := s.evalInputs(verified)
-	if !ok {
-		return errors.New("not authorized to pass role to Pipes")
-	}
-	decision := authz.CheckPassRole(authz.PassRoleRequest{
-		Caller: authz.RequestContext{
-			Principal:     verified.Principal,
-			Resource:      roleARN,
-			Region:        verified.Region,
-			ConditionKeys: s.conditionKeys(verified),
-		},
-		EvalInputs:       in,
-		RoleARN:          roleARN,
-		TrustPolicyDoc:   trust,
-		ServicePrincipal: authz.ServicePrincipalPipes,
-		SourceArn:        sourceARN,
-	})
-	if decision != authz.Allow {
-		return errors.New("not authorized to pass role to Pipes")
-	}
-	return nil
+	return s.checkEdgePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalPipes, "Pipes")
 }
 
 func (s *Server) pipesRegion(verified *authn.Verified) string {

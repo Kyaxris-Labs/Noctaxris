@@ -207,8 +207,7 @@ func scanTopic(row *sql.Row) (Topic, error) {
 		return Topic{}, fmt.Errorf("scan topic: %w", err)
 	}
 	t.Policy = policy
-	t.Attributes, err = unmarshalAttributes(attrs)
-	if err != nil {
+	if err := unmarshalJSONColumn(attrs, &t.Attributes); err != nil {
 		return Topic{}, err
 	}
 	return t, nil
@@ -239,7 +238,7 @@ func (s *Store) CreateTopic(accountID, region, topicName string, attributes map[
 	if policy == "" {
 		policy = defaultSNSTopicPolicy(accountID, arn)
 	}
-	attrsJSON, err := marshalAttributes(attributes)
+	attrsJSON, err := marshalJSONColumn(attributes)
 	if err != nil {
 		return Topic{}, err
 	}
@@ -256,8 +255,8 @@ func (s *Store) CreateTopic(accountID, region, topicName string, attributes map[
 		}
 		return Topic{}, fmt.Errorf("create topic: %w", err)
 	}
-	attrsCopy, err := unmarshalAttributes(attrsJSON)
-	if err != nil {
+	var attrsCopy map[string]string
+	if err := unmarshalJSONColumn(attrsJSON, &attrsCopy); err != nil {
 		return Topic{}, err
 	}
 	return Topic{
@@ -349,8 +348,7 @@ func (s *Store) ListTopics(accountID string) ([]Topic, error) {
 			return nil, fmt.Errorf("list topics: %w", err)
 		}
 		t.Policy = policy
-		t.Attributes, err = unmarshalAttributes(attrs)
-		if err != nil {
+		if err := unmarshalJSONColumn(attrs, &t.Attributes); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -431,7 +429,7 @@ func (s *Store) SetTopicAttributes(accountID, topicName string, attrs map[string
 		}
 		merged[k] = v
 	}
-	attrsJSON, err := marshalAttributes(merged)
+	attrsJSON, err := marshalJSONColumn(merged)
 	if err != nil {
 		return err
 	}
@@ -478,7 +476,7 @@ func (s *Store) PublishWithOpts(accountID, topicName, message, subject string, m
 	}
 	messageID := uuid.NewString()
 	created := nowRFC3339()
-	attrsJSON, err := marshalAttributes(messageAttrs)
+	attrsJSON, err := marshalJSONColumn(messageAttrs)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -530,8 +528,7 @@ func (s *Store) findSNSDedupMessage(topicARN, dedupID string) (PublishedMessage,
 	if err != nil {
 		return PublishedMessage{}, false, fmt.Errorf("sns dedup lookup: %w", err)
 	}
-	m.Attributes, err = unmarshalAttributes(attrs)
-	if err != nil {
+	if err := unmarshalJSONColumn(attrs, &m.Attributes); err != nil {
 		return PublishedMessage{}, false, err
 	}
 	return m, true, nil
@@ -775,8 +772,7 @@ func (s *Store) GetPublishedMessage(messageID string) (PublishedMessage, error) 
 	if err != nil {
 		return PublishedMessage{}, fmt.Errorf("get published message: %w", err)
 	}
-	m.Attributes, err = unmarshalAttributes(attrs)
-	if err != nil {
+	if err := unmarshalJSONColumn(attrs, &m.Attributes); err != nil {
 		return PublishedMessage{}, err
 	}
 	return m, nil
@@ -796,8 +792,7 @@ func scanSubscription(row *sql.Row) (Subscription, error) {
 		return Subscription{}, fmt.Errorf("scan subscription: %w", err)
 	}
 	sub.Confirmed = confirmed == 1
-	sub.Attributes, err = unmarshalAttributes(attrsJSON)
-	if err != nil {
+	if err := unmarshalJSONColumn(attrsJSON, &sub.Attributes); err != nil {
 		return Subscription{}, err
 	}
 	if sub.Attributes == nil {
@@ -993,7 +988,7 @@ func (s *Store) SetSubscriptionAttributes(subscriptionARN string, attrs map[stri
 			return fmt.Errorf("%w: unsupported subscription attribute %q", ErrSNSInvalidParameter, key)
 		}
 	}
-	raw, err := marshalAttributes(sub.Attributes)
+	raw, err := marshalJSONColumn(sub.Attributes)
 	if err != nil {
 		return err
 	}
@@ -1115,8 +1110,8 @@ func scanSubscriptionRows(rows *sql.Rows) ([]Subscription, error) {
 			return nil, fmt.Errorf("scan subscriptions: %w", err)
 		}
 		sub.Confirmed = confirmed == 1
-		attrs, err := unmarshalAttributes(attrsJSON)
-		if err != nil {
+		var attrs map[string]string
+		if err := unmarshalJSONColumn(attrsJSON, &attrs); err != nil {
 			return nil, err
 		}
 		if attrs == nil {

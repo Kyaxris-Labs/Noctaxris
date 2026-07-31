@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -33,6 +34,10 @@ type ECSRunOpts struct {
 	RegistryUsername string
 	// RegistryPassword is the lab ECR authorization token password.
 	RegistryPassword string
+	// PreStartCopyDest, with PreStartCopyTar, copies a tar archive into the container after
+	// create and before start (CodeBuild CODECOMMIT workspace inject).
+	PreStartCopyDest string
+	PreStartCopyTar  io.Reader
 }
 
 // ValidateECSRunOpts checks required fields without talking to Docker.
@@ -134,6 +139,23 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		return "", fmt.Errorf("compute: ecs container create: %w", err)
 	}
 	cid := create.ID
+	if opts.PreStartCopyTar != nil {
+		dest := strings.TrimSpace(opts.PreStartCopyDest)
+		if dest == "" {
+			dest = CodeBuildWorkspaceDir
+		}
+		if err := ValidateCodeBuildContainerPath(dest); err != nil {
+			_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+			return "", err
+		}
+		if err := c.CopyToContainer(ctx, cid, dest, opts.PreStartCopyTar); err != nil {
+			_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+			return "", err
+		}
+	} else if strings.TrimSpace(opts.PreStartCopyDest) != "" {
+		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+		return "", fmt.Errorf("compute: PreStartCopyDest set without PreStartCopyTar")
+	}
 	if err := c.cli.ContainerStart(ctx, cid, container.StartOptions{}); err != nil {
 		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
 		return "", fmt.Errorf("compute: ecs container start: %w", err)

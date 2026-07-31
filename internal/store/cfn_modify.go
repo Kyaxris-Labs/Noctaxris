@@ -69,8 +69,12 @@ func cfnPropJSONEqual(a, b map[string]any, key string) bool {
 	return string(ra) == string(rb)
 }
 
-func cfnRejectImmutablePropChange(resType, logicalID string, oldProps, newProps map[string]any, keys ...string) error {
-	for _, key := range keys {
+func cfnRejectImmutablePropChange(resType, logicalID string, oldProps, newProps map[string]any) error {
+	meta, ok := cfnResourceMetas[resType]
+	if !ok {
+		return nil
+	}
+	for _, key := range meta.Immutable {
 		if _, ok := newProps[key]; !ok {
 			continue
 		}
@@ -82,7 +86,7 @@ func cfnRejectImmutablePropChange(resType, logicalID string, oldProps, newProps 
 }
 
 func (s *Store) modifyCFNSSMParameter(accountID, region, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::SSM::Parameter", physicalID, oldProps, newProps, "Name"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::SSM::Parameter", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	name := cfnStringProp(newProps, "Name")
@@ -108,7 +112,7 @@ func (s *Store) modifyCFNSSMParameter(accountID, region, physicalID string, oldP
 }
 
 func (s *Store) modifyCFNS3Bucket(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::S3::Bucket", physicalID, oldProps, newProps, "BucketName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::S3::Bucket", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	name := cfnStringProp(newProps, "BucketName")
@@ -128,7 +132,7 @@ func (s *Store) modifyCFNS3Bucket(accountID, physicalID string, oldProps, newPro
 }
 
 func (s *Store) modifyCFNBucketPolicy(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
-	if err := cfnRejectImmutablePropChange("AWS::S3::BucketPolicy", physicalID, oldProps, newProps, "Bucket"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::S3::BucketPolicy", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	_, _, err := s.provisionCFNBucketPolicy(accountID, "BucketPolicy", newProps, auth)
@@ -136,7 +140,7 @@ func (s *Store) modifyCFNBucketPolicy(accountID, physicalID string, oldProps, ne
 }
 
 func (s *Store) modifyCFNIAMRole(accountID, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
-	if err := cfnRejectImmutablePropChange("AWS::IAM::Role", physicalID, oldProps, newProps, "RoleName", "Path"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::IAM::Role", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	roleName := cfnStringProp(newProps, "RoleName")
@@ -296,7 +300,7 @@ func (s *Store) modifyCFNManagedPolicyDocument(accountID, physicalID string, old
 		return err
 	}
 	_ = accountID
-	if err := cfnRejectImmutablePropChange("AWS::IAM::ManagedPolicy", physicalID, oldProps, newProps, "ManagedPolicyName", "PolicyName", "Path"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::IAM::ManagedPolicy", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	docRaw, ok := newProps["PolicyDocument"]
@@ -338,7 +342,7 @@ func (s *Store) replaceManagedPolicyDocument(policyARN, document string) error {
 }
 
 func (s *Store) modifyCFNSQSQueue(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::SQS::Queue", physicalID, oldProps, newProps, "QueueName", "FifoQueue"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::SQS::Queue", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	q, err := s.GetQueueByURL(physicalID)
@@ -367,7 +371,7 @@ func (s *Store) modifyCFNQueuePolicyResource(accountID, physicalID string, oldPr
 }
 
 func (s *Store) modifyCFNSNSTopic(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::SNS::Topic", physicalID, oldProps, newProps, "TopicName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::SNS::Topic", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	topic, err := s.GetTopicByARN(physicalID)
@@ -421,7 +425,7 @@ func cfnLambdaEnvVars(props map[string]any) (map[string]string, bool) {
 }
 
 func (s *Store) modifyCFNLambdaFunction(accountID, region, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
-	if err := cfnRejectImmutablePropChange("AWS::Lambda::Function", physicalID, oldProps, newProps, "FunctionName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::Lambda::Function", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	fn, err := s.GetFunction(accountID, physicalID)
@@ -494,7 +498,7 @@ func (s *Store) modifyCFNLambdaPermission(accountID, physicalID, logicalID strin
 }
 
 func (s *Store) modifyCFNEventRule(accountID, region, physicalID string, oldProps, newProps map[string]any, auth cfnProvisionAuth) error {
-	if err := cfnRejectImmutablePropChange("AWS::Events::Rule", physicalID, oldProps, newProps, "Name", "EventBusName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::Events::Rule", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	bus, rule, ok := splitCFNEventRulePhysical(physicalID)
@@ -517,7 +521,7 @@ func (s *Store) modifyCFNEventRule(accountID, region, physicalID string, oldProp
 }
 
 func (s *Store) modifyCFNSecret(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::SecretsManager::Secret", physicalID, oldProps, newProps, "Name"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::SecretsManager::Secret", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	if _, ok := newProps["SecretString"]; ok && !cfnPropJSONEqual(oldProps, newProps, "SecretString") {
@@ -555,8 +559,7 @@ func (s *Store) modifyCFNSecret(accountID, physicalID string, oldProps, newProps
 }
 
 func (s *Store) modifyCFNDynamoTable(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::DynamoDB::Table", physicalID, oldProps, newProps,
-		"TableName", "KeySchema", "AttributeDefinitions", "BillingMode"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::DynamoDB::Table", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	name := cfnStringProp(newProps, "TableName")
@@ -570,7 +573,7 @@ func (s *Store) modifyCFNDynamoTable(accountID, physicalID string, oldProps, new
 }
 
 func (s *Store) modifyCFNKMSAlias(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::KMS::Alias", physicalID, oldProps, newProps, "AliasName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::KMS::Alias", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	aliasName := cfnStringProp(newProps, "AliasName")
@@ -612,7 +615,7 @@ func (s *Store) modifyCFNKMSKey(physicalID string, oldProps, newProps map[string
 }
 
 func (s *Store) modifyCFNLogGroup(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::Logs::LogGroup", physicalID, oldProps, newProps, "LogGroupName"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::Logs::LogGroup", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	name := cfnStringProp(newProps, "LogGroupName")
@@ -630,7 +633,7 @@ func (s *Store) modifyCFNLogGroup(accountID, physicalID string, oldProps, newPro
 }
 
 func (s *Store) modifyCFNEventBus(accountID, physicalID string, oldProps, newProps map[string]any) error {
-	if err := cfnRejectImmutablePropChange("AWS::Events::EventBus", physicalID, oldProps, newProps, "Name"); err != nil {
+	if err := cfnRejectImmutablePropChange("AWS::Events::EventBus", physicalID, oldProps, newProps); err != nil {
 		return err
 	}
 	for key := range newProps {

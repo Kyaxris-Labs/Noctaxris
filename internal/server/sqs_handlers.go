@@ -763,7 +763,7 @@ func (s *Server) writeSQSError(
 
 func sqsSendOptsFromParams(attrs map[string]string, params map[string]any) *store.SendMessageOpts {
 	opts := &store.SendMessageOpts{}
-	if n := intFromJSONNumber(params["DelaySeconds"]); n > 0 {
+	if n := intParam(params["DelaySeconds"], 0); n > 0 {
 		opts.DelaySeconds = n
 	}
 	if attrTruthySQS(attrs, "FifoQueue") {
@@ -782,7 +782,7 @@ func sqsSendOptsFromParams(attrs map[string]string, params map[string]any) *stor
 
 func sqsSendOptsFromEntry(attrs map[string]string, entry map[string]any) *store.SendMessageOpts {
 	opts := &store.SendMessageOpts{}
-	if n := intFromJSONNumber(entry["DelaySeconds"]); n > 0 {
+	if n := intParam(entry["DelaySeconds"], 0); n > 0 {
 		opts.DelaySeconds = n
 	}
 	if attrTruthySQS(attrs, "FifoQueue") {
@@ -834,30 +834,5 @@ func anyMapParam(v any) map[string]any {
 		return t
 	default:
 		return nil
-	}
-}
-
-func intParam(v any, def int) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case json.Number:
-		n, err := t.Int64()
-		if err != nil {
-			return def
-		}
-		return int(n)
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(t))
-		if err != nil {
-			return def
-		}
-		return n
-	default:
-		return def
 	}
 }
