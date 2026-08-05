@@ -127,6 +127,7 @@ Failures on assertions happen only when the endpoint is up.
 
 ## Honest limitations
 
+- Nested compute talks to DinD via `github.com/moby/moby/client` + `github.com/moby/moby/api` (not `github.com/docker/docker`). Soft-skip without a healthy engine is unchanged.
 - CloudFormation lab subset: JSON or YAML; ChangeSet lite; nested stacks (lab S3 TemplateURL); drift lite; resources toward lab-fullstack (S3, IAM Role, SQS(+QueuePolicy), DynamoDB, Lambda ZipFile, KMS, SNS, Events, SSM, Secrets, nested Stack); DependsOn + `Ref`/`Fn::GetAtt`/`Fn::Sub`/`Fn::Join`. Unknown types/props fail closed.
 - Default Lambda SDK tests cover Create/Get/List/Delete for every lab zip runtime (Python/Node/Java). Live Invoke is opt-in (`NOCTAXRIS_NESTED=1`) and needs nested DinD.
 - Edge / data / workflow / nested SDK rows (CloudFront edge, Transfer files, Glue crawler, AppConfig deploy, Config history, SFN Choice, CloudTrail delivery, Route53 Alias, ELBv2 rules, AppSync PassRole) run whenever the API is up. Nested OpenSearch / ActiveMQ / Firehose OpenSearch / Lambda MQ ESM rows skip when engines are not Active/RUNNING.

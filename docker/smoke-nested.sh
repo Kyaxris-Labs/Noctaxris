@@ -182,16 +182,38 @@ if [[ "${SKIP_LAMBDA:-0}" != "1" ]]; then
 def handler(event, context):
     return {"ok": True}
 PY
-  (cd "$TMP" && zip -q "$TMP/fn.zip" handler.py)
+  # Prefer zip(1); fall back to Python zipfile when Git Bash/Windows lacks zip.
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$TMP" && zip -q "$TMP/fn.zip" handler.py)
+  else
+    PY=""
+    if command -v python3 >/dev/null 2>&1; then
+      PY=python3
+    elif command -v python >/dev/null 2>&1; then
+      PY=python
+    else
+      echo "zip or python required for Lambda zip Invoke smoke" >&2
+      exit 1
+    fi
+    (cd "$TMP" && "$PY" -c 'import zipfile; zipfile.ZipFile("fn.zip","w").write("handler.py")')
+  fi
+  # Windows AWS CLI needs a drive path; Git Bash mktemp often yields /tmp/...
+  ZIP_FILE="$TMP/fn.zip"
+  if command -v cygpath >/dev/null 2>&1; then
+    ZIP_FILE="$(cygpath -m "$ZIP_FILE")"
+  fi
   FN="smoke-fn-$RANDOM"
   aws lambda create-function \
     --function-name "$FN" \
     --runtime python3.12 \
     --role "$ROLE_ARN" \
     --handler handler.handler \
-    --zip-file "fileb://$TMP/fn.zip" \
+    --zip-file "fileb://${ZIP_FILE}" \
     --endpoint-url "$EP" >/dev/null
   OUT="$TMP/out.json"
+  if command -v cygpath >/dev/null 2>&1; then
+    OUT="$(cygpath -m "$OUT")"
+  fi
   if aws lambda invoke --function-name "$FN" --payload '{}' --endpoint-url "$EP" "$OUT" >/dev/null; then
     grep -q '"ok"' "$OUT" || { echo "invoke payload unexpected: $(cat "$OUT")" >&2; exit 1; }
     echo "Lambda zip Invoke ok"

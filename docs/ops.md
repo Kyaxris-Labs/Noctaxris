@@ -84,7 +84,7 @@ GitHub Actions (`.github/workflows/ci.yml`):
 
 | Job | When |
 |-----|------|
-| unit / compose-static / govulncheck | Every push and PR (`go run ./scripts/govulncheck-ci`; allowlists only documented daemon-side Docker GO IDs with Fixed in: N/A) |
+| unit / compose-static / govulncheck | Every push and PR (`go run ./scripts/govulncheck-ci`; allowlist empty by default after moby client migration; see [security-defaults.md](security-defaults.md)) |
 | race | Scoped `-race` on `internal/kernel` and `internal/store` (`-timeout 30m`; job `timeout-minutes: 40`) |
 | image | `docker build -f docker/Dockerfile .` |
 | smoke-core | Every push and PR (after unit + compose-static + image): Compose up → ready → STS/S3/KMS/DynamoDB CLI; audit JSONL must not contain the root secret |

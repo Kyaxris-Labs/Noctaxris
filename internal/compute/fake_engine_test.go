@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // fakeEngine is a minimal Docker Engine HTTP API for unit tests (no DinD).
@@ -520,7 +520,7 @@ func newTestComputeClient(t *testing.T, eng *fakeEngine) (*Client, *httptest.Ser
 	if err != nil {
 		t.Fatal(err)
 	}
-	dockerCLI, err := client.NewClientWithOpts(
+	dockerCLI, err := client.New(
 		client.WithHost("tcp://"+u.Host),
 		client.WithHTTPClient(srv.Client()),
 		client.WithAPIVersionNegotiation(),

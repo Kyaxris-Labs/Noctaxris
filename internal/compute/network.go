@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -21,24 +22,25 @@ func (c *Client) ensureInternalNetwork(ctx context.Context, name string) (string
 	if c == nil || c.cli == nil {
 		return "", fmt.Errorf("compute: client unavailable")
 	}
-	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
+	networks, err := c.cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("compute: list networks: %w", err)
 	}
-	for _, n := range networks {
+	for _, n := range networks.Items {
 		if n.Name != name {
 			continue
 		}
-		insp, err := c.cli.NetworkInspect(ctx, n.ID, network.InspectOptions{})
+		inspRes, err := c.cli.NetworkInspect(ctx, n.ID, client.NetworkInspectOptions{})
 		if err != nil {
 			return "", fmt.Errorf("compute: inspect network %s: %w", name, err)
 		}
+		insp := inspRes.Network
 		if !insp.Internal {
 			return "", fmt.Errorf("compute: network %s exists but is not Internal (refuse reuse)", name)
 		}
 		return n.ID, nil
 	}
-	resp, err := c.cli.NetworkCreate(ctx, name, network.CreateOptions{
+	resp, err := c.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{
 		Driver:   "bridge",
 		Internal: true,
 		Labels: map[string]string{
@@ -60,30 +62,31 @@ func (c *Client) ensureFunctionNetwork(ctx context.Context, name string) (string
 	if c == nil || c.cli == nil {
 		return "", fmt.Errorf("compute: client unavailable")
 	}
-	networks, err := c.cli.NetworkList(ctx, network.ListOptions{})
+	networks, err := c.cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return "", fmt.Errorf("compute: list networks: %w", err)
 	}
-	for _, n := range networks {
+	for _, n := range networks.Items {
 		if n.Name != name {
 			continue
 		}
-		insp, err := c.cli.NetworkInspect(ctx, n.ID, network.InspectOptions{})
+		inspRes, err := c.cli.NetworkInspect(ctx, n.ID, client.NetworkInspectOptions{})
 		if err != nil {
 			return "", fmt.Errorf("compute: inspect network %s: %w", name, err)
 		}
+		insp := inspRes.Network
 		if functionNetworkPostureOK(insp) {
 			return n.ID, nil
 		}
 		if len(insp.Containers) > 0 {
 			return "", fmt.Errorf("compute: network %s exists with incompatible egress posture and has active containers (remove or recreate)", name)
 		}
-		if err := c.cli.NetworkRemove(ctx, n.ID); err != nil {
+		if _, err := c.cli.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{}); err != nil {
 			return "", fmt.Errorf("compute: remove incompatible network %s: %w", name, err)
 		}
 		break
 	}
-	resp, err := c.cli.NetworkCreate(ctx, name, network.CreateOptions{
+	resp, err := c.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{
 		Driver:   "bridge",
 		Internal: false,
 		Options: map[string]string{

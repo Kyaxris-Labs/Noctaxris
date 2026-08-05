@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
@@ -882,6 +883,18 @@ func logsInt64Param(v any) int64 {
 		return n
 	case int:
 		return int64(n)
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil {
+			return 0
+		}
+		return i
+	case string:
+		i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return i
 	default:
 		return 0
 	}

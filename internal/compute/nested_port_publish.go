@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 // EnvNestedPortPublish gates engine-side PortBindings for nested data containers.
@@ -56,15 +56,15 @@ func dataPlanePortPublishEnabled(kind DataKind, containerPort int) bool {
 
 // dataPlaneExposedPorts returns ExposedPorts when port publish is enabled for kind.
 // Empty when disabled or containerPort is non-positive.
-func dataPlaneExposedPorts(containerPort int, kind DataKind) nat.PortSet {
+func dataPlaneExposedPorts(containerPort int, kind DataKind) network.PortSet {
 	if !dataPlanePortPublishEnabled(kind, containerPort) {
 		return nil
 	}
-	p, err := nat.NewPort("tcp", strconv.Itoa(containerPort))
+	p, err := network.ParsePort(strconv.Itoa(containerPort) + "/tcp")
 	if err != nil {
 		return nil
 	}
-	return nat.PortSet{p: struct{}{}}
+	return network.PortSet{p: struct{}{}}
 }
 
 // applyDataPlanePortPublish sets PortBindings on hc when the opt-in gate is on.
@@ -75,12 +75,12 @@ func applyDataPlanePortPublish(hc *container.HostConfig, containerPort int, kind
 	if hc == nil || !dataPlanePortPublishEnabled(kind, containerPort) {
 		return
 	}
-	p, err := nat.NewPort("tcp", strconv.Itoa(containerPort))
+	p, err := network.ParsePort(strconv.Itoa(containerPort) + "/tcp")
 	if err != nil {
 		return
 	}
-	hc.PortBindings = nat.PortMap{
-		p: []nat.PortBinding{{
+	hc.PortBindings = network.PortMap{
+		p: []network.PortBinding{{
 			HostPort: strconv.Itoa(containerPort),
 		}},
 	}

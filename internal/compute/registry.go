@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/client"
 )
 
 // LoadImageFromTar loads an image archive into the nested engine.
@@ -18,8 +18,8 @@ func (c *Client) LoadImageFromTar(ctx context.Context, tar io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("compute: image load: %w", err)
 	}
-	defer resp.Body.Close()
-	_, err = io.Copy(io.Discard, resp.Body)
+	defer resp.Close()
+	_, err = io.Copy(io.Discard, resp)
 	if err != nil {
 		return fmt.Errorf("compute: image load response: %w", err)
 	}
@@ -31,7 +31,7 @@ func (c *Client) TagImage(ctx context.Context, source, target string) error {
 	if c == nil || c.cli == nil {
 		return fmt.Errorf("compute: client is nil")
 	}
-	if err := c.cli.ImageTag(ctx, source, target); err != nil {
+	if _, err := c.cli.ImageTag(ctx, client.ImageTagOptions{Source: source, Target: target}); err != nil {
 		return fmt.Errorf("compute: image tag %q -> %q: %w", source, target, err)
 	}
 	return nil
@@ -47,7 +47,7 @@ func (c *Client) PullLabRegistryImage(ctx context.Context, ref, username, passwo
 		return err
 	}
 	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-	rc, err := c.cli.ImagePull(ctx, ref, image.PullOptions{RegistryAuth: auth})
+	rc, err := c.cli.ImagePull(ctx, ref, client.ImagePullOptions{RegistryAuth: auth})
 	if err != nil {
 		return fmt.Errorf("compute: pull %s: %w", ref, err)
 	}

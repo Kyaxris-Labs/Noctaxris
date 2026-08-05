@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // CodeBuildWorkspaceDir is the nested CodeBuild source root inside ECS task containers.
@@ -96,11 +96,17 @@ func (c *Client) CopyToContainer(ctx context.Context, containerID, destPath stri
 		return err
 	}
 	if len(mkdirTar) > 0 {
-		if err := c.cli.CopyToContainer(ctx, cid, "/", bytes.NewReader(mkdirTar), container.CopyToContainerOptions{}); err != nil {
+		if _, err := c.cli.CopyToContainer(ctx, cid, client.CopyToContainerOptions{
+			DestinationPath: "/",
+			Content:         bytes.NewReader(mkdirTar),
+		}); err != nil {
 			return fmt.Errorf("compute: ensure container dirs %s: %w", dst, err)
 		}
 	}
-	if err := c.cli.CopyToContainer(ctx, cid, dst, tarStream, container.CopyToContainerOptions{}); err != nil {
+	if _, err := c.cli.CopyToContainer(ctx, cid, client.CopyToContainerOptions{
+		DestinationPath: dst,
+		Content:         tarStream,
+	}); err != nil {
 		return fmt.Errorf("compute: copy to container %s:%s: %w", cid, dst, err)
 	}
 	return nil
@@ -120,11 +126,11 @@ func (c *Client) CopyFromContainer(ctx context.Context, containerID, srcPath str
 		return nil, err
 	}
 	src := path.Clean(srcPath)
-	rc, _, err := c.cli.CopyFromContainer(ctx, cid, src)
+	res, err := c.cli.CopyFromContainer(ctx, cid, client.CopyFromContainerOptions{SourcePath: src})
 	if err != nil {
 		return nil, fmt.Errorf("compute: copy from container %s:%s: %w", cid, src, err)
 	}
-	return rc, nil
+	return res.Content, nil
 }
 
 // WorkspaceTarHasFileEntries reports whether tarData contains at least one non-root path entry.

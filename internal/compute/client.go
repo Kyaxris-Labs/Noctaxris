@@ -28,8 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -69,7 +68,7 @@ func NewClient(dockerHost, tlsCertPath, listenAddr string) (*Client, error) {
 		filepath.Join(p, "cert.pem"),
 		filepath.Join(p, "key.pem"),
 	))
-	cli, err := client.NewClientWithOpts(opts...)
+	cli, err := client.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("compute: docker client: %w", err)
 	}
@@ -86,7 +85,7 @@ func (c *Client) Close() error {
 
 // Ping checks that the nested engine is reachable.
 func (c *Client) Ping(ctx context.Context) error {
-	if _, err := c.cli.Ping(ctx); err != nil {
+	if _, err := c.cli.Ping(ctx, client.PingOptions{}); err != nil {
 		return fmt.Errorf("compute: ping engine: %w", err)
 	}
 	return nil
@@ -124,7 +123,7 @@ func (c *Client) pullImage(ctx context.Context, ref string) error {
 	if err := AllowImagePull(ref, listen); err != nil {
 		return err
 	}
-	rc, err := c.cli.ImagePull(ctx, ref, image.PullOptions{})
+	rc, err := c.cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}

@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
 )
 
 func TestNestedPortPublishDefaultOff(t *testing.T) {
@@ -36,7 +36,7 @@ func TestNestedPortPublishOptInBindings(t *testing.T) {
 		t.Fatal("NOCTAXRIS_NESTED_PORT_PUBLISH=1 must enable publish")
 	}
 	exposed := dataPlaneExposedPorts(5432, DataKindRDS)
-	p, err := nat.NewPort("tcp", "5432")
+	p, err := network.ParsePort("5432/tcp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,13 +53,13 @@ func TestNestedPortPublishOptInBindings(t *testing.T) {
 	}
 	// Empty HostIP: bind on DinD engine eth0 so Compose can forward; operator
 	// loopback is the Compose overlay (127.0.0.1), not this DinD-side map.
-	if bindings[0].HostIP != "" {
-		t.Fatalf("HostIP=%q want empty (engine-side eth0)", bindings[0].HostIP)
+	if bindings[0].HostIP.IsValid() {
+		t.Fatalf("HostIP=%v want empty (engine-side eth0)", bindings[0].HostIP)
 	}
 
 	t.Setenv(EnvNestedPortPublish, "true")
 	hc = dataPlaneHostConfig(6379, DataKindElastiCache)
-	p6379, err := nat.NewPort("tcp", strconv.Itoa(6379))
+	p6379, err := network.ParsePort(strconv.Itoa(6379) + "/tcp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestBrokerPortPublishNarrowGate(t *testing.T) {
 		}
 	}
 
-	p9092, err := nat.NewPort("tcp", "9092")
+	p9092, err := network.ParsePort("9092/tcp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestBrokerPortPublishNarrowGate(t *testing.T) {
 		t.Fatalf("MSK PortBindings=%#v", hcMSK.PortBindings)
 	}
 
-	p1883, err := nat.NewPort("tcp", "1883")
+	p1883, err := network.ParsePort("1883/tcp")
 	if err != nil {
 		t.Fatal(err)
 	}

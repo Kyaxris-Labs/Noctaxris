@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -157,16 +158,26 @@ exec python /tmp/noctaxris-ec2-imds.py`, ec2IMDSDocRoot, ec2IMDSDocRoot, EC2IMDS
 			EC2NetworkName: {},
 		},
 	}
-	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, EC2IMDSContainerName)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: netCfg,
+		Name:             EC2IMDSContainerName,
+	})
 	if err != nil {
 		_ = c.removeEC2IMDSContainer(ctx)
-		create, err = c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, EC2IMDSContainerName)
+		create, err = c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Config:           cfg,
+			HostConfig:       hostConfig,
+			NetworkingConfig: netCfg,
+			Name:             EC2IMDSContainerName,
+		})
 		if err != nil {
 			return "", fmt.Errorf("compute: ec2 imds create: %w", err)
 		}
 	}
-	if err := c.cli.ContainerStart(ctx, create.ID, container.StartOptions{}); err != nil {
-		_ = c.cli.ContainerRemove(context.Background(), create.ID, container.RemoveOptions{Force: true})
+	if _, err := c.cli.ContainerStart(ctx, create.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = c.cli.ContainerRemove(context.Background(), create.ID, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("compute: ec2 imds start: %w", err)
 	}
 	ip, ok := c.ec2IMDSRunningIP(ctx)
@@ -177,10 +188,11 @@ exec python /tmp/noctaxris-ec2-imds.py`, ec2IMDSDocRoot, ec2IMDSDocRoot, EC2IMDS
 }
 
 func (c *Client) ec2IMDSRunningIP(ctx context.Context) (string, bool) {
-	insp, err := c.cli.ContainerInspect(ctx, EC2IMDSContainerName)
+	inspRes, err := c.cli.ContainerInspect(ctx, EC2IMDSContainerName, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", false
 	}
+	insp := inspRes.Container
 	if insp.State == nil || !insp.State.Running {
 		return "", false
 	}
@@ -191,16 +203,16 @@ func (c *Client) ec2IMDSRunningIP(ctx context.Context) (string, bool) {
 	if !ok || ep == nil {
 		return "", false
 	}
-	ip := strings.TrimSpace(ep.IPAddress)
-	if ip == "" {
+	ip := ep.IPAddress
+	if !ip.IsValid() {
 		return "", false
 	}
-	return ip, true
+	return ip.String(), true
 }
 
 func (c *Client) removeEC2IMDSContainer(ctx context.Context) error {
-	err := c.cli.ContainerRemove(ctx, EC2IMDSContainerName, container.RemoveOptions{Force: true})
-	if err == nil || errdefs.IsNotFound(err) {
+	_, err := c.cli.ContainerRemove(ctx, EC2IMDSContainerName, client.ContainerRemoveOptions{Force: true})
+	if err == nil || cerrdefs.IsNotFound(err) {
 		return nil
 	}
 	return err
@@ -216,10 +228,11 @@ func (c *Client) registerEC2IMDSMeta(ctx context.Context, clientIP string, meta 
 	if err != nil {
 		return fmt.Errorf("compute: ec2 imds meta json: %w", err)
 	}
-	insp, err := c.cli.ContainerInspect(ctx, EC2IMDSContainerName)
+	inspRes, err := c.cli.ContainerInspect(ctx, EC2IMDSContainerName, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("compute: ec2 imds register inspect: %w", err)
 	}
+	insp := inspRes.Container
 	path := ec2IMDSDocRoot + "/" + ip + ".json"
 	res, err := c.Exec(ctx, ExecOpts{
 		ContainerID: insp.ID,
@@ -251,10 +264,11 @@ func (c *Client) ContainerNetworkIP(ctx context.Context, containerID, networkNam
 	if cid == "" || netName == "" {
 		return "", fmt.Errorf("compute: container ID and network name are required")
 	}
-	insp, err := c.cli.ContainerInspect(ctx, cid)
+	inspRes, err := c.cli.ContainerInspect(ctx, cid, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("compute: container inspect: %w", err)
 	}
+	insp := inspRes.Container
 	if insp.NetworkSettings == nil || insp.NetworkSettings.Networks == nil {
 		return "", fmt.Errorf("compute: container has no network settings")
 	}
@@ -262,9 +276,9 @@ func (c *Client) ContainerNetworkIP(ctx context.Context, containerID, networkNam
 	if !ok || ep == nil {
 		return "", fmt.Errorf("compute: container not on network %s", netName)
 	}
-	ip := strings.TrimSpace(ep.IPAddress)
-	if ip == "" {
+	ip := ep.IPAddress
+	if !ip.IsValid() {
 		return "", fmt.Errorf("compute: container has no IP on %s", netName)
 	}
-	return ip, nil
+	return ip.String(), nil
 }

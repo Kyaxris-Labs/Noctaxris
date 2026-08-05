@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -150,13 +151,18 @@ func (c *Client) StartEC2Instance(ctx context.Context, opts EC2RunOpts) (EC2Star
 			EC2NetworkName: {},
 		},
 	}
-	create, err := c.cli.ContainerCreate(ctx, cfg, ec2TaskHostConfig(opts.MemoryMB, imdsHosts), netCfg, nil, name)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       ec2TaskHostConfig(opts.MemoryMB, imdsHosts),
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return EC2StartResult{}, fmt.Errorf("compute: ec2 container create: %w", err)
 	}
 	cid := create.ID
-	if err := c.cli.ContainerStart(ctx, cid, container.StartOptions{}); err != nil {
-		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+	if _, err := c.cli.ContainerStart(ctx, cid, client.ContainerStartOptions{}); err != nil {
+		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 		return EC2StartResult{}, fmt.Errorf("compute: ec2 container start: %w", err)
 	}
 
@@ -222,8 +228,8 @@ func (c *Client) StopEC2Instance(ctx context.Context, containerID string) error 
 		return fmt.Errorf("compute: container ID is required")
 	}
 	timeout := 30
-	if err := c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		if errdefs.IsNotFound(err) {
+	if _, err := c.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("compute: ec2 container stop: %w", err)
@@ -237,7 +243,7 @@ func (c *Client) StartStoppedEC2Instance(ctx context.Context, containerID string
 	if containerID == "" {
 		return fmt.Errorf("compute: container ID is required")
 	}
-	if err := c.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+	if _, err := c.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("compute: ec2 container start: %w", err)
 	}
 	return nil
@@ -249,8 +255,8 @@ func (c *Client) TerminateEC2Instance(ctx context.Context, containerID string) e
 	if containerID == "" {
 		return fmt.Errorf("compute: container ID is required")
 	}
-	if err := c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
-		if errdefs.IsNotFound(err) {
+	if _, err := c.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("compute: ec2 container remove: %w", err)

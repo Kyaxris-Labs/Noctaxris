@@ -11,11 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
-	"github.com/docker/docker/pkg/stdcopy"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -406,13 +407,18 @@ func (c *Client) StartDataPlane(ctx context.Context, opts DataPlaneOpts) (DataPl
 		},
 	}
 
-	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, name)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container create: %w", err)
 	}
 	cid := create.ID
-	if err := c.cli.ContainerStart(ctx, cid, container.StartOptions{}); err != nil {
-		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+	if _, err := c.cli.ContainerStart(ctx, cid, client.ContainerStartOptions{}); err != nil {
+		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container start: %w", err)
 	}
 
@@ -438,8 +444,9 @@ func (c *Client) EnsureDataPlaneByName(ctx context.Context, opts DataPlaneOpts) 
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane Name is required for ensure")
 	}
 	wantHash := dataPlaneBindsHash(opts.Binds)
-	insp, err := c.cli.ContainerInspect(ctx, name)
+	inspRes, err := c.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err == nil {
+		insp := inspRes.Container
 		port := opts.ContainerPort
 		if port == 0 {
 			port = DefaultDataPlanePort(opts.Kind)
@@ -464,7 +471,7 @@ func (c *Client) EnsureDataPlaneByName(ctx context.Context, opts DataPlaneOpts) 
 				Running:     true,
 			}, nil
 		}
-		if err := c.cli.ContainerStart(ctx, insp.ID, container.StartOptions{}); err != nil {
+		if _, err := c.cli.ContainerStart(ctx, insp.ID, client.ContainerStartOptions{}); err != nil {
 			return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container start: %w", err)
 		}
 		return DataPlaneInstance{
@@ -476,7 +483,7 @@ func (c *Client) EnsureDataPlaneByName(ctx context.Context, opts DataPlaneOpts) 
 			Running:     true,
 		}, nil
 	}
-	if !errdefs.IsNotFound(err) {
+	if !cerrdefs.IsNotFound(err) {
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane inspect: %w", err)
 	}
 	return c.StartDataPlane(ctx, opts)
@@ -502,13 +509,13 @@ func (c *Client) StopDataPlane(ctx context.Context, containerID string) error {
 		return fmt.Errorf("compute: container ID is required")
 	}
 	timeout := 10
-	if err := c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		if !errdefs.IsNotFound(err) {
+	if _, err := c.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("compute: data-plane container stop: %w", err)
 		}
 	}
-	if err := c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
-		if errdefs.IsNotFound(err) {
+	if _, err := c.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("compute: data-plane container remove: %w", err)
@@ -525,13 +532,14 @@ func (c *Client) InspectDataPlane(ctx context.Context, containerID string) (Data
 	if containerID == "" {
 		return DataPlaneInstance{}, fmt.Errorf("compute: container ID is required")
 	}
-	insp, err := c.cli.ContainerInspect(ctx, containerID)
+	inspRes, err := c.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container not found")
 		}
 		return DataPlaneInstance{}, fmt.Errorf("compute: data-plane container inspect: %w", err)
 	}
+	insp := inspRes.Container
 	kind := DataKind(insp.Config.Labels[LabelDataKind])
 	port := DefaultDataPlanePort(kind)
 	name := strings.TrimPrefix(insp.Name, "/")
@@ -562,13 +570,14 @@ func (c *Client) WaitDataPlaneHealthy(ctx context.Context, containerID string) e
 	defer ticker.Stop()
 	var runningSince time.Time
 	for {
-		insp, err := c.cli.ContainerInspect(ctx, containerID)
+		inspRes, err := c.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 		if err != nil {
-			if errdefs.IsNotFound(err) {
+			if cerrdefs.IsNotFound(err) {
 				return fmt.Errorf("compute: data-plane container not found")
 			}
 			return fmt.Errorf("compute: data-plane container inspect: %w", err)
 		}
+		insp := inspRes.Container
 		if insp.State != nil && insp.State.Running {
 			if runningSince.IsZero() {
 				runningSince = time.Now()
@@ -604,7 +613,7 @@ func (c *Client) DataPlaneLogs(ctx context.Context, containerID string) (string,
 	if containerID == "" {
 		return "", fmt.Errorf("compute: container ID is required")
 	}
-	rc, err := c.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+	rc, err := c.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       "200",

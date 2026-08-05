@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -311,6 +312,12 @@ func ssmIntParam(v any, def int) int {
 			return def
 		}
 		return int(i)
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(t))
+		if err != nil {
+			return def
+		}
+		return i
 	default:
 		return def
 	}

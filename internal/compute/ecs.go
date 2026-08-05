@@ -6,10 +6,11 @@ import (
 	"io"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -134,7 +135,12 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		},
 	}
 
-	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, name)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("compute: ecs container create: %w", err)
 	}
@@ -145,19 +151,19 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 			dest = CodeBuildWorkspaceDir
 		}
 		if err := ValidateCodeBuildContainerPath(dest); err != nil {
-			_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+			_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 			return "", err
 		}
 		if err := c.CopyToContainer(ctx, cid, dest, opts.PreStartCopyTar); err != nil {
-			_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+			_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 			return "", err
 		}
 	} else if strings.TrimSpace(opts.PreStartCopyDest) != "" {
-		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("compute: PreStartCopyDest set without PreStartCopyTar")
 	}
-	if err := c.cli.ContainerStart(ctx, cid, container.StartOptions{}); err != nil {
-		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+	if _, err := c.cli.ContainerStart(ctx, cid, client.ContainerStartOptions{}); err != nil {
+		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("compute: ecs container start: %w", err)
 	}
 	return cid, nil
@@ -170,10 +176,10 @@ func (c *Client) StopECSTask(ctx context.Context, containerID string) error {
 		return fmt.Errorf("compute: container ID is required")
 	}
 	timeout := 10
-	if err := c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+	if _, err := c.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		return fmt.Errorf("compute: ecs container stop: %w", err)
 	}
-	if err := c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+	if _, err := c.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("compute: ecs container remove: %w", err)
 	}
 	return nil
@@ -186,14 +192,14 @@ func (c *Client) WaitECSTaskExit(ctx context.Context, containerID string) (int64
 	if containerID == "" {
 		return -1, fmt.Errorf("compute: container ID is required")
 	}
-	statusCh, errCh := c.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	wait := c.cli.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
-	case err := <-errCh:
+	case err := <-wait.Error:
 		if err != nil {
 			return -1, fmt.Errorf("compute: ecs container wait: %w", err)
 		}
 		return 0, nil
-	case st := <-statusCh:
+	case st := <-wait.Result:
 		if st.Error != nil && st.Error.Message != "" {
 			return st.StatusCode, fmt.Errorf("compute: ecs container wait: %s", st.Error.Message)
 		}
@@ -210,12 +216,13 @@ func (c *Client) ContainerRunning(ctx context.Context, containerID string) (bool
 	if containerID == "" {
 		return false, fmt.Errorf("compute: container ID is required")
 	}
-	insp, err := c.cli.ContainerInspect(ctx, containerID)
+	inspRes, err := c.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("compute: ecs container inspect: %w", err)
 	}
+	insp := inspRes.Container
 	return insp.State != nil && insp.State.Running, nil
 }

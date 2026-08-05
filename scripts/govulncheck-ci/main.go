@@ -2,8 +2,8 @@
 // whose OSV IDs are not listed in scripts/govulncheck-allowlist.txt.
 //
 // govulncheck has no native per-ID exclude (golang/go#61211). This keeps the
-// scan active for every other vulnerability while documenting residual
-// daemon-side Docker Engine IDs with Fixed in: N/A on github.com/docker/docker.
+// scan active for every other vulnerability while allowing an explicit, empty-
+// by-default residual allowlist (see scripts/govulncheck-allowlist.txt).
 package main
 
 import (

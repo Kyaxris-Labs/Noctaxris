@@ -1,7 +1,7 @@
 package compute
 
 import (
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 )
 
 // nestedTaskPidsLimit caps processes inside nested Lambda/ECS lab containers.

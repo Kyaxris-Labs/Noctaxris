@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -176,17 +177,27 @@ func (c *Client) ensureECSIMDSMirror(ctx context.Context) (string, error) {
 			ECSNetworkName: {},
 		},
 	}
-	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, ECSIMDSContainerName)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: netCfg,
+		Name:             ECSIMDSContainerName,
+	})
 	if err != nil {
 		// Stale name after a failed remove or race: force remove and retry once.
 		_ = c.removeECSIMDSContainer(ctx)
-		create, err = c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, ECSIMDSContainerName)
+		create, err = c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Config:           cfg,
+			HostConfig:       hostConfig,
+			NetworkingConfig: netCfg,
+			Name:             ECSIMDSContainerName,
+		})
 		if err != nil {
 			return "", fmt.Errorf("compute: ecs imds create: %w", err)
 		}
 	}
-	if err := c.cli.ContainerStart(ctx, create.ID, container.StartOptions{}); err != nil {
-		_ = c.cli.ContainerRemove(context.Background(), create.ID, container.RemoveOptions{Force: true})
+	if _, err := c.cli.ContainerStart(ctx, create.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = c.cli.ContainerRemove(context.Background(), create.ID, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("compute: ecs imds start: %w", err)
 	}
 	ip, ok := c.ecsIMDSRunningIP(ctx)
@@ -197,10 +208,11 @@ func (c *Client) ensureECSIMDSMirror(ctx context.Context) (string, error) {
 }
 
 func (c *Client) ecsIMDSRunningIP(ctx context.Context) (string, bool) {
-	insp, err := c.cli.ContainerInspect(ctx, ECSIMDSContainerName)
+	inspRes, err := c.cli.ContainerInspect(ctx, ECSIMDSContainerName, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", false
 	}
+	insp := inspRes.Container
 	if insp.State == nil || !insp.State.Running {
 		return "", false
 	}
@@ -211,16 +223,16 @@ func (c *Client) ecsIMDSRunningIP(ctx context.Context) (string, bool) {
 	if !ok || ep == nil {
 		return "", false
 	}
-	ip := strings.TrimSpace(ep.IPAddress)
-	if ip == "" {
+	ip := ep.IPAddress
+	if !ip.IsValid() {
 		return "", false
 	}
-	return ip, true
+	return ip.String(), true
 }
 
 func (c *Client) removeECSIMDSContainer(ctx context.Context) error {
-	err := c.cli.ContainerRemove(ctx, ECSIMDSContainerName, container.RemoveOptions{Force: true})
-	if err == nil || errdefs.IsNotFound(err) {
+	_, err := c.cli.ContainerRemove(ctx, ECSIMDSContainerName, client.ContainerRemoveOptions{Force: true})
+	if err == nil || cerrdefs.IsNotFound(err) {
 		return nil
 	}
 	return err
@@ -242,10 +254,11 @@ func (c *Client) registerECSIMDSCredentials(ctx context.Context, credID string, 
 	if len(body) == 0 {
 		return fmt.Errorf("compute: imds credential body is empty")
 	}
-	insp, err := c.cli.ContainerInspect(ctx, ECSIMDSContainerName)
+	inspRes, err := c.cli.ContainerInspect(ctx, ECSIMDSContainerName, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("compute: imds register inspect: %w", err)
 	}
+	insp := inspRes.Container
 	path := ecsIMDSDocRoot + ecsIMDSRelativePrefix + id
 	res, err := c.Exec(ctx, ExecOpts{
 		ContainerID: insp.ID,

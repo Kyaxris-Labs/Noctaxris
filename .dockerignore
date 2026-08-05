@@ -2,6 +2,8 @@
 .local
 .cursor
 .superpowers
+.worktrees
+.gocache
 .env
 **/.env
 docker/.env
@@ -21,3 +23,4 @@ tests/
 **/node_modules/
 **/.pytest_cache/
 **/.terraform/
+docker/.smoke-*

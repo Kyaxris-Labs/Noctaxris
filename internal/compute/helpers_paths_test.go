@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 func TestDirTreeTarBoundaries(t *testing.T) {
@@ -140,16 +140,20 @@ func TestHostConfigSecurityOKNegatives(t *testing.T) {
 
 func TestFunctionNetworkPostureExtraCases(t *testing.T) {
 	if !functionNetworkPostureOK(network.Inspect{
-		Internal: false,
-		Driver:   "BRIDGE",
-		Options:  map[string]string{bridgeNoMasquerade: "0"},
+		Network: network.Network{
+			Internal: false,
+			Driver:   "BRIDGE",
+			Options:  map[string]string{bridgeNoMasquerade: "0"},
+		},
 	}) {
 		t.Fatal("masq 0")
 	}
 	if functionNetworkPostureOK(network.Inspect{
-		Internal: false,
-		Driver:   "overlay",
-		Options:  map[string]string{bridgeNoMasquerade: "false"},
+		Network: network.Network{
+			Internal: false,
+			Driver:   "overlay",
+			Options:  map[string]string{bridgeNoMasquerade: "false"},
+		},
 	}) {
 		t.Fatal("overlay")
 	}

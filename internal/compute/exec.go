@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 )
 
 // ExecOpts configures a one-shot command inside a running nested container.
@@ -41,7 +41,7 @@ func (c *Client) Exec(ctx context.Context, opts ExecOpts) (ExecResult, error) {
 		return ExecResult{}, fmt.Errorf("compute: exec Cmd is required")
 	}
 	attachStdin := opts.Stdin != ""
-	create, err := c.cli.ContainerExecCreate(ctx, cid, container.ExecOptions{
+	create, err := c.cli.ExecCreate(ctx, cid, client.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		AttachStdin:  attachStdin,
@@ -51,7 +51,7 @@ func (c *Client) Exec(ctx context.Context, opts ExecOpts) (ExecResult, error) {
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("compute: exec create: %w", err)
 	}
-	attach, err := c.cli.ContainerExecAttach(ctx, create.ID, container.ExecAttachOptions{})
+	attach, err := c.cli.ExecAttach(ctx, create.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("compute: exec attach: %w", err)
 	}
@@ -68,7 +68,7 @@ func (c *Client) Exec(ctx context.Context, opts ExecOpts) (ExecResult, error) {
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && err != io.EOF {
 		return ExecResult{}, fmt.Errorf("compute: exec copy: %w", err)
 	}
-	insp, err := c.cli.ContainerExecInspect(ctx, create.ID)
+	insp, err := c.cli.ExecInspect(ctx, create.ID, client.ExecInspectOptions{})
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("compute: exec inspect: %w", err)
 	}

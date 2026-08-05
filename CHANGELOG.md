@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Nested compute: migrate Engine client from `github.com/docker/docker` to `github.com/moby/moby/client` + `github.com/moby/moby/api`; `scripts/govulncheck-allowlist.txt` empty of Fixed-N/A Engine IDs (see [docs/security-defaults.md](docs/security-defaults.md))
 - API Gateway REST: TOKEN/REQUEST Lambda authorizers (`Create`/`Get`/`GetAuthorizers`/`DeleteAuthorizer`; method `CUSTOM`/`TOKEN`/`REQUEST` + `AuthorizerId`); usage plans and API keys lite (`Create`/`Get`/`Delete` ApiKey and UsagePlan, UsagePlanKey associate); invoke fail-closed Allow/Deny and `x-api-key` when `apiKeyRequired` or stage is under a usage plan
 - KMS: asymmetric lab keys — `CreateKey` `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` (`KeyUsage` `SIGN_VERIFY`); sealed PKCS8 material; `Sign`/`Verify` (`RSASSA_PSS_SHA_256` primary, also `RSASSA_PKCS1_V1_5_SHA_256`); `GetPublicKey` PEM SPKI; symmetric keys reject Sign/Verify fail-closed
 - Step Functions: `waitForTaskToken` Task pause (Resource `.waitForTaskToken` or Parameters with `WaitForTaskToken` / `$$.Task.Token`); `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat`; execution stays `RUNNING` until callback

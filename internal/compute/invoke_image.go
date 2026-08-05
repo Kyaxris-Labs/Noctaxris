@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // ImageRunOpts configures a one-shot lab Lambda invoke from a container image.
@@ -185,28 +186,33 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 		},
 	}
 
-	create, err := c.cli.ContainerCreate(ctx, cfg, hostConfig, netCfg, nil, name)
+	create, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostConfig,
+		NetworkingConfig: netCfg,
+		Name:             name,
+	})
 	if err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: container create: %w", err)
 	}
 	cid := create.ID
 	defer func() {
-		_ = c.cli.ContainerRemove(context.Background(), cid, container.RemoveOptions{Force: true})
+		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 	}()
 
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	if err := c.cli.ContainerStart(runCtx, cid, container.StartOptions{}); err != nil {
+	if _, err := c.cli.ContainerStart(runCtx, cid, client.ContainerStartOptions{}); err != nil {
 		return InvokeResult{}, fmt.Errorf("compute: container start: %w", err)
 	}
 
-	statusCh, errCh := c.cli.ContainerWait(runCtx, cid, container.WaitConditionNotRunning)
+	wait := c.cli.ContainerWait(runCtx, cid, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
-	case err := <-errCh:
-		_ = c.cli.ContainerStop(context.Background(), cid, container.StopOptions{Timeout: &stopTimeout})
+	case err := <-wait.Error:
+		_, _ = c.cli.ContainerStop(context.Background(), cid, client.ContainerStopOptions{Timeout: &stopTimeout})
 		return InvokeResult{}, fmt.Errorf("compute: container wait: %w", err)
-	case st := <-statusCh:
+	case st := <-wait.Result:
 		if st.Error != nil && st.Error.Message != "" {
 			return InvokeResult{}, fmt.Errorf("compute: container wait: %s", st.Error.Message)
 		}
@@ -219,7 +225,7 @@ func (c *Client) RunImageInvoke(ctx context.Context, opts ImageRunOpts) (InvokeR
 		}
 		return InvokeResult{Payload: payload, Logs: logs}, nil
 	case <-runCtx.Done():
-		_ = c.cli.ContainerStop(context.Background(), cid, container.StopOptions{Timeout: &stopTimeout})
+		_, _ = c.cli.ContainerStop(context.Background(), cid, client.ContainerStopOptions{Timeout: &stopTimeout})
 		logs, _, _ := c.collectLogs(context.Background(), cid)
 		return InvokeResult{Logs: logs}, fmt.Errorf("compute: invoke timeout after %ds: %w", timeout, runCtx.Err())
 	}

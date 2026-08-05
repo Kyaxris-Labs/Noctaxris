@@ -3,7 +3,7 @@ package compute
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/network"
 )
 
 func TestFunctionNetworkPostureOK(t *testing.T) {
@@ -15,30 +15,38 @@ func TestFunctionNetworkPostureOK(t *testing.T) {
 		{
 			name: "lab posture",
 			insp: network.Inspect{
-				Internal: false,
-				Driver:   "bridge",
-				Options:  map[string]string{bridgeNoMasquerade: "false"},
+				Network: network.Network{
+					Internal: false,
+					Driver:   "bridge",
+					Options:  map[string]string{bridgeNoMasquerade: "false"},
+				},
 			},
 			ok: true,
 		},
 		{
 			name: "legacy internal",
-			insp: network.Inspect{Internal: true, Driver: "bridge"},
-			ok:   false,
+			insp: network.Inspect{
+				Network: network.Network{Internal: true, Driver: "bridge"},
+			},
+			ok: false,
 		},
 		{
 			name: "masquerade enabled",
 			insp: network.Inspect{
-				Internal: false,
-				Driver:   "bridge",
-				Options:  map[string]string{bridgeNoMasquerade: "true"},
+				Network: network.Network{
+					Internal: false,
+					Driver:   "bridge",
+					Options:  map[string]string{bridgeNoMasquerade: "true"},
+				},
 			},
 			ok: false,
 		},
 		{
 			name: "missing masquerade option",
-			insp: network.Inspect{Internal: false, Driver: "bridge", Options: map[string]string{}},
-			ok:   false,
+			insp: network.Inspect{
+				Network: network.Network{Internal: false, Driver: "bridge", Options: map[string]string{}},
+			},
+			ok: false,
 		},
 	}
 	for _, tc := range cases {

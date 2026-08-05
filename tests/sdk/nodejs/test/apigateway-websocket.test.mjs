@@ -92,7 +92,7 @@ function minimalPythonZip() {
 }
 
 test("WebSocket API create routes soft-skip connect without nested", async (t) => {
-  await requireReady();
+  if (!(await requireReady(t))) return;
   const prefix = uniquePrefix();
   const iam = newIAM();
   const lam = newLambda();

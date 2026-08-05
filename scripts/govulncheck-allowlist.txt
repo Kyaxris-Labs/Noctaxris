@@ -1,7 +1,4 @@
 # Allowlisted GO vuln IDs only (one ID per line; # comments and blanks ignored).
-# Daemon-side Docker Engine issues reported against github.com/docker/docker with
-# Fixed in: N/A (no client-module fix). See docs/security-defaults.md.
-GO-2026-4883
-GO-2026-4887
-GO-2026-5617
-GO-2026-5668
+# No Fixed-N/A Docker Engine IDs apply after migration from github.com/docker/docker
+# to github.com/moby/moby/client + github.com/moby/moby/api. Keep empty unless a
+# new residual ID is explicitly reviewed and documented in docs/security-defaults.md.
