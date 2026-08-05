@@ -251,12 +251,12 @@ func TestSetRotationRulesRejectsInvalidDurationAndCron(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	cases := []store.SecretRotationRules{
-		{ScheduleExpression: "rate(4 hours)", Duration: "5h"},   // window > interval
-		{ScheduleExpression: "rate(10 days)", Duration: "25h"},  // > 24h day window
-		{ScheduleExpression: "rate(3 hours)"},                   // AWS min 4 hours
-		{ScheduleExpression: "cron(15 10 * * ? *)"},             // minutes must be 0
-		{ScheduleExpression: "cron(0 10 * * ? 2027)"},           // year must be *
-		{Duration: "1h"},                                        // duration alone
+		{ScheduleExpression: "rate(4 hours)", Duration: "5h"},  // window > interval
+		{ScheduleExpression: "rate(10 days)", Duration: "25h"}, // > 24h day window
+		{ScheduleExpression: "rate(3 hours)"},                  // AWS min 4 hours
+		{ScheduleExpression: "cron(15 10 * * ? *)"},            // minutes must be 0
+		{ScheduleExpression: "cron(0 10 * * ? 2027)"},          // year must be *
+		{Duration: "1h"}, // duration alone
 	}
 	for i, rules := range cases {
 		err := st.SetSecretRotationRules(account, "sched-bad", rules, now, false)

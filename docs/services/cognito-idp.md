@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-User Pool and app client CRUD, AdminCreateUser / SignUp lite, InitiateAuth `USER_PASSWORD_AUTH` / `USER_SRP_AUTH` and refresh flows, software-token (TOTP) MFA challenge, `RevokeToken`, RS256 ID and access tokens, JWKS on the existing `:4566` listener. Lab `RoleArn` plus `LambdaConfig` trigger ARNs on Create/UpdateUserPool with PassRole for `cognito-idp.amazonaws.com`, and sync Invoke of configured lifecycle triggers.
+User Pool and app client CRUD, AdminCreateUser / AdminGetUser / AdminSetUserPassword / AdminDeleteUser / AdminDisableUser / ListUsers / SignUp lite, InitiateAuth `USER_PASSWORD_AUTH` / `USER_SRP_AUTH` and refresh flows, software-token (TOTP) MFA challenge, `RevokeToken`, RS256 ID and access tokens, JWKS on the existing `:4566` listener. Lab `RoleArn` plus `LambdaConfig` trigger ARNs on Create/UpdateUserPool with PassRole for `cognito-idp.amazonaws.com`, and sync Invoke of configured lifecycle triggers.
 
 ## Implemented
 
@@ -10,7 +10,7 @@ User Pool and app client CRUD, AdminCreateUser / SignUp lite, InitiateAuth `USER
 |------|---------|
 | Pool | `CreateUserPool`, `DescribeUserPool`, `UpdateUserPool`, `ListUserPools`, `DeleteUserPool` |
 | Client | `CreateUserPoolClient`, `DescribeUserPoolClient`, `ListUserPoolClients`, `DeleteUserPoolClient` |
-| Users | `AdminCreateUser`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`, `ResendConfirmationCode`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute` |
+| Users | `AdminCreateUser`, `AdminGetUser`, `AdminSetUserPassword`, `AdminDeleteUser`, `AdminDisableUser`, `ListUsers`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, `ConfirmForgotPassword`, `ResendConfirmationCode`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute` |
 | Auth | `InitiateAuth` (unsigned public IdP API; AWS CLI shape without `Authorization`): `USER_PASSWORD_AUTH`, `USER_SRP_AUTH` (`SRP_A` → `PASSWORD_VERIFIER`), `CUSTOM_AUTH` (Define/Create/Verify; optional SRP nesting `SRP_A` → `PASSWORD_VERIFIER` → `CUSTOM_CHALLENGE`), `REFRESH_TOKEN_AUTH` / `REFRESH_TOKEN`; `AdminInitiateAuth` (password and refresh flows; SigV4); `RevokeToken` (unsigned public IdP; `ClientId` + refresh `Token`) |
 | MFA (TOTP) | `AssociateSoftwareToken`, `VerifySoftwareToken`, `RespondToAuthChallenge` (`SOFTWARE_TOKEN_MFA`, `PASSWORD_VERIFIER`) — unsigned public IdP. After Verify, password or SRP auth returns `ChallengeName=SOFTWARE_TOKEN_MFA` + `Session` (no tokens) until a valid TOTP is submitted |
 | Triggers | `LambdaConfig` lab subset store ARNs (`PreSignUp`, `PostConfirmation`, `PreAuthentication`, `PostAuthentication`, `PreTokenGeneration`, `CustomMessage`, `UserMigration`, `DefineAuthChallenge`, `CreateAuthChallenge`, `VerifyAuthChallengeResponse`) and lab top-level `RoleArn` on Create/Update/Describe; PassRole for `cognito-idp.amazonaws.com` when `RoleArn` is set (`aws:SourceArn` = pool ARN). Sync Invoke on lifecycle events below |

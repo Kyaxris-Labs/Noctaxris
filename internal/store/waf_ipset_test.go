@@ -120,9 +120,9 @@ func TestWAFIPSetUnknownARNFailsClosed(t *testing.T) {
 	phantom := "arn:aws:wafv2:us-east-1:" + account + ":regional/ipset/missing/00000000-0000-0000-0000-000000000000"
 	acl, err := st.CreateWAFWebACL(account, "us-east-1", "ipset-phantom-acl", "REGIONAL", "", "Allow", []store.WAFRule{
 		{
-			Name:     "ref-missing",
-			Priority: 1,
-			Action:   "Block",
+			Name:                    "ref-missing",
+			Priority:                1,
+			Action:                  "Block",
 			IPSetReferenceStatement: &store.WAFIPSetReferenceStatement{ARN: phantom},
 		},
 	})

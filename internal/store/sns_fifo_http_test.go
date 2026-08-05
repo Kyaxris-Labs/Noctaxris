@@ -17,8 +17,8 @@ func TestSNSFIFOTopicPublishAndSQSDelivery(t *testing.T) {
 	}
 
 	topic, err := st.CreateTopic(account, "us-east-1", "orders.fifo", map[string]string{
-		"FifoTopic":                  "true",
-		"ContentBasedDeduplication":  "true",
+		"FifoTopic":                 "true",
+		"ContentBasedDeduplication": "true",
 	})
 	if err != nil {
 		t.Fatal(err)

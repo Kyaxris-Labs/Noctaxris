@@ -64,9 +64,9 @@ func TestS3LifecycleConfigurationRoundTrip(t *testing.T) {
 	}
 	days := 30
 	cfg := store.S3LifecycleConfiguration{Rules: []store.S3LifecycleRule{{
-		ID:     "expire-logs",
-		Status: "Enabled",
-		Filter: &store.S3LifecycleFilter{Prefix: "logs/"},
+		ID:         "expire-logs",
+		Status:     "Enabled",
+		Filter:     &store.S3LifecycleFilter{Prefix: "logs/"},
 		Expiration: &store.S3LifecycleExpiration{Days: &days},
 	}}}
 	if err := st.PutLifecycleConfiguration(account, "lc-bucket", cfg); err != nil {

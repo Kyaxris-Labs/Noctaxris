@@ -88,12 +88,51 @@ func AdminCreateUserJSON(u store.CognitoUser) ([]byte, error) {
 		"User": map[string]any{
 			"Username":   u.Username,
 			"UserStatus": u.UserStatus,
+			"Enabled":    u.Enabled,
 			"Attributes": []map[string]string{
 				{"Name": "sub", "Value": u.Sub},
 			},
 		},
 	})
 }
+
+// AdminGetUserJSON builds AdminGetUser response.
+func AdminGetUserJSON(u store.CognitoUser) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"Username":       u.Username,
+		"UserStatus":     u.UserStatus,
+		"Enabled":        u.Enabled,
+		"UserCreateDate": float64(u.CreatedAt) / 1000.0,
+		"UserAttributes": []map[string]string{
+			{"Name": "sub", "Value": u.Sub},
+		},
+	})
+}
+
+// ListUsersJSON builds ListUsers response.
+func ListUsersJSON(users []store.CognitoUser) ([]byte, error) {
+	items := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		items = append(items, map[string]any{
+			"Username":   u.Username,
+			"UserStatus": u.UserStatus,
+			"Enabled":    u.Enabled,
+			"Attributes": []map[string]string{
+				{"Name": "sub", "Value": u.Sub},
+			},
+		})
+	}
+	return json.Marshal(map[string]any{"Users": items})
+}
+
+// AdminSetUserPasswordJSON is an empty OK body.
+func AdminSetUserPasswordJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// AdminDeleteUserJSON is an empty OK body.
+func AdminDeleteUserJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+// AdminDisableUserJSON is an empty OK body.
+func AdminDisableUserJSON() ([]byte, error) { return []byte(`{}`), nil }
 
 // SignUpJSON builds SignUp response.
 func SignUpJSON(u store.CognitoUser) ([]byte, error) {

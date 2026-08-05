@@ -243,3 +243,85 @@ func TestAPIGatewayRESTApiKeyUsagePlanLite(t *testing.T) {
 		t.Fatalf("DeleteUsagePlanKey status=%d", delKey.Code)
 	}
 }
+
+func TestAPIGatewayRESTAuthzHandlersCoverage(t *testing.T) {
+	srv, _, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	create := mustAPIGatewayREST(t, handler, http.MethodPost, "/restapis", map[string]any{"name": "authz-cov"}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateRestApi %d %s", create.Code, create.Body.String())
+	}
+	var apiResp map[string]any
+	_ = json.Unmarshal(create.Body.Bytes(), &apiResp)
+	apiID, _ := apiResp["id"].(string)
+
+	emptyGroup := mustAPIGatewayREST(t, handler, http.MethodPost, "/restapis/"+apiID+"/authorizers", map[string]any{
+		"name": "", "type": "TOKEN",
+	}, now)
+	if emptyGroup.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAuthorizer empty name want 400 got %d", emptyGroup.Code)
+	}
+
+	authzRec := mustAPIGatewayREST(t, handler, http.MethodPost, "/restapis/"+apiID+"/authorizers", map[string]any{
+		"name": "tok2", "type": "TOKEN",
+		"authorizerUri":  "arn:aws:lambda:us-east-1:" + testAccountID + ":function:authz-cov",
+		"identitySource": "method.request.header.Authorization",
+	}, now)
+	if authzRec.Code != http.StatusOK {
+		t.Fatalf("CreateAuthorizer %d %s", authzRec.Code, authzRec.Body.String())
+	}
+
+	missAPIAuthz := mustAPIGatewayREST(t, handler, http.MethodGet, "/restapis/missing-api/authorizers", nil, now)
+	if missAPIAuthz.Code != http.StatusNotFound {
+		t.Fatalf("GetAuthorizers missing api want 404 got %d", missAPIAuthz.Code)
+	}
+
+	keyRec := mustAPIGatewayREST(t, handler, http.MethodPost, "/apikeys", map[string]any{
+		"name": "disabled-key", "enabled": false,
+	}, now)
+	if keyRec.Code != http.StatusOK {
+		t.Fatalf("CreateApiKey %d %s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyResp map[string]any
+	_ = json.Unmarshal(keyRec.Body.Bytes(), &keyResp)
+	apiKeyID, _ := keyResp["id"].(string)
+
+	badPlanStages := mustAPIGatewayREST(t, handler, http.MethodPost, "/usageplans", map[string]any{
+		"name": "bad-stages",
+		"apiStages": []map[string]any{{
+			"apiId": "missing", "stage": "prod",
+		}},
+	}, now)
+	if badPlanStages.Code != http.StatusNotFound && badPlanStages.Code != http.StatusBadRequest {
+		t.Fatalf("CreateUsagePlan bad stage want 4xx got %d %s", badPlanStages.Code, badPlanStages.Body.String())
+	}
+
+	planRec := mustAPIGatewayREST(t, handler, http.MethodPost, "/usageplans", map[string]any{
+		"name": "cov-plan-only",
+	}, now)
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("CreateUsagePlan %d %s", planRec.Code, planRec.Body.String())
+	}
+	var planResp map[string]any
+	_ = json.Unmarshal(planRec.Body.Bytes(), &planResp)
+	planID, _ := planResp["id"].(string)
+
+	badKeyType := mustAPIGatewayREST(t, handler, http.MethodPost, "/usageplans/"+planID+"/keys", map[string]any{
+		"keyId": apiKeyID, "keyType": "CUSTOM",
+	}, now)
+	if badKeyType.Code != http.StatusBadRequest || !strings.Contains(badKeyType.Body.String(), "API_KEY") {
+		t.Fatalf("CreateUsagePlanKey bad type want 400 got %d %s", badKeyType.Code, badKeyType.Body.String())
+	}
+
+	missPlanKeys := mustAPIGatewayREST(t, handler, http.MethodGet, "/usageplans/missing-plan/keys", nil, now)
+	if missPlanKeys.Code != http.StatusNotFound {
+		t.Fatalf("GetUsagePlanKeys missing plan want 404 got %d", missPlanKeys.Code)
+	}
+
+	delMissPlanKey := mustAPIGatewayREST(t, handler, http.MethodDelete, "/usageplans/"+planID+"/keys/missing-key", nil, now)
+	if delMissPlanKey.Code != http.StatusNotFound {
+		t.Fatalf("DeleteUsagePlanKey missing want 404 got %d", delMissPlanKey.Code)
+	}
+}

@@ -629,3 +629,75 @@ func TestSNSPublishConcurrentReceive(t *testing.T) {
 		t.Fatalf("sns-target messages=%d want %d", len(targetSeen), publishes)
 	}
 }
+
+func TestSNSCoverageWave2ListSubsPermissionsTopicName(t *testing.T) {
+	st := openSNSStore(t)
+	account := "000000000001"
+
+	if err := store.EnsureSNSSchema(nil); err == nil {
+		t.Fatal("nil db must fail")
+	}
+	if err := st.EnsureSNSSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.TopicNameFromARN("not-an-arn"); err == nil {
+		t.Fatal("invalid ARN must fail")
+	}
+	if _, err := store.TopicNameFromARN("arn:aws:sns:us-east-1:"); err == nil {
+		t.Fatal("empty name segment must fail")
+	}
+	// Lenient parser: last colon segment is the name (including short ARNs).
+	if name, err := store.TopicNameFromARN("arn:aws:sns:us-east-1:1"); err != nil || name != "1" {
+		t.Fatalf("short ARN name=%q err=%v", name, err)
+	}
+	name, err := store.TopicNameFromARN("arn:aws:sns:us-east-1:000000000001:wave2-topic")
+	if err != nil || name != "wave2-topic" {
+		t.Fatalf("name=%q err=%v", name, err)
+	}
+
+	empty, err := st.ListSubscriptions(account)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty subs=%v err=%v", empty, err)
+	}
+
+	topic, err := st.CreateTopic(account, "us-east-1", "wave2-topic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Lab RemoveTopicPermission is a stub that only validates the topic exists.
+	if err := st.RemoveTopicPermission(account, "wave2-topic", "missing-label"); err != nil {
+		t.Fatal(err)
+	}
+
+	principal := "arn:aws:iam::" + account + ":root"
+	if err := st.AddTopicPermission(account, "wave2-topic", "wave2-label", principal, "sns:Publish"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RemoveTopicPermission(account, "wave2-topic", "wave2-label"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RemoveTopicPermission(account, "missing-topic", "x"); !errors.Is(err, store.ErrNoSuchTopic) {
+		t.Fatalf("remove on missing topic: %v", err)
+	}
+
+	q, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "wave2-sns-q", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"sns.amazonaws.com"},"Action":"sqs:SendMessage","Resource":"*"}]}`
+	if err := st.SetQueueAttributes(account, q.QueueName, map[string]string{"Policy": pol}); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := st.Subscribe(account, topic.TopicARN, "sqs", q.QueueARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs, err := st.ListSubscriptions(account)
+	if err != nil || len(subs) != 1 || subs[0].SubscriptionARN != sub.SubscriptionARN {
+		t.Fatalf("subs=%v err=%v", subs, err)
+	}
+	if _, err := st.Publish(account, "wave2-topic", "hello-wave2", "", nil); err != nil {
+		t.Fatal(err)
+	}
+}

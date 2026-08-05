@@ -2,8 +2,11 @@ package store_test
 
 import (
 	"bytes"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -322,5 +325,127 @@ func TestKMSAWSManagedConvenienceAliases(t *testing.T) {
 	}
 	if k.AccountID != accountID || k.KeyState != store.KeyStateEnabled {
 		t.Fatalf("managed key unexpected: %+v", k)
+	}
+}
+
+func TestKMSCoverageWave2ListPolicyAliasGrants(t *testing.T) {
+	st := openKMSStore(t)
+	account := "000000000001"
+	creator := "arn:aws:iam::" + account + ":root"
+
+	empty, err := st.ListKeys(account)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty keys=%v err=%v", empty, err)
+	}
+	emptyAliases, err := st.ListAliases(account)
+	if err != nil || len(emptyAliases) != 0 {
+		t.Fatalf("empty aliases=%v err=%v", emptyAliases, err)
+	}
+
+	arn := store.AliasARN("", account, "alias/wave2")
+	if !strings.Contains(arn, ":alias/wave2") || !strings.Contains(arn, "us-east-1") {
+		t.Fatalf("AliasARN=%q", arn)
+	}
+	arn2 := store.AliasARN("eu-west-1", account, "wave2-bare")
+	if !strings.Contains(arn2, "eu-west-1") || !strings.Contains(arn2, ":alias/wave2-bare") {
+		t.Fatalf("AliasARN bare=%q", arn2)
+	}
+
+	k, err := st.CreateKey(account, creator, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := st.CreateKey(account, creator, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := st.ListKeys(account)
+	if err != nil || len(keys) < 2 {
+		t.Fatalf("keys=%v err=%v", keys, err)
+	}
+
+	pol, err := st.GetKeyPolicy(k.KeyID)
+	if err != nil || !strings.Contains(pol, "Statement") {
+		t.Fatalf("policy=%q err=%v", pol, err)
+	}
+	if _, err := st.GetKeyPolicy("missing-key-id"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing policy err=%v", err)
+	}
+
+	if err := st.SetKeyState(k.KeyID, "Bogus"); err == nil {
+		t.Fatal("invalid state must fail")
+	}
+	if err := st.SetKeyState(k.KeyID, store.KeyStateDisabled); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetKey(k.KeyID)
+	if err != nil || got.KeyState != store.KeyStateDisabled {
+		t.Fatalf("disabled=%+v err=%v", got, err)
+	}
+	if err := st.SetKeyState(k.KeyID, store.KeyStateEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ScheduleKeyDeletion(k.KeyID, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKeyState(k.KeyID, store.KeyStateDisabled); err == nil {
+		t.Fatal("pending deletion SetKeyState must fail")
+	}
+	if err := st.CancelKeyDeletion(k.KeyID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.CreateAlias(account, "alias/wave2-a", k.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAlias(account, "alias/wave2-b", k2.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := st.ListAliases(account)
+	if err != nil || len(aliases) < 2 {
+		t.Fatalf("aliases=%v err=%v", aliases, err)
+	}
+	if err := st.UpdateAlias(account, "alias/wave2-a", "missing"); err == nil {
+		t.Fatal("update to missing key must fail")
+	}
+	if err := st.UpdateAlias(account, "alias/missing", k2.KeyID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("update missing alias err=%v", err)
+	}
+	if err := st.UpdateAlias(account, "alias/wave2-a", k2.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := st.ResolveKeyID(account, "alias/wave2-a")
+	if err != nil || resolved != k2.KeyID {
+		t.Fatalf("resolved=%q err=%v", resolved, err)
+	}
+
+	grantee := "arn:aws:iam::" + account + ":user/alice"
+	retirer := "arn:aws:iam::" + account + ":user/retire"
+	grant, err := st.CreateGrant(account, k2.KeyID, grantee, retirer, []string{"Encrypt", "Decrypt"}, "wave2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RetireGrant(grant.GrantID, "arn:aws:iam::"+account+":user/other"); err == nil {
+		t.Fatal("unauthorized retire must fail")
+	}
+	if err := st.RetireGrant(grant.GrantID, retirer); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RevokeGrant(grant.GrantID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoke after retire err=%v", err)
+	}
+
+	grant2, err := st.CreateGrant(account, k2.KeyID, grantee, "", []string{"Encrypt"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RevokeGrant(grant2.GrantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RevokeGrant("missing-grant"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoke missing err=%v", err)
+	}
+	if err := st.RetireGrant("missing-grant", grantee); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("retire missing err=%v", err)
 	}
 }

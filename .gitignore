@@ -33,6 +33,7 @@ go.work.sum
 # .vscode/
 .cursor/
 .local/
+.local-*
 .superpowers/
 bin/
 .DS_Store

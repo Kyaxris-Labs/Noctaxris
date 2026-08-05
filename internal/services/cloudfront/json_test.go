@@ -53,3 +53,48 @@ func TestInvalidationJSONCompleted(t *testing.T) {
 		t.Fatalf("Invalidation=%v", body)
 	}
 }
+
+func TestCloudFrontDistributionJSON(t *testing.T) {
+	d := store.CloudFrontDistribution{
+		ID: "E1", ARN: "arn:aws:cloudfront::1:distribution/E1",
+		CallerReference: "ref", Comment: "lab", Enabled: true,
+		OriginsJSON:   `[{"Id":"o1","DomainName":"b.example","OriginType":"custom"},{"Id":"o2","DomainName":"s3","OriginType":"s3"}]`,
+		BehaviorsJSON: `[{"PathPattern":"*","TargetOriginId":"o1"},{"PathPattern":"/api/*","TargetOriginId":"o2"}]`,
+		Status: store.CloudFrontStatusDeployed, ETag: "etag-2",
+		DomainName: "d1.cloudfront.noctaxris.local",
+		LoggingEnabled: true, LoggingBucket: "logs-bucket", LoggingPrefix: "cf/",
+	}
+	for _, fn := range []struct {
+		name string
+		run  func() ([]byte, error)
+	}{
+		{"Create", func() ([]byte, error) { return cfsvc.CreateDistributionJSON(d) }},
+		{"Get", func() ([]byte, error) { return cfsvc.GetDistributionJSON(d) }},
+		{"Update", func() ([]byte, error) { return cfsvc.UpdateDistributionJSON(d) }},
+		{"List", func() ([]byte, error) { return cfsvc.ListDistributionsJSON([]store.CloudFrontDistribution{d}) }},
+	} {
+		t.Run(fn.name, func(t *testing.T) {
+			raw, err := fn.run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatal(err)
+			}
+			if out["Distribution"] == nil && out["DistributionList"] == nil && out["ETag"] == nil {
+				t.Fatalf("unexpected shape: %v", out)
+			}
+		})
+	}
+	if _, err := cfsvc.DeleteDistributionJSON(); err != nil {
+		t.Fatal(err)
+	}
+	inv := store.CloudFrontInvalidation{ID: "I1", DistributionID: "E1", Status: "InProgress"}
+	if _, err := cfsvc.GetInvalidationJSON(inv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfsvc.ListInvalidationsJSON([]store.CloudFrontInvalidation{inv}); err != nil {
+		t.Fatal(err)
+	}
+}

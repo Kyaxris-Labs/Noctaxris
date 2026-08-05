@@ -492,14 +492,14 @@ func TestCodeBuildCodeCommitSourceResolveAndMaterialize(t *testing.T) {
 	}
 
 	p, err := st.CreateCodeBuildProject(account, region, store.CreateCodeBuildProjectInput{
-		Name:        "cc-proj",
-		ServiceRole: "arn:aws:iam::" + account + ":role/CodeBuildRole",
-		SourceType:  "CODECOMMIT",
-		SourceLoc:   arn,
-		Image:       "alpine:3.20",
-		VpcConfig:   map[string]any{"vpcId": "vpc-lab", "subnets": []any{"subnet-1"}},
-		Cache:       map[string]any{"type": "NO_CACHE"},
-		Fleet:       map[string]any{"fleetArn": "arn:aws:codebuild:us-east-1:" + account + ":fleet/lab"},
+		Name:            "cc-proj",
+		ServiceRole:     "arn:aws:iam::" + account + ":role/CodeBuildRole",
+		SourceType:      "CODECOMMIT",
+		SourceLoc:       arn,
+		Image:           "alpine:3.20",
+		VpcConfig:       map[string]any{"vpcId": "vpc-lab", "subnets": []any{"subnet-1"}},
+		Cache:           map[string]any{"type": "NO_CACHE"},
+		Fleet:           map[string]any{"fleetArn": "arn:aws:codebuild:us-east-1:" + account + ":fleet/lab"},
 		ReportGroupArns: []string{"arn:aws:codebuild:us-east-1:" + account + ":report-group/lab"},
 		SecondarySources: []any{
 			map[string]any{"type": "NO_SOURCE", "sourceIdentifier": "extra"},

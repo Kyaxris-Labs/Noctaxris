@@ -253,8 +253,8 @@ func TestFIFOSendReceiveOrderingAndDedup(t *testing.T) {
 	account := "000000000001"
 	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "orders.fifo", map[string]string{
 		"FifoQueue":                 "true",
-		"ContentBasedDeduplication":   "true",
-		"VisibilityTimeout":           "300",
+		"ContentBasedDeduplication": "true",
+		"VisibilityTimeout":         "300",
 	}); err != nil {
 		t.Fatal(err)
 	}

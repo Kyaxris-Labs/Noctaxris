@@ -34,3 +34,30 @@ func TestGetResourceConfigHistoryXML(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigServiceXML(t *testing.T) {
+	req := "req-config"
+	for _, fn := range []func(string) ([]byte, error){
+		PutConfigurationRecorderXML, PutDeliveryChannelXML, StartConfigurationRecorderXML,
+	} {
+		out, err := fn(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(out), req) {
+			t.Fatalf("missing request id: %s", out)
+		}
+	}
+
+	compliance := []store.ConfigComplianceResult{{
+		ConfigRuleName: "s3-bucket-public-read-prohibited",
+		ComplianceType: "COMPLIANT",
+	}}
+	cOut, err := DescribeComplianceByConfigRuleXML(compliance, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cOut), "COMPLIANT") {
+		t.Fatalf("compliance=%s", cOut)
+	}
+}

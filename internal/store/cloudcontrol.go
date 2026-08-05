@@ -97,7 +97,10 @@ func cloudControlMapProvisionErr(err error) error {
 	if errors.Is(err, ErrCFNAccessDenied) {
 		return err
 	}
-	if errors.Is(err, ErrBucketAlreadyExists) || strings.Contains(err.Error(), "already exists") {
+	msg := err.Error()
+	if errors.Is(err, ErrBucketAlreadyExists) ||
+		strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "BucketAlreadyExists") {
 		return fmt.Errorf("%w: %v", ErrCloudControlAlreadyExists, err)
 	}
 	return fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)

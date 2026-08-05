@@ -2721,6 +2721,26 @@
       "value": "cognito-idp:AdminCreateUser"
     },
     {
+      "name": "ActionCognitoAdminGetUser",
+      "value": "cognito-idp:AdminGetUser"
+    },
+    {
+      "name": "ActionCognitoAdminSetUserPassword",
+      "value": "cognito-idp:AdminSetUserPassword"
+    },
+    {
+      "name": "ActionCognitoAdminDeleteUser",
+      "value": "cognito-idp:AdminDeleteUser"
+    },
+    {
+      "name": "ActionCognitoAdminDisableUser",
+      "value": "cognito-idp:AdminDisableUser"
+    },
+    {
+      "name": "ActionCognitoListUsers",
+      "value": "cognito-idp:ListUsers"
+    },
+    {
       "name": "ActionCognitoSignUp",
       "value": "cognito-idp:SignUp"
     },
@@ -4037,7 +4057,11 @@
     "codepipeline:PutApprovalResult",
     "codepipeline:StartPipelineExecution",
     "cognito-idp:AdminCreateUser",
+    "cognito-idp:AdminDeleteUser",
+    "cognito-idp:AdminDisableUser",
+    "cognito-idp:AdminGetUser",
     "cognito-idp:AdminInitiateAuth",
+    "cognito-idp:AdminSetUserPassword",
     "cognito-idp:AssociateSoftwareToken",
     "cognito-idp:ConfirmForgotPassword",
     "cognito-idp:ConfirmSignUp",
@@ -4052,6 +4076,7 @@
     "cognito-idp:InitiateAuth",
     "cognito-idp:ListUserPoolClients",
     "cognito-idp:ListUserPools",
+    "cognito-idp:ListUsers",
     "cognito-idp:ResendConfirmationCode",
     "cognito-idp:RespondToAuthChallenge",
     "cognito-idp:RevokeToken",
@@ -4768,7 +4793,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 953,
+  "count": 958,
   "source": "Action* constants in actions.go",
-  "generated": "2026-07-31T12:32:55.443446+00:00"
+  "generated": "2026-08-05T14:26:56.177518+00:00"
 }

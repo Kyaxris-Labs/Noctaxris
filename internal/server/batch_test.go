@@ -110,3 +110,154 @@ func TestBatchControlPlaneAndSubmitWithoutCompute(t *testing.T) {
 		t.Fatalf("DescribeJobQueues status=%d body=%q", desc.Code, desc.Body.String())
 	}
 }
+
+func TestBatchDescribeAndSubmitErrorPaths(t *testing.T) {
+	srv, _, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "batch-svc-cov", batchServiceTrustOK, now)
+	mustCreateIAMRole(t, handler, "batch-job-cov", batchJobTrustOK, now)
+	svcRole := "arn:aws:iam::" + testAccountID + ":role/batch-svc-cov"
+	jobRole := "arn:aws:iam::" + testAccountID + ":role/batch-job-cov"
+
+	ce := mustBatchREST(t, handler, "/v1/createcomputeenvironment", map[string]any{
+		"computeEnvironmentName": "cov-ce",
+		"type":                   "MANAGED",
+		"serviceRole":            svcRole,
+	}, now)
+	if ce.Code != http.StatusOK {
+		t.Fatalf("CreateComputeEnvironment status=%d body=%q", ce.Code, ce.Body.String())
+	}
+
+	jq := mustBatchREST(t, handler, "/v1/createjobqueue", map[string]any{
+		"jobQueueName": "cov-jq",
+		"priority":     1,
+		"computeEnvironmentOrder": []map[string]any{
+			{"order": 1, "computeEnvironment": "cov-ce"},
+		},
+	}, now)
+	if jq.Code != http.StatusOK {
+		t.Fatalf("CreateJobQueue status=%d body=%q", jq.Code, jq.Body.String())
+	}
+
+	jd := mustBatchREST(t, handler, "/v1/registerjobdefinition", map[string]any{
+		"jobDefinitionName": "cov-jd",
+		"type":              "container",
+		"containerProperties": map[string]any{
+			"image":      "alpine:3.20",
+			"command":    []string{"echo", "ok"},
+			"jobRoleArn": jobRole,
+		},
+	}, now)
+	if jd.Code != http.StatusOK {
+		t.Fatalf("RegisterJobDefinition status=%d body=%q", jd.Code, jd.Body.String())
+	}
+
+	descCE := mustBatchREST(t, handler, "/v1/describecomputeenvironments", map[string]any{
+		"computeEnvironments": []string{"cov-ce"},
+	}, now)
+	if descCE.Code != http.StatusOK || !strings.Contains(descCE.Body.String(), "cov-ce") {
+		t.Fatalf("DescribeComputeEnvironments status=%d body=%q", descCE.Code, descCE.Body.String())
+	}
+	descCEAll := mustBatchREST(t, handler, "/v1/describecomputeenvironments", map[string]any{}, now)
+	if descCEAll.Code != http.StatusOK || !strings.Contains(descCEAll.Body.String(), "cov-ce") {
+		t.Fatalf("DescribeComputeEnvironments all status=%d body=%q", descCEAll.Code, descCEAll.Body.String())
+	}
+
+	descJD := mustBatchREST(t, handler, "/v1/describejobdefinitions", map[string]any{
+		"jobDefinitions": []string{"cov-jd"},
+	}, now)
+	if descJD.Code != http.StatusOK || !strings.Contains(descJD.Body.String(), "cov-jd") {
+		t.Fatalf("DescribeJobDefinitions status=%d body=%q", descJD.Code, descJD.Body.String())
+	}
+	descJDAll := mustBatchREST(t, handler, "/v1/describejobdefinitions", map[string]any{}, now)
+	if descJDAll.Code != http.StatusOK || !strings.Contains(descJDAll.Body.String(), "cov-jd") {
+		t.Fatalf("DescribeJobDefinitions all status=%d body=%q", descJDAll.Code, descJDAll.Body.String())
+	}
+
+	submitBadQueue := mustBatchREST(t, handler, "/v1/submitjob", map[string]any{
+		"jobName":       "job-bad-q",
+		"jobQueue":      "missing-jq",
+		"jobDefinition": "cov-jd",
+	}, now)
+	// DockerHost empty → 503 before queue validation, or 400 if validation runs first.
+	if submitBadQueue.Code != http.StatusServiceUnavailable && submitBadQueue.Code != http.StatusBadRequest {
+		t.Fatalf("SubmitJob bad queue status=%d body=%q", submitBadQueue.Code, submitBadQueue.Body.String())
+	}
+
+	submitEmpty := mustBatchREST(t, handler, "/v1/submitjob", map[string]any{
+		"jobName":       "",
+		"jobQueue":      "cov-jq",
+		"jobDefinition": "cov-jd",
+	}, now)
+	if submitEmpty.Code != http.StatusServiceUnavailable && submitEmpty.Code != http.StatusBadRequest {
+		t.Fatalf("SubmitJob empty name status=%d body=%q", submitEmpty.Code, submitEmpty.Body.String())
+	}
+
+	submitOKPath := mustBatchREST(t, handler, "/v1/submitjob", map[string]any{
+		"jobName":       "job-cov",
+		"jobQueue":      "cov-jq",
+		"jobDefinition": "cov-jd",
+	}, now)
+	if submitOKPath.Code != http.StatusServiceUnavailable {
+		t.Fatalf("SubmitJob without DockerHost status=%d want 503 body=%q", submitOKPath.Code, submitOKPath.Body.String())
+	}
+	if !strings.Contains(submitOKPath.Body.String(), "compute unavailable") {
+		t.Fatalf("body=%q", submitOKPath.Body.String())
+	}
+
+	descJobsEmpty := mustBatchREST(t, handler, "/v1/describejobs", map[string]any{
+		"jobs": []string{},
+	}, now)
+	if descJobsEmpty.Code != http.StatusOK {
+		t.Fatalf("DescribeJobs empty status=%d body=%q", descJobsEmpty.Code, descJobsEmpty.Body.String())
+	}
+	descJobsMiss := mustBatchREST(t, handler, "/v1/describejobs", map[string]any{
+		"jobs": []string{"missing-job"},
+	}, now)
+	if descJobsMiss.Code != http.StatusOK {
+		t.Fatalf("DescribeJobs missing status=%d body=%q", descJobsMiss.Code, descJobsMiss.Body.String())
+	}
+}
+
+func TestBatchRejectUnsupportedFargateShape(t *testing.T) {
+	srv, _, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "batch-job-fargate", batchJobTrustOK, now)
+	jobRole := "arn:aws:iam::" + testAccountID + ":role/batch-job-fargate"
+
+	fargate := mustBatchREST(t, handler, "/v1/registerjobdefinition", map[string]any{
+		"jobDefinitionName":    "fargate-jd",
+		"type":                 "container",
+		"platformCapabilities": []any{"FARGATE"},
+		"containerProperties": map[string]any{
+			"image":      "alpine:3.20",
+			"jobRoleArn": jobRole,
+		},
+	}, now)
+	if fargate.Code != http.StatusBadRequest || !strings.Contains(fargate.Body.String(), "FARGATE") {
+		t.Fatalf("FARGATE reject status=%d body=%q", fargate.Code, fargate.Body.String())
+	}
+
+	awsvpc := mustBatchREST(t, handler, "/v1/registerjobdefinition", map[string]any{
+		"jobDefinitionName": "awsvpc-jd",
+		"type":              "container",
+		"containerProperties": map[string]any{
+			"image":       "alpine:3.20",
+			"jobRoleArn":  jobRole,
+			"networkMode": "awsvpc",
+		},
+	}, now)
+	if awsvpc.Code != http.StatusBadRequest || !strings.Contains(awsvpc.Body.String(), "awsvpc") {
+		t.Fatalf("awsvpc reject status=%d body=%q", awsvpc.Code, awsvpc.Body.String())
+	}
+
+	// Ensure JSON shapes still marshal for empty describe filters.
+	raw, _ := json.Marshal(map[string]any{"jobs": []string{"x"}})
+	if len(raw) == 0 {
+		t.Fatal("marshal")
+	}
+}

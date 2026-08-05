@@ -50,3 +50,53 @@ func TestDescribeDomainJSONNeverActiveOnStub(t *testing.T) {
 		t.Fatalf("FailureReason=%v want max_map_count hint", st["FailureReason"])
 	}
 }
+
+func TestOpenSearchDomainJSONPaths(t *testing.T) {
+	active := store.OpenSearchDomain{
+		DomainID: "id-2", DomainName: "live", DomainARN: "arn:aws:es:us-east-1:1:domain/live",
+		EngineVersion: "OpenSearch_2.11", DomainStatus: store.OpenSearchDomainStatusActive,
+		ContainerID: "cid-1", StubEndpoint: "https://live.noctaxris.local",
+	}
+	for _, fn := range []func(store.OpenSearchDomain) ([]byte, error){
+		CreateDomainJSON, DescribeDomainJSON,
+	} {
+		raw, err := fn(active)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"DomainStatus":"Active"`) {
+			t.Fatalf("want Active with container: %s", raw)
+		}
+	}
+
+	processing := active
+	processing.DomainStatus = "Processing"
+	raw, err := DescribeDomainJSON(processing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"Processing":true`) {
+		t.Fatalf("want Processing true: %s", raw)
+	}
+
+	listRaw, err := ListDomainNamesJSON([]store.OpenSearchDomain{{DomainName: "a"}, {DomainName: "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list map[string]any
+	if err := json.Unmarshal(listRaw, &list); err != nil {
+		t.Fatal(err)
+	}
+	names, _ := list["DomainNames"].([]any)
+	if len(names) != 2 {
+		t.Fatalf("DomainNames=%v", list)
+	}
+
+	delRaw, err := DeleteDomainJSON(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(delRaw), `"Deleted":true`) {
+		t.Fatalf("delete=%s", delRaw)
+	}
+}

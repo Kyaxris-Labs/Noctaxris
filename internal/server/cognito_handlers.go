@@ -92,6 +92,16 @@ func (s *Server) handleCognito(
 		s.cognitoDeleteUserPoolClient(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoAdminCreateUser:
 		s.cognitoAdminCreateUser(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoAdminGetUser:
+		s.cognitoAdminGetUser(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoAdminSetUserPassword:
+		s.cognitoAdminSetUserPassword(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoAdminDeleteUser:
+		s.cognitoAdminDeleteUser(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoAdminDisableUser:
+		s.cognitoAdminDisableUser(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionCognitoListUsers:
+		s.cognitoListUsers(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoSignUp:
 		s.cognitoSignUp(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCognitoConfirmSignUp:
@@ -151,6 +161,16 @@ func cognitoAction(action string) string {
 		return catalog.ActionCognitoDeleteUserPoolClient
 	case "AdminCreateUser":
 		return catalog.ActionCognitoAdminCreateUser
+	case "AdminGetUser":
+		return catalog.ActionCognitoAdminGetUser
+	case "AdminSetUserPassword":
+		return catalog.ActionCognitoAdminSetUserPassword
+	case "AdminDeleteUser":
+		return catalog.ActionCognitoAdminDeleteUser
+	case "AdminDisableUser":
+		return catalog.ActionCognitoAdminDisableUser
+	case "ListUsers":
+		return catalog.ActionCognitoListUsers
 	case "SignUp":
 		return catalog.ActionCognitoSignUp
 	case "ConfirmSignUp":

@@ -406,10 +406,8 @@ func (s *Server) handleIAMIdentity(
 
 	case catalog.ActionIAMCreateSAMLProvider, "CreateSAMLProvider":
 		handled = true
-		meta, _ := url.QueryUnescape(params["SAMLMetadataDocument"])
-		if meta == "" {
-			meta = params["SAMLMetadataDocument"]
-		}
+		// formParams / ParseForm already unescapes; QueryUnescape again turns base64 '+' into spaces.
+		meta := params["SAMLMetadataDocument"]
 		arn, createErr := s.store.PutSAMLProvider(accountID, params["Name"], meta)
 		if createErr != nil {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "ValidationError",

@@ -83,3 +83,55 @@ func TestInstanceProfileOneRole(t *testing.T) {
 		t.Fatalf("role changed to %q", prof.RoleName)
 	}
 }
+
+func TestInstanceProfileListRemoveDeleteAndValidation(t *testing.T) {
+	st := openTestStore(t)
+	const accountID = "000000000001"
+	trust := `{"Version":"2012-10-17","Statement":[]}`
+
+	if _, err := st.CreateInstanceProfile("bad", "P"); err == nil {
+		t.Fatal("invalid account id must fail")
+	}
+	if _, err := st.CreateInstanceProfile(accountID, ""); err == nil {
+		t.Fatal("empty profile name must fail")
+	}
+	if _, err := st.CreateRole(accountID, "RoleX", trust); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateInstanceProfile(accountID, "ProfA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateInstanceProfile(accountID, "ProfB"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddRoleToInstanceProfile(accountID, "ProfA", "RoleX"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := st.ListInstanceProfiles(accountID)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("list=%v err=%v", listed, err)
+	}
+	if listed[0].ProfileName != "ProfA" || listed[0].RoleName != "RoleX" {
+		t.Fatalf("listed[0]=%+v", listed[0])
+	}
+	if err := st.RemoveRoleFromInstanceProfile(accountID, "ProfA", "RoleX"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RemoveRoleFromInstanceProfile(accountID, "ProfA", "RoleX"); err == nil {
+		t.Fatal("second remove must fail")
+	}
+	prof, err := st.GetInstanceProfile(accountID, "ProfA")
+	if err != nil || prof.RoleName != "" {
+		t.Fatalf("after remove prof=%+v err=%v", prof, err)
+	}
+	if err := st.DeleteInstanceProfile(accountID, "ProfA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteInstanceProfile(accountID, "ProfA"); err == nil {
+		t.Fatal("delete missing must fail")
+	}
+	listed, err = st.ListInstanceProfiles(accountID)
+	if err != nil || len(listed) != 1 || listed[0].ProfileName != "ProfB" {
+		t.Fatalf("after delete list=%v err=%v", listed, err)
+	}
+}

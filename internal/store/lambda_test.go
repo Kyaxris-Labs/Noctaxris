@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -539,5 +540,172 @@ func TestLambdaCreateFunctionImage(t *testing.T) {
 	}
 	if pub.PackageType != store.LambdaPackageTypeImage || pub.ImageURI != updated.ImageURI {
 		t.Fatalf("published=%+v", pub)
+	}
+}
+
+func TestLambdaCoverageWave2ParseAndCodeDirs(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+
+	if _, ok := store.ParseFunctionAccountID("bare-name"); ok {
+		t.Fatal("bare name must not parse")
+	}
+	if _, ok := store.ParseFunctionAccountID("arn:aws:lambda:us-east-1:"); ok {
+		t.Fatal("truncated ARN must not parse")
+	}
+	acct, ok := store.ParseFunctionAccountID("arn:aws:lambda:us-east-1:000000000001:function:fn")
+	if !ok || acct != account {
+		t.Fatalf("acct=%q ok=%v", acct, ok)
+	}
+
+	dir := st.FunctionCodeDir(account, "fn")
+	if !strings.Contains(filepath.ToSlash(dir), "/lambda/"+account+"/fn/code") {
+		t.Fatalf("FunctionCodeDir=%q", dir)
+	}
+	in := store.FunctionCodeDirInContainer("/data", account, "fn")
+	if in != "/data/lambda/"+account+"/fn/code" {
+		t.Fatalf("FunctionCodeDirInContainer=%q", in)
+	}
+	vdir := st.VersionCodeDir(account, "fn", 3)
+	if !strings.Contains(filepath.ToSlash(vdir), "/versions/3/code") {
+		t.Fatalf("VersionCodeDir=%q", vdir)
+	}
+	vin := store.VersionCodeDirInContainer("/data", account, "fn", 3)
+	if !strings.Contains(vin, "/versions/3/code") {
+		t.Fatalf("VersionCodeDirInContainer=%q", vin)
+	}
+	ldir := st.LayerCodeDir(account, "layer", 1)
+	if !strings.Contains(filepath.ToSlash(ldir), "/layers/layer/versions/1/code") {
+		t.Fatalf("LayerCodeDir=%q", ldir)
+	}
+}
+
+func TestLambdaCoverageWave2EventInvokeAliasesVersionsLayers(t *testing.T) {
+	st := openLambdaStore(t)
+	account := "000000000001"
+	zip := testZip(t, map[string]string{"app.py": "def handler(e,c): return e"})
+
+	if _, err := st.PutFunctionEventInvokeConfig(account, "missing", "a", "b"); !errors.Is(err, store.ErrNoSuchFunction) {
+		t.Fatalf("missing put eic: %v", err)
+	}
+	if err := st.DeleteFunctionEventInvokeConfig(account, "missing"); !errors.Is(err, store.ErrNoSuchFunction) {
+		t.Fatalf("missing delete eic: %v", err)
+	}
+	if _, err := st.ListVersionsByFunction(account, "!!bad"); !errors.Is(err, store.ErrInvalidFunctionName) {
+		t.Fatalf("bad list versions: %v", err)
+	}
+	if _, err := st.ListLambdaAliases(account, "!!bad"); !errors.Is(err, store.ErrInvalidFunctionName) {
+		t.Fatalf("bad list aliases: %v", err)
+	}
+
+	fn, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, FunctionName: "wave2-fn",
+		RoleARN: "arn:aws:iam::" + account + ":role/exec",
+		Runtime: "python3.12", Handler: "app.handler", Timeout: 3, Memory: 128, Zip: zip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := st.PutFunctionEventInvokeConfig(account, "wave2-fn",
+		"arn:aws:sqs:us-east-1:"+account+":fail",
+		"arn:aws:sqs:us-east-1:"+account+":ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DestinationOnFailureArn == "" || updated.DestinationOnSuccessArn == "" {
+		t.Fatalf("destinations=%+v", updated)
+	}
+	if err := st.DeleteFunctionEventInvokeConfig(account, "wave2-fn"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := st.GetFunction(account, "wave2-fn")
+	if err != nil || cleared.DestinationOnFailureArn != "" || cleared.DestinationOnSuccessArn != "" {
+		t.Fatalf("cleared=%+v err=%v", cleared, err)
+	}
+
+	emptyVers, err := st.ListVersionsByFunction(account, "wave2-fn")
+	if err != nil || len(emptyVers) != 0 {
+		t.Fatalf("empty versions=%v err=%v", emptyVers, err)
+	}
+	v1, err := st.PublishVersion(account, "wave2-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := st.PublishVersion(account, "wave2-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vers, err := st.ListVersionsByFunction(account, "wave2-fn")
+	if err != nil || len(vers) != 2 {
+		t.Fatalf("versions=%v err=%v", vers, err)
+	}
+
+	emptyAliases, err := st.ListLambdaAliases(account, "wave2-fn")
+	if err != nil || len(emptyAliases) != 0 {
+		t.Fatalf("empty aliases=%v err=%v", emptyAliases, err)
+	}
+	alias, err := st.CreateLambdaAlias(account, "wave2-fn", "live", v1.Version, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := st.ListLambdaAliases(account, "wave2-fn")
+	if err != nil || len(listed) != 1 || listed[0].AliasName != "live" {
+		t.Fatalf("aliases=%v err=%v", listed, err)
+	}
+	if _, err := st.UpdateLambdaAlias(account, "wave2-fn", "live", 0, ""); !errors.Is(err, store.ErrInvalidFunctionVersion) {
+		t.Fatalf("bad version update: %v", err)
+	}
+	if _, err := st.UpdateLambdaAlias(account, "wave2-fn", "missing", v2.Version, ""); !errors.Is(err, store.ErrNoSuchAlias) {
+		t.Fatalf("missing alias update: %v", err)
+	}
+	updatedAlias, err := st.UpdateLambdaAlias(account, "wave2-fn", "live", v2.Version, "v2")
+	if err != nil || updatedAlias.FunctionVersion != v2.Version || updatedAlias.Description != "v2" {
+		t.Fatalf("updated alias=%+v err=%v", updatedAlias, err)
+	}
+	if err := st.DeleteLambdaAlias(account, "wave2-fn", "missing"); !errors.Is(err, store.ErrNoSuchAlias) {
+		t.Fatalf("delete missing: %v", err)
+	}
+	if err := st.DeleteLambdaAlias(account, "wave2-fn", "live"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetLambdaAlias(account, "wave2-fn", "live"); !errors.Is(err, store.ErrNoSuchAlias) {
+		t.Fatalf("after delete: %v", err)
+	}
+	_ = alias
+	_ = fn
+
+	layerZip := testZip(t, map[string]string{"python/lib.py": "x=1"})
+	layer, err := st.PublishLayerVersion(store.PublishLayerVersionMeta{
+		AccountID: account, LayerName: "wave2-layer", Description: "d", Zip: layerZip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := st.LayerCodeSizeBytes(account, layer.LayerARN)
+	if size <= 0 {
+		t.Fatalf("layer size=%d", size)
+	}
+	if st.LayerCodeSizeBytes(account, "arn:aws:lambda:us-east-1:999999999999:layer:x:1") != 0 {
+		t.Fatal("cross-account layer size must be 0")
+	}
+	if st.LayerCodeSizeBytes(account, "not-an-arn") != 0 {
+		t.Fatal("invalid ARN size must be 0")
+	}
+
+	fnWithLayer, err := st.CreateFunction(store.CreateFunctionMeta{
+		AccountID: account, FunctionName: "wave2-layered",
+		RoleARN: "arn:aws:iam::" + account + ":role/exec",
+		Runtime: "python3.12", Handler: "app.handler", Timeout: 3, Memory: 128, Zip: zip,
+		Layers: []string{layer.LayerARN},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.EnrichFunctionLayerSizes(nil)
+	st.EnrichFunctionLayerSizes(&store.LambdaFunction{})
+	st.EnrichFunctionLayerSizes(&fnWithLayer)
+	if fnWithLayer.LayerCodeSizes[layer.LayerARN] != size {
+		t.Fatalf("enriched sizes=%v want %d", fnWithLayer.LayerCodeSizes, size)
 	}
 }

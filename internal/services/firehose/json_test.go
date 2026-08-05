@@ -57,3 +57,37 @@ func TestDescribeDeliveryStreamJSONOpenSearch(t *testing.T) {
 		t.Fatalf("unexpected S3 dest in OpenSearch describe: %s", raw)
 	}
 }
+
+func TestFirehoseAllDestTypes(t *testing.T) {
+	s3st := store.FirehoseStream{
+		Name: "s3", StreamARN: store.FirehoseStreamARN("us-east-1", "000000000001", "s3"),
+		DestType: "S3", DestBucket: "b", DestPrefix: "p/", RoleARN: "arn:role", CreatedAt: 1_700_000_000_000,
+	}
+	raw, err := fhsvc.DescribeDeliveryStreamJSON(s3st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "S3DestinationDescription") {
+		t.Fatalf("s3=%s", raw)
+	}
+
+	lam := s3st
+	lam.Name, lam.DestType, lam.DestLambdaARN = "lam", "Lambda", "arn:aws:lambda:1:1:function:f"
+	raw, _ = fhsvc.DescribeDeliveryStreamJSON(lam)
+
+	vpc := s3st
+	vpc.Name, vpc.DestType = "vpc", "VPCFlow"
+	raw, _ = fhsvc.DescribeDeliveryStreamJSON(vpc)
+
+	raw, _ = fhsvc.CreateDeliveryStreamJSON(s3st)
+	raw, _ = fhsvc.ListDeliveryStreamsJSON([]store.FirehoseStream{s3st})
+	_, _ = fhsvc.ListDeliveryStreamsJSON(nil)
+	if _, err := fhsvc.DeleteDeliveryStreamJSON(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = fhsvc.PutRecordJSON("rec-1")
+	raw, _ = fhsvc.PutRecordBatchJSON([]int{0, 2}, 3)
+	if !strings.Contains(string(raw), "FailedPutCount") {
+		t.Fatalf("batch=%s", raw)
+	}
+}

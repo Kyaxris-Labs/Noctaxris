@@ -117,10 +117,10 @@ func TestGlueGetTableResolvesSchemaReferenceColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = st.CreateGlueTable(account, store.GlueTableCreate{
-		DatabaseName: "labdb",
-		Name:         "items",
+		DatabaseName:    "labdb",
+		Name:            "items",
 		StorageLocation: "s3://lab/items/",
-		Columns:      []store.GlueColumn{},
+		Columns:         []store.GlueColumn{},
 		SchemaReference: store.GlueSchemaReference{
 			RegistryName:        "catalog-reg",
 			SchemaName:          "item",

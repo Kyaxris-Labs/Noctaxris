@@ -60,3 +60,104 @@ func TestBackupSelectionAndJobsJSON(t *testing.T) {
 		t.Fatalf("jobs=%v", listOut)
 	}
 }
+
+func TestBackupVaultPlanRecoveryJSON(t *testing.T) {
+	ts := int64(1_700_000_000_000)
+	vault := store.BackupVault{
+		BackupVaultName: "lab-vault", BackupVaultARN: "arn:aws:backup:us-east-1:1:vault:lab-vault",
+		CreatedAt: ts, NumberOfRecoveryPoints: 2, EncryptionKeyARN: "arn:aws:kms:us-east-1:1:key/k",
+	}
+	for _, fn := range []struct {
+		name string
+		run  func() ([]byte, error)
+		key  string
+	}{
+		{"CreateBackupVault", func() ([]byte, error) { return backupsvc.CreateBackupVaultJSON(vault) }, "BackupVaultName"},
+		{"DescribeBackupVault", func() ([]byte, error) { return backupsvc.DescribeBackupVaultJSON(vault) }, "EncryptionKeyArn"},
+		{"ListBackupVaults", func() ([]byte, error) { return backupsvc.ListBackupVaultsJSON([]store.BackupVault{vault}) }, "BackupVaultList"},
+	} {
+		t.Run(fn.name, func(t *testing.T) {
+			raw, err := fn.run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatal(err)
+			}
+			if fn.key == "BackupVaultList" {
+				if _, ok := out[fn.key].([]any); !ok {
+					t.Fatalf("missing %s: %v", fn.key, out)
+				}
+				return
+			}
+			if out[fn.key] == nil && fn.key != "EncryptionKeyArn" {
+				t.Fatalf("%s missing %s: %v", fn.name, fn.key, out)
+			}
+		})
+	}
+
+	plan := store.BackupPlan{
+		BackupPlanID: "plan-1", BackupPlanARN: "arn:aws:backup:us-east-1:1:plan:plan-1",
+		BackupPlanName: "lab-plan", VersionID: "v1", CreatedAt: ts,
+		RulesJSON: `[{"RuleName":"daily","TargetBackupVaultName":"lab-vault"}]`,
+	}
+	if _, err := backupsvc.CreateBackupPlanJSON(plan); err != nil {
+		t.Fatal(err)
+	}
+	getPlan, err := backupsvc.GetBackupPlanJSON(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planOut map[string]any
+	if err := json.Unmarshal(getPlan, &planOut); err != nil {
+		t.Fatal(err)
+	}
+	bp, _ := planOut["BackupPlan"].(map[string]any)
+	if bp["BackupPlanName"] != "lab-plan" {
+		t.Fatalf("BackupPlan=%v", bp)
+	}
+	if _, err := backupsvc.ListBackupPlansJSON([]store.BackupPlan{plan}); err != nil {
+		t.Fatal(err)
+	}
+
+	job := store.BackupJob{
+		BackupJobID: "job-2", BackupVaultName: "lab-vault", ResourceARN: "arn:aws:s3:::b",
+		IamRoleARN: "arn:aws:iam::1:role/Backup", State: "RUNNING", PercentDone: "50.0",
+		CreatedAt: ts, CompletionDate: ts, RecoveryPointARN: "arn:aws:backup:us-east-1:1:recovery-point:rp-2",
+	}
+	if _, err := backupsvc.StartBackupJobJSON(job); err != nil {
+		t.Fatal(err)
+	}
+	descJob, err := backupsvc.DescribeBackupJobJSON(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jobOut map[string]any
+	if err := json.Unmarshal(descJob, &jobOut); err != nil {
+		t.Fatal(err)
+	}
+	if jobOut["CompletionDate"] == nil {
+		t.Fatalf("CompletionDate missing: %v", jobOut)
+	}
+
+	rp := store.BackupRecoveryPoint{
+		RecoveryPointARN: "arn:aws:backup:us-east-1:1:recovery-point:rp-3",
+		BackupVaultName:  "lab-vault", ResourceARN: "arn:aws:s3:::b", ResourceType: "S3",
+		Status: "COMPLETED", CreationDate: ts,
+	}
+	if _, err := backupsvc.DescribeRecoveryPointJSON(rp, vault.BackupVaultARN); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backupsvc.ListRecoveryPointsJSON([]store.BackupRecoveryPoint{rp}); err != nil {
+		t.Fatal(err)
+	}
+
+	emptySel := store.BackupSelection{BackupPlanID: "plan-1", SelectionID: "sel-0", CreatedAt: ts}
+	if _, err := backupsvc.GetBackupSelectionJSON(emptySel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backupsvc.ListBackupSelectionsJSON(nil); err != nil {
+		t.Fatal(err)
+	}
+}

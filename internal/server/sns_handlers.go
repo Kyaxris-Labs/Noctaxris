@@ -38,6 +38,10 @@ func (s *Server) handleSNS(
 		action = catalog.ActionSNSTagResource
 	case catalog.ActionKMSUntagResource, "UntagResource":
 		action = catalog.ActionSNSUntagResource
+	case catalog.ActionEventsRemovePermission, catalog.ActionLambdaRemovePermission:
+		// Query Action=RemovePermission is normalized to events:/lambda: by resolveAction;
+		// remap for SNS-signed requests.
+		action = catalog.ActionSNSRemovePermission
 	}
 	action = snsAction(action)
 	accountID := verified.AccountID

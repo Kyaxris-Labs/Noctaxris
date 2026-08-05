@@ -149,3 +149,68 @@ func TestRDSDataTxnLive(t *testing.T) {
 	}
 	_, _ = setupConn.Exec(ctx, `DELETE FROM noctaxris_txn_lab WHERE id IN (1, 2)`)
 }
+
+func TestMatchRDSDataTxnResource(t *testing.T) {
+	sess := &rdsDataTxnSession{resource: "arn:rds:db", secret: "arn:secret:a"}
+	if err := matchRDSDataTxnResource(sess, "arn:rds:other", ""); err == nil {
+		t.Fatal("want resource mismatch error")
+	}
+	if err := matchRDSDataTxnResource(sess, "", "arn:secret:b"); err == nil {
+		t.Fatal("want secret mismatch error")
+	}
+	if err := matchRDSDataTxnResource(sess, "arn:rds:db", "arn:secret:a"); err != nil {
+		t.Fatalf("match: %v", err)
+	}
+}
+
+func TestLookupRDSDataTxnSessionEmptyAndMissing(t *testing.T) {
+	srv := &Server{}
+	_, err := srv.lookupRDSDataTxnSession("acct", "  ")
+	if err == nil {
+		t.Fatal("want error for empty transaction id")
+	}
+	_, err = srv.lookupRDSDataTxnSession("acct", "missing-txn")
+	if !errors.Is(err, store.ErrRDSDataTxnNotFound) {
+		t.Fatalf("want not found, got %v", err)
+	}
+}
+
+func TestRDSDataTxnSessionCloseNilSafe(t *testing.T) {
+	var sess *rdsDataTxnSession
+	sess.close()
+	sess = &rdsDataTxnSession{}
+	sess.close()
+}
+
+func TestCommitRollbackRDSDataTxnNotFound(t *testing.T) {
+	srv := &Server{store: mustOpenRDSDataTxnTestStore(t)}
+	ctx := context.Background()
+	err := srv.CommitRDSDataSQLTransaction(ctx, testAccountID, "nope", "", "")
+	if !errors.Is(err, store.ErrRDSDataTxnNotFound) {
+		t.Fatalf("Commit want not found got %v", err)
+	}
+	err = srv.RollbackRDSDataSQLTransaction(ctx, testAccountID, "nope", "", "")
+	if !errors.Is(err, store.ErrRDSDataTxnNotFound) {
+		t.Fatalf("Rollback want not found got %v", err)
+	}
+}
+
+func mustOpenRDSDataTxnTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(dir + "/master.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.EnsureRoot(testAccountID, "AKIAROOTEXAMPLE01", "secret-root-value"); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+const testAccountID = "000000000001"

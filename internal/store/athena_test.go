@@ -348,5 +348,3 @@ func TestAthenaDuckRunnerFailClosed(t *testing.T) {
 		t.Fatalf("state=%s", exec.State)
 	}
 }
-
-

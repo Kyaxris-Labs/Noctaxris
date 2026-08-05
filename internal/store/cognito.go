@@ -132,6 +132,7 @@ type CognitoUser struct {
 	UserStatus string
 	PoolID     string
 	CreatedAt  int64
+	Enabled    bool
 }
 
 // CognitoAuthResult mirrors AuthenticationResultType lite.
@@ -167,6 +168,9 @@ func EnsureCognitoSchema(db *sql.DB) error {
 		return err
 	}
 	if err := EnsureCognitoForgotAttrsSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureCognitoAdminSchema(db); err != nil {
 		return err
 	}
 	return nil
@@ -538,7 +542,7 @@ func (s *Store) AdminCreateCognitoUser(accountID, poolID, username, password str
 	if err := s.applyCustomMessagePayload(accountID, strings.TrimSpace(poolID), username, "CustomMessage_AdminCreateUser", "{####}", CognitoLabConfirmationCode, cmPayload); err != nil {
 		return CognitoUser{}, err
 	}
-	return CognitoUser{Username: username, Sub: sub, UserStatus: "CONFIRMED", PoolID: poolID, CreatedAt: now}, nil
+	return CognitoUser{Username: username, Sub: sub, UserStatus: "CONFIRMED", PoolID: poolID, CreatedAt: now, Enabled: true}, nil
 }
 
 // SignUpCognitoUser creates an UNCONFIRMED user (ConfirmSignUp sets CONFIRMED).
@@ -604,7 +608,7 @@ func (s *Store) SignUpCognitoUser(accountID, clientID, username, password string
 	if err := s.storeCognitoConfirmationCode(acct, poolID, username, cognitoConfirmPurposeSignUp, code, "email"); err != nil {
 		return CognitoUser{}, "", err
 	}
-	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now}, poolID, nil
+	return CognitoUser{Username: username, Sub: sub, UserStatus: "UNCONFIRMED", PoolID: poolID, CreatedAt: now, Enabled: true}, poolID, nil
 }
 
 // ConfirmSignUpCognitoUser marks a user CONFIRMED when the stored signup code matches.
@@ -824,6 +828,13 @@ func (s *Store) authenticateAndIssue(accountID, poolID, clientID, username, pass
 	}
 	if status != "CONFIRMED" {
 		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
+	}
+	enabled, err := s.cognitoUserEnabled(accountID, poolID, username)
+	if err != nil {
+		return CognitoAuthOutcome{}, err
+	}
+	if !enabled {
+		return CognitoAuthOutcome{}, fmt.Errorf("%w: User is disabled", ErrCognitoUnauthorized)
 	}
 	if _, err := s.FireCognitoTriggerIfConfigured(
 		accountID, poolID, clientID, username, sub, status,

@@ -1,5 +1,7 @@
 //go:build ignore
 
+// Parked: duplicates newer bcm_exports_test.go / budgets_test.go / costexplorer_test.go /
+// codedeploy_test.go and references missing openStreamDV6Store helper.
 package store_test
 
 import (
@@ -7,27 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-func openStreamDV6Store(t *testing.T) *store.Store {
-	t.Helper()
-	dir := t.TempDir()
-	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.Open(dir, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
-}
-
 func TestCloudControlBucketAndRole(t *testing.T) {
-	st := openStreamDV6Store(t)
+	st := openTestStore(t)
 	account := "000000000001"
 
 	_, _, err := st.CloudControlCreateResource(account, "AWS::EC2::Instance", `{"InstanceType":"t3.micro"}`)
@@ -66,7 +51,7 @@ func TestCloudControlBucketAndRole(t *testing.T) {
 }
 
 func TestBCMExportWritesSample(t *testing.T) {
-	st := openStreamDV6Store(t)
+	st := openTestStore(t)
 	account := "000000000001"
 
 	exp, err := st.CreateBCMExport(account, "us-east-1", "lab-cur", "sample", "CSV")
@@ -93,7 +78,7 @@ func TestBCMExportWritesSample(t *testing.T) {
 }
 
 func TestCostExplorerSeeded(t *testing.T) {
-	st := openStreamDV6Store(t)
+	st := openTestStore(t)
 
 	rows, err := st.CostExplorerGetCostAndUsage("MONTHLY", []string{"UnblendedCost"})
 	if err != nil || len(rows) != 1 {
@@ -109,7 +94,7 @@ func TestCostExplorerSeeded(t *testing.T) {
 }
 
 func TestBudgetsCRUD(t *testing.T) {
-	st := openStreamDV6Store(t)
+	st := openTestStore(t)
 	account := "000000000001"
 
 	b, err := st.CreateBudget(account, "lab-budget", "COST", "MONTHLY", "100.0", "USD", nil)
@@ -130,7 +115,7 @@ func TestBudgetsCRUD(t *testing.T) {
 }
 
 func TestCodeDeployAppGroupDeployment(t *testing.T) {
-	st := openStreamDV6Store(t)
+	st := openTestStore(t)
 	account := "000000000001"
 
 	app, err := st.CreateCodeDeployApplication(account, "LabApp", "ECS")
@@ -160,4 +145,3 @@ func TestCodeDeployAppGroupDeployment(t *testing.T) {
 		t.Fatalf("list=%v err=%v", ids, err)
 	}
 }
-

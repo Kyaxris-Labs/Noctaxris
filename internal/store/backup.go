@@ -267,6 +267,9 @@ func (s *Store) ListBackupVaults(accountID, region string) ([]BackupVault, error
 
 // DeleteBackupVault deletes an empty vault.
 func (s *Store) DeleteBackupVault(accountID, region, name string) error {
+	if region == "" {
+		region = DefaultBackupRegion
+	}
 	v, err := s.DescribeBackupVault(accountID, region, name)
 	if err != nil {
 		return err

@@ -563,3 +563,88 @@ func TestCodeBuildConfigStubValidation(t *testing.T) {
 		t.Fatalf("bad vpc status=%d body=%q", badVPC.Code, badVPC.Body.String())
 	}
 }
+
+func TestCodeBuildProjectNegativesAndDeleteMissing(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "cb-neg-role", codebuildTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/cb-neg-role"
+
+	emptyName := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "version: 0.2"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if emptyName.Code == http.StatusOK {
+		t.Fatalf("empty name should fail: %s", emptyName.Body.String())
+	}
+
+	missingRole := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "no-role-proj",
+		"serviceRole": "arn:aws:iam::" + testAccountID + ":role/missing-cb-role",
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "version: 0.2"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if missingRole.Code == http.StatusOK {
+		t.Fatalf("missing role should fail: %s", missingRole.Body.String())
+	}
+
+	create := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "neg-proj",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": `{"version":"0.2","phases":{"build":{"commands":["echo hi"]}}}`},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateProject status=%d body=%q", create.Code, create.Body.String())
+	}
+	dup := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name":        "neg-proj",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "version: 0.2"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if dup.Code == http.StatusOK {
+		t.Fatalf("duplicate project should fail: %s", dup.Body.String())
+	}
+
+	list := mustCodeBuildJSON(t, handler, "ListProjects", map[string]any{}, now)
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "neg-proj") {
+		t.Fatalf("ListProjects status=%d body=%q", list.Code, list.Body.String())
+	}
+	batch := mustCodeBuildJSON(t, handler, "BatchGetProjects", map[string]any{"names": []string{"neg-proj"}}, now)
+	if batch.Code != http.StatusOK || !strings.Contains(batch.Body.String(), "neg-proj") {
+		t.Fatalf("BatchGetProjects status=%d body=%q", batch.Code, batch.Body.String())
+	}
+	emptyBatch := mustCodeBuildJSON(t, handler, "BatchGetProjects", map[string]any{"names": []string{}}, now)
+	if emptyBatch.Code != http.StatusOK {
+		t.Fatalf("BatchGetProjects empty status=%d body=%q", emptyBatch.Code, emptyBatch.Body.String())
+	}
+
+	updMissing := mustCodeBuildJSON(t, handler, "UpdateProject", map[string]any{
+		"name":        "no-such-proj",
+		"serviceRole": roleARN,
+		"source":      map[string]any{"type": "NO_SOURCE", "buildspec": "version: 0.2"},
+		"environment": map[string]any{"type": "LINUX_CONTAINER", "image": "alpine:3.20"},
+		"artifacts":   map[string]any{"type": "NO_ARTIFACTS"},
+	}, now)
+	if updMissing.Code == http.StatusOK {
+		t.Fatalf("UpdateProject missing should fail")
+	}
+
+	del := mustCodeBuildJSON(t, handler, "DeleteProject", map[string]any{"name": "neg-proj"}, now)
+	if del.Code != http.StatusOK {
+		t.Fatalf("DeleteProject status=%d body=%q", del.Code, del.Body.String())
+	}
+	delMiss := mustCodeBuildJSON(t, handler, "DeleteProject", map[string]any{"name": "neg-proj"}, now)
+	if delMiss.Code == http.StatusOK {
+		t.Fatalf("DeleteProject missing should fail: %s", delMiss.Body.String())
+	}
+}

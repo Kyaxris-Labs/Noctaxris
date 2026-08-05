@@ -24,12 +24,12 @@ func TestCreateOpenSearchDomainCharsetValidation(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000001"
 	for _, name := range []string{
-		"ab",                // too short (AWS min 3)
-		"UPPER",             // uppercase
-		"bad_name",          // underscore
-		"has.dot",           // dotted
-		"ssrf.attacker.com", // DNS SSRF shape
-		"-leading",          // must start with letter
+		"ab",                    // too short (AWS min 3)
+		"UPPER",                 // uppercase
+		"bad_name",              // underscore
+		"has.dot",               // dotted
+		"ssrf.attacker.com",     // DNS SSRF shape
+		"-leading",              // must start with letter
 		strings.Repeat("a", 29), // too long (AWS max 28)
 	} {
 		_, err := st.CreateOpenSearchDomain(account, "us-east-1", name, "")

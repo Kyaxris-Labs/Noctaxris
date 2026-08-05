@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -145,5 +146,111 @@ func TestRestAPIProxyPathMatchAndLambdaURI(t *testing.T) {
 	}
 	if method.HTTPMethod != "ANY" {
 		t.Fatalf("method=%q", method.HTTPMethod)
+	}
+}
+
+func TestRestAPIResourceMethodDeleteAndNotFound(t *testing.T) {
+	st := openTestStore(t)
+	const acct = "000000000001"
+	api, err := st.CreateRestAPI(acct, "rest-cov", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base := store.RestAPIExecuteBase(api.APIID, "dev"); base == "" {
+		t.Fatal("empty execute base")
+	}
+	acct2, byID, err := st.GetRestAPIByID(api.APIID)
+	if err != nil || acct2 != acct || byID.APIID != api.APIID {
+		t.Fatalf("byID=%+v err=%v", byID, err)
+	}
+	if _, _, err := st.GetRestAPIByID("missing"); !errors.Is(err, store.ErrAPIGatewayNotFound) {
+		t.Fatalf("missing by id: %v", err)
+	}
+
+	child, err := st.CreateRestResource(acct, api.APIID, api.RootResourceID, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRestResource(acct, api.APIID, api.RootResourceID, ""); err == nil {
+		t.Fatal("empty pathPart")
+	}
+	ress, err := st.ListRestResources(acct, api.APIID)
+	if err != nil || len(ress) < 2 {
+		t.Fatalf("resources=%v err=%v", ress, err)
+	}
+
+	m, err := st.PutRestMethod(acct, api.APIID, child.ResourceID, "GET", "NONE", "", false)
+	if err != nil || m.HTTPMethod != "GET" {
+		t.Fatalf("method=%+v err=%v", m, err)
+	}
+	gotM, err := st.GetRestMethod(acct, api.APIID, child.ResourceID, "GET")
+	if err != nil || gotM.HTTPMethod != "GET" {
+		t.Fatalf("get method=%+v err=%v", gotM, err)
+	}
+	if _, err := st.GetRestMethod(acct, api.APIID, child.ResourceID, "POST"); !errors.Is(err, store.ErrAPIGatewayNotFound) {
+		t.Fatalf("missing method: %v", err)
+	}
+
+	in, err := st.PutRestIntegration(acct, api.APIID, child.ResourceID, "GET", "MOCK", "", "", "", nil)
+	if err != nil || in.Type != "MOCK" {
+		t.Fatalf("integration=%+v err=%v", in, err)
+	}
+	gotIn, err := st.GetRestIntegration(acct, api.APIID, child.ResourceID, "GET")
+	if err != nil || gotIn.Type != "MOCK" {
+		t.Fatalf("get integration=%+v err=%v", gotIn, err)
+	}
+
+	dep, err := st.CreateRestDeployment(acct, api.APIID, "v1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := st.CreateRestStage(acct, api.APIID, "prod", dep.DeploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stage.StageName != "prod" {
+		t.Fatalf("stage=%+v", stage)
+	}
+	if _, err := st.GetRestStage(acct, api.APIID, "missing"); !errors.Is(err, store.ErrAPIGatewayNotFound) {
+		t.Fatalf("missing stage: %v", err)
+	}
+
+	arn := store.RestAPIMethodARN("us-east-1", acct, api.APIID, "prod", "GET", "/child")
+	if arn == "" {
+		t.Fatal("empty method arn")
+	}
+	if _, err := store.NormalizeRestAPILambdaURI("arn:aws:lambda:us-east-1:" + acct + ":function:fn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NormalizeRestAPILambdaURI("bad"); err == nil {
+		t.Fatal("expected bad uri")
+	}
+
+	if err := st.DeleteRestMethod(acct, api.APIID, child.ResourceID, "GET"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRestMethod(acct, api.APIID, child.ResourceID, "GET"); !errors.Is(err, store.ErrAPIGatewayNotFound) {
+		t.Fatalf("second delete method: %v", err)
+	}
+	if err := st.DeleteRestResource(acct, api.APIID, child.ResourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRestResource(acct, api.APIID, api.RootResourceID); err == nil {
+		t.Fatal("expected root delete reject")
+	}
+	if _, _, err := st.MatchRestAPIRoute(acct, api.APIID, "GET", "/nope"); !errors.Is(err, store.ErrAPIGatewayNotFound) {
+		t.Fatalf("miss route: %v", err)
+	}
+}
+
+func TestRestAPICreateStageWithoutDeploymentFails(t *testing.T) {
+	st := openTestStore(t)
+	const acct = "000000000001"
+	api, err := st.CreateRestAPI(acct, "stage-bad", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRestStage(acct, api.APIID, "dev", "missing-dep"); err == nil {
+		t.Fatal("expected missing deployment reject")
 	}
 }

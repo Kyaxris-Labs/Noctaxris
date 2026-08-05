@@ -110,9 +110,9 @@ func TestTransactWriteUpdateWithCondition(t *testing.T) {
 	err := st.TransactWriteItems(account, []store.TransactWriteAction{
 		{
 			Kind: "Update", TableName: "Orders",
-			ItemPK:           `{"S":"acct"}`,
-			KeyJSON:          []byte(`{"pk":{"S":"acct"}}`),
-			UpdateExpression: "SET balance = :n",
+			ItemPK:              `{"S":"acct"}`,
+			KeyJSON:             []byte(`{"pk":{"S":"acct"}}`),
+			UpdateExpression:    "SET balance = :n",
 			ConditionExpression: "balance = :old",
 			ExpressionAttributeValues: map[string]any{
 				":n":   map[string]any{"N": "20"},
@@ -134,9 +134,9 @@ func TestTransactWriteUpdateWithCondition(t *testing.T) {
 	err = st.TransactWriteItems(account, []store.TransactWriteAction{
 		{
 			Kind: "Update", TableName: "Orders",
-			ItemPK:           `{"S":"acct"}`,
-			KeyJSON:          []byte(`{"pk":{"S":"acct"}}`),
-			UpdateExpression: "SET balance = :n",
+			ItemPK:              `{"S":"acct"}`,
+			KeyJSON:             []byte(`{"pk":{"S":"acct"}}`),
+			UpdateExpression:    "SET balance = :n",
 			ConditionExpression: "balance = :old",
 			ExpressionAttributeValues: map[string]any{
 				":n":   map[string]any{"N": "30"},
@@ -170,8 +170,8 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 	err := st.TransactWriteItems(account, []store.TransactWriteAction{
 		{
 			Kind: "Put", TableName: "Orders",
-			ItemPK:   `{"S":"new"}`,
-			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"1"}}`),
+			ItemPK:              `{"S":"new"}`,
+			ItemJSON:            []byte(`{"pk":{"S":"new"},"v":{"S":"1"}}`),
 			ConditionExpression: "attribute_not_exists(pk)",
 		},
 	}, "")
@@ -182,8 +182,8 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 	err = st.TransactWriteItems(account, []store.TransactWriteAction{
 		{
 			Kind: "Put", TableName: "Orders",
-			ItemPK:   `{"S":"new"}`,
-			ItemJSON: []byte(`{"pk":{"S":"new"},"v":{"S":"2"}}`),
+			ItemPK:              `{"S":"new"}`,
+			ItemJSON:            []byte(`{"pk":{"S":"new"},"v":{"S":"2"}}`),
 			ConditionExpression: "attribute_not_exists(pk)",
 		},
 	}, "")
@@ -195,7 +195,7 @@ func TestTransactWritePutDeleteConditionExpression(t *testing.T) {
 	err = st.TransactWriteItems(account, []store.TransactWriteAction{
 		{
 			Kind: "Delete", TableName: "Orders",
-			ItemPK: `{"S":"new"}`,
+			ItemPK:              `{"S":"new"}`,
 			ConditionExpression: "v = :want",
 			ExpressionAttributeValues: map[string]any{
 				":want": map[string]any{"S": "1"},
