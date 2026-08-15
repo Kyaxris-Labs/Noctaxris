@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.4.1
+
+Patch after 1.4.0: Go 1.26.6 for stdlib govulncheck findings. Docker Hub: `kyaxris/noctaxris` (`1.4.1`, `1.4`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- Toolchain: Go 1.26.6 (clears GO-2026-5026, GO-2026-5942, GO-2026-5972, GO-2026-6088, GO-2026-6089, GO-2026-6090, GO-2026-6218)
+
 ## 1.4.0
 
 Minor after 1.3.1: Floci-parity edge and control-plane depth (API Gateway authorizers/usage plans, KMS RSA Sign/Verify, Step Functions task tokens, IoT Topic Rules, WAFv2 IPSet), stored-state and analytics labs (Lightsail disks/IPs, ASG policies, Backup selections, CUR FOCUS, Glue Schema Registry), and Engine client migration to Moby. Docker Hub: `kyaxris/noctaxris` (`1.4.0`, `1.4`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

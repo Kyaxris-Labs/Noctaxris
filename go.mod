@@ -1,6 +1,6 @@
 module github.com/Kyaxris-Labs/Noctaxris
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/Azure/go-amqp v1.7.0

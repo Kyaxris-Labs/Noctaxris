@@ -114,7 +114,7 @@ Operator runbook (stop → tar volumes → restore verify → start, plus image-
 
 Files live under `docker/`:
 
-- `Dockerfile`: multi-stage build (`golang:1.26.5-bookworm` → distroless nonroot), `CGO_ENABLED=0`
+- `Dockerfile`: multi-stage build (`golang:1.26.6-bookworm` → distroless nonroot), `CGO_ENABLED=0`
 - `compose.yaml`: publish `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566` (default loopback), `noctaxris-data` for API sealed state, `noctaxris-secrets` for `master.key` (`NOCTAXRIS_MASTER_KEY_FILE`), `noctaxris-compute` for Lambda code (API RW, engine `:ro`), digest-pinned `docker:27-dind` / `busybox` init (chowns compute + secrets to UID `65532`), restricted DinD engine (`privileged: false` + caps/devices + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`), `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports, healthchecks on API and engine. Privileged engine opt-in: `compose.engine-privileged.yaml`. Lab overlays: `compose.lab-open.yaml` (open data plane), `compose.lab-host-gateway.yaml` (Lambda ExtraHosts), `compose.lab-ecs-host-gateway.yaml` (ECS / CodeBuild / Batch ExtraHosts), `compose.lab-brokers.yaml` (shared Kafka/MQTT + `NOCTAXRIS_BROKER_PORT_PUBLISH`), `compose.lab-nested-ports.yaml` (selected nested data TCP on `127.0.0.1` via DinD engine, including `9092`/`1883` when shared brokers run)
 - `.env.example`: sample root keys for local Compose
 
