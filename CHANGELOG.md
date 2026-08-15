@@ -2,26 +2,37 @@
 
 ## Unreleased
 
-- Nested compute: migrate Engine client from `github.com/docker/docker` to `github.com/moby/moby/client` + `github.com/moby/moby/api`; `scripts/govulncheck-allowlist.txt` empty of Fixed-N/A Engine IDs (see [docs/security-defaults.md](docs/security-defaults.md))
+## 1.4.0
+
+Minor after 1.3.1: Floci-parity edge and control-plane depth (API Gateway authorizers/usage plans, KMS RSA Sign/Verify, Step Functions task tokens, IoT Topic Rules, WAFv2 IPSet), stored-state and analytics labs (Lightsail disks/IPs, ASG policies, Backup selections, CUR FOCUS, Glue Schema Registry), and Engine client migration to Moby. Docker Hub: `kyaxris/noctaxris` (`1.4.0`, `1.4`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+### Edge, identity, and messaging labs
+
 - API Gateway REST: TOKEN/REQUEST Lambda authorizers (`Create`/`Get`/`GetAuthorizers`/`DeleteAuthorizer`; method `CUSTOM`/`TOKEN`/`REQUEST` + `AuthorizerId`); usage plans and API keys lite (`Create`/`Get`/`Delete` ApiKey and UsagePlan, UsagePlanKey associate); invoke fail-closed Allow/Deny and `x-api-key` when `apiKeyRequired` or stage is under a usage plan
 - KMS: asymmetric lab keys — `CreateKey` `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` (`KeyUsage` `SIGN_VERIFY`); sealed PKCS8 material; `Sign`/`Verify` (`RSASSA_PSS_SHA_256` primary, also `RSASSA_PKCS1_V1_5_SHA_256`); `GetPublicKey` PEM SPKI; symmetric keys reject Sign/Verify fail-closed
 - Step Functions: `waitForTaskToken` Task pause (Resource `.waitForTaskToken` or Parameters with `WaitForTaskToken` / `$$.Task.Token`); `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat`; execution stays `RUNNING` until callback
 - SSM: parameter version labels (`LabelParameterVersion`, `GetParameterHistory`); `GetParameter`/`GetParameters` resolve `Name:version` / `Name:label` or `Version`/`Label`; Put overwrite keeps history; max 10 labels/version with AWS-like move on reattach
-- S3: bucket CORS (`Put`/`Get`/`DeleteBucketCors`), lifecycle configuration (`Put`/`Get`/`DeleteLifecycleConfiguration`, stored rules only), and `SelectObjectContent` lite (CSV/JSON, `SELECT * FROM s3object [LIMIT n]`, simplified JSON records; unsupported SQL fail closed)
 - CodePipeline: Manual Approval pause on `StartPipelineExecution` (`InProgress` + token via `GetPipelineState`); `PutApprovalResult` Approved continues to CodeBuild / Rejected fails; `GetPipelineExecution` and `ListPipelineExecutions` store-state
 - AppSync: management SAR (`List`/`Delete` ApiKeys; `Update`/`Delete`/`Get`/`List` DataSources and Resolvers; `GetSchemaCreationStatus` returns `SUCCESS` after `StartSchemaCreation`); GraphQL Lambda runtime unchanged
+- IoT Topic Rules engine lite: `CreateTopicRule` / `GetTopicRule` / `ListTopicRules` / `ReplaceTopicRule` / `DeleteTopicRule` / `EnableTopicRule` / `DisableTopicRule`; minimal `SELECT * FROM 'topic/filter'` (+/#); in-process actions (republish, SQS, SNS, S3, DynamoDB, Kinesis, Lambda) fail-closed on missing targets; MQTT non-`$aws/` publish dispatch when shared MQTT is on; tests use `PublishTopic` without Mosquitto
+- WAFv2: IPSet CRUD (`CreateIPSet` / `GetIPSet` / `UpdateIPSet` / `DeleteIPSet` / `ListIPSets`) and `IPSetReferenceStatement.ARN` resolve for SourceIP matching (unknown ARN fail closed; inline Addresses kept)
+- CloudFront: `GetDistributionConfig` (config + ETag), `UpdateDistribution` (IfMatch; mutates Enabled/origins/cache behaviors), and invalidation theatre (`CreateInvalidation`/`GetInvalidation`/`ListInvalidations`, Completed immediately)
+- ELBv2: `ModifyListener` (default forward / port / protocol) and `ModifyRule` (conditions + forward action); ALB rules accept `http-header`, `query-string`, and `source-ip` alongside path/host; lab `/alb/` matching uses headers, query, and peer source IP (still `:4566` only)
+
+### Stored-state, data, and analytics
+
+- S3: bucket CORS (`Put`/`Get`/`DeleteBucketCors`), lifecycle configuration (`Put`/`Get`/`DeleteLifecycleConfiguration`, stored rules only), and `SelectObjectContent` lite (CSV/JSON, `SELECT * FROM s3object [LIMIT n]`, simplified JSON records; unsupported SQL fail closed)
 - Lightsail: stored-state disks (`Create/Get/GetDisks/Attach/Detach/DeleteDisk`), static IPs (`Allocate/Get/GetStaticIps/Attach/Detach/ReleaseStaticIp`), key pairs (`Create/Get/GetKeyPairs/DeleteKeyPair` dummy material), and public ports (`Open/CloseInstancePublicPorts`, `GetInstancePortStates`); no VMs
 - EMR: CancelSteps (marks steps CANCELLED); persist InstanceGroups/Fleets from RunJobFlow; ListInstanceGroups/ListInstanceFleets; cluster AddTags/RemoveTags; Create/Describe/Delete/List SecurityConfiguration (stored JSON); still no Spark
 - CUR: FOCUS enumerator + projection lite — in-process S3/Lambda usage counters; FOCUS CSV when `Format=FOCUS` or `AdditionalSchemaElements` includes `FOCUS`; `Format=Parquet` stages FOCUS NDJSON then DuckDB Parquet (same `NOCTAXRIS_CUR_EMIT` gate)
 - Auto Scaling: scaling policies (`Put`/`Describe`/`Delete`), lifecycle hooks, `Attach`/`Detach`/`Describe` instances (membership without DinD), and ELBv2 target-group attach/detach/describe (ARN validated against the ELBv2 store)
 - AWS Backup: selections (`Create`/`Get`/`List`/`DeleteBackupSelection` with `IamRoleArn` + `Resources`); `ListBackupJobs` filters; `StopBackupJob` no-op on completed; `DeleteRecoveryPoint` metadata removal
-- ELBv2: `ModifyListener` (default forward / port / protocol) and `ModifyRule` (conditions + forward action); ALB rules accept `http-header`, `query-string`, and `source-ip` alongside path/host; lab `/alb/` matching uses headers, query, and peer source IP (still `:4566` only)
 - Glue: Schema Registry lite (`Create/Get/List/Delete` Registry and Schema, `Register/Get/List` SchemaVersion); GetTable/GetTables resolve empty Columns from SchemaReference (AVRO/JSON)
-- CloudFront: `GetDistributionConfig` (config + ETag), `UpdateDistribution` (IfMatch; mutates Enabled/origins/cache behaviors), and invalidation theatre (`CreateInvalidation`/`GetInvalidation`/`ListInvalidations`, Completed immediately)
-
-- IoT Topic Rules engine lite: `CreateTopicRule` / `GetTopicRule` / `ListTopicRules` / `ReplaceTopicRule` / `DeleteTopicRule` / `EnableTopicRule` / `DisableTopicRule`; minimal `SELECT * FROM 'topic/filter'` (+/#); in-process actions (republish, SQS, SNS, S3, DynamoDB, Kinesis, Lambda) fail-closed on missing targets; MQTT non-`$aws/` publish dispatch when shared MQTT is on; tests use `PublishTopic` without Mosquitto
 - Athena: WorkGroup CRUD (`Create`/`Get`/`List`/`Update`/`Delete`); `primary` seeded; `StartQueryExecution` honors DISABLED fail-closed and `EnforceWorkGroupConfiguration` / default `OutputLocation`
-- WAFv2: IPSet CRUD (`CreateIPSet` / `GetIPSet` / `UpdateIPSet` / `DeleteIPSet` / `ListIPSets`) and `IPSetReferenceStatement.ARN` resolve for SourceIP matching (unknown ARN fail closed; inline Addresses kept)
+
+### Nested compute client
+
+- Nested compute: migrate Engine client from `github.com/docker/docker` to `github.com/moby/moby/client` + `github.com/moby/moby/api`; `scripts/govulncheck-allowlist.txt` empty of Fixed-N/A Engine IDs (see [docs/security-defaults.md](docs/security-defaults.md))
 
 ## 1.3.1
 
