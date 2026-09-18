@@ -281,6 +281,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	action := resolveAction(r, body)
+	if isIoTCredentialsPath(r) {
+		s.handleIoTCredentials(w, r, body, requestID, eventID, readOnly)
+		return
+	}
 	var verified *authn.Verified
 	if isUnauthenticatedSTSAction(action) {
 		// AWS STS federation APIs authenticate via SAML/OIDC token, not SigV4.
@@ -295,6 +299,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			code := authn.Code(err)
 			// Narrow anonymous S3 GetObject/HeadObject gate: only MissingAuthenticationToken,
 			// only object GET/HEAD, and only when env + policy/ACL allow that object.
+			if code == authn.CodeMissingAuthenticationToken &&
+				s.tryIoTDeviceUnsigned(w, r, body, requestID, eventID, readOnly) {
+				return
+			}
 			if code == authn.CodeMissingAuthenticationToken &&
 				s.tryAnonymousS3Object(w, r, body, requestID, eventID, readOnly) {
 				return
@@ -325,6 +333,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if IsTransferLabHomePath(r.URL.Path) {
 		s.handleTransferLabHome(w, r, body, requestID, eventID, verified, readOnly)
+		return
+	}
+
+	if isIoTRESTAfterAuth(r, verified) {
+		s.handleIoTREST(w, r, body, requestID, eventID, verified, readOnly)
 		return
 	}
 
@@ -657,7 +670,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if verified.Service == "iot" || verified.Service == "iotdata" || verified.Service == "iot-data" ||
-		verified.Service == "data.iot" || strings.HasPrefix(action, "iot:") || strings.HasPrefix(action, "iot-data:") {
+		verified.Service == "data.iot" || verified.Service == "iotdevicegateway" ||
+		verified.Service == "iot-jobs-data" || verified.Service == "iotjobsdata" ||
+		strings.HasPrefix(action, "iot:") || strings.HasPrefix(action, "iot-data:") ||
+		strings.HasPrefix(action, "iot-jobs-data:") {
 		s.handleIoT(w, r, body, requestID, eventID, action, verified, readOnly)
 		return
 	}
@@ -1430,7 +1446,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIoTReplaceTopicRule,
 		catalog.ActionIoTDeleteTopicRule,
 		catalog.ActionIoTEnableTopicRule,
-		catalog.ActionIoTDisableTopicRule:
+		catalog.ActionIoTDisableTopicRule,
+		catalog.ActionIoTDescribeEndpoint,
+		catalog.ActionIoTCreateRoleAlias,
+		catalog.ActionIoTDescribeRoleAlias,
+		catalog.ActionIoTListRoleAliases,
+		catalog.ActionIoTDeleteRoleAlias,
+		catalog.ActionIoTCreateJob,
+		catalog.ActionIoTDescribeJob,
+		catalog.ActionIoTListNamedShadowsForThing,
+		catalog.ActionIoTListRetainedMessages,
+		catalog.ActionIoTDataListNamedShadowsForThing,
+		catalog.ActionIoTJobsGetPendingJobExecutions,
+		catalog.ActionIoTJobsDescribeJobExecution,
+		catalog.ActionIoTJobsStartNextPendingJobExecution:
 		s.handleIoT(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionCloudWatchPutMetricData,
 		catalog.ActionCloudWatchListMetrics,
@@ -1629,6 +1658,9 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 		return false
 	}
 	if isEKSRESTPath(r.URL.Path) {
+		return false
+	}
+	if isIoTMuxRESTPath(r.URL.Path) {
 		return false
 	}
 	return true

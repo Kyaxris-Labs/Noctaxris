@@ -3001,6 +3001,62 @@
       "value": "iot:DisableTopicRule"
     },
     {
+      "name": "ActionIoTDescribeEndpoint",
+      "value": "iot:DescribeEndpoint"
+    },
+    {
+      "name": "ActionIoTCreateRoleAlias",
+      "value": "iot:CreateRoleAlias"
+    },
+    {
+      "name": "ActionIoTDescribeRoleAlias",
+      "value": "iot:DescribeRoleAlias"
+    },
+    {
+      "name": "ActionIoTListRoleAliases",
+      "value": "iot:ListRoleAliases"
+    },
+    {
+      "name": "ActionIoTDeleteRoleAlias",
+      "value": "iot:DeleteRoleAlias"
+    },
+    {
+      "name": "ActionIoTAssumeRoleWithCertificate",
+      "value": "iot:AssumeRoleWithCertificate"
+    },
+    {
+      "name": "ActionIoTCreateJob",
+      "value": "iot:CreateJob"
+    },
+    {
+      "name": "ActionIoTDescribeJob",
+      "value": "iot:DescribeJob"
+    },
+    {
+      "name": "ActionIoTListNamedShadowsForThing",
+      "value": "iot:ListNamedShadowsForThing"
+    },
+    {
+      "name": "ActionIoTListRetainedMessages",
+      "value": "iot:ListRetainedMessages"
+    },
+    {
+      "name": "ActionIoTDataListNamedShadowsForThing",
+      "value": "iot-data:ListNamedShadowsForThing"
+    },
+    {
+      "name": "ActionIoTJobsGetPendingJobExecutions",
+      "value": "iot-jobs-data:GetPendingJobExecutions"
+    },
+    {
+      "name": "ActionIoTJobsDescribeJobExecution",
+      "value": "iot-jobs-data:DescribeJobExecution"
+    },
+    {
+      "name": "ActionIoTJobsStartNextPendingJobExecution",
+      "value": "iot-jobs-data:StartNextPendingJobExecution"
+    },
+    {
       "name": "ActionCloudWatchPutMetricData",
       "value": "cloudwatch:PutMetricData"
     },
@@ -4380,18 +4436,29 @@
     "iam:UpdateAssumeRolePolicy",
     "iot-data:DeleteThingShadow",
     "iot-data:GetThingShadow",
+    "iot-data:ListNamedShadowsForThing",
     "iot-data:UpdateThingShadow",
+    "iot-jobs-data:DescribeJobExecution",
+    "iot-jobs-data:GetPendingJobExecutions",
+    "iot-jobs-data:StartNextPendingJobExecution",
+    "iot:AssumeRoleWithCertificate",
     "iot:AttachPolicy",
     "iot:AttachThingPrincipal",
+    "iot:CreateJob",
     "iot:CreateKeysAndCertificate",
     "iot:CreatePolicy",
+    "iot:CreateRoleAlias",
     "iot:CreateThing",
     "iot:CreateTopicRule",
     "iot:DeleteCertificate",
     "iot:DeletePolicy",
+    "iot:DeleteRoleAlias",
     "iot:DeleteThing",
     "iot:DeleteTopicRule",
     "iot:DescribeCertificate",
+    "iot:DescribeEndpoint",
+    "iot:DescribeJob",
+    "iot:DescribeRoleAlias",
     "iot:DescribeThing",
     "iot:DetachPolicy",
     "iot:DisableTopicRule",
@@ -4399,7 +4466,10 @@
     "iot:GetPolicy",
     "iot:GetTopicRule",
     "iot:ListCertificates",
+    "iot:ListNamedShadowsForThing",
     "iot:ListPolicies",
+    "iot:ListRetainedMessages",
+    "iot:ListRoleAliases",
     "iot:ListThingPrincipals",
     "iot:ListThings",
     "iot:ListTopicRules",
@@ -4793,7 +4863,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 958,
+  "count": 972,
   "source": "Action* constants in actions.go",
-  "generated": "2026-08-05T14:26:56.177518+00:00"
+  "generated": "2026-09-18T09:19:14.749374+00:00"
 }

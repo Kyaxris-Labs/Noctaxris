@@ -89,6 +89,41 @@ CREATE TABLE IF NOT EXISTS iot_topic_rules (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (account_id, region, rule_name)
 );
+CREATE TABLE IF NOT EXISTS iot_role_aliases (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  role_alias TEXT NOT NULL,
+  role_alias_arn TEXT NOT NULL,
+  role_arn TEXT NOT NULL,
+  credential_duration_seconds INTEGER NOT NULL DEFAULT 3600,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, role_alias)
+);
+CREATE TABLE IF NOT EXISTS iot_jobs (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  job_arn TEXT NOT NULL,
+  document TEXT NOT NULL DEFAULT '{}',
+  targets_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'IN_PROGRESS',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, job_id)
+);
+CREATE TABLE IF NOT EXISTS iot_job_executions (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  thing_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  execution_number INTEGER NOT NULL DEFAULT 1,
+  version_number INTEGER NOT NULL DEFAULT 1,
+  queued_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL DEFAULT 0,
+  last_updated_at INTEGER NOT NULL,
+  status_details_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (account_id, region, job_id, thing_name)
+);
 `
 
 // IoTThing is a lab IoT thing.
@@ -164,6 +199,21 @@ func IoTCertificateARN(region, accountID, certID string) string {
 // IoTPolicyARN builds arn:aws:iot:REGION:ACCOUNT:policy/NAME
 func IoTPolicyARN(region, accountID, policyName string) string {
 	return fmt.Sprintf("arn:aws:iot:%s:%s:policy/%s", iotRegion(region), accountID, policyName)
+}
+
+// IoTRoleAliasARN builds arn:aws:iot:REGION:ACCOUNT:rolealias/NAME
+func IoTRoleAliasARN(region, accountID, alias string) string {
+	return fmt.Sprintf("arn:aws:iot:%s:%s:rolealias/%s", iotRegion(region), accountID, alias)
+}
+
+// IoTJobARN builds arn:aws:iot:REGION:ACCOUNT:job/ID
+func IoTJobARN(region, accountID, jobID string) string {
+	return fmt.Sprintf("arn:aws:iot:%s:%s:job/%s", iotRegion(region), accountID, jobID)
+}
+
+// IoTClientARN builds arn:aws:iot:REGION:ACCOUNT:client/CLIENTID
+func IoTClientARN(region, accountID, clientID string) string {
+	return fmt.Sprintf("arn:aws:iot:%s:%s:client/%s", iotRegion(region), accountID, clientID)
 }
 
 // CreateIoTThing creates a thing. Identical recreate is idempotent; conflicting attrs fail.
@@ -755,6 +805,51 @@ func (s *Store) DeleteIoTThingShadow(accountID, region, thingName, shadowName st
 		return ErrIoTNotFound
 	}
 	return nil
+}
+
+// ListIoTNamedShadows returns named shadow names for a thing. The classic (unnamed)
+// shadow is omitted. Unknown things and classic-only things yield an empty list.
+func (s *Store) ListIoTNamedShadows(accountID, region, thingName string) ([]string, error) {
+	if err := s.EnsureIoTSchema(); err != nil {
+		return nil, err
+	}
+	region = iotRegion(region)
+	thingName = strings.TrimSpace(thingName)
+	if thingName == "" {
+		return []string{}, nil
+	}
+	rows, err := s.db.Query(
+		`SELECT shadow_name FROM iot_shadows
+		 WHERE account_id = ? AND region = ? AND thing_name = ? AND shadow_name != ''
+		 ORDER BY shadow_name`,
+		accountID, region, thingName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list named shadows: %w", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("list named shadows scan: %w", err)
+		}
+		if strings.TrimSpace(name) != "" {
+			out = append(out, name)
+		}
+	}
+	return out, rows.Err()
+}
+
+// ListIoTRetainedMessages returns retained MQTT payloads the caller may read.
+// Lab MQTT has no retained store; the list is always empty (HTTP 200, not unimplemented).
+func (s *Store) ListIoTRetainedMessages(accountID, region string) ([]string, error) {
+	if err := s.EnsureIoTSchema(); err != nil {
+		return nil, err
+	}
+	_ = accountID
+	_ = region
+	return []string{}, nil
 }
 
 func attributesEqual(a, b map[string]string) bool {

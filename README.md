@@ -89,7 +89,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 | API edge | API Gateway REST, HTTP API, WebSocket lab lite |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
 | Billing | Pricing, BCM Data Exports, Cost and Usage Reports, Cost Explorer, Budgets |
-| Devices | IoT Core / IoT Data (HTTP shadows + Topic Rules; opt-in MQTT) |
+| Devices | IoT Core / IoT Data (HTTP shadows, named-shadow list, Jobs data plane, credentials provider, Topic Rules; opt-in MQTT) |
 | Control plane labs | Lightsail, Auto Scaling, Elastic Beanstalk, AWS Backup |
 
 Open the service matrix for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
@@ -490,8 +490,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="1" align="center" valign="middle">Devices</td>
       <td>IoT Core / Data</td>
-      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows; opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs.</td>
-      <td>Jobs, fleet indexing, operator BYO CA APIs, retained MQTT APIs, WAN ATS hostnames.</td>
+      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows (classic + named, REST <code>?name=</code>); <code>ListNamedShadowsForThing</code> (classic omitted); <code>DescribeEndpoint</code> lab addresses; Jobs <code>CreateJob</code> plus device <code>GET /things/{thing}/jobs</code> and <code>PUT .../jobs/$next</code>; credentials provider mTLS <code>GET /role-aliases/{alias}/credentials</code> (thing-name header must match); opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; ClientId must equal thing name; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs (<code>iot-jobs-data</code> on Jobs device HTTP).</td>
+      <td>Fleet indexing, operator BYO CA APIs, retained MQTT store, WAN ATS hostnames.</td>
     </tr>
     <tr>
       <td rowspan="4" align="center" valign="middle">Control plane labs</td>

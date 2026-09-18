@@ -2,6 +2,7 @@ package iot
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -95,9 +96,9 @@ func ListCertificatesJSON(certs []store.IoTCertificate) ([]byte, error) {
 // CreatePolicyJSON builds CreatePolicy response.
 func CreatePolicyJSON(p store.IoTPolicy) ([]byte, error) {
 	return json.Marshal(map[string]any{
-		"policyName":     p.PolicyName,
-		"policyArn":      p.PolicyARN,
-		"policyDocument": p.PolicyDocument,
+		"policyName":      p.PolicyName,
+		"policyArn":       p.PolicyARN,
+		"policyDocument":  p.PolicyDocument,
 		"policyVersionId": "1",
 	})
 }
@@ -171,4 +172,136 @@ func ListTopicRulesJSON(rules []store.IoTTopicRule) ([]byte, error) {
 		})
 	}
 	return json.Marshal(map[string]any{"rules": items})
+}
+
+// DescribeEndpointJSON builds DescribeEndpoint response.
+func DescribeEndpointJSON(address string) ([]byte, error) {
+	return json.Marshal(map[string]any{"endpointAddress": address})
+}
+
+// ListNamedShadowsJSON builds ListNamedShadowsForThing response.
+func ListNamedShadowsJSON(names []string, ts int64) ([]byte, error) {
+	if names == nil {
+		names = []string{}
+	}
+	return json.Marshal(map[string]any{
+		"results":   names,
+		"timestamp": ts,
+	})
+}
+
+// CreateRoleAliasJSON builds CreateRoleAlias / DescribeRoleAlias response.
+func CreateRoleAliasJSON(ra store.IoTRoleAlias) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"roleAlias":                 ra.RoleAlias,
+		"roleAliasArn":              ra.RoleAliasARN,
+		"roleArn":                   ra.RoleARN,
+		"credentialDurationSeconds": ra.CredentialDurationSeconds,
+	})
+}
+
+// ListRoleAliasesJSON builds ListRoleAliases response.
+func ListRoleAliasesJSON(aliases []store.IoTRoleAlias) ([]byte, error) {
+	items := make([]map[string]any, 0, len(aliases))
+	for _, ra := range aliases {
+		items = append(items, map[string]any{
+			"roleAlias":    ra.RoleAlias,
+			"roleAliasArn": ra.RoleAliasARN,
+			"roleArn":      ra.RoleARN,
+		})
+	}
+	return json.Marshal(map[string]any{"roleAliases": items})
+}
+
+// CreateJobJSON builds CreateJob response.
+func CreateJobJSON(j store.IoTJob) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"jobId":  j.JobID,
+		"jobArn": j.JobARN,
+	})
+}
+
+// DescribeJobJSON builds DescribeJob response.
+func DescribeJobJSON(j store.IoTJob) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"job": map[string]any{
+			"jobId":     j.JobID,
+			"jobArn":    j.JobARN,
+			"status":    j.Status,
+			"targets":   j.Targets,
+			"document":  j.Document,
+			"createdAt": float64(j.CreatedAt),
+		},
+	})
+}
+
+func jobExecutionSummary(ex store.IoTJobExecution) map[string]any {
+	m := map[string]any{
+		"jobId":           ex.JobID,
+		"executionNumber": ex.ExecutionNumber,
+		"versionNumber":   ex.VersionNumber,
+		"queuedAt":        ex.QueuedAt,
+		"lastUpdatedAt":   ex.LastUpdatedAt,
+	}
+	if ex.StartedAt > 0 {
+		m["startedAt"] = ex.StartedAt
+	}
+	return m
+}
+
+// GetPendingJobExecutionsJSON builds GetPendingJobExecutions response.
+func GetPendingJobExecutionsJSON(inProgress, queued []store.IoTJobExecution) ([]byte, error) {
+	inItems := make([]map[string]any, 0, len(inProgress))
+	for _, ex := range inProgress {
+		inItems = append(inItems, jobExecutionSummary(ex))
+	}
+	qItems := make([]map[string]any, 0, len(queued))
+	for _, ex := range queued {
+		qItems = append(qItems, jobExecutionSummary(ex))
+	}
+	return json.Marshal(map[string]any{
+		"inProgressJobs": inItems,
+		"queuedJobs":     qItems,
+	})
+}
+
+// DescribeJobExecutionJSON builds DescribeJobExecution / StartNextPendingJobExecution response.
+func DescribeJobExecutionJSON(ex store.IoTJobExecution, includeDocument bool) ([]byte, error) {
+	exec := map[string]any{
+		"jobId":           ex.JobID,
+		"thingName":       ex.ThingName,
+		"status":          ex.Status,
+		"executionNumber": ex.ExecutionNumber,
+		"versionNumber":   ex.VersionNumber,
+		"queuedAt":        ex.QueuedAt,
+		"lastUpdatedAt":   ex.LastUpdatedAt,
+		"statusDetails":   ex.StatusDetails,
+	}
+	if ex.StartedAt > 0 {
+		exec["startedAt"] = ex.StartedAt
+	}
+	if includeDocument {
+		exec["jobDocument"] = ex.JobDocument
+	}
+	return json.Marshal(map[string]any{"execution": exec})
+}
+
+// CredentialsProviderJSON builds GET /role-aliases/{alias}/credentials response.
+func CredentialsProviderJSON(accessKeyID, secret, sessionToken string, expiration time.Time) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"credentials": map[string]any{
+			"accessKeyId":     accessKeyID,
+			"secretAccessKey": secret,
+			"sessionToken":    sessionToken,
+			"expiration":      expiration.UTC().Format(time.RFC3339),
+		},
+	})
+}
+
+// ListRetainedMessagesJSON builds an empty retained-message list.
+func ListRetainedMessagesJSON(topics []string) ([]byte, error) {
+	if topics == nil {
+		topics = []string{}
+	}
+	return json.Marshal(map[string]any{"retainedTopics": topics})
 }

@@ -131,7 +131,7 @@ func (s *Store) ResolveIoTMQTTDeviceForThingShadow(accountID, region, thingName,
 		return IoTMQTTDeviceContext{}, ErrIoTNotFound
 	}
 	if len(allowed) > 1 {
-		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: multiple ACTIVE certificates Allow this MQTT action; pass certificateId (MQTT ClientId = certificateId) or detach extras", ErrIoTBadRequest)
+		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: multiple ACTIVE certificates Allow this MQTT action; pass certificateId or detach extras", ErrIoTBadRequest)
 	}
 	return IoTMQTTDeviceContext{
 		AccountID:     accountID,

@@ -80,6 +80,9 @@ const ServicePrincipalRDS = "rds.amazonaws.com"
 // role trust when configuring Lambda-backed RotateSecret (PassRole on the rotator role).
 const ServicePrincipalSecretsManager = "secretsmanager.amazonaws.com"
 
+// ServicePrincipalIoTCredentials is the IoT credentials provider service principal.
+const ServicePrincipalIoTCredentials = "credentials.iot.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

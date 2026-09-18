@@ -91,6 +91,10 @@ type Config struct {
 	SharedKafka bool
 	// SharedMQTT starts the shared noctaxris-lab-mqtt Mosquitto singleton (NOCTAXRIS_SHARED_MQTT).
 	SharedMQTT bool
+	// IoTEndpointHost is the hostname prefix for DescribeEndpoint addresses
+	// (NOCTAXRIS_IOT_ENDPOINT_HOST). Empty uses 127.0.0.1. Non-IP values produce
+	// distinct data/jobs/credentials hostnames for hosts-file and TLS SNI labs.
+	IoTEndpointHost string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -138,6 +142,8 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w", EnvSharedMQTT, err)
 	}
 	cfg.SharedMQTT = sharedMQTT
+
+	cfg.IoTEndpointHost = strings.TrimSpace(getenv("NOCTAXRIS_IOT_ENDPOINT_HOST", ""))
 
 	proxies, err := ParseTrustedProxies(os.Getenv(EnvTrustedProxies))
 	if err != nil {

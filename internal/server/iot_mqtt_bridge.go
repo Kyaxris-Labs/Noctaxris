@@ -54,10 +54,10 @@ func newShadowMQTTHandler(st *store.Store, publish func(topic string, payload []
 }
 
 // HandleMessage processes one MQTT publish for classic or named shadows.
-// certificateID is the lab device certificate id (DER SHA-256 hex). Prefer setting the MQTT
-// ClientId to certificateId so multi-cert things resolve unambiguously. When empty, the handler
-// picks the unique ACTIVE cert on the thing that Allows the shadow action (fail closed if zero
-// or multiple Allows).
+// certificateID is the lab device certificate id (DER SHA-256 hex) from TLS, not MQTT ClientId.
+// Official Connect policies require ClientId to equal the thing name. When certificateID is empty,
+// the handler picks the unique ACTIVE cert on the thing that Allows the shadow action (fail closed
+// if zero or multiple Allows).
 func (h *shadowMQTTHandler) HandleMessage(certificateID, topic string, payload []byte) error {
 	if h == nil || h.store == nil {
 		return fmt.Errorf("shadow mqtt handler unavailable")

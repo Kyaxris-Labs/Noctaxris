@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- IoT: `DescribeEndpoint` (`GET /endpoint?endpointType=`), REST named-shadow list (classic unnamed omitted), Jobs HTTP data plane (`iot-jobs-data`), credentials provider mTLS (`GET /role-aliases/{alias}/credentials` with matching `x-amzn-iot-thingname` and CredentialProvider SNI), MQTT ClientId equal to thing name
+
 ## 1.4.1
 
 Patch after 1.4.0: Go 1.26.6 for stdlib govulncheck findings. Docker Hub: `kyaxris/noctaxris` (`1.4.1`, `1.4`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

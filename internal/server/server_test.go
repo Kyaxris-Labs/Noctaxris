@@ -938,7 +938,7 @@ func signHeader(t *testing.T, req *http.Request, body []byte, akid, secret, regi
 	canonicalRequest := strings.Join([]string{
 		req.Method,
 		canonicalPath(req),
-		"",
+		canonicalQuery(req.URL.Query(), false),
 		canonicalHeaders,
 		signedHeaderList,
 		payloadHash,

@@ -87,6 +87,30 @@ func (s *Server) handleIoT(
 		s.iotEnableTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTDisableTopicRule:
 		s.iotDisableTopicRule(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDescribeEndpoint:
+		s.iotDescribeEndpoint(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTCreateRoleAlias:
+		s.iotCreateRoleAlias(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDescribeRoleAlias:
+		s.iotDescribeRoleAlias(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTListRoleAliases:
+		s.iotListRoleAliases(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDeleteRoleAlias:
+		s.iotDeleteRoleAlias(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTCreateJob:
+		s.iotCreateJob(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDescribeJob:
+		s.iotDescribeJob(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTListNamedShadowsForThing, catalog.ActionIoTDataListNamedShadowsForThing:
+		s.iotListNamedShadowsForThing(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTListRetainedMessages:
+		s.iotListRetainedMessages(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTJobsGetPendingJobExecutions:
+		s.iotGetPendingJobExecutionsJSON(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTJobsDescribeJobExecution:
+		s.iotDescribeJobExecutionJSON(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTJobsStartNextPendingJobExecution:
+		s.iotStartNextPendingJobExecutionJSON(w, r, body, requestID, eventID, verified, readOnly, params)
 	default:
 		s.writeIoTError(w, r, body, requestID, http.StatusNotImplemented, "InvalidAction",
 			"This IoT action is not implemented.", readOnly, eventID, verified)
@@ -154,6 +178,30 @@ func iotAction(action string) string {
 		return catalog.ActionIoTEnableTopicRule
 	case "DisableTopicRule":
 		return catalog.ActionIoTDisableTopicRule
+	case "DescribeEndpoint":
+		return catalog.ActionIoTDescribeEndpoint
+	case "CreateRoleAlias":
+		return catalog.ActionIoTCreateRoleAlias
+	case "DescribeRoleAlias":
+		return catalog.ActionIoTDescribeRoleAlias
+	case "ListRoleAliases":
+		return catalog.ActionIoTListRoleAliases
+	case "DeleteRoleAlias":
+		return catalog.ActionIoTDeleteRoleAlias
+	case "CreateJob":
+		return catalog.ActionIoTCreateJob
+	case "DescribeJob":
+		return catalog.ActionIoTDescribeJob
+	case "ListNamedShadowsForThing":
+		return catalog.ActionIoTDataListNamedShadowsForThing
+	case "ListRetainedMessages":
+		return catalog.ActionIoTListRetainedMessages
+	case "GetPendingJobExecutions":
+		return catalog.ActionIoTJobsGetPendingJobExecutions
+	case "DescribeJobExecution":
+		return catalog.ActionIoTJobsDescribeJobExecution
+	case "StartNextPendingJobExecution":
+		return catalog.ActionIoTJobsStartNextPendingJobExecution
 	default:
 		return action
 	}
@@ -261,6 +309,11 @@ func (s *Server) iotListThings(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	_ = params
+	if s.iotTLSDevice(r) != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"Device certificates cannot call iot:ListThings.", readOnly, eventID, verified)
+		return
+	}
 	if !s.authorize(verified, catalog.ActionIoTListThings, "*") {
 		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform iot:ListThings.", readOnly, eventID, verified)
@@ -1119,6 +1172,346 @@ func (s *Server) iotDisableTopicRule(
 	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DisableTopicRule", readOnly)
 }
 
+func (s *Server) iotDescribeEndpoint(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if verified != nil && !s.authorize(verified, catalog.ActionIoTDescribeEndpoint, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DescribeEndpoint.", readOnly, eventID, verified)
+		return
+	}
+	endpointType := iotStringParam(params, "endpointType", "EndpointType")
+	if !isIoTEndpointType(endpointType) {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"Unsupported endpointType.", readOnly, eventID, verified)
+		return
+	}
+	if endpointType == "" {
+		endpointType = "iot:Data-ATS"
+	}
+	out, _ := iotsvc.DescribeEndpointJSON(s.iotEndpointAddress(endpointType))
+	if r.Header.Get("X-Amz-Target") != "" {
+		s.writeIoTOK(w, out)
+	} else {
+		s.writeIoTRESTOK(w, out)
+	}
+	s.iotMaybeAudit(r, requestID, eventID, verified, iotEventSource, "DescribeEndpoint", readOnly)
+}
+
+func (s *Server) iotCreateRoleAlias(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTCreateRoleAlias, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:CreateRoleAlias.", readOnly, eventID, verified)
+		return
+	}
+	alias := iotStringParam(params, "roleAlias", "RoleAlias")
+	roleARN := iotStringParam(params, "roleArn", "RoleArn")
+	dur := iotIntParam(params, "credentialDurationSeconds", "CredentialDurationSeconds")
+	ra, err := s.store.CreateIoTRoleAlias(verified.AccountID, s.iotRegion(verified), alias, roleARN, dur)
+	if errors.Is(err, store.ErrIoTConflict) {
+		s.writeIoTError(w, r, body, requestID, http.StatusConflict, "ResourceAlreadyExistsException",
+			"Role alias already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrIoTBadRequest) {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to create role alias.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.CreateRoleAliasJSON(ra)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "CreateRoleAlias", false)
+}
+
+func (s *Server) iotDescribeRoleAlias(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDescribeRoleAlias, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DescribeRoleAlias.", readOnly, eventID, verified)
+		return
+	}
+	alias := iotStringParam(params, "roleAlias", "RoleAlias")
+	ra, err := s.store.DescribeIoTRoleAlias(verified.AccountID, s.iotRegion(verified), alias)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Role alias not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to describe role alias.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.CreateRoleAliasJSON(ra)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DescribeRoleAlias", readOnly)
+}
+
+func (s *Server) iotListRoleAliases(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	_ = params
+	if s.iotTLSDevice(r) != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"Device certificates cannot call iot:ListRoleAliases.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionIoTListRoleAliases, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:ListRoleAliases.", readOnly, eventID, verified)
+		return
+	}
+	list, err := s.store.ListIoTRoleAliases(verified.AccountID, s.iotRegion(verified))
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to list role aliases.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.ListRoleAliasesJSON(list)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListRoleAliases", readOnly)
+}
+
+func (s *Server) iotDeleteRoleAlias(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDeleteRoleAlias, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DeleteRoleAlias.", readOnly, eventID, verified)
+		return
+	}
+	alias := iotStringParam(params, "roleAlias", "RoleAlias")
+	err := s.store.DeleteIoTRoleAlias(verified.AccountID, s.iotRegion(verified), alias)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Role alias not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to delete role alias.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DeleteRoleAlias", false)
+}
+
+func (s *Server) iotCreateJob(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTCreateJob, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:CreateJob.", readOnly, eventID, verified)
+		return
+	}
+	jobID := iotStringParam(params, "jobId", "JobId")
+	targets := iotStringSliceParam(params, "targets", "Targets")
+	document := iotJSONDocument(params, "document", "Document")
+	job, err := s.store.CreateIoTJob(verified.AccountID, s.iotRegion(verified), jobID, document, targets)
+	if errors.Is(err, store.ErrIoTConflict) {
+		s.writeIoTError(w, r, body, requestID, http.StatusConflict, "ResourceAlreadyExistsException",
+			"Job already exists.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Job target thing not found.", readOnly, eventID, verified)
+		return
+	}
+	if errors.Is(err, store.ErrIoTBadRequest) {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to create job.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.CreateJobJSON(job)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "CreateJob", false)
+}
+
+func (s *Server) iotDescribeJob(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDescribeJob, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:DescribeJob.", readOnly, eventID, verified)
+		return
+	}
+	jobID := iotStringParam(params, "jobId", "JobId")
+	job, err := s.store.DescribeIoTJob(verified.AccountID, s.iotRegion(verified), jobID)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Job not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to describe job.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.DescribeJobJSON(job)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "DescribeJob", readOnly)
+}
+
+func (s *Server) iotListNamedShadowsForThing(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	if !s.authorize(verified, catalog.ActionIoTDataListNamedShadowsForThing, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to list named shadows.", readOnly, eventID, verified)
+		return
+	}
+	thingName := iotStringParam(params, "thingName", "ThingName")
+	names, err := s.store.ListIoTNamedShadows(verified.AccountID, s.iotRegion(verified), thingName)
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to list named shadows.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.ListNamedShadowsJSON(names, s.now().UTC().Unix())
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotDataEventSource, "ListNamedShadowsForThing", readOnly)
+}
+
+func (s *Server) iotListRetainedMessages(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	_ = params
+	if !s.authorize(verified, catalog.ActionIoTListRetainedMessages, "*") {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:ListRetainedMessages.", readOnly, eventID, verified)
+		return
+	}
+	topics, err := s.store.ListIoTRetainedMessages(verified.AccountID, s.iotRegion(verified))
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to list retained messages.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.ListRetainedMessagesJSON(topics)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListRetainedMessages", readOnly)
+}
+
+func (s *Server) iotGetPendingJobExecutionsJSON(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	thingName := iotStringParam(params, "thingName", "ThingName")
+	resource := store.IoTThingARN(s.iotRegion(verified), verified.AccountID, thingName)
+	if !s.authorize(verified, catalog.ActionIoTJobsGetPendingJobExecutions, resource) {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to get pending job executions.", readOnly, eventID, verified)
+		return
+	}
+	inProgress, queued, err := s.store.ListPendingIoTJobExecutions(verified.AccountID, s.iotRegion(verified), thingName)
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to list pending job executions.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.GetPendingJobExecutionsJSON(inProgress, queued)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "iot-jobs-data.amazonaws.com", "GetPendingJobExecutions", readOnly)
+}
+
+func (s *Server) iotDescribeJobExecutionJSON(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	thingName := iotStringParam(params, "thingName", "ThingName")
+	jobID := iotStringParam(params, "jobId", "JobId")
+	resource := store.IoTThingARN(s.iotRegion(verified), verified.AccountID, thingName)
+	if !s.authorize(verified, catalog.ActionIoTJobsDescribeJobExecution, resource) {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to describe job execution.", readOnly, eventID, verified)
+		return
+	}
+	ex, err := s.store.GetIoTJobExecution(verified.AccountID, s.iotRegion(verified), thingName, jobID)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Job execution not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to describe job execution.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.DescribeJobExecutionJSON(ex, true)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "iot-jobs-data.amazonaws.com", "DescribeJobExecution", readOnly)
+}
+
+func (s *Server) iotStartNextPendingJobExecutionJSON(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	thingName := iotStringParam(params, "thingName", "ThingName")
+	resource := store.IoTThingARN(s.iotRegion(verified), verified.AccountID, thingName)
+	if !s.authorize(verified, catalog.ActionIoTJobsStartNextPendingJobExecution, resource) {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to start the next job execution.", readOnly, eventID, verified)
+		return
+	}
+	details := iotStringMapParam(params, "statusDetails", "StatusDetails")
+	ex, err := s.store.StartNextIoTJobExecution(verified.AccountID, s.iotRegion(verified), thingName, details)
+	if errors.Is(err, store.ErrIoTNotFound) {
+		out, _ := iotsvc.EmptyJSON()
+		s.writeIoTOK(w, out)
+		s.writeSuccessAudit(r, requestID, eventID, verified, "iot-jobs-data.amazonaws.com", "StartNextPendingJobExecution", false)
+		return
+	}
+	if err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to start next job execution.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.DescribeJobExecutionJSON(ex, true)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, "iot-jobs-data.amazonaws.com", "StartNextPendingJobExecution", false)
+}
+
+func iotJSONDocument(params map[string]any, keys ...string) string {
+	if s := iotStringParam(params, keys...); s != "" {
+		return s
+	}
+	for _, k := range keys {
+		if raw, ok := params[k]; ok && raw != nil {
+			if m, ok := raw.(map[string]any); ok {
+				b, err := json.Marshal(m)
+				if err == nil {
+					return string(b)
+				}
+			}
+		}
+	}
+	return "{}"
+}
+
 func (s *Server) writeIoTOK(w http.ResponseWriter, payload []byte) {
 	w.Header().Set("Content-Type", iotJSONContentType)
 	w.WriteHeader(http.StatusOK)
@@ -1134,5 +1527,5 @@ func (s *Server) writeIoTError(
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"__type": code, "message": message})
 	_ = body
-	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, code, readOnly)
+	s.iotMaybeAudit(r, requestID, eventID, verified, iotEventSource, code, readOnly)
 }
