@@ -87,12 +87,25 @@ func isIoTDeviceDeniedControlAction(action string) bool {
 	}
 }
 
+func isIoTDataPlaneSigV4Service(verified *authn.Verified) bool {
+	if verified == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(verified.Service)) {
+	case "iot", "iotdata", "iot-data", "data.iot", "iotdevicegateway",
+		"iot-jobs-data", "iotjobsdata":
+		return true
+	default:
+		return false
+	}
+}
+
 func isIoTRESTAfterAuth(r *http.Request, verified *authn.Verified) bool {
 	if r == nil {
 		return false
 	}
 	if isIoTDataPlaneRESTPath(r.URL.Path) {
-		return true
+		return isIoTDataPlaneSigV4Service(verified)
 	}
 	if isIoTDescribeEndpointPath(r.URL.Path) && r.Method == http.MethodGet {
 		svc := ""
@@ -476,7 +489,7 @@ func (s *Server) handleIoTCredentials(
 	if role.MaxSessionDuration > 0 && dur > role.MaxSessionDuration {
 		dur = role.MaxSessionDuration
 	}
-	expires := s.now().UTC().Add(time.Duration(dur) * time.Second)
+	expires := s.tokenExpiresAt(time.Duration(dur) * time.Second)
 	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
 		AccountID:    accountID,
 		RoleARN:      ra.RoleARN,

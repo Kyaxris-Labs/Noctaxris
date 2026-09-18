@@ -281,7 +281,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	action := resolveAction(r, body)
-	if isIoTCredentialsPath(r) {
+	if isIoTCredentialsPath(r) && s.iotTLSDevice(r) != nil {
 		s.handleIoTCredentials(w, r, body, requestID, eventID, readOnly)
 		return
 	}
@@ -341,7 +341,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if action == "" && (strings.EqualFold(verified.Service, "lambda") || isLambdaRESTPath(r.URL.Path)) {
+	if action == "" && strings.EqualFold(verified.Service, "lambda") {
 		restAction, body2 := resolveLambdaREST(r, body)
 		if restAction != "" {
 			s.handleLambda(w, r, body2, requestID, eventID, restAction, verified, readOnly)
@@ -368,14 +368,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if action == "" && (strings.EqualFold(verified.Service, "batch") || isBatchRESTPath(r.URL.Path)) {
+	if action == "" && strings.EqualFold(verified.Service, "batch") {
 		if restAction := resolveBatchREST(r); restAction != "" {
 			s.handleBatch(w, r, body, requestID, eventID, restAction, verified, readOnly)
 			return
 		}
 	}
 
-	if action == "" && (strings.EqualFold(verified.Service, "backup") || isBackupRESTPath(r.URL.Path)) {
+	if action == "" && strings.EqualFold(verified.Service, "backup") {
 		if restAction, pathParams := resolveBackupREST(r); restAction != "" {
 			merged := backupMergeParams(pathParams, jsonBodyMap(body))
 			raw, _ := json.Marshal(merged)
@@ -384,7 +384,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if action == "" && (strings.EqualFold(verified.Service, "eks") || isEKSRESTPath(r.URL.Path)) {
+	if action == "" && strings.EqualFold(verified.Service, "eks") {
 		if restAction := resolveEKSREST(r); restAction != "" {
 			s.handleEKS(w, r, body, requestID, eventID, restAction, verified, readOnly)
 			return
@@ -392,8 +392,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if action == "" && (strings.EqualFold(verified.Service, "bedrock") ||
-		strings.EqualFold(verified.Service, "bedrock-runtime") ||
-		isBedrockRuntimePath(r.URL.Path)) {
+		strings.EqualFold(verified.Service, "bedrock-runtime")) {
 		if restAction, modelID := resolveBedrockRuntimeREST(r); restAction != "" {
 			s.handleBedrockRuntime(w, r, body, requestID, eventID, restAction, verified, readOnly, modelID)
 			return
@@ -401,8 +400,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if action == "" && (strings.EqualFold(verified.Service, "ses") ||
-		strings.EqualFold(verified.Service, "email") ||
-		isSESV2RESTPath(r.URL.Path)) {
+		strings.EqualFold(verified.Service, "email")) {
 		if restAction, identity := resolveSESV2REST(r); restAction != "" {
 			s.handleSESV2(w, r, body, requestID, eventID, restAction, verified, readOnly, identity)
 			return
@@ -414,8 +412,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if action == "" && (verified.Service == "s3" || isS3PathStyleRequest(r, body, action)) {
+	if action == "" && strings.EqualFold(verified.Service, "s3") {
 		s.handleS3(w, r, body, requestID, eventID, verified, readOnly)
+		return
+	}
+
+	if s.rejectSigV4ServiceMismatch(w, r, requestID, eventID, action, verified, readOnly) {
 		return
 	}
 
@@ -1660,6 +1662,15 @@ func isS3PathStyleRequest(r *http.Request, body []byte, action string) bool {
 		return false
 	}
 	if isEKSRESTPath(r.URL.Path) {
+		return false
+	}
+	if isBatchRESTPath(r.URL.Path) {
+		return false
+	}
+	if isBackupRESTPath(r.URL.Path) {
+		return false
+	}
+	if isSESV2RESTPath(r.URL.Path) {
 		return false
 	}
 	if isIoTMuxRESTPath(r.URL.Path) {
