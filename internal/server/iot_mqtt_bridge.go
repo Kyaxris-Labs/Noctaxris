@@ -329,3 +329,29 @@ func ShadowMQTTSubscribeFilters() []string {
 		"$aws/things/+/shadow/name/+/delete",
 	}
 }
+
+// persistMQTTRetained writes a retained MQTT payload when the first topic
+// segment is a unique thing name (device ACL is `{thing}/#`).
+func persistMQTTRetained(st *store.Store, topic string, payload []byte, qos int) error {
+	if st == nil {
+		return nil
+	}
+	topic = strings.TrimSpace(topic)
+	if topic == "" || strings.HasPrefix(topic, "$aws/") {
+		return nil
+	}
+	thingName := topic
+	if i := strings.IndexByte(topic, '/'); i >= 0 {
+		thingName = topic[:i]
+	}
+	g, err := st.DescribeIoTThingByNameGlobal(thingName)
+	if err != nil {
+		return nil
+	}
+	return st.PutIoTRetainedMessage(g.AccountID, g.Region, topic, payload, qos)
+}
+
+// PersistMQTTRetainedForTest writes a retained MQTT payload using the Mosquitto # helper.
+func PersistMQTTRetainedForTest(st *store.Store, topic string, payload []byte, qos int) error {
+	return persistMQTTRetained(st, topic, payload, qos)
+}

@@ -298,10 +298,16 @@ func CredentialsProviderJSON(accessKeyID, secret, sessionToken string, expiratio
 	})
 }
 
-// ListRetainedMessagesJSON builds an empty retained-message list.
-func ListRetainedMessagesJSON(topics []string) ([]byte, error) {
-	if topics == nil {
-		topics = []string{}
+// ListRetainedMessagesJSON builds ListRetainedMessages (summaries only; no payload).
+func ListRetainedMessagesJSON(msgs []store.IoTRetainedMessage) ([]byte, error) {
+	items := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		items = append(items, map[string]any{
+			"topic":            m.Topic,
+			"payloadSize":      len(m.Payload),
+			"qos":              m.QoS,
+			"lastModifiedTime": m.LastModified,
+		})
 	}
-	return json.Marshal(map[string]any{"retainedTopics": topics})
+	return json.Marshal(map[string]any{"retainedTopics": items})
 }

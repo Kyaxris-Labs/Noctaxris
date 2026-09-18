@@ -124,6 +124,15 @@ CREATE TABLE IF NOT EXISTS iot_job_executions (
   status_details_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (account_id, region, job_id, thing_name)
 );
+CREATE TABLE IF NOT EXISTS iot_retained_messages (
+  account_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  payload BLOB NOT NULL,
+  qos INTEGER NOT NULL DEFAULT 0,
+  last_modified INTEGER NOT NULL,
+  PRIMARY KEY (account_id, region, topic)
+);
 `
 
 // IoTThing is a lab IoT thing.
@@ -161,6 +170,14 @@ type IoTShadow struct {
 	PayloadJSON string
 	Version     int64
 	UpdatedAt   int64
+}
+
+// IoTRetainedMessage is a retained MQTT topic. List JSON omits Payload.
+type IoTRetainedMessage struct {
+	Topic        string
+	Payload      []byte
+	QoS          int
+	LastModified int64
 }
 
 // EnsureIoTSchema creates IoT tables if missing.
@@ -849,15 +866,72 @@ func (s *Store) ListIoTNamedShadows(accountID, region, thingName string) ([]stri
 	return out, rows.Err()
 }
 
-// ListIoTRetainedMessages returns retained MQTT payloads the caller may read.
-// Lab MQTT has no retained store; the list is always empty (HTTP 200, not unimplemented).
-func (s *Store) ListIoTRetainedMessages(accountID, region string) ([]string, error) {
+// PutIoTRetainedMessage upserts a retained MQTT payload. An empty payload clears the topic.
+func (s *Store) PutIoTRetainedMessage(accountID, region, topic string, payload []byte, qos int) error {
+	if err := s.EnsureIoTSchema(); err != nil {
+		return err
+	}
+	region = iotRegion(region)
+	topic = strings.TrimSpace(topic)
+	if strings.TrimSpace(accountID) == "" {
+		return fmt.Errorf("%w: accountId required", ErrIoTBadRequest)
+	}
+	if topic == "" {
+		return fmt.Errorf("%w: topic required", ErrIoTBadRequest)
+	}
+	if qos < 0 || qos > 2 {
+		qos = 0
+	}
+	if len(payload) == 0 {
+		_, err := s.db.Exec(
+			`DELETE FROM iot_retained_messages WHERE account_id = ? AND region = ? AND topic = ?`,
+			accountID, region, topic,
+		)
+		if err != nil {
+			return fmt.Errorf("clear retained message: %w", err)
+		}
+		return nil
+	}
+	now := time.Now().UTC().UnixMilli()
+	_, err := s.db.Exec(
+		`INSERT INTO iot_retained_messages (account_id, region, topic, payload, qos, last_modified)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(account_id, region, topic) DO UPDATE SET
+		   payload = excluded.payload, qos = excluded.qos, last_modified = excluded.last_modified`,
+		accountID, region, topic, payload, qos, now,
+	)
+	if err != nil {
+		return fmt.Errorf("put retained message: %w", err)
+	}
+	return nil
+}
+
+// ListIoTRetainedMessages returns retained MQTT topics for an account/region.
+// Payload is stored for MQTT retain and a future Get; List JSON must not emit it.
+func (s *Store) ListIoTRetainedMessages(accountID, region string) ([]IoTRetainedMessage, error) {
 	if err := s.EnsureIoTSchema(); err != nil {
 		return nil, err
 	}
-	_ = accountID
-	_ = region
-	return []string{}, nil
+	region = iotRegion(region)
+	rows, err := s.db.Query(
+		`SELECT topic, payload, qos, last_modified
+		 FROM iot_retained_messages WHERE account_id = ? AND region = ?
+		 ORDER BY topic`,
+		accountID, region,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list retained messages: %w", err)
+	}
+	defer rows.Close()
+	out := []IoTRetainedMessage{}
+	for rows.Next() {
+		var m IoTRetainedMessage
+		if err := rows.Scan(&m.Topic, &m.Payload, &m.QoS, &m.LastModified); err != nil {
+			return nil, fmt.Errorf("list retained messages scan: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func attributesEqual(a, b map[string]string) bool {

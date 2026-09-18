@@ -286,6 +286,37 @@ func TestShadowMQTTBridgePolicyDeny(t *testing.T) {
 	}
 }
 
+func TestPersistMQTTRetainedWritesStore(t *testing.T) {
+	st := openBridgeStore(t)
+	account := testAccountID
+	region := testRegion
+	thing, err := st.CreateIoTThing(account, region, "retain-thing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := thing.ThingName + "/status"
+	if err := server.PersistMQTTRetainedForTest(st, topic, []byte("hot"), 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ListIoTRetainedMessages(account, region)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Topic != topic || string(got[0].Payload) != "hot" || got[0].QoS != 1 {
+		t.Fatalf("retained=%v", got)
+	}
+	if err := server.PersistMQTTRetainedForTest(st, topic, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ListIoTRetainedMessages(account, region)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("cleared list=%v", got)
+	}
+}
+
 func openBridgeStore(t *testing.T) *store.Store {
 	t.Helper()
 	dir := t.TempDir()

@@ -137,6 +137,11 @@ func (s *Server) runSharedMQTTBridge(ctx context.Context) error {
 			if strings.HasPrefix(topic, "$aws/") {
 				return
 			}
+			if msg.Retained() {
+				if err := persistMQTTRetained(s.store, topic, msg.Payload(), int(msg.Qos())); err != nil {
+					log.Printf("mqtt retained: %v", err)
+				}
+			}
 			s.DispatchMQTTPublish(topic, msg.Payload())
 		}); token.Wait() && token.Error() != nil {
 			log.Printf("mqtt subscribe #: %v", token.Error())

@@ -1405,13 +1405,13 @@ func (s *Server) iotListRetainedMessages(
 			"User is not authorized to perform iot:ListRetainedMessages.", readOnly, eventID, verified)
 		return
 	}
-	topics, err := s.store.ListIoTRetainedMessages(verified.AccountID, s.iotRegion(verified))
+	msgs, err := s.store.ListIoTRetainedMessages(verified.AccountID, s.iotRegion(verified))
 	if err != nil {
 		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
 			"Unable to list retained messages.", readOnly, eventID, verified)
 		return
 	}
-	out, _ := iotsvc.ListRetainedMessagesJSON(topics)
+	out, _ := iotsvc.ListRetainedMessagesJSON(msgs)
 	s.writeIoTOK(w, out)
 	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListRetainedMessages", readOnly)
 }

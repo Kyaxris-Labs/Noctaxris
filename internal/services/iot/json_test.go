@@ -2,6 +2,7 @@ package iot_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	iotsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/iot"
@@ -68,5 +69,48 @@ func TestIoTJSON(t *testing.T) {
 	}
 	if _, err := iotsvc.ListTopicRulesJSON([]store.IoTTopicRule{rule}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListRetainedMessagesJSONShape(t *testing.T) {
+	emptyRaw, err := iotsvc.ListRetainedMessagesJSON(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var empty map[string]any
+	if err := json.Unmarshal(emptyRaw, &empty); err != nil {
+		t.Fatal(err)
+	}
+	topics, _ := empty["retainedTopics"].([]any)
+	if topics == nil || len(topics) != 0 {
+		t.Fatalf("empty retainedTopics=%s", emptyRaw)
+	}
+
+	raw, err := iotsvc.ListRetainedMessagesJSON([]store.IoTRetainedMessage{{
+		Topic:        "lab/status",
+		Payload:      []byte("on"),
+		QoS:          1,
+		LastModified: 1_700_000_000_000,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"payload"`) || strings.Contains(string(raw), `"on"`) {
+		t.Fatalf("payload leaked: %s", raw)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := body["retainedTopics"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("items=%s", raw)
+	}
+	item, _ := items[0].(map[string]any)
+	if item["topic"] != "lab/status" || item["payloadSize"] != float64(2) || item["qos"] != float64(1) {
+		t.Fatalf("summary=%v", item)
+	}
+	if item["lastModifiedTime"] != float64(1_700_000_000_000) {
+		t.Fatalf("lastModifiedTime=%v", item["lastModifiedTime"])
 	}
 }

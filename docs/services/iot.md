@@ -85,7 +85,7 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 | Endpoints | `DescribeEndpoint` JSON 1.1 and REST `GET /endpoint?endpointType=` for `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider` (lab `endpointAddress`, default `127.0.0.1:4566`) |
 | Jobs | Control-plane `CreateJob` / `DescribeJob`; device HTTP `GET /things/{thingName}/jobs`, `GET /things/{thingName}/jobs/{jobId}`, `PUT /things/{thingName}/jobs/$next` (`iot-jobs-data:*`) |
 | Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress`. Minted ASIA `expiration` / `ExpiresAt` uses wall clock (same as SigV4), not lab `SetClock` |
-| Retained MQTT | `ListRetainedMessages` returns an empty list (HTTP 200). Lab MQTT has no retained store |
+| Retained MQTT | `ListRetainedMessages` returns stored topic summaries (`topic`, `payloadSize`, `qos`, `lastModifiedTime` ms). Payload stays in SQLite and is omitted from List. Empty account is HTTP 200 with `retainedTopics: []`. Shared Mosquitto `#` deliveries with `Retained()` upsert the same rows |
 
 ### Notes
 
@@ -94,6 +94,7 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 - Attached policies cannot be deleted until detached.
 - Shadows merge `state` maps; null child keys delete. Version increments on each update.
 - Topic rule SQL must include a quoted `FROM` topic filter; duplicate `ruleName` returns `ResourceAlreadyExistsException`.
+- Retained MQTT: empty payload on Put clears the topic. A live MQTT PUBLISH to a client that already subscribed is RETAIN=0, so SQLite is updated when the broker later redelivers a retained copy (bridge subscribe).
 
 ### Authz notes
 
@@ -123,13 +124,15 @@ DescribeEndpoint, Jobs HTTP, and credentials provider (lab addresses on `:4566`)
 aws iot describe-endpoint --endpoint-type iot:Data-ATS --endpoint-url "$EP"
 aws iot describe-endpoint --endpoint-type iot:Jobs --endpoint-url "$EP"
 aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url "$EP"
+aws iot list-retained-messages --endpoint-url "$EP"
 # Jobs data plane: GET /things/{thingName}/jobs
 # Credentials: mTLS GET /role-aliases/{alias}/credentials with matching x-amzn-iot-thingname
+# ListRetainedMessages: topic, qos, lastModifiedTime, payloadSize (no payload). Empty list is HTTP 200.
 ```
 
 ## Not yet / deferred
 
-- Retained MQTT store (`ListRetainedMessages` is an empty HTTP 200 list)
+- `GetRetainedMessage` HTTP (payload is stored; List omits it)
 - Richer IoT SQL (WHERE, SELECT projections, nested functions)
 - Thing types, thing groups, fleet indexing
 - Operator custom CA upload APIs
