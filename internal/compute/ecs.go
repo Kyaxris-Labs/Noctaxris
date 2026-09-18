@@ -90,6 +90,13 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 	if err != nil {
 		return "", err
 	}
+	credID := ecsIMDSCredIDFromEnvMap(uriEnv)
+	failAfterIMDS := func(err error) (string, error) {
+		if credID != "" {
+			_ = c.unregisterECSIMDSCredentials(context.Background(), credID)
+		}
+		return "", err
+	}
 	if len(uriEnv) > 0 {
 		taskEnv = cloneStringMap(taskEnv)
 		for k, v := range uriEnv {
@@ -142,7 +149,7 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		Name:             name,
 	})
 	if err != nil {
-		return "", fmt.Errorf("compute: ecs container create: %w", err)
+		return failAfterIMDS(fmt.Errorf("compute: ecs container create: %w", err))
 	}
 	cid := create.ID
 	if opts.PreStartCopyTar != nil {
@@ -152,19 +159,19 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		}
 		if err := ValidateCodeBuildContainerPath(dest); err != nil {
 			_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
-			return "", err
+			return failAfterIMDS(err)
 		}
 		if err := c.CopyToContainer(ctx, cid, dest, opts.PreStartCopyTar); err != nil {
 			_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
-			return "", err
+			return failAfterIMDS(err)
 		}
 	} else if strings.TrimSpace(opts.PreStartCopyDest) != "" {
 		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
-		return "", fmt.Errorf("compute: PreStartCopyDest set without PreStartCopyTar")
+		return failAfterIMDS(fmt.Errorf("compute: PreStartCopyDest set without PreStartCopyTar"))
 	}
 	if _, err := c.cli.ContainerStart(ctx, cid, client.ContainerStartOptions{}); err != nil {
 		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
-		return "", fmt.Errorf("compute: ecs container start: %w", err)
+		return failAfterIMDS(fmt.Errorf("compute: ecs container start: %w", err))
 	}
 	return cid, nil
 }
@@ -175,6 +182,7 @@ func (c *Client) StopECSTask(ctx context.Context, containerID string) error {
 	if containerID == "" {
 		return fmt.Errorf("compute: container ID is required")
 	}
+	_ = c.unregisterECSIMDSCredentialsForContainer(ctx, containerID)
 	timeout := 10
 	if _, err := c.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		return fmt.Errorf("compute: ecs container stop: %w", err)

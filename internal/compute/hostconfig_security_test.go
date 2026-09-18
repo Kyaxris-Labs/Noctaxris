@@ -85,3 +85,19 @@ func TestNestedTaskSecurityNoPrivilege(t *testing.T) {
 		t.Fatalf("SecurityOpt=%#v missing no-new-privileges", hc.SecurityOpt)
 	}
 }
+
+func TestECSIMDSHostConfigNoHostPublish(t *testing.T) {
+	hc := ecsIMDSHostConfig()
+	if !hostConfigSecurityOK(hc) {
+		t.Fatalf("imds HostConfig not hardened: Privileged=%v CapAdd=%#v CapDrop=%#v", hc.Privileged, hc.CapAdd, hc.CapDrop)
+	}
+	if hc.PortBindings != nil {
+		t.Fatalf("PortBindings=%#v want nil", hc.PortBindings)
+	}
+	if hc.Privileged {
+		t.Fatal("Privileged must be false")
+	}
+	if string(hc.NetworkMode) != ECSNetworkName {
+		t.Fatalf("NetworkMode=%q", hc.NetworkMode)
+	}
+}

@@ -235,6 +235,15 @@ func TestRegisterIMDSValidation(t *testing.T) {
 	if err := cli.registerECSIMDSCredentials(ctx, "id", nil); err == nil {
 		t.Fatal("empty body")
 	}
+	if err := cli.registerECSIMDSCredentials(ctx, "../etc/passwd", []byte("{}")); err == nil {
+		t.Fatal("path traversal id")
+	}
+	if err := cli.registerECSIMDSCredentials(ctx, "live-test-cred", []byte("{}")); err == nil {
+		t.Fatal("non-uuid id")
+	}
+	if err := cli.unregisterECSIMDSCredentials(ctx, "not-a-uuid"); err == nil {
+		t.Fatal("unregister non-uuid")
+	}
 	if err := cli.registerEC2IMDSMeta(ctx, "", EC2IMDSMeta{}); err == nil {
 		t.Fatal("empty ip")
 	}

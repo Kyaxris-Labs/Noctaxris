@@ -44,6 +44,7 @@ type execRec struct {
 	ExitCode    int
 	Stdout      string
 	Cmd         []string
+	Env         []string
 	AttachStdin bool
 	AttachDone  bool
 }
@@ -197,10 +198,10 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == http.MethodPost && path == "/containers/create":
 		var body struct {
-			Image  string            `json:"Image"`
-			Labels map[string]string `json:"Labels"`
-			Env    []string          `json:"Env"`
-			Cmd    []string          `json:"Cmd"`
+			Image      string            `json:"Image"`
+			Labels     map[string]string `json:"Labels"`
+			Env        []string          `json:"Env"`
+			Cmd        []string          `json:"Cmd"`
 			HostConfig struct {
 				NetworkMode string `json:"NetworkMode"`
 			} `json:"HostConfig"`
@@ -335,6 +336,7 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := containerIDFromPath(path, "/exec")
 		var body struct {
 			Cmd         []string `json:"Cmd"`
+			Env         []string `json:"Env"`
 			AttachStdin bool     `json:"AttachStdin"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -346,6 +348,7 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ExitCode:    f.execCode,
 			Stdout:      f.execStdout,
 			Cmd:         body.Cmd,
+			Env:         append([]string(nil), body.Env...),
 			AttachStdin: body.AttachStdin,
 		}
 		f.mu.Unlock()
@@ -430,6 +433,16 @@ func (f *fakeEngine) findContainerLocked(idOrName string) (map[string]any, bool)
 		return insp, true
 	}
 	return nil, false
+}
+
+func (f *fakeEngine) execRecords() []execRec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]execRec, 0, len(f.execs))
+	for _, rec := range f.execs {
+		out = append(out, rec)
+	}
+	return out
 }
 
 func (f *fakeEngine) seedInternalNetwork(name string) string {
@@ -1097,6 +1110,127 @@ func TestFakeEngineECSIMDSAttach(t *testing.T) {
 		t.Fatalf("RunECSTask with imds: %v", err)
 	}
 	_ = cli.StopECSTask(ctx, cid)
+}
+
+func TestFakeEngineECSIMDSSidecarExactPathCmd(t *testing.T) {
+	eng := newFakeEngine()
+	cli, _ := newTestComputeClient(t, eng)
+	ctx := context.Background()
+	_, uriEnv, err := cli.attachECSIMDSEnv(ctx, map[string]string{
+		"AWS_ACCESS_KEY_ID":     "AKIATEST",
+		"AWS_SECRET_ACCESS_KEY": "secret",
+	})
+	if err != nil {
+		t.Fatalf("attachECSIMDSEnv: %v", err)
+	}
+	inspRes, err := cli.cli.ContainerInspect(ctx, ECSIMDSContainerName, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect sidecar: %v", err)
+	}
+	cmd := inspRes.Container.Config.Cmd
+	joined := strings.Join(cmd, " ")
+	if strings.Contains(joined, "python -m http.server") {
+		t.Fatalf("sidecar Cmd still lists directories: %q", joined)
+	}
+	if !strings.Contains(joined, ecsIMDSHandlerScript) {
+		t.Fatalf("sidecar Cmd=%q", joined)
+	}
+	id := ecsIMDSCredIDFromEnvMap(uriEnv)
+	if id == "" {
+		t.Fatal("expected credential id in URI env")
+	}
+}
+
+func TestFakeEngineECSIMDSReplacesDirectoryLister(t *testing.T) {
+	eng := newFakeEngine()
+	cli, _ := newTestComputeClient(t, eng)
+	ctx := context.Background()
+	if _, err := cli.EnsureECSNetwork(ctx); err != nil {
+		t.Fatalf("EnsureECSNetwork: %v", err)
+	}
+	create, err := cli.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: ECSIMDSImage,
+			Cmd:   []string{"/bin/sh", "-c", "python -m http.server 9254 --bind 0.0.0.0 --directory /www"},
+			Labels: map[string]string{
+				LabelManaged: "true",
+				labelECSIMDS: "ecs",
+			},
+		},
+		HostConfig: &container.HostConfig{
+			NetworkMode:  container.NetworkMode(ECSNetworkName),
+			PortBindings: nil,
+		},
+		Name: ECSIMDSContainerName,
+	})
+	if err != nil {
+		t.Fatalf("seed listing sidecar: %v", err)
+	}
+	if _, err := cli.cli.ContainerStart(ctx, create.ID, client.ContainerStartOptions{}); err != nil {
+		t.Fatalf("start listing sidecar: %v", err)
+	}
+	ip, err := cli.ensureECSIMDSMirror(ctx)
+	if err != nil {
+		t.Fatalf("ensureECSIMDSMirror: %v", err)
+	}
+	if ip == "" {
+		t.Fatal("expected sidecar ip")
+	}
+	inspRes, err := cli.cli.ContainerInspect(ctx, ECSIMDSContainerName, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	joined := strings.Join(inspRes.Container.Config.Cmd, " ")
+	if strings.Contains(joined, "python -m http.server") {
+		t.Fatalf("listing sidecar was reused: %q", joined)
+	}
+	if !ecsIMDSSidecarServesExactPaths(inspRes.Container.Config.Cmd) {
+		t.Fatalf("replacement Cmd=%q", joined)
+	}
+}
+
+func TestFakeEngineStopECSTaskUnregistersIMDS(t *testing.T) {
+	eng := newFakeEngine()
+	cli, _ := newTestComputeClient(t, eng)
+	ctx := context.Background()
+	cid, err := cli.RunECSTask(ctx, ECSRunOpts{
+		ImageURI: "alpine:3.20",
+		Env: map[string]string{
+			"AWS_ACCESS_KEY_ID":     "AKIATEST",
+			"AWS_SECRET_ACCESS_KEY": "secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunECSTask: %v", err)
+	}
+	if err := cli.StopECSTask(ctx, cid); err != nil {
+		t.Fatalf("StopECSTask: %v", err)
+	}
+	foundRm := false
+	for _, rec := range eng.execRecords() {
+		joined := strings.Join(rec.Cmd, " ")
+		if !strings.Contains(joined, `rm -f -- "$NOCTAXRIS_IMDS_PATH"`) {
+			continue
+		}
+		foundRm = true
+		wantPrefix := "NOCTAXRIS_IMDS_PATH=" + ecsIMDSDocRoot + ecsIMDSRelativePrefix
+		okPath := false
+		for _, e := range rec.Env {
+			if strings.HasPrefix(e, wantPrefix) {
+				okPath = true
+				id := strings.TrimPrefix(e, wantPrefix)
+				if _, err := normalizeECSIMDSCredID(id); err != nil {
+					t.Fatalf("rm path id %q: %v", id, err)
+				}
+			}
+		}
+		if !okPath {
+			t.Fatalf("rm exec env=%v", rec.Env)
+		}
+	}
+	if !foundRm {
+		t.Fatal("StopECSTask did not delete sidecar credential file")
+	}
 }
 
 func TestFakeEngineRunInvokeAndImageInvoke(t *testing.T) {

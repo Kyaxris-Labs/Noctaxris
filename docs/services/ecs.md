@@ -14,10 +14,16 @@ Lab-complete ECS core: task definitions (with required task and execution roles)
 | Clusters | `DescribeClusters`, `ListClusters` (default cluster `default` seeded per account) |
 | Roles | `RegisterTaskDefinition`, `RunTask`, `CreateService`, and `UpdateService` (task definition or DesiredCount>0) require `iam:PassRole` on `taskRoleArn` and `executionRoleArn`. Role trust must Allow `sts:AssumeRole` for `ecs-tasks.amazonaws.com`. Service reconcile fails closed if task-def roles diverge from the roles PassRole'd at create/update |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD, TLS on port 2376). Tasks run on Internal network `noctaxris-ecs` without host-gateway ExtraHosts by default. Opt in with `NOCTAXRIS_INJECT_ECS_HOST_GATEWAY=1` or `docker/compose.lab-ecs-host-gateway.yaml` for nested task→API labs (see [ops.md](../ops.md#compose-overlays-lab-opt-in)). Nested tasks drop all Linux capabilities (`CapDrop: ALL`). No host `docker.sock` on the API container. After the container exits, task status becomes `STOPPED` (background reaper plus sync on `DescribeTasks` / `ListTasks`). Live RunTask requires a healthy engine |
-| Task role session | Temporary AWS_* credentials for the task role injected into the container (same mint pattern as Lambda Invoke) |
+| Task role session | Temporary AWS_* credentials for the task role injected into the container (same mint pattern as Lambda Invoke). `ExpiresAt` is wall clock (not lab `SetClock`) |
 | Lab registry images | Task definitions may reference `127.0.0.1:4566/ACCOUNT/REPO:tag`. RunTask issues a registry token as the **execution role ARN** and performs a single authenticated pull inside `RunECSTask` (no unauthenticated re-pull). The execution role must Allow `ecr:BatchGetImage` |
 
 Task definitions, tasks, and cluster metadata live in SQLite.
+
+### Task credentials (container metadata)
+
+Nested `RunTask` with minted `AWS_*` maps `169.254.170.2` to sidecar `noctaxris-ecs-imds` on Internal `noctaxris-ecs` (CodeBuild and Batch share this path). AWS SDKs GET `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, which is `/v2/credentials/<uuid>` per the ECS task IAM role docs. The lab also sets `AWS_CONTAINER_CREDENTIALS_FULL_URI` (`http://169.254.170.2:9254/v2/credentials/<uuid>`) because the sidecar listens on `:9254`; relative URI alone still assumes `:80`.
+
+The sidecar GET-serves that exact UUID file only. `GET /v2/credentials/` and any other path or method return 404 (no directory listing of sibling task-role JSON). `StopTask` / nested `StopECSTask` deletes the file. No host port publish.
 
 ### Authz notes
 
@@ -38,8 +44,8 @@ REPO="noctaxris-lab-$RANDOM"
 aws ecr create-repository --repository-name "$REPO" --endpoint-url "$EP"
 PASS=$(aws ecr get-login-password --endpoint-url "$EP")
 echo "$PASS" | docker login --username AWS --password-stdin 127.0.0.1:4566
-docker pull alpine:3.20
-docker tag alpine:3.20 "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
+docker pull alpine:3.23
+docker tag alpine:3.23 "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
 docker push "127.0.0.1:4566/${ACCOUNT}/${REPO}:lab"
 
 ECS_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
