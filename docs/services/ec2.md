@@ -19,7 +19,7 @@ Without `NOCTAXRIS_DOCKER_HOST` / engine, `RunInstances` still returns instance 
 
 | AMI ID / alias | Docker image (allowlisted) |
 |----------------|----------------------------|
-| `ami-alpine` | `public.ecr.aws/docker/library/alpine:3.20` |
+| `ami-alpine` | `public.ecr.aws/docker/library/alpine:3.23` |
 | `ami-amazonlinux2023` | `public.ecr.aws/amazonlinux/amazonlinux:2023` |
 | `ami-ubuntu2204` | `public.ecr.aws/docker/library/ubuntu:22.04` |
 | unknown AMI | default alpine pin above |

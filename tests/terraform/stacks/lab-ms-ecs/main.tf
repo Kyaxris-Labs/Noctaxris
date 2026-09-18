@@ -1,6 +1,6 @@
 # Lab microservice ECS stack: ECR + task definition + service.
 # live=false (default): DesiredCount 0, control-plane only (no DinD).
-# live=true: DesiredCount >= 1; needs healthy noctaxris-engine. Default image alpine:3.20
+# live=true: DesiredCount >= 1; needs healthy noctaxris-engine. Default image alpine:3.23
 #   (DinD pull). Optional: push to lab ECR via scripts/push-lab-image.sh and pass
 #   -var=container_image=127.0.0.1:4566/ACCOUNT/REPO:lab
 # Apply: STACK=lab-ms-ecs bash tests/terraform/run.sh
@@ -13,7 +13,7 @@ locals {
   ecr_image     = "127.0.0.1:4566/${data.aws_caller_identity.current.account_id}/${aws_ecr_repository.app.name}:lab"
   # Empty container_image uses alpine for live-ready runs; ECR URI when use_ecr_image=true.
   container_image = var.container_image != "" ? var.container_image : (
-    var.use_ecr_image ? local.ecr_image : "alpine:3.20"
+    var.use_ecr_image ? local.ecr_image : "alpine:3.23"
   )
 }
 

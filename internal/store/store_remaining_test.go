@@ -225,8 +225,8 @@ func TestRemainingExportedZerosBatch(t *testing.T) {
 	if err != nil || global.ThingName != thing.ThingName {
 		t.Fatalf("global thing=%+v err=%v", global, err)
 	}
-	if _, err := st.InferSingleActiveCertificateForThing(account, region, thing.ThingName); err == nil {
-		t.Fatal("expected no single active cert")
+	if _, err := st.MQTTConnectCertificateForThing(thing.ThingName); err == nil {
+		t.Fatal("expected no MQTT connect cert")
 	}
 
 	allows := st.RoleSessionAllows(account, "arn:aws:iam::"+account+":role/ZerosRole", "s3:PutObject", "arn:aws:s3:::mp-zeros", "sess", region)

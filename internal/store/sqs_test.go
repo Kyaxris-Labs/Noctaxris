@@ -798,8 +798,8 @@ func TestSendReceiveCMVDeleteStress(t *testing.T) {
 	if sent.Load() != rounds {
 		t.Fatalf("sent=%d want %d", sent.Load(), rounds)
 	}
-	_ = received
-	_ = deleted
+	_ = received.Load()
+	_ = deleted.Load()
 }
 
 func TestDelayedNotEarly(t *testing.T) {

@@ -12,7 +12,7 @@ variable "desired_count" {
 
 variable "container_image" {
   type        = string
-  description = "Task container image. Empty uses alpine:3.20 unless use_ecr_image=true."
+  description = "Task container image. Empty uses alpine:3.23 unless use_ecr_image=true."
   default     = ""
 }
 

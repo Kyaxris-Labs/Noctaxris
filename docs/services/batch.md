@@ -13,7 +13,7 @@ Lab AWS Batch core: compute environments, job queues, job definitions, and Submi
 | Job definition | `RegisterJobDefinition`, `DescribeJobDefinitions` |
 | Jobs | `SubmitJob`, `DescribeJobs` |
 | Roles | Optional `serviceRole` on compute environment requires PassRole for `batch.amazonaws.com`. Optional `jobRoleArn` / `executionRoleArn` on container properties require PassRole for `ecs-tasks.amazonaws.com`. When `jobRoleArn` is set, SubmitJob mints temporary AWS_* credentials for that role into the nested container. Lab registry pull uses `executionRoleArn` when set, otherwise `jobRoleArn` |
-| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob starts the container and returns `SUBMITTED` / `RUNNING`; exit is reaped in the background (ECS pattern). `platformCapabilities: FARGATE` and `networkMode: awsvpc` are rejected (lab nested Docker only). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled once with authenticated Registry V2 |
+| Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). SubmitJob starts the container and returns `SUBMITTED` / `RUNNING`; exit is reaped in the background (ECS pattern). Job-role sessions share the ECS container-credentials sidecar (`169.254.170.2:9254`, exact `/v2/credentials/<uuid>` GET, no host publish). `platformCapabilities: FARGATE` and `networkMode: awsvpc` are rejected (lab nested Docker only). Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled once with authenticated Registry V2 |
 
 ### Authz notes
 
@@ -51,7 +51,7 @@ aws batch create-job-queue \
 aws batch register-job-definition \
   --job-definition-name lab-jd \
   --type container \
-  --container-properties "{\"image\":\"alpine:3.20\",\"command\":[\"echo\",\"batch-ok\"],\"jobRoleArn\":\"$JOB\"}" \
+  --container-properties "{\"image\":\"alpine:3.23\",\"command\":[\"echo\",\"batch-ok\"],\"jobRoleArn\":\"$JOB\"}" \
   --endpoint-url "$EP"
 
 aws batch submit-job --job-name job1 --job-queue lab-jq --job-definition lab-jd --endpoint-url "$EP"

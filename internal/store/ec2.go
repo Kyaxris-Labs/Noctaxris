@@ -36,7 +36,7 @@ const (
 
 const (
 	// DefaultEC2DockerImage is used when ImageId is unknown or empty.
-	DefaultEC2DockerImage = "public.ecr.aws/docker/library/alpine:3.20"
+	DefaultEC2DockerImage = "public.ecr.aws/docker/library/alpine:3.23"
 )
 
 const ec2Schema = `
@@ -63,16 +63,16 @@ CREATE TABLE IF NOT EXISTS ec2_instances (
 
 // EC2Instance is a lab EC2 instance row (nested container-backed).
 type EC2Instance struct {
-	InstanceID       string
-	ImageID          string
-	DockerImage      string
-	InstanceType     string
-	StateName        string
-	StateCode        int
-	ContainerID      string
-	PrivateIP        string
-	PublicIP         string
-	AvailabilityZone string
+	InstanceID         string
+	ImageID            string
+	DockerImage        string
+	InstanceType       string
+	StateName          string
+	StateCode          int
+	ContainerID        string
+	PrivateIP          string
+	PublicIP           string
+	AvailabilityZone   string
 	KeyName            string
 	UserData           string
 	IamInstanceProfile string

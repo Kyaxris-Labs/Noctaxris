@@ -31,7 +31,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS` | empty | Comma-separated CORS AllowOrigins for Function URL `NONE` when `Cors.AllowOrigins` is omitted. Empty keeps lab default `*`. |
 | `NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE` | empty | Set to `1` to pass `Set-Cookie` from HTTP API Lambda proxy responses (stripped by default with hop-by-hop headers). |
 | `NOCTAXRIS_APIGW_HTTP_PROXY` | empty (off) | Set to `1` to allow API Gateway `HTTP_PROXY` / `VPC_LINK` integrations. Default rejects those types. |
-| `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` | empty | Comma-separated hosts or URL prefixes allowed as `HTTP_PROXY` / `VPC_LINK` IntegrationUri when proxy is on. Link-local, metadata, loopback, and private hosts need an entry that names that host. Fetches do not follow redirects; dial uses a pinned DialContext. |
+| `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` | empty | Comma-separated hosts or http(s) URLs allowed as `HTTP_PROXY` / `VPC_LINK` IntegrationUri when proxy is on. URL entries match parsed scheme, host, and port (optional path prefix on that origin), not a raw string prefix. Userinfo cannot retarget the host. Link-local, metadata, loopback, and private hosts need an entry that names that host. Fetches do not follow redirects; dial uses a pinned DialContext. |
 | `NOCTAXRIS_SNS_HTTP_EGRESS` | empty (off) | Set to `1` to honor `NOCTAXRIS_SNS_HTTP_ALLOWLIST` for SNS HTTP(S) subscriptions beyond the lab catcher. Unset/off: only `127.0.0.1:4566/_noctaxris/sns-http-catcher` (allowlist ignored). |
 | `NOCTAXRIS_SNS_HTTP_ALLOWLIST` | empty | Comma-separated exact HTTP(S) URLs allowed beyond the lab catcher when `NOCTAXRIS_SNS_HTTP_EGRESS=1`. Listed URLs still reject private, loopback, link-local, and metadata hosts; delivery does not follow redirects. Ignored when egress is off. |
 | `NOCTAXRIS_INJECT_HOST_GATEWAY` | disabled | Set to `1` to inject `host.docker.internal:host-gateway` ExtraHosts on nested Lambda function containers (in-function SDK labs). Prefer `docker/compose.lab-host-gateway.yaml` over changing the code default. |
@@ -90,7 +90,9 @@ aws iot describe-endpoint --endpoint-type iot:Jobs --endpoint-url "$AWS_ENDPOINT
 aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url "$AWS_ENDPOINT_URL"
 ```
 
-Jobs HTTP: `GET /things/{thingName}/jobs` (SigV4 service `iot-jobs-data`). Credentials provider: mTLS `GET /role-aliases/{alias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing. Live Mosquitto CONNECT smokes soft-skip; ClientId equal to thing name is enforced in-process (`AllowMQTTConnect`), not on the nested broker CONNECT.
+Jobs HTTP: `GET /things/{thingName}/jobs` (SigV4 service `iot-jobs-data`). Shadow REST uses `iotdevicegateway`. Those paths are not IoT when signed as `s3`. Credentials provider: mTLS `GET /role-aliases/{alias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing (unsigned non-mTLS is 403; S3 GetObject on that key works when signed as `s3`). Live Mosquitto CONNECT smokes soft-skip when shared MQTT / engine flags are unset. ClientId equal to thing name is enforced by `AllowMQTTConnect` and by generated Mosquitto dynsec `clientid`.
+
+JSON 1.1 `X-Amz-Target` requires credential-scope service to match the target API (`Credential should be scoped to correct service`). Signing names that differ from catalog prefixes are aliased (`apigateway` for `apigatewayv2`, `dynamodb` for `dynamodbstreams`, `tagging` for `tag`). Query signed as `iam` or `sts` must match those APIs (`CreateUser` scoped to `sts` is denied). Other Query `Action=` routes still use `verified.Service` or action prefix so Organizations `CreatePolicy`, Auto Scaling `DeletePolicy`, and SNS `TagResource` remap stay on their own scope. Lambda, EKS, Batch, Backup, Bedrock, and SESv2 REST paths require matching `verified.Service`.
 
 ### Cognito confirmation codes (`NOCTAXRIS_COGNITO_INSECURE_CODES`)
 
@@ -104,8 +106,8 @@ When `NOCTAXRIS_LAB_FORENSICS=1`, SigV4 service `noctaxris-lab` accepts:
 
 | Action | Behavior |
 |--------|----------|
-| `FreezeClock` / `UnfreezeClock` | Pin or clear the lab wall clock used for audit timestamps and similar lab time (SigV4 skew checks still use real time) |
-| `SetClock` | Set the lab clock to an ISO-8601 / RFC3339 instant |
+| `FreezeClock` / `UnfreezeClock` | Pin or clear the lab clock used for audit timestamps and similar lab time (SigV4 skew and STS/IoT/nested-compute temporary credential `ExpiresAt` still use real time) |
+| `SetClock` | Set the lab clock to an ISO-8601 / RFC3339 instant. Does not extend ASIA session life past DurationSeconds |
 | `BulkSeed` | Seed a named forensic scenario (`ScenarioId` required: `suspicious-login`, `s3-data-exfil`, `crypto-mining`) into CloudTrail JSONL and optional GuardDuty findings (canned shapes; not live traffic) |
 
 Default off returns AccessDenied. These are Noctaxris lab extensions, not AWS public APIs.
@@ -145,8 +147,8 @@ Operator runbook (stop → tar volumes → restore verify → start, plus image-
 
 Files live under `docker/`:
 
-- `Dockerfile`: multi-stage build (`golang:1.26.6-bookworm` → distroless nonroot), `CGO_ENABLED=0`
-- `compose.yaml`: publish `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566` (default loopback), `noctaxris-data` for API sealed state, `noctaxris-secrets` for `master.key` (`NOCTAXRIS_MASTER_KEY_FILE`), `noctaxris-compute` for Lambda code (API RW, engine `:ro`), digest-pinned `docker:27-dind` / `busybox` init (chowns compute + secrets to UID `65532`), restricted DinD engine (`privileged: false` + caps/devices + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`), `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports, healthchecks on API and engine. Privileged engine opt-in: `compose.engine-privileged.yaml`. Lab overlays: `compose.lab-open.yaml` (open data plane), `compose.lab-host-gateway.yaml` (Lambda ExtraHosts), `compose.lab-ecs-host-gateway.yaml` (ECS / CodeBuild / Batch ExtraHosts), `compose.lab-brokers.yaml` (shared Kafka/MQTT + `NOCTAXRIS_BROKER_PORT_PUBLISH`), `compose.lab-nested-ports.yaml` (selected nested data TCP on `127.0.0.1` via DinD engine, including `9092`/`1883` when shared brokers run)
+- `Dockerfile`: multi-stage build (`golang:1.27.1-bookworm` → distroless nonroot), `CGO_ENABLED=0`
+- `compose.yaml`: publish `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566` (default loopback), `noctaxris-data` for API sealed state, `noctaxris-secrets` for `master.key` (`NOCTAXRIS_MASTER_KEY_FILE`), `noctaxris-compute` for Lambda code (API RW, engine `:ro`), digest-pinned `docker:29-dind` / `busybox` init (chowns compute + secrets to UID `65532`), restricted DinD engine (`privileged: false` + caps/devices + `cgroup: host` + `/sys/fs/cgroup` rw + dockerd `--ipv6=false`), `read_only: true`, tmpfs `/tmp`, no `docker.sock`, no host publish of database/cache/search ports, healthchecks on API and engine. Privileged engine opt-in: `compose.engine-privileged.yaml`. Lab overlays: `compose.lab-open.yaml` (open data plane), `compose.lab-host-gateway.yaml` (Lambda ExtraHosts), `compose.lab-ecs-host-gateway.yaml` (ECS / CodeBuild / Batch ExtraHosts), `compose.lab-brokers.yaml` (shared Kafka/MQTT + `NOCTAXRIS_BROKER_PORT_PUBLISH`), `compose.lab-nested-ports.yaml` (selected nested data TCP on `127.0.0.1` via DinD engine, including `9092`/`1883` when shared brokers run)
 - `.env.example`: sample root keys for local Compose
 
 Copy `.env.example` to `.env`, set real lab keys, then:

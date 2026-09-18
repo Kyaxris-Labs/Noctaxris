@@ -2,7 +2,7 @@
 
 Control-plane (`live=false`): apply creates ECR, IAM roles, task definition, and a service with DesiredCount 0. No nested DinD required.
 
-Live (`live=true`): DesiredCount defaults to 1. The default container image is `alpine:3.20` (DinD pull). Nested tasks need a healthy `noctaxris-engine`.
+Live (`live=true`): DesiredCount defaults to 1. The default container image is `alpine:3.23` (DinD pull). Nested tasks need a healthy `noctaxris-engine`.
 
 Optional lab ECR image path:
 

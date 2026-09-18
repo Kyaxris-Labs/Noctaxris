@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+- Toolchain: Go 1.27.1. Digest-pinned `golang:1.27.1-bookworm`, `docker:29-dind`, `busybox:1.37`, and distroless `static-debian12:nonroot`. CI govulncheck `v1.8.0`. Go modules and AWS SDK v2 / Node.js test clients refreshed. Nested Engine stays `github.com/moby/moby/client`. Lab alpine pin is `alpine:3.23` (`alpine:3.20` remains allowlisted).
+- Authz: account `:root` (or the 12-digit account id) in an S3/SQS/SNS/Lambda/Secrets resource policy is not a same-account OR grant to IAM users, roles, or anonymous. Role trust and KMS key policies still treat `:root` as the account (AND with identity). Resource-policy-only Allow still applies session and permissions-boundary explicit Deny
+- IAM: `GetAccountSummary`, `GenerateCredentialReport`, and `GetCredentialReport` authorize against `*` (no resource type)
+- Nested ECS/CodeBuild/Batch: `noctaxris-ecs-imds` GET-serves only `/v2/credentials/<uuid>` (404 on directory listing and other paths) and deletes the credential file when the nested task is stopped. Still no host port publish
+- STS/IoT: temporary credential `ExpiresAt` uses wall clock (`authClock`), so lab `SetClock`/`FreezeClock` cannot extend ASIA life past DurationSeconds. Nested Lambda/ECS/CodeBuild/Batch role sessions (`mintRoleSessionEnv`) use the same wall-clock stamp. SigV4 verify already used wall time. Audit and inject `eventTime` stay on the lab clock
 - IAM: `GetAccountSummary` (Query `SummaryMap` usage plus lab quotas)
 - EC2: `DescribeRegions` (enabled lab region `us-east-1`, Query `regionInfo`)
+- API Gateway: HTTP_PROXY allowlist URL entries compare parsed scheme, host, and port (path prefix stays on that origin). Host-only URLs such as `https://example.com` no longer match `https://example.com.evil.com/...` or `https://example.com@evil.com/...`
 - Clients: document `AWS_ENDPOINT_URL=http://127.0.0.1:4566` and `AWS_EC2_METADATA_DISABLED=true` for CLI/SDK/Prowler enumerate (STS reads `AWS_ENDPOINT_URL`; no general `*.amazonaws.com` Host/SNI). SDK Prowler smoke soft-skips when `prowler` is missing or the endpoint env is unset. Live `prowler aws` was not executed in this cut
-- S3: Query `Action=ListBuckets` stays unknown; REST `GET /` is the boto3 list path
-- IoT: `DescribeEndpoint` (`GET /endpoint?endpointType=`), REST named-shadow list (classic unnamed omitted), Jobs HTTP data plane (`iot-jobs-data`), credentials provider mTLS (`GET /role-aliases/{alias}/credentials` with matching `x-amzn-iot-thingname` and CredentialProvider SNI). In-process `AllowMQTTConnect` requires ClientId equal to thing name; live Mosquitto CONNECT does not. `ListRetainedMessages` is an empty 200 list. Live Mosquitto CONNECT was not executed in this cut
+- S3: Query `Action=ListBuckets` stays unknown; REST `GET /` is the boto3 list path. Empty-action path-style is S3 only when SigV4 credential scope is `s3`
+- IoT: `DescribeEndpoint` (`GET /endpoint?endpointType=`), REST named-shadow list (classic unnamed omitted), Jobs HTTP data plane (`iot-jobs-data`), credentials provider mTLS (`GET /role-aliases/{alias}/credentials` with matching `x-amzn-iot-thingname` and CredentialProvider SNI). Data-plane REST `/things/...` and `/api/things/...` require IoT SigV4 scope (`iot` / `iotdata` / `iotdevicegateway` / `iot-jobs-data`); `s3`-signed GetObject on those keys stays S3. Credentials GET is claimed only with mTLS (unsigned non-mTLS is 403). `ListRetainedMessages` is an empty 200 list
+- IoT MQTT: live Mosquitto CONNECT applies `AllowMQTTConnect` (ClientId must equal the attached thing name; dynsec `clientid`, clients without `iot:Connect` are disabled). Shared ACL no longer grants every client `pattern readwrite #`; device users are limited to their thing's shadow and `{thing}/#` topics. The shadow bridge requires the connected certificate id. Empty `HandleMessage` does not adopt the topic thing's cert, so device A cannot update thing B
+- Mux: JSON 1.1 `X-Amz-Target` requires credential-scope service to match the target API (`Credential should be scoped to correct service`; aliases include `apigateway` for `apigatewayv2`, `dynamodb` for `dynamodbstreams`, `tagging` for `tag`). Query signed as `iam` or `sts` must match those APIs. Lambda, EKS, Batch, Backup, Bedrock, and SESv2 REST paths require `verified.Service` (path alone does not select the API)
 
 ## 1.4.1
 

@@ -371,10 +371,10 @@ func TestComposePinsEngineAndInitImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(b)
-	if !strings.Contains(content, "docker:27-dind@sha256:") {
+	if !strings.Contains(content, "docker:29-dind@sha256:") {
 		t.Fatal("noctaxris-engine image must be pinned by digest")
 	}
-	if !strings.Contains(content, "busybox:1.36@sha256:") {
+	if !strings.Contains(content, "busybox:1.37@sha256:") {
 		t.Fatal("noctaxris-compute-init image must be pinned by digest")
 	}
 }

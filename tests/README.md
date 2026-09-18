@@ -42,7 +42,7 @@ Optional overrides: `NOCTAXRIS_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCES
 
 | Suite | Tools |
 |-------|--------|
-| SDK (Go) | Go 1.22+ (module under `tests/sdk/go`) |
+| SDK (Go) | Go 1.27+ (module under `tests/sdk/go`) |
 | SDK (Node.js) | Node.js 24+; `npm install` under `tests/sdk/nodejs` |
 | SDK (Python) | Python 3.10+; `pip install -r requirements.txt` under `tests/sdk/python` |
 | Terraform | Terraform CLI 1.5+, AWS provider resolved on `init` |
@@ -135,7 +135,7 @@ Failures on assertions happen only when the endpoint is up.
 - Forensic SDK rows soft-skip when the matching client env is unset (API process must also have the flag): `NOCTAXRIS_CLOUDTRAIL_INJECT` (InjectEvents / Insights), `NOCTAXRIS_GUARDDUTY_INJECT`, `NOCTAXRIS_MACIE_INJECT`, `NOCTAXRIS_VPCFLOW_INJECT`, `NOCTAXRIS_LAB_FORENSICS` (SetClock / BulkSeed; no FreezeClock in SDK). Detective SearchGraph soft-skips unless both `NOCTAXRIS_CLOUDTRAIL_INJECT=1` and `NOCTAXRIS_GUARDDUTY_INJECT=1`. Always-on forensic control-plane rows (Security Hub BatchImportFindings, Control Tower stub, Athena CT-shaped, Logs JSON filter, CloudTrail selectors, IAM last-used/credential report, S3 Object Lock/logging/delete markers, SQS `NoctaxrisDlqSourceArn` provenance, Config GetResourceConfigHistory) run whenever the API is up. Default Compose leaves inject flags off. Nested Lambda Logs/ESM, messaging DLQ depth, CF/ELB access logs, Firehose VPC Flow dest, FreezeClock, gzip, and XFF remain unit-only or deferred.
 - Terraform needs the Terraform binary on `PATH`. The runner skips when it is missing.
 - Prowler AWS enumerate smoke (`tests/sdk/go/prowler_enumerate_test.go`, `tests/sdk/python/prowler/test_prowler_enumerate.py`) skips when `prowler` is not installed or `AWS_ENDPOINT_URL` / `NOCTAXRIS_ENDPOINT` is unset. Startup list of STS/IAM/S3/EC2/CloudTrail is the bar; check PASS/FAIL is not asserted. Live `prowler aws` against a running instance is not executed in this cut.
-- Live Mosquitto CONNECT smokes skip when shared MQTT / engine flags are unset. ClientId equal to thing name is unit-tested via `AllowMQTTConnect`; the nested broker CONNECT path does not enforce it.
+- Live Mosquitto CONNECT smokes skip when shared MQTT / engine flags are unset. ClientId equal to thing name is enforced by `AllowMQTTConnect` and by generated Mosquitto dynsec `clientid` (device ACL is thing-scoped; no `pattern readwrite #`).
 - Compose publishes `127.0.0.1:4566` only. When the API runs on a Windows host, WSL cannot reach that loopback; `tests/terraform/run.sh` skips automatically when the endpoint host is `127.0.0.1` or `localhost` (override with `NOCTAXRIS_FORCE_WSL_TF=1` only if EP is reachable). Do not widen Compose publish. Run AWS CLI / Terraform from a host that shares the loopback with Compose (Windows host for Docker Desktop, or Linux where Compose listens locally).
 
 Gaps and follow-ups: [HANDOFF.md](HANDOFF.md).
