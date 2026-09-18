@@ -656,8 +656,9 @@ func (s *Server) handleIAM(
 }
 
 // iamRequestResource returns the AWS-shaped IAM resource ARN for authorize.
-// Account-scoped list/report actions use type wildcards or the account root ARN.
-// Unknown create shapes without a name still fall back to "*".
+// List APIs use type wildcards. GetAccountSummary and credential-report
+// actions have no resource type (Resource "*"). Named mutation APIs bind
+// the specific user/role/group/policy ARN from the request.
 func (s *Server) iamRequestResource(accountID, action string, params map[string]string, verified *authn.Verified) string {
 	userName := strings.TrimSpace(params["UserName"])
 	roleName := strings.TrimSpace(params["RoleName"])
@@ -684,7 +685,7 @@ func (s *Server) iamRequestResource(accountID, action string, params map[string]
 	case catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport",
 		catalog.ActionIAMGetCredentialReport, "GetCredentialReport",
 		catalog.ActionIAMGetAccountSummary, "GetAccountSummary":
-		return "arn:aws:iam::" + accountID + ":root"
+		return "*"
 	case catalog.ActionIAMCreateUser, "CreateUser",
 		catalog.ActionIAMGetUser, "GetUser",
 		catalog.ActionIAMDeleteUser, "DeleteUser",

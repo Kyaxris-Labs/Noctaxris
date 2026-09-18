@@ -398,7 +398,7 @@ func (s *Server) handleAssumeRole(
 	} else if int64(duration/time.Second) > maxAllowed {
 		duration = time.Duration(maxAllowed) * time.Second
 	}
-	expires := s.now().UTC().Add(duration)
+	expires := s.tokenExpiresAt(duration)
 	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
 		AccountID:     accountID,
 		RoleARN:       roleARN,
@@ -441,9 +441,9 @@ func (s *Server) handleAssumeRole(
 			ARN:       roleARN,
 		}}),
 		WithAuditRequestParameters(map[string]any{
-			"roleArn":          roleARN,
-			"roleSessionName":  sessionName,
-			"durationSeconds":  durationSecs,
+			"roleArn":         roleARN,
+			"roleSessionName": sessionName,
+			"durationSeconds": durationSecs,
 		}),
 	)
 }
@@ -700,8 +700,10 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 // authorizeDataplaneOR applies SCP/RCP, then a resource evaluator (S3/SQS/SNS/DynamoDB).
 // Same-account: identity Allow OR resource policy Allow. Cross-account (resourceAccountID
 // differs from caller): identity Allow AND resource policy Allow via EvaluateResourceAccess.
-// Boundary and session intersect only when identity Allows (ADR-0005 §8 resource-policy-only
-// path skips boundary/session).
+// Session and permissions-boundary explicit Deny still apply when the resource
+// document alone Allows. Boundary and session Allow intersection runs only when
+// identity Allows (implicit deny in those documents does not block a direct
+// resource-policy grant).
 func (s *Server) authorizeDataplaneOR(
 	verified *authn.Verified,
 	action, resource, resourceAccountID string,
@@ -716,6 +718,9 @@ func (s *Server) authorizeDataplaneOR(
 		return false
 	}
 	if eval(ctx, in.IdentityDocs, resourceAccountID) != authz.Allow {
+		return false
+	}
+	if authz.SessionOrBoundaryExplicitDeny(ctx, in) {
 		return false
 	}
 	if authz.Evaluate(ctx, in.IdentityDocs) != authz.Allow {

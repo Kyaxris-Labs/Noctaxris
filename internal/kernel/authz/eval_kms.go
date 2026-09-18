@@ -35,7 +35,7 @@ func EvaluateKMS(req KMSRequest) Decision {
 	var keyDeny, keyAllow bool
 	var keyUnknown bool
 	if req.KeyPolicyDoc != "" {
-		keyDeny, keyAllow, keyUnknown = resourcePolicyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
+		keyDeny, keyAllow, keyUnknown = delegatedResourcePolicyEffectHits(req.Caller, []string{req.KeyPolicyDoc})
 	}
 	if identityUnknown || keyUnknown || identityDeny || keyDeny {
 		return Deny
@@ -62,10 +62,17 @@ func policyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool
 	return policyEffectHitsWith(ctx, docs, statementMatches)
 }
 
-// resourcePolicyEffectHits is policyEffectHits for resource-based documents
-// (KMS key policy, S3/Secrets/DynamoDB/ECR resource policies). Missing Principal is match-none.
+// resourcePolicyEffectHits is policyEffectHits for dataplane resource documents
+// (S3/Secrets/DynamoDB/ECR). Account :root is not a direct IAM user/role Allow.
+// Missing Principal is match-none.
 func resourcePolicyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool, catalogUnknown bool) {
 	return policyEffectHitsWith(ctx, docs, resourceStatementMatches)
+}
+
+// delegatedResourcePolicyEffectHits matches account :root / account id as the
+// account (KMS key policy AND, cross-account resource Allow, resource Deny).
+func delegatedResourcePolicyEffectHits(ctx RequestContext, docs []string) (denyHit, allowHit bool, catalogUnknown bool) {
+	return policyEffectHitsWith(ctx, docs, resourceStatementMatchesDelegated)
 }
 
 func policyEffectHitsWith(

@@ -165,3 +165,27 @@ func TestAnonymousS3PolicyDenyBeatsPublicReadACL(t *testing.T) {
 		t.Fatalf("Deny policy must beat ACL, status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
+
+func TestAnonymousS3AccountRootPolicyDoesNotGrant(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.AllowAnonymousS3 = true
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/anon-root", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/anon-root/hi.txt", []byte("nope"), "s3", now, nil)
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::` + testAccountID + `:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::anon-root/*"}]}`)
+	if rec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/anon-root?policy", policy, "s3", now, map[string]string{
+		"Content-Type": "application/json",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("PutBucketPolicy status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4566/anon-root/hi.txt", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("unsigned Get with :root Principal status=%d body=%q want 403 AccessDenied", rec.Code, rec.Body.String())
+	}
+}

@@ -15,9 +15,7 @@ func orgFilterAllows(ctx RequestContext, docs []string) bool {
 }
 
 // OrgFiltersDeny reports whether RCPs or SCPs deny the request (EvaluateFull
-// steps 2–3). Identity, boundary, and session are not considered so callers
-// that combine resource-based OR with identity (S3/SQS/DynamoDB) can apply
-// boundary/session only when identity Allows (ADR-0005 §8).
+// steps 2-3). Identity, boundary, and session are not considered here.
 func OrgFiltersDeny(ctx RequestContext, in EvalInputs) bool {
 	if len(in.RCPDocs) > 0 && !orgFilterAllows(ctx, in.RCPDocs) {
 		return true
@@ -43,6 +41,25 @@ func denyScanFull(ctx RequestContext, in EvalInputs) bool {
 	}
 	for _, raw := range docs {
 		deny, _, unknown := policyEffectHits(ctx, []string{raw})
+		if unknown || deny {
+			return true
+		}
+	}
+	return false
+}
+
+// SessionOrBoundaryExplicitDeny reports explicit Deny or catalog-unknown in
+// session policies or the permissions boundary. Resource-policy-only Allow
+// must still honor these (deny evaluation runs before Allow).
+func SessionOrBoundaryExplicitDeny(ctx RequestContext, in EvalInputs) bool {
+	if !ctx.Principal.IsRoot && strings.TrimSpace(in.BoundaryDoc) != "" {
+		deny, _, unknown := policyEffectHits(ctx, []string{in.BoundaryDoc})
+		if unknown || deny {
+			return true
+		}
+	}
+	if len(in.SessionDocs) > 0 {
+		deny, _, unknown := policyEffectHits(ctx, in.SessionDocs)
 		if unknown || deny {
 			return true
 		}

@@ -75,3 +75,25 @@ func TestEvaluateAnonymousS3GetObjectSpecificPrincipalDoesNotGrantAnonymous(t *t
 		t.Fatalf("named Principal Allow got %v, want Deny for anonymous", got)
 	}
 }
+
+func TestEvaluateAnonymousS3GetObjectAccountRootDoesNotGrant(t *testing.T) {
+	rootPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:root"},"Action":"s3:GetObject","Resource":"*"}]}`
+	got := authz.EvaluateAnonymousS3GetObject(authz.AnonymousS3GetRequest{
+		Resource:          "arn:aws:s3:::pub/a.txt",
+		ResourceAccountID: "000000000001",
+		BucketPolicyDoc:   rootPolicy,
+	})
+	if got != authz.Deny {
+		t.Fatalf("account :root Principal got %v, want Deny for anonymous", got)
+	}
+
+	idPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"000000000001"},"Action":"s3:GetObject","Resource":"*"}]}`
+	got = authz.EvaluateAnonymousS3GetObject(authz.AnonymousS3GetRequest{
+		Resource:          "arn:aws:s3:::pub/a.txt",
+		ResourceAccountID: "000000000001",
+		BucketPolicyDoc:   idPolicy,
+	})
+	if got != authz.Deny {
+		t.Fatalf("bare account id Principal got %v, want Deny for anonymous", got)
+	}
+}

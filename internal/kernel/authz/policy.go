@@ -218,8 +218,9 @@ func ValidateResourcePolicyDocument(raw string) error {
 	return nil
 }
 
-// resourceStatementMatches evaluates a resource-based policy statement
-// (KMS key policy, S3/Secrets/DynamoDB/ECR). Missing Principal is match-none.
+// resourceStatementMatches evaluates a dataplane resource-based policy statement
+// (S3/Secrets/DynamoDB/ECR). Account :root is not a direct IAM user/role Allow.
+// Missing Principal is match-none.
 func resourceStatementMatches(st statement, ctx RequestContext) (matches bool, catalogUnknown bool) {
 	keys := ctx.ConditionKeys
 	if keys == nil {
@@ -235,6 +236,31 @@ func resourceStatementMatches(st statement, ctx RequestContext) (matches bool, c
 	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
 		return false, false
 	}
+	return resourceStatementBodyMatches(st, ctx, keys)
+}
+
+// resourceStatementMatchesDelegated is resourceStatementMatches for AND paths
+// (KMS key policy, cross-account resource Allow, resource Deny) where account
+// :root / 12-digit account id delegates to principals in that account.
+func resourceStatementMatchesDelegated(st statement, ctx RequestContext) (matches bool, catalogUnknown bool) {
+	keys := ctx.ConditionKeys
+	if keys == nil {
+		keys = map[string]string{}
+	}
+	if conditionCatalogUnknown(st.Condition) {
+		return false, true
+	}
+	effect := strings.EqualFold(st.Effect, "Allow") || strings.EqualFold(st.Effect, "Deny")
+	if !effect {
+		return false, false
+	}
+	if st.Principal == nil || !principalMatchesDelegatedAccount(*st.Principal, ctx.Principal) {
+		return false, false
+	}
+	return resourceStatementBodyMatches(st, ctx, keys)
+}
+
+func resourceStatementBodyMatches(st statement, ctx RequestContext, keys map[string]string) (matches bool, catalogUnknown bool) {
 	if !actionsMatch(st.Action, ctx.Action) {
 		return false, false
 	}
@@ -266,7 +292,7 @@ func trustStatementMatches(st statement, ctx RequestContext) (matches bool, cata
 	if !effect {
 		return false, false
 	}
-	if st.Principal == nil || !principalMatches(*st.Principal, ctx.Principal) {
+	if st.Principal == nil || !principalMatchesDelegatedAccount(*st.Principal, ctx.Principal) {
 		return false, false
 	}
 	if !actionsMatch(st.Action, ctx.Action) {
@@ -286,6 +312,18 @@ func trustStatementMatches(st statement, ctx RequestContext) (matches bool, cata
 }
 
 func principalMatches(spec principalSpec, caller identity.Principal) bool {
+	return matchPrincipal(spec, caller, false)
+}
+
+// principalMatchesDelegatedAccount treats account :root / 12-digit account id as
+// the account (IAM users and roles in that account), not anonymous. Used for
+// role trust and KMS key policies (AND with identity) and for resource Deny /
+// cross-account resource Allow.
+func principalMatchesDelegatedAccount(spec principalSpec, caller identity.Principal) bool {
+	return matchPrincipal(spec, caller, true)
+}
+
+func matchPrincipal(spec principalSpec, caller identity.Principal, delegateAccount bool) bool {
 	if spec.All {
 		return true
 	}
@@ -306,17 +344,44 @@ func principalMatches(spec principalSpec, caller identity.Principal) bool {
 		if p == "*" {
 			return true
 		}
-		if p == caller.AccountID {
-			return true
-		}
 		if p == callerARN && callerARN != "" {
 			return true
 		}
-		if accountID, ok := accountRootARN(p); ok && accountID == caller.AccountID {
+		if !awsAccountPrincipal(p, caller.AccountID) {
+			continue
+		}
+		if caller.Kind == identity.KindAnonymous {
+			continue
+		}
+		if delegateAccount {
+			return true
+		}
+		// Same-account dataplane OR: :root is not a direct grant to IAM users/roles.
+		if caller.IsRoot || caller.Kind == identity.KindRoot {
 			return true
 		}
 	}
 	return false
+}
+
+func awsAccountPrincipal(p, callerAccountID string) bool {
+	if isAWSAccountID(p) && p == callerAccountID {
+		return true
+	}
+	accountID, ok := accountRootARN(p)
+	return ok && accountID == callerAccountID
+}
+
+func isAWSAccountID(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // accountRootARN reports whether s is arn:aws:iam::ACCOUNT:root and returns ACCOUNT.

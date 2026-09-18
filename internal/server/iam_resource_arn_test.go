@@ -247,28 +247,19 @@ func TestIAMListRolesDenyOnRoleWildcard(t *testing.T) {
 	}
 }
 
-// Deny on account root must bind credential report APIs (authorize resource is not bare "*").
-func TestIAMCredentialReportDenyOnAccountRoot(t *testing.T) {
+// GetAccountSummary / credential-report authorize against "*" (no resource type).
+// Allow on account :root does not grant; Deny on :root does not bind; Deny on * does.
+func TestIAMCredentialReportWildcardResource(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
-	_, actorARN, err := st.CreateUser(testAccountID, "cred-report-denied")
+	_, actorARN, err := st.CreateUser(testAccountID, "cred-report-user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	akid, secret, err := st.CreateUserAccessKey(testAccountID, "cred-report-denied")
+	akid, secret, err := st.CreateUserAccessKey(testAccountID, "cred-report-user")
 	if err != nil {
-		t.Fatal(err)
-	}
-	policy := fmt.Sprintf(`{
-		"Version":"2012-10-17",
-		"Statement":[
-			{"Effect":"Allow","Action":"iam:*","Resource":"*"},
-			{"Effect":"Deny","Action":["iam:GenerateCredentialReport","iam:GetCredentialReport"],"Resource":"arn:aws:iam::%s:root"}
-		]
-	}`, testAccountID)
-	if err := st.PutInlinePolicy(actorARN, "cred-deny", policy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -281,12 +272,61 @@ func TestIAMCredentialReportDenyOnAccountRoot(t *testing.T) {
 		return rec
 	}
 
-	rec := iamPost("Action=GenerateCredentialReport&Version=2010-05-08")
+	rootOnly := fmt.Sprintf(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":["iam:GetAccountSummary","iam:GenerateCredentialReport","iam:GetCredentialReport"],"Resource":"arn:aws:iam::%s:root"}
+		]
+	}`, testAccountID)
+	if err := st.PutInlinePolicy(actorARN, "root-only", rootOnly); err != nil {
+		t.Fatal(err)
+	}
+	rec := iamPost("Action=GetAccountSummary&Version=2010-05-08")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
-		t.Fatalf("GenerateCredentialReport want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+		t.Fatalf("GetAccountSummary Allow on :root want 403 got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = iamPost("Action=GenerateCredentialReport&Version=2010-05-08")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
+		t.Fatalf("GenerateCredentialReport Allow on :root want 403 got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	if err := st.DeleteInlinePolicy(actorARN, "root-only"); err != nil {
+		t.Fatal(err)
+	}
+	starAllow := `{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":["iam:GetAccountSummary","iam:GenerateCredentialReport","iam:GetCredentialReport"],"Resource":"*"}
+		]
+	}`
+	if err := st.PutInlinePolicy(actorARN, "star-allow", starAllow); err != nil {
+		t.Fatal(err)
+	}
+	rec = iamPost("Action=GetAccountSummary&Version=2010-05-08")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<GetAccountSummaryResponse") {
+		t.Fatalf("GetAccountSummary Allow on * want 200 got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	rec = iamPost("Action=GenerateCredentialReport&Version=2010-05-08")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GenerateCredentialReport Allow on * want 200 got status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	rec = iamPost("Action=GetCredentialReport&Version=2010-05-08")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetCredentialReport Allow on * want 200 got status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	starDeny := `{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":"iam:*","Resource":"*"},
+			{"Effect":"Deny","Action":["iam:GenerateCredentialReport","iam:GetCredentialReport"],"Resource":"*"}
+		]
+	}`
+	if err := st.PutInlinePolicy(actorARN, "star-deny", starDeny); err != nil {
+		t.Fatal(err)
+	}
+	rec = iamPost("Action=GenerateCredentialReport&Version=2010-05-08")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDenied") {
-		t.Fatalf("GetCredentialReport want 403 AccessDenied got status=%d body=%q", rec.Code, rec.Body.String())
+		t.Fatalf("GenerateCredentialReport Deny on * want 403 got status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }

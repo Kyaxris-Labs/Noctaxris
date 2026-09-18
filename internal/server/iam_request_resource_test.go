@@ -23,11 +23,6 @@ func TestIAMRequestResourceListReportNotBareStar(t *testing.T) {
 		{catalog.ActionIAMListInstanceProfiles, "arn:aws:iam::" + accountID + ":instance-profile/*"},
 		{catalog.ActionIAMListOpenIDConnectProviders, "arn:aws:iam::" + accountID + ":oidc-provider/*"},
 		{catalog.ActionIAMListSAMLProviders, "arn:aws:iam::" + accountID + ":saml-provider/*"},
-		{catalog.ActionIAMGenerateCredentialReport, "arn:aws:iam::" + accountID + ":root"},
-		{catalog.ActionIAMGetCredentialReport, "arn:aws:iam::" + accountID + ":root"},
-		{"GetCredentialReport", "arn:aws:iam::" + accountID + ":root"},
-		{catalog.ActionIAMGetAccountSummary, "arn:aws:iam::" + accountID + ":root"},
-		{"GetAccountSummary", "arn:aws:iam::" + accountID + ":root"},
 	}
 	for _, tc := range cases {
 		got := s.iamRequestResource(accountID, tc.action, map[string]string{}, nil)
@@ -36,6 +31,25 @@ func TestIAMRequestResourceListReportNotBareStar(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Fatalf("%s resource=%q want %q", tc.action, got, tc.want)
+		}
+	}
+}
+
+func TestIAMRequestResourceAccountSummaryIsWildcard(t *testing.T) {
+	s := &Server{}
+	accountID := "000000000001"
+	actions := []string{
+		catalog.ActionIAMGenerateCredentialReport,
+		"GenerateCredentialReport",
+		catalog.ActionIAMGetCredentialReport,
+		"GetCredentialReport",
+		catalog.ActionIAMGetAccountSummary,
+		"GetAccountSummary",
+	}
+	for _, action := range actions {
+		got := s.iamRequestResource(accountID, action, map[string]string{}, nil)
+		if got != "*" {
+			t.Fatalf("%s resource=%q want *", action, got)
 		}
 	}
 }

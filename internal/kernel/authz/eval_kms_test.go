@@ -130,3 +130,33 @@ func TestEvaluateKMSKeyPolicyDenyOverridesGrant(t *testing.T) {
 		t.Fatalf("got %v, want Deny", got)
 	}
 }
+
+func TestEvaluateKMSAccountRootKeyPolicyRequiresIdentity(t *testing.T) {
+	ctx := authz.RequestContext{
+		Principal: identity.Principal{
+			Kind:      identity.KindUser,
+			AccountID: "000000000001",
+			UserName:  "alice",
+		},
+		Action:   "kms:Decrypt",
+		Resource: "arn:aws:kms:us-east-1:000000000001:key/abc",
+	}
+	identityAllow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:Decrypt","Resource":"*"}]}`
+	keyRoot := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::000000000001:root"},"Action":"kms:*","Resource":"*"}]}`
+	got := authz.EvaluateKMS(authz.KMSRequest{
+		Caller:       ctx,
+		IdentityDocs: []string{identityAllow},
+		KeyPolicyDoc: keyRoot,
+	})
+	if got != authz.Allow {
+		t.Fatalf("key policy :root AND identity Allow got %v, want Allow", got)
+	}
+	got = authz.EvaluateKMS(authz.KMSRequest{
+		Caller:       ctx,
+		IdentityDocs: nil,
+		KeyPolicyDoc: keyRoot,
+	})
+	if got != authz.Deny {
+		t.Fatalf("key policy :root without identity got %v, want Deny", got)
+	}
+}

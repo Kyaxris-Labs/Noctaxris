@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func mustS3WithCreds(
@@ -286,5 +288,115 @@ func TestLambdaPassRoleBoundaryDeny(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "AccessDeniedException") {
 		t.Fatalf("expected AccessDeniedException in %q", rec.Body.String())
+	}
+}
+
+func TestAuthorizeS3AccountRootBucketPolicyDoesNotGrantIAMUser(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, _, err := st.CreateUser(testAccountID, "root-pol-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userAKID, userSecret, err := st.CreateUserAccessKey(testAccountID, "root-pol-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/root-pol-bucket", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/root-pol-bucket/obj.txt", []byte("secret"), "s3", now, nil)
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::` + testAccountID + `:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::root-pol-bucket/*"}]}`)
+	polRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/root-pol-bucket?policy", policy, "s3", now, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if polRec.Code != http.StatusOK {
+		t.Fatalf("PutBucketPolicy status=%d body=%q", polRec.Code, polRec.Body.String())
+	}
+
+	getRec := mustS3WithCreds(t, handler, http.MethodGet, "http://127.0.0.1:4566/root-pol-bucket/obj.txt", nil, userAKID, userSecret, "s3", now, nil)
+	if getRec.Code != http.StatusForbidden || !strings.Contains(getRec.Body.String(), "AccessDenied") {
+		t.Fatalf("GetObject via :root bucket policy status=%d body=%q want 403", getRec.Code, getRec.Body.String())
+	}
+}
+
+func TestAuthorizeS3ResourcePolicySessionExplicitDeny(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, userARN, err := st.CreateUser(testAccountID, "sess-deny-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/sess-deny-bucket", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/sess-deny-bucket/obj.txt", []byte("via-bucket"), "s3", now, nil)
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"` + userARN + `"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::sess-deny-bucket/*"}]}`)
+	polRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/sess-deny-bucket?policy", policy, "s3", now, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if polRec.Code != http.StatusOK {
+		t.Fatalf("PutBucketPolicy status=%d body=%q", polRec.Code, polRec.Body.String())
+	}
+
+	const sessSecret = "temp-sess-secret"
+	const sessToken = "temp-sess-token"
+	akid, err := st.MintTempCredentialsOpts(store.MintTempOpts{
+		AccountID:     testAccountID,
+		UserName:      "sess-deny-user",
+		Secret:        sessSecret,
+		SessionToken:  sessToken,
+		Expires:       now.Add(time.Hour),
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	getRec := mustS3WithCreds(t, handler, http.MethodGet, "http://127.0.0.1:4566/sess-deny-bucket/obj.txt", nil, akid, sessSecret, "s3", now, map[string]string{
+		"X-Amz-Security-Token": sessToken,
+	})
+	if getRec.Code != http.StatusForbidden || !strings.Contains(getRec.Body.String(), "AccessDenied") {
+		t.Fatalf("session Deny over resource-policy Allow status=%d body=%q want 403", getRec.Code, getRec.Body.String())
+	}
+}
+
+func TestAuthorizeS3ResourcePolicyBoundaryExplicitDeny(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_, userARN, err := st.CreateUser(testAccountID, "bound-deny-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userAKID, userSecret, err := st.CreateUserAccessKey(testAccountID, "bound-deny-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`
+	boundARN, err := st.CreateManagedPolicy(testAccountID, "ExplicitS3DenyBoundary", boundDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutUserPermissionsBoundary(testAccountID, "bound-deny-user", boundARN); err != nil {
+		t.Fatal(err)
+	}
+
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/bound-deny-bucket", nil, "s3", now, nil)
+	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/bound-deny-bucket/obj.txt", []byte("via-bucket"), "s3", now, nil)
+	policy := []byte(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"` + userARN + `"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bound-deny-bucket/*"}]}`)
+	polRec := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/bound-deny-bucket?policy", policy, "s3", now, map[string]string{
+		"Content-Type": "application/json",
+	})
+	if polRec.Code != http.StatusOK {
+		t.Fatalf("PutBucketPolicy status=%d body=%q", polRec.Code, polRec.Body.String())
+	}
+
+	getRec := mustS3WithCreds(t, handler, http.MethodGet, "http://127.0.0.1:4566/bound-deny-bucket/obj.txt", nil, userAKID, userSecret, "s3", now, nil)
+	if getRec.Code != http.StatusForbidden || !strings.Contains(getRec.Body.String(), "AccessDenied") {
+		t.Fatalf("boundary Deny over resource-policy Allow status=%d body=%q want 403", getRec.Code, getRec.Body.String())
 	}
 }

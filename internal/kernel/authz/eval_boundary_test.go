@@ -113,3 +113,37 @@ func TestBoundaryExplicitDenyOverrides(t *testing.T) {
 		t.Fatalf("boundary explicit Deny got %v, want Deny", got)
 	}
 }
+
+func TestSessionOrBoundaryExplicitDeny(t *testing.T) {
+	ctx := userCtx("s3:GetObject")
+	explicitDeny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"s3:GetObject","Resource":"*"}]}`
+	implicitOnly := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"iam:*","Resource":"*"}]}`
+
+	if authz.SessionOrBoundaryExplicitDeny(ctx, authz.EvalInputs{}) {
+		t.Fatal("empty inputs should not deny")
+	}
+	if !authz.SessionOrBoundaryExplicitDeny(ctx, authz.EvalInputs{BoundaryDoc: explicitDeny}) {
+		t.Fatal("boundary explicit Deny should deny")
+	}
+	if authz.SessionOrBoundaryExplicitDeny(ctx, authz.EvalInputs{BoundaryDoc: implicitOnly}) {
+		t.Fatal("boundary without matching Deny should not trip explicit-deny scan")
+	}
+	if !authz.SessionOrBoundaryExplicitDeny(ctx, authz.EvalInputs{SessionDocs: []string{explicitDeny}}) {
+		t.Fatal("session explicit Deny should deny")
+	}
+	if authz.SessionOrBoundaryExplicitDeny(ctx, authz.EvalInputs{SessionDocs: []string{implicitOnly}}) {
+		t.Fatal("session without matching Deny should not trip explicit-deny scan")
+	}
+
+	rootCtx := authz.RequestContext{
+		Principal: identity.RootPrincipal("000000000001", "AKIAROOT"),
+		Action:    "s3:GetObject",
+		Resource:  "*",
+	}
+	if authz.SessionOrBoundaryExplicitDeny(rootCtx, authz.EvalInputs{BoundaryDoc: explicitDeny}) {
+		t.Fatal("root skips permissions boundary")
+	}
+	if !authz.SessionOrBoundaryExplicitDeny(rootCtx, authz.EvalInputs{SessionDocs: []string{explicitDeny}}) {
+		t.Fatal("root still honors session explicit Deny")
+	}
+}
