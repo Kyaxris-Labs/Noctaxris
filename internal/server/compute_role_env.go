@@ -26,7 +26,7 @@ func (s *Server) mintRoleSessionEnv(roleARN, sessionName, endpoint, region strin
 	if err != nil {
 		return nil, fmt.Errorf("mint credentials: %w", err)
 	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
+	expires := s.tokenExpiresAt(defaultSessionDuration)
 	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
 		AccountID:    roleAccountID,
 		RoleARN:      roleARN,

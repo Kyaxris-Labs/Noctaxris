@@ -32,6 +32,8 @@ Cross-account `AssumeRole` uses `EvaluateCrossAccount` (caller identity plus rol
 
 Role chaining: callers with a session token (or Role/Federated principal) cannot request `DurationSeconds` greater than 3600. Role `MaxSessionDuration` (CreateRole, default 3600, max 43200) caps all AssumeRole mints.
 
+AssumeRole `Expiration` is wall-clock mint time plus `DurationSeconds` (default 3600, min 900). GetSessionToken, GetFederationToken, and AssumeRoot stamp the same way with the lab default of one hour. Nested Lambda, ECS, CodeBuild, and Batch role sessions (`mintRoleSessionEnv`) use that same wall-clock default. Lab `SetClock` / `FreezeClock` still apply to CloudTrail `eventTime` and other forensic stamps. SigV4 skew and `authn.Verify` session expiry stay on real time, so a future lab clock cannot keep ASIA keys valid after that duration. Expired session tokens fail closed (`InvalidClientTokenId`).
+
 `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` match trust `Principal.Federated` against the IdP ARN (account-root `AWS` principals do not over-allow federation callers). SAML verify is a lab subset: SignedInfo RSA, Reference DigestValue over the Assertion with Signature removed, Conditions time window, and Audience matching metadata `entityID` (not exclusive C14N). Web identity trusts can Condition on `{issuer-host}:sub` / `:aud` and, for GitHub Actions issuers, `token.actions.githubusercontent.com:*` claim keys populated from the verified JWT. OIDC providers store the full `ClientIDList` (and thumbprints for honesty; JWKS verify does not check thumbprints).
 
 ## How to verify / CLI smoke

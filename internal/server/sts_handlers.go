@@ -82,7 +82,7 @@ func (s *Server) handleGetSessionToken(
 	params := formParams(r, body)
 	serial := params.Get("SerialNumber")
 	tokenCode := params.Get("TokenCode")
-	now := s.now().UTC()
+	labNow := s.now().UTC()
 	mfaPresent := false
 
 	if serial != "" || tokenCode != "" {
@@ -106,7 +106,7 @@ func (s *Server) handleGetSessionToken(
 				verified.AccessKeyID, verified.AccountID, true)
 			return
 		}
-		if !sts.ValidateLabTokenCode(dev.Seed, tokenCode, now, 1) {
+		if !sts.ValidateLabTokenCode(dev.Seed, tokenCode, labNow, 1) {
 			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
 				"MultiFactorAuthentication failed with invalid MFA one time pass code.", readOnly, r, eventID,
 				verified.AccessKeyID, verified.AccountID, true)
@@ -127,7 +127,7 @@ func (s *Server) handleGetSessionToken(
 			"Unable to mint credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := now.Add(defaultSessionDuration)
+	expires := s.tokenExpiresAt(defaultSessionDuration)
 	userName := verified.Principal.UserName
 	mintOpts := store.MintTempOpts{
 		AccountID:    verified.AccountID,
@@ -140,7 +140,7 @@ func (s *Server) handleGetSessionToken(
 	}
 	if mfaPresent {
 		mintOpts.MFAAuthenticated = true
-		mintOpts.MFAAuthenticatedAt = now
+		mintOpts.MFAAuthenticatedAt = labNow
 	}
 	accessKeyID, err := s.store.MintTempCredentialsOpts(mintOpts)
 	if err != nil {
@@ -224,7 +224,7 @@ func (s *Server) handleGetFederationToken(
 			"Unable to mint credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
+	expires := s.tokenExpiresAt(defaultSessionDuration)
 	userName := verified.Principal.UserName
 	mintOpts := store.MintTempOpts{
 		AccountID:     verified.AccountID,
@@ -395,7 +395,7 @@ func (s *Server) handleAssumeRoot(
 			"Unable to mint credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := s.now().UTC().Add(defaultSessionDuration)
+	expires := s.tokenExpiresAt(defaultSessionDuration)
 	accessKeyID, err := s.store.MintTempCredentialsOpts(store.MintTempOpts{
 		AccountID:    target,
 		SessionName:  "AssumeRoot",
@@ -673,7 +673,7 @@ func (s *Server) mintAndWriteAssumeRole(
 			"Unable to mint credentials.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 		return
 	}
-	expires := s.now().UTC().Add(defaultAssumeRoleDuration)
+	expires := s.tokenExpiresAt(defaultAssumeRoleDuration)
 	accessKeyID, err := s.store.MintTempCredentials(accountID, roleARN, sessionName, secret, sessionToken, expires)
 	if err != nil {
 		s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",

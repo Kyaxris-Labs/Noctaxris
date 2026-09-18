@@ -286,16 +286,16 @@ func TestCloudTrailInjectHelpersCoverage(t *testing.T) {
 			"type":     "IAMUser",
 			"userName": "alice",
 		},
-		"sessionContext":     map[string]any{"mfa": true},
-		"requestParameters":  map[string]any{"password": "x", "bucket": "b"},
-		"responseElements":   map[string]any{"ok": true},
-		"resources":          []any{map[string]any{"arn": "arn:aws:s3:::b", "Type": "AWS::S3::Bucket"}},
-		"managementEvent":    true,
-		"sourceIPAddress":    "198.51.100.1",
-		"errorCode":          "AccessDenied",
-		"errorMessage":       "nope",
-		"eventCategory":      "Management",
-		"awsRegion":          "us-west-2",
+		"sessionContext":    map[string]any{"mfa": true},
+		"requestParameters": map[string]any{"password": "x", "bucket": "b"},
+		"responseElements":  map[string]any{"ok": true},
+		"resources":         []any{map[string]any{"arn": "arn:aws:s3:::b", "Type": "AWS::S3::Bucket"}},
+		"managementEvent":   true,
+		"sourceIPAddress":   "198.51.100.1",
+		"errorCode":         "AccessDenied",
+		"errorMessage":      "nope",
+		"eventCategory":     "Management",
+		"awsRegion":         "us-west-2",
 	}, verified, "req-1", "us-east-1", now)
 	if err != nil {
 		t.Fatal(err)
@@ -434,5 +434,25 @@ func TestCreateBucketObjectLockEnabledHelper(t *testing.T) {
 	req.Header.Set("x-amz-bypass-governance-retention", "true")
 	if !s3BypassGovernanceRetention(req) {
 		t.Fatal("bypass header")
+	}
+}
+
+func TestTokenExpiresAtIgnoresLabClock(t *testing.T) {
+	s := &Server{}
+	future := time.Date(2099, 6, 15, 12, 0, 0, 0, time.UTC)
+	s.setLabClock(future)
+	before := time.Now().UTC()
+	got := s.tokenExpiresAt(15 * time.Minute)
+	after := time.Now().UTC()
+	if got.Year() == 2099 {
+		t.Fatalf("tokenExpiresAt used lab clock: %s", got)
+	}
+	lo := before.Add(15 * time.Minute).Add(-time.Second)
+	hi := after.Add(15 * time.Minute).Add(time.Second)
+	if got.Before(lo) || got.After(hi) {
+		t.Fatalf("tokenExpiresAt=%s want between %s and %s", got, lo, hi)
+	}
+	if !s.effectiveNow().Equal(future) {
+		t.Fatalf("lab clock should stay %s got %s", future, s.effectiveNow())
 	}
 }

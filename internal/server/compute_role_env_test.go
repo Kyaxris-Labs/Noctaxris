@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
@@ -77,6 +78,57 @@ func TestMintRoleSessionEnvInjectsCredentials(t *testing.T) {
 	}
 	if acct != accountID || isRoot || secret != env["AWS_SECRET_ACCESS_KEY"] {
 		t.Fatalf("lookup account=%q isRoot=%v secret match=%v", acct, isRoot, secret == env["AWS_SECRET_ACCESS_KEY"])
+	}
+}
+
+func TestMintRoleSessionEnvIgnoresLabClock(t *testing.T) {
+	dir := t.TempDir()
+	key, err := store.LoadOrCreateMasterKey(filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	accountID := "000000000001"
+	if err := st.EnsureRoot(accountID, "AKIAROOTEXAMPLE01", "secret-root-value"); err != nil {
+		t.Fatal(err)
+	}
+	roleARN, err := st.CreateRole(accountID, "clock-job", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aud, err := audit.NewWriter(filepath.Join(dir, "cloudtrail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = aud.Close() })
+	srv := New(config.Config{ListenAddr: "127.0.0.1:4566", DataRoot: dir, AccountID: accountID}, st, aud)
+	future := time.Date(2099, 6, 15, 12, 0, 0, 0, time.UTC)
+	srv.setLabClock(future)
+
+	before := time.Now().UTC()
+	env, err := srv.mintRoleSessionEnv(roleARN, "noctaxris-clock", "http://127.0.0.1:4566", "us-east-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now().UTC()
+	ak, err := st.LookupAccessKeyRecord(env["AWS_ACCESS_KEY_ID"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ak.ExpiresAt.Year() >= 2090 {
+		t.Fatalf("lab clock leaked into ExpiresAt %s", ak.ExpiresAt)
+	}
+	lo := before.Add(defaultSessionDuration).Add(-2 * time.Second)
+	hi := after.Add(defaultSessionDuration).Add(5 * time.Second)
+	if ak.ExpiresAt.Before(lo) || ak.ExpiresAt.After(hi) {
+		t.Fatalf("ExpiresAt=%s want between %s and %s", ak.ExpiresAt, lo, hi)
+	}
+	if !srv.effectiveNow().Equal(future) {
+		t.Fatalf("lab clock should stay %s got %s", future, srv.effectiveNow())
 	}
 }
 

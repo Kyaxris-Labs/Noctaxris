@@ -21,9 +21,16 @@ func (s *Server) effectiveNow() time.Time {
 	return s.labClockNowLocked()
 }
 
-// authClock is wall time for SigV4 skew checks (lab clock override must not affect auth).
+// authClock is wall time for SigV4 skew and temporary-credential ExpiresAt.
+// Lab SetClock / FreezeClock must not affect auth.
 func (s *Server) authClock() time.Time {
 	return time.Now().UTC()
+}
+
+// tokenExpiresAt is mint time plus DurationSeconds on the wall clock that
+// authn.Verify uses. AWS STS Expiration cannot be extended past that interval.
+func (s *Server) tokenExpiresAt(d time.Duration) time.Time {
+	return s.authClock().Add(d)
 }
 
 func (s *Server) labClockNowLocked() time.Time {
@@ -271,8 +278,8 @@ func (s *Server) labBulkSeed(
 	s.writeLabForensicsOK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, labForensicsEventSource, "BulkSeed", readOnly,
 		WithAuditRequestParameters(map[string]any{
-			"scenarioId":           scenarioID,
-			"cloudTrailEventCount": len(eventIDs),
+			"scenarioId":            scenarioID,
+			"cloudTrailEventCount":  len(eventIDs),
 			"guardDutyFindingCount": len(findingIDs),
 		}))
 }
@@ -353,20 +360,20 @@ func labScenarioS3DataExfil(accountID, region string, base time.Time) ([]map[str
 			},
 			"resources": []map[string]any{
 				{
-					"ARN":              fmt.Sprintf("arn:aws:s3:::%s/finance/q1-report.csv", bucket),
-					"type":             "AWS::S3::Object",
-					"accountId":        accountID,
-					"ARNPrefix":        fmt.Sprintf("arn:aws:s3:::%s/", bucket),
+					"ARN":       fmt.Sprintf("arn:aws:s3:::%s/finance/q1-report.csv", bucket),
+					"type":      "AWS::S3::Object",
+					"accountId": accountID,
+					"ARNPrefix": fmt.Sprintf("arn:aws:s3:::%s/", bucket),
 				},
 			},
 		},
 	}
 	gd := []store.GuardDutyFinding{
 		{
-			Id:     "seed-gd-exfil-1",
-			Type:   "Exfiltration:S3/ObjectRead.Unusual",
-			Title:  "Unusual S3 object read volume",
-			Region: region,
+			Id:       "seed-gd-exfil-1",
+			Type:     "Exfiltration:S3/ObjectRead.Unusual",
+			Title:    "Unusual S3 object read volume",
+			Region:   region,
 			Severity: 6.5,
 			Resource: map[string]any{
 				"resourceType": "S3Bucket",
