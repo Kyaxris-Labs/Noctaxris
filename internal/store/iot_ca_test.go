@@ -192,12 +192,20 @@ func TestResolveIoTMQTTDeviceMultiCertUniqueAllow(t *testing.T) {
 		t.Fatal(err)
 	}
 	topicARN := "arn:aws:iot:us-east-1:000000000001:topic/$aws/things/multi-cert-thing/shadow/update"
-	dev, err := st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, "", "iot:Publish", topicARN)
+	_, err = st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, "", "iot:Publish", topicARN)
+	if err == nil {
+		t.Fatal("empty certificateId must fail closed")
+	}
+	dev, err := st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, allowCert.CertificateID, "iot:Publish", topicARN)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if dev.CertificateID != allowCert.CertificateID {
 		t.Fatalf("cert=%s want allow cert %s", dev.CertificateID, allowCert.CertificateID)
+	}
+	_, err = st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, denyCert.CertificateID, "iot:Publish", topicARN)
+	if err != nil {
+		t.Fatalf("deny cert is still attached: %v", err)
 	}
 }
 
@@ -236,9 +244,9 @@ func TestResolveIoTMQTTDeviceMultiCertAmbiguousAllow(t *testing.T) {
 	topicARN := "arn:aws:iot:us-east-1:000000000001:topic/$aws/things/ambig-thing/shadow/update"
 	_, err = st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, "", "iot:Publish", topicARN)
 	if err == nil {
-		t.Fatal("expected ambiguous multi-Allow error")
+		t.Fatal("empty certificateId must fail closed")
 	}
-	// Explicit certificateId disambiguates.
+	// Explicit certificateId selects the connected principal.
 	dev, err := st.ResolveIoTMQTTDeviceForThingShadow(account, region, thing.ThingName, c2.CertificateID, "iot:Publish", topicARN)
 	if err != nil {
 		t.Fatal(err)

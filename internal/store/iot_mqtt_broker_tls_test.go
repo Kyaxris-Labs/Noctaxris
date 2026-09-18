@@ -19,7 +19,7 @@ func TestEnsureLabMQTTBrokerMaterial(t *testing.T) {
 	if mat.SecretsDir == "" || mat.MosquittoConf == "" || mat.BridgeCertPEM == "" || mat.CACertPEM == "" {
 		t.Fatalf("material incomplete: %+v", mat)
 	}
-	if len(mat.Binds) < 5 {
+	if len(mat.Binds) < 7 {
 		t.Fatalf("binds=%v", mat.Binds)
 	}
 	for _, p := range []string{mat.MosquittoConf, filepath.Join(mat.SecretsDir, "ca.crt"), filepath.Join(mat.SecretsDir, "server.crt")} {
@@ -34,6 +34,21 @@ func TestEnsureLabMQTTBrokerMaterial(t *testing.T) {
 	body := string(conf)
 	if !strings.Contains(body, "require_certificate true") || !strings.Contains(body, "allow_anonymous false") {
 		t.Fatalf("mosquitto conf insecure defaults: %s", body)
+	}
+	if !strings.Contains(body, "plugin /usr/lib/mosquitto_dynamic_security.so") ||
+		!strings.Contains(body, "plugin_opt_config_file") {
+		t.Fatalf("mosquitto conf missing dynsec plugin: %s", body)
+	}
+	acl, err := os.ReadFile(filepath.Join(mat.SecretsDir, "mosquitto.acl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aclBody := string(acl)
+	if mosquittoACLHasPatternLine(aclBody) {
+		t.Fatalf("device ACL must not use global pattern readwrite: %s", aclBody)
+	}
+	if !strings.Contains(aclBody, "user "+store.LabMQTTBridgeUsername) {
+		t.Fatalf("missing bridge ACL user: %s", aclBody)
 	}
 	for _, b := range mat.Binds {
 		if strings.Contains(b, "..") {

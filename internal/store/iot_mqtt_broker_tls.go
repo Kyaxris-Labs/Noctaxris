@@ -65,11 +65,23 @@ func (s *Store) EnsureLabMQTTBrokerMaterial() (LabMQTTBrokerMaterial, error) {
 	}
 	bridgeCertPath := filepath.Join(dir, labMQTTBridgeCertFile)
 	bridgeKeyPath := filepath.Join(dir, labMQTTBridgeKeyFile)
-	if err := ensureLabMQTTLSPair(ca, bridgeCertPath, bridgeKeyPath, "noctaxris-mqtt-bridge", true, false); err != nil {
+	if err := ensureLabMQTTLSPair(ca, bridgeCertPath, bridgeKeyPath, LabMQTTBridgeUsername, true, false); err != nil {
 		return LabMQTTBrokerMaterial{}, err
 	}
 	aclPath := filepath.Join(dir, labMQTTACLFile)
-	if err := writeFileIfMissing(aclPath, []byte(defaultMQTTACL()), 0o600); err != nil {
+	dynsecPath := filepath.Join(dir, labMQTTDynsecFile)
+	aclBody, dynsecBody, err := s.labMQTTAuthFiles()
+	if err != nil {
+		return LabMQTTBrokerMaterial{}, err
+	}
+	if err := os.WriteFile(aclPath, []byte(aclBody), 0o600); err != nil {
+		return LabMQTTBrokerMaterial{}, fmt.Errorf("write mosquitto acl: %w", err)
+	}
+	if err := os.WriteFile(dynsecPath, dynsecBody, 0o600); err != nil {
+		return LabMQTTBrokerMaterial{}, fmt.Errorf("write mosquitto dynsec: %w", err)
+	}
+	stampPath, err := writeMQTTAuthStamp(dir, aclBody, dynsecBody)
+	if err != nil {
 		return LabMQTTBrokerMaterial{}, err
 	}
 	confPath := filepath.Join(dir, labMQTTMosquittoConfFile)
@@ -91,6 +103,8 @@ func (s *Store) EnsureLabMQTTBrokerMaterial() (LabMQTTBrokerMaterial, error) {
 		filepath.ToSlash(serverCertPath) + ":" + mqttBrokerContainerDir + "/server.crt:ro",
 		filepath.ToSlash(serverKeyPath) + ":" + mqttBrokerContainerDir + "/server.key:ro",
 		filepath.ToSlash(aclPath) + ":" + mqttBrokerContainerDir + "/mosquitto.acl:ro",
+		filepath.ToSlash(dynsecPath) + ":" + mqttBrokerContainerDir + "/dynamic-security.json:ro",
+		filepath.ToSlash(stampPath) + ":" + mqttBrokerContainerDir + "/auth.stamp:ro",
 	}
 	return LabMQTTBrokerMaterial{
 		SecretsDir:       dir,
@@ -113,12 +127,6 @@ func writeFileIfMissing(path string, data []byte, mode os.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
-func defaultMQTTACL() string {
-	return "# Lab MQTT: authenticated users (cert CN) may read/write shadow and application topics.\n" +
-		"pattern readwrite $aws/things/+/shadow/#\n" +
-		"pattern readwrite #\n"
-}
-
 func mosquittoConfContent(mountDir string) string {
 	mountDir = strings.TrimSuffix(mountDir, "/")
 	return fmt.Sprintf(`listener 1883 0.0.0.0
@@ -129,7 +137,9 @@ cafile %s/ca.crt
 certfile %s/server.crt
 keyfile %s/server.key
 acl_file %s/mosquitto.acl
-`, mountDir, mountDir, mountDir, mountDir)
+plugin %s
+plugin_opt_config_file %s/dynamic-security.json
+`, mountDir, mountDir, mountDir, mountDir, labMQTTDynsecPluginPath, mountDir)
 }
 
 func ensureLabMQTTLSPair(ca LabIoTCA, certPath, keyPath, cn string, clientAuth, serverAuth bool) error {

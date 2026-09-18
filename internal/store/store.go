@@ -359,6 +359,9 @@ type Store struct {
 	asyncEnqueueMu sync.Mutex
 	onAsyncEnqueue func(job LambdaAsyncInvocation)
 
+	mqttBrokerAuthMu   sync.Mutex
+	mqttBrokerAuthHook func()
+
 	cognitoTriggerMu      sync.Mutex
 	cognitoTriggerInvoker CognitoTriggerInvoker
 

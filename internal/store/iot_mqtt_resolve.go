@@ -65,27 +65,39 @@ func (s *Store) ResolveIoTMQTTDeviceByCertificate(certificateID string) (IoTMQTT
 	return out[0], nil
 }
 
-// InferSingleActiveCertificateForThing returns the certificateId when the thing has exactly
-// one ACTIVE attached certificate (lab MQTT bridge inference when Mosquitto ACL already gated publish).
-func (s *Store) InferSingleActiveCertificateForThing(accountID, region, thingName string) (string, error) {
-	active, err := s.listActiveCertificateIDsForThing(accountID, region, thingName)
+// MQTTConnectCertificateForThing returns the unique ACTIVE cert attached to thingName
+// that AllowMQTTConnect allows (ClientId equals the thing name and iot:Connect Allows).
+// Zero or multiple matches fail closed. Used by the live shadow bridge after Mosquitto
+// has already bound CONNECT ClientId and ACL topics to that thing.
+func (s *Store) MQTTConnectCertificateForThing(thingName string) (string, error) {
+	g, err := s.DescribeIoTThingByNameGlobal(thingName)
 	if err != nil {
 		return "", err
 	}
-	if len(active) == 0 {
+	active, err := s.listActiveCertificateIDsForThing(g.AccountID, g.Region, g.ThingName)
+	if err != nil {
+		return "", err
+	}
+	var allowed []string
+	for _, certID := range active {
+		if s.AllowMQTTConnect(certID, g.ThingName) {
+			allowed = append(allowed, certID)
+		}
+	}
+	if len(allowed) == 0 {
 		return "", ErrIoTNotFound
 	}
-	if len(active) > 1 {
-		return "", fmt.Errorf("%w: thing has multiple ACTIVE certificates", ErrIoTBadRequest)
+	if len(allowed) > 1 {
+		return "", fmt.Errorf("%w: multiple ACTIVE certificates Allow MQTT Connect for this thing", ErrIoTBadRequest)
 	}
-	return active[0], nil
+	return allowed[0], nil
 }
 
-// ResolveIoTMQTTDeviceForThingShadow picks an ACTIVE cert on the thing for MQTT shadow authz.
-// When certificateID is set, that cert must be ACTIVE and attached to the thing.
-// When empty: one ACTIVE cert is used; with multiple, the unique cert whose IoT policies Allow
-// action/resource is used; zero or multiple Allows fails closed.
+// ResolveIoTMQTTDeviceForThingShadow requires the connected device certificate.
+// Empty certificateID fails closed so the topic thing's cert cannot be adopted.
 func (s *Store) ResolveIoTMQTTDeviceForThingShadow(accountID, region, thingName, certificateID, action, resource string) (IoTMQTTDeviceContext, error) {
+	_ = action
+	_ = resource
 	if err := s.EnsureIoTSchema(); err != nil {
 		return IoTMQTTDeviceContext{}, err
 	}
@@ -95,50 +107,18 @@ func (s *Store) ResolveIoTMQTTDeviceForThingShadow(accountID, region, thingName,
 	if thingName == "" {
 		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: thingName required", ErrIoTBadRequest)
 	}
-	if certificateID != "" {
-		dev, err := s.ResolveIoTMQTTDeviceByCertificate(certificateID)
-		if err != nil {
-			return IoTMQTTDeviceContext{}, err
-		}
-		if !strings.EqualFold(dev.ThingName, thingName) ||
-			dev.AccountID != accountID || iotRegion(dev.Region) != region {
-			return IoTMQTTDeviceContext{}, fmt.Errorf("%w: certificate not attached to thing", ErrIoTBadRequest)
-		}
-		return dev, nil
+	if certificateID == "" {
+		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: certificateId required", ErrIoTBadRequest)
 	}
-	active, err := s.listActiveCertificateIDsForThing(accountID, region, thingName)
+	dev, err := s.ResolveIoTMQTTDeviceByCertificate(certificateID)
 	if err != nil {
 		return IoTMQTTDeviceContext{}, err
 	}
-	if len(active) == 0 {
-		return IoTMQTTDeviceContext{}, ErrIoTNotFound
+	if !strings.EqualFold(dev.ThingName, thingName) ||
+		dev.AccountID != accountID || iotRegion(dev.Region) != region {
+		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: certificate not attached to thing", ErrIoTBadRequest)
 	}
-	if len(active) == 1 {
-		return IoTMQTTDeviceContext{
-			AccountID:     accountID,
-			Region:        region,
-			ThingName:     thingName,
-			CertificateID: active[0],
-		}, nil
-	}
-	var allowed []string
-	for _, certID := range active {
-		if s.EvaluateIoTDevicePolicy(accountID, region, certID, action, resource) {
-			allowed = append(allowed, certID)
-		}
-	}
-	if len(allowed) == 0 {
-		return IoTMQTTDeviceContext{}, ErrIoTNotFound
-	}
-	if len(allowed) > 1 {
-		return IoTMQTTDeviceContext{}, fmt.Errorf("%w: multiple ACTIVE certificates Allow this MQTT action; pass certificateId or detach extras", ErrIoTBadRequest)
-	}
-	return IoTMQTTDeviceContext{
-		AccountID:     accountID,
-		Region:        region,
-		ThingName:     thingName,
-		CertificateID: allowed[0],
-	}, nil
+	return dev, nil
 }
 
 func (s *Store) listActiveCertificateIDsForThing(accountID, region, thingName string) ([]string, error) {

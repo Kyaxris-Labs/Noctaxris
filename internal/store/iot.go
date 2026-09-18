@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrIoTNotFound      = errors.New("ResourceNotFoundException")
-	ErrIoTBadRequest    = errors.New("InvalidRequestException")
-	ErrIoTConflict      = errors.New("ResourceAlreadyExistsException")
+	ErrIoTNotFound        = errors.New("ResourceNotFoundException")
+	ErrIoTBadRequest      = errors.New("InvalidRequestException")
+	ErrIoTConflict        = errors.New("ResourceAlreadyExistsException")
 	ErrIoTVersionConflict = errors.New("VersionConflictException")
 	ErrIoTDeleteConflict  = errors.New("DeleteConflictException")
 )
@@ -362,6 +362,7 @@ func (s *Store) DeleteIoTThing(accountID, region, thingName string) error {
 	}
 	_, _ = s.db.Exec(`DELETE FROM iot_thing_principals WHERE account_id = ? AND region = ? AND thing_name = ?`, accountID, region, thingName)
 	_, _ = s.db.Exec(`DELETE FROM iot_shadows WHERE account_id = ? AND region = ? AND thing_name = ?`, accountID, region, thingName)
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 
@@ -395,10 +396,12 @@ func (s *Store) CreateIoTKeysAndCertificate(accountID, region string, setAsActiv
 	if err != nil {
 		return IoTCertificate{}, fmt.Errorf("create iot certificate: %w", err)
 	}
-	return IoTCertificate{
+	out := IoTCertificate{
 		CertificateID: certID, CertificateARN: arn, Status: status,
 		CertificatePEM: certPEM, PublicKey: pubPEM, PrivateKey: keyPEM, CreatedAt: now,
-	}, nil
+	}
+	s.notifyMQTTBrokerAuth()
+	return out, nil
 }
 
 func extractRSAPublicKeyPEM(privateKeyPEM string) string {
@@ -482,6 +485,7 @@ func (s *Store) UpdateIoTCertificate(accountID, region, certificateID, newStatus
 	if err != nil {
 		return fmt.Errorf("update certificate: %w", err)
 	}
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 
@@ -517,6 +521,7 @@ func (s *Store) DeleteIoTCertificate(accountID, region, certificateID string) er
 		`DELETE FROM iot_policy_attachments WHERE account_id = ? AND region = ? AND target = ?`,
 		accountID, region, c.CertificateARN,
 	)
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 
@@ -642,6 +647,7 @@ func (s *Store) AttachIoTPolicy(accountID, region, policyName, target string) er
 	if err != nil {
 		return fmt.Errorf("attach policy: %w", err)
 	}
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 
@@ -654,6 +660,7 @@ func (s *Store) DetachIoTPolicy(accountID, region, policyName, target string) er
 	if err != nil {
 		return fmt.Errorf("detach policy: %w", err)
 	}
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 
@@ -673,6 +680,7 @@ func (s *Store) AttachIoTThingPrincipal(accountID, region, thingName, principal 
 	if err != nil {
 		return fmt.Errorf("attach thing principal: %w", err)
 	}
+	s.notifyMQTTBrokerAuth()
 	return nil
 }
 

@@ -18,25 +18,25 @@ Nested MQTT clients (Lambda/ECS/other DinD containers) use `noctaxris-lab-mqtt:1
 
 ### Device authentication (lab IoT CA)
 
-Mosquitto requires client certificates signed by the process **lab IoT CA** (material under the lab secrets sibling path, not operator upload APIs). `CreateKeysAndCertificate` signs device certs with **ClientAuth** EKU and embeds `certificateId` for mapping. Mosquitto: `require_certificate true`, `allow_anonymous false`, ACL allowlist for `$aws/things/+/shadow/#` and application topics (`#`) at the broker layer (IoT policies still govern each action).
+Mosquitto requires client certificates signed by the process **lab IoT CA** (material under the lab secrets sibling path, not operator upload APIs). `CreateKeysAndCertificate` signs device certs with **ClientAuth** EKU and embeds `certificateId` for mapping. Mosquitto: `require_certificate true`, `allow_anonymous false`, `use_identity_as_username true`. The ACL file grants the API bridge (`noctaxris-mqtt-bridge`) `readwrite #`. Each device user (TLS CN = `certificateId`) is limited to `$aws/things/{thing}/shadow/#` and `{thing}/#`. There is no `pattern readwrite #` for devices.
 
 Certificates issued before lab-CA signing cannot authenticate to MQTT until re-issued. This is not Bring-Your-Own-CA or full CSR/operator CA depth.
 
 ### MQTT authorization
 
-The bridge and broker path use `EvaluateIoTDevicePolicy` on the union of IoT policies attached to the certificate: actions `iot:Connect`, `iot:Publish`, `iot:Subscribe`, `iot:Receive` against topic / topicfilter / client ARN shapes. Deny-overrides; no matching Allow fails closed. Account binding comes from the ACTIVE certificate attached to a Thing (TLS certificate id), not from MQTT `clientId` alone.
+The bridge and broker path use `EvaluateIoTDevicePolicy` on the union of IoT policies attached to the certificate: actions `iot:Connect`, `iot:Publish`, `iot:Subscribe`, `iot:Receive` against topic / topicfilter / client ARN shapes. Deny-overrides; no matching Allow fails closed. Account binding comes from the ACTIVE certificate attached to a Thing (TLS certificate id). MQTT ClientId must equal the attached thing name.
 
-In-process `AllowMQTTConnect` requires ClientId to equal the attached thing name (`${iot:Connection.Thing.ThingName}`). Filename-shaped client IDs (for example `device.pem`) are denied. Live Mosquitto CONNECT authenticates the TLS certificate and does not call that check. Live shadow handling:
+`AllowMQTTConnect` requires ClientId to equal the attached thing name (`${iot:Connection.Thing.ThingName}`). Filename-shaped client IDs (for example `device.pem`) are denied. Live Mosquitto CONNECT uses the same rule: dynamic-security `clientid` is the thing name, and clients without `iot:Connect` are `disabled`. Shadow MQTT handling requires the connected certificate id. Empty `HandleMessage` fails closed and does not adopt the topic thing's cert. Device A cannot update thing B.
 
 | Thing certs | Behavior |
 |-------------|----------|
-| One ACTIVE attached cert | Used for policy evaluation |
-| Multiple ACTIVE; exactly one Allows the shadow action | That cert is used |
-| Multiple ACTIVE; zero or multiple Allow | Fail closed (`/rejected`); pass explicit TLS `certificateId` to lab tooling, or detach extra certs |
+| HandleMessage with TLS `certificateId` | Policy evaluated as that principal; cert must be attached to the topic thing |
+| Empty `certificateId` | `/rejected` (fail closed) |
+| Live broker publish | Unique cert that `AllowMQTTConnect` Allows for the topic thing (ClientId already bound to that name) |
 
 Control-plane and HTTP shadow APIs keep identity `EvaluateFull`.
 
-Mosquitto TLS material is bind-mounted into `noctaxris-lab-mqtt`. If broker config/CA mounts change after the container first started, Ensure recreates the singleton automatically (binds fingerprint mismatch).
+Mosquitto TLS material is bind-mounted into `noctaxris-lab-mqtt`. ACL and dynsec are rewritten on attach/policy/cert changes. If broker config/CA/ACL mounts change after the container first started, Ensure recreates the singleton automatically (binds fingerprint mismatch).
 
 ### Shadow topics (classic + named)
 
@@ -84,7 +84,7 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 | Named shadows | `ListNamedShadowsForThing` REST `GET /api/things/shadow/ListNamedShadowsForThing/{thingName}` (classic unnamed shadow omitted; empty list if only classic exists or the thing is unknown) |
 | Endpoints | `DescribeEndpoint` JSON 1.1 and REST `GET /endpoint?endpointType=` for `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider` (lab `endpointAddress`, default `127.0.0.1:4566`) |
 | Jobs | Control-plane `CreateJob` / `DescribeJob`; device HTTP `GET /things/{thingName}/jobs`, `GET /things/{thingName}/jobs/{jobId}`, `PUT /things/{thingName}/jobs/$next` (`iot-jobs-data:*`) |
-| Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress` |
+| Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress`. Minted ASIA `expiration` / `ExpiresAt` uses wall clock (same as SigV4), not lab `SetClock` |
 | Retained MQTT | `ListRetainedMessages` returns an empty list (HTTP 200). Lab MQTT has no retained store |
 
 ### Notes
@@ -99,11 +99,15 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 
 Identity `EvaluateFull` on `iot:*`, `iot-data:*`, and `iot-jobs-data:*` for signed HTTP APIs. Device certificates use attached IoT policies (`iot:*`). Device certificates cannot call `ListThings` or `ListRoleAliases`.
 
+Shadow, Jobs, and named-shadow REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`) run only when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`. A request signed as `s3` is path-style S3 (`things` / `api` as the bucket). Wrong-scope signatures are not treated as IoT writes.
+
 `GET /endpoint` is IoT only when SigV4 service is `iot` (or another `iot*` service). Path-style S3 `GET /endpoint` stays S3.
+
+Credentials provider `GET /role-aliases/{alias}/credentials` is claimed only when a device client certificate is present (mTLS still required to mint). Unsigned callers without mTLS get the usual missing-signature 403. Signed `s3` GetObject on that key reaches S3.
 
 ### MQTT ClientId
 
-Connect policies that use `${iot:Connection.Thing.ThingName}` require the MQTT ClientId to equal the thing name. The TLS certificate still supplies identity. Using the certificate id or a filename as ClientId is denied by `AllowMQTTConnect`. The nested Mosquitto listener does not enforce ClientId on CONNECT; unit tests cover the in-process helper.
+Connect policies that use `${iot:Connection.Thing.ThingName}` require the MQTT ClientId to equal the thing name. The TLS certificate still supplies identity. Using the certificate id or a filename as ClientId is denied by `AllowMQTTConnect`. Live Mosquitto CONNECT uses dynsec `clientid` equal to the thing name (same rule).
 
 ## How to verify / CLI smoke
 
@@ -111,7 +115,7 @@ Shared Compose and env setup: [index.md](index.md#shared-verification).
 
 Lab protocol is JSON (`AWSIotService.*` / `AWSIotDataService.*` X-Amz-Target). Prefer SDK triples under `tests/sdk/`. Live Compose smoke skipped when Docker is unavailable.
 
-MQTT shadow / rules round-trip needs DinD, `compose.lab-brokers.yaml`, and device certs from `CreateKeysAndCertificate` after shared MQTT is enabled. SDK live MQTT rows soft-skip when shared flags or engine are unavailable. Topic-rule unit tests use `PublishTopic` and do not require Mosquitto. Live Mosquitto CONNECT was not executed in this cut.
+MQTT shadow / rules round-trip needs DinD, `compose.lab-brokers.yaml`, and device certs from `CreateKeysAndCertificate` after shared MQTT is enabled. SDK live MQTT rows soft-skip when shared flags or engine are unavailable. Topic-rule unit tests use `PublishTopic` and do not require Mosquitto. Live Mosquitto CONNECT ClientId checks are unit-tested via generated dynsec/ACL plus `AllowMQTTConnect`.
 
 DescribeEndpoint, Jobs HTTP, and credentials provider (lab addresses on `:4566`):
 
@@ -125,7 +129,6 @@ aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url 
 
 ## Not yet / deferred
 
-- Live Mosquitto CONNECT ClientId enforcement (in-process `AllowMQTTConnect` does; the broker CONNECT path does not)
 - Retained MQTT store (`ListRetainedMessages` is an empty HTTP 200 list)
 - Richer IoT SQL (WHERE, SELECT projections, nested functions)
 - Thing types, thing groups, fleet indexing

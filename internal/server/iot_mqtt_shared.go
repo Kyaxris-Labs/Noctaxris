@@ -34,6 +34,7 @@ func (s *Server) startSharedMQTTIfEnabled() {
 	if s == nil || !s.cfg.SharedMQTT {
 		return
 	}
+	s.wireMQTTBrokerAuthRefresh()
 	if mqttBridgeStartHook != nil {
 		if err := mqttBridgeStartHook(s); err != nil {
 			log.Printf("shared mqtt: %v", err)
@@ -45,6 +46,21 @@ func (s *Server) startSharedMQTTIfEnabled() {
 			log.Printf("shared mqtt bridge: %v", err)
 		}
 	}()
+}
+
+func (s *Server) wireMQTTBrokerAuthRefresh() {
+	if s == nil || s.store == nil {
+		return
+	}
+	s.store.SetMQTTBrokerAuthHook(func() {
+		if _, err := s.store.EnsureLabMQTTBrokerMaterial(); err != nil {
+			log.Printf("mqtt broker acl: %v", err)
+			return
+		}
+		if err := tryEnsureSharedMQTTBroker(s); err != nil {
+			log.Printf("mqtt broker refresh: %v", err)
+		}
+	})
 }
 
 func errorsIsContextCanceled(err error) bool {
@@ -104,13 +120,13 @@ func (s *Server) runSharedMQTTBridge(ctx context.Context) error {
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
 		SetTLSConfig(tlsCfg).
-		SetClientID("noctaxris-mqtt-bridge").
+		SetClientID(store.LabMQTTBridgeUsername).
 		SetAutoReconnect(true)
 	opts.OnConnect = func(c mqtt.Client) {
 		for _, filter := range ShadowMQTTSubscribeFilters() {
 			f := filter
 			if token := c.Subscribe(f, 0, func(_ mqtt.Client, msg mqtt.Message) {
-				_ = handler.HandleMessage("", msg.Topic(), msg.Payload())
+				_ = handler.HandleBrokerMessage(msg.Topic(), msg.Payload())
 			}); token.Wait() && token.Error() != nil {
 				log.Printf("mqtt subscribe %s: %v", f, token.Error())
 			}
@@ -193,6 +209,7 @@ func tryEnsureSharedMQTT(s *Server) error {
 	if s == nil || !s.cfg.SharedMQTT {
 		return nil
 	}
+	s.wireMQTTBrokerAuthRefresh()
 	if !compute.BrokerPortPublishReady() {
 		return fmt.Errorf("shared mqtt requires %s or %s", compute.EnvBrokerPortPublish, compute.EnvNestedPortPublish)
 	}

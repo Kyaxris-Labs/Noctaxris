@@ -54,10 +54,8 @@ func newShadowMQTTHandler(st *store.Store, publish func(topic string, payload []
 }
 
 // HandleMessage processes one MQTT publish for classic or named shadows.
-// certificateID is the lab device certificate id (DER SHA-256 hex) from TLS, not MQTT ClientId.
-// Official Connect policies require ClientId to equal the thing name. When certificateID is empty,
-// the handler picks the unique ACTIVE cert on the thing that Allows the shadow action (fail closed
-// if zero or multiple Allows).
+// certificateID is the connected lab device certificate id (DER SHA-256 hex) from TLS.
+// Empty certificateID fails closed; the handler does not adopt the topic thing's cert.
 func (h *shadowMQTTHandler) HandleMessage(certificateID, topic string, payload []byte) error {
 	if h == nil || h.store == nil {
 		return fmt.Errorf("shadow mqtt handler unavailable")
@@ -68,6 +66,12 @@ func (h *shadowMQTTHandler) HandleMessage(certificateID, topic string, payload [
 	}
 	if parsed.Op == shadowOpUnknown {
 		return nil
+	}
+	if strings.TrimSpace(certificateID) == "" {
+		return h.publishRejected(shadowRejectTopic(parsed.Response), map[string]any{
+			"code":    403,
+			"message": "not authorized",
+		})
 	}
 	thing, err := h.store.DescribeIoTThingByNameGlobal(parsed.ThingName)
 	if err != nil {
@@ -104,6 +108,29 @@ func (h *shadowMQTTHandler) HandleMessage(certificateID, topic string, payload [
 	}
 }
 
+// HandleBrokerMessage applies a live Mosquitto shadow publish using the unique
+// cert that AllowMQTTConnect allows for the topic thing (ClientId equals thing name).
+func (h *shadowMQTTHandler) HandleBrokerMessage(topic string, payload []byte) error {
+	if h == nil || h.store == nil {
+		return fmt.Errorf("shadow mqtt handler unavailable")
+	}
+	parsed, err := parseShadowTopic(topic)
+	if err != nil {
+		return err
+	}
+	if parsed.Op == shadowOpUnknown {
+		return nil
+	}
+	certID, err := h.store.MQTTConnectCertificateForThing(parsed.ThingName)
+	if err != nil {
+		return h.publishRejected(shadowRejectTopic(parsed.Response), map[string]any{
+			"code":    403,
+			"message": "not authorized",
+		})
+	}
+	return h.HandleMessage(certID, topic, payload)
+}
+
 // ShadowMQTTHandler exposes shadow MQTT handling for unit tests.
 type ShadowMQTTHandler struct {
 	inner *shadowMQTTHandler
@@ -120,6 +147,14 @@ func (h *ShadowMQTTHandler) HandleMessage(certificateID, topic string, payload [
 		return fmt.Errorf("shadow mqtt handler unavailable")
 	}
 	return h.inner.HandleMessage(certificateID, topic, payload)
+}
+
+// HandleBrokerMessage implements live Mosquitto shadow handling (see shadowMQTTHandler.HandleBrokerMessage).
+func (h *ShadowMQTTHandler) HandleBrokerMessage(topic string, payload []byte) error {
+	if h == nil || h.inner == nil {
+		return fmt.Errorf("shadow mqtt handler unavailable")
+	}
+	return h.inner.HandleBrokerMessage(topic, payload)
 }
 
 func (h *shadowMQTTHandler) handleUpdate(dev store.IoTMQTTDeviceContext, parsed parsedShadowTopic, payload []byte) error {
