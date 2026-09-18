@@ -80,3 +80,62 @@ func GetCredentialReportXML(csv []byte, generated time.Time, state, requestID st
 	resp.ResponseMetadata.RequestId = requestID
 	return marshalResponse(resp)
 }
+
+type summaryMapEntry struct {
+	Key   string `xml:"key"`
+	Value int    `xml:"value"`
+}
+
+type getAccountSummaryResponse struct {
+	XMLName                 xml.Name `xml:"GetAccountSummaryResponse"`
+	XMLNS                   string   `xml:"xmlns,attr"`
+	GetAccountSummaryResult struct {
+		SummaryMap struct {
+			Entry []summaryMapEntry `xml:"entry"`
+		} `xml:"SummaryMap"`
+	} `xml:"GetAccountSummaryResult"`
+	ResponseMetadata responseMetadata `xml:"ResponseMetadata"`
+}
+
+// GetAccountSummaryXML builds GetAccountSummary Query XML (SummaryMap entry/key/value).
+func GetAccountSummaryXML(sum store.IAMAccountSummary, requestID string) ([]byte, error) {
+	resp := getAccountSummaryResponse{XMLNS: iamXMLNS}
+	resp.GetAccountSummaryResult.SummaryMap.Entry = []summaryMapEntry{
+		{Key: "Users", Value: sum.Users},
+		{Key: "UsersQuota", Value: 5000},
+		{Key: "Groups", Value: sum.Groups},
+		{Key: "GroupsQuota", Value: 100},
+		{Key: "Roles", Value: sum.Roles},
+		{Key: "RolesQuota", Value: 250},
+		{Key: "Policies", Value: sum.Policies},
+		{Key: "PoliciesQuota", Value: 1000},
+		{Key: "PolicyVersionsInUse", Value: sum.PolicyVersionsInUse},
+		{Key: "PolicyVersionsInUseQuota", Value: 10000},
+		{Key: "VersionsPerPolicyQuota", Value: 5},
+		{Key: "InstanceProfiles", Value: sum.InstanceProfiles},
+		{Key: "InstanceProfilesQuota", Value: 100},
+		{Key: "MFADevices", Value: sum.MFADevices},
+		{Key: "MFADevicesInUse", Value: sum.MFADevicesInUse},
+		{Key: "AccountMFAEnabled", Value: 0},
+		{Key: "AccountAccessKeysPresent", Value: sum.AccountAccessKeysPresent},
+		{Key: "AccountPasswordPresent", Value: 0},
+		{Key: "AccountSigningCertificatesPresent", Value: 0},
+		{Key: "ServerCertificates", Value: 0},
+		{Key: "ServerCertificatesQuota", Value: 20},
+		{Key: "Providers", Value: sum.Providers},
+		{Key: "AccessKeysPerUserQuota", Value: 2},
+		{Key: "SigningCertificatesPerUserQuota", Value: 2},
+		{Key: "GroupsPerUserQuota", Value: 10},
+		{Key: "AttachedPoliciesPerUserQuota", Value: 10},
+		{Key: "AttachedPoliciesPerRoleQuota", Value: 10},
+		{Key: "AttachedPoliciesPerGroupQuota", Value: 10},
+		{Key: "UserPolicySizeQuota", Value: 2048},
+		{Key: "GroupPolicySizeQuota", Value: 5120},
+		{Key: "RolePolicySizeQuota", Value: 10240},
+		{Key: "AssumeRolePolicySizeQuota", Value: 2048},
+		{Key: "PolicySizeQuota", Value: 5120},
+		{Key: "GlobalEndpointTokenVersion", Value: 1},
+	}
+	resp.ResponseMetadata.RequestId = requestID
+	return marshalResponse(resp)
+}

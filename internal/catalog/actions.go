@@ -85,6 +85,7 @@ const (
 	ActionIAMGetAccessKeyLastUsed     = "iam:GetAccessKeyLastUsed"
 	ActionIAMGenerateCredentialReport = "iam:GenerateCredentialReport"
 	ActionIAMGetCredentialReport      = "iam:GetCredentialReport"
+	ActionIAMGetAccountSummary        = "iam:GetAccountSummary"
 )
 
 // Managed policies
@@ -605,6 +606,7 @@ const (
 const (
 	ActionEC2RunInstances                  = "ec2:RunInstances"
 	ActionEC2DescribeInstances             = "ec2:DescribeInstances"
+	ActionEC2DescribeRegions               = "ec2:DescribeRegions"
 	ActionEC2DescribeImages                = "ec2:DescribeImages"
 	ActionEC2TerminateInstances            = "ec2:TerminateInstances"
 	ActionEC2StopInstances                 = "ec2:StopInstances"

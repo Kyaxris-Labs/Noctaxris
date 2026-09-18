@@ -44,6 +44,7 @@ A DinD-only sidecar (`noctaxris-ec2-imds`) on Internal `noctaxris-ec2` serves cl
 | Area | Actions |
 |------|---------|
 | Instances | `RunInstances`, `DescribeInstances`, `TerminateInstances`, `StopInstances`, `StartInstances` |
+| Regions | `DescribeRegions` (enabled lab region `us-east-1`; Query `regionInfo` / `opt-in-not-required`) |
 | Images | `DescribeImages` (lab catalog; optional `ImageId.N` filter) |
 | Bootstrap | UserData exec once on create; IMDS lite sidecar (DinD-internal) |
 | VPC / subnet | `CreateVpc`, `DeleteVpc`, `DescribeVpcs`; `CreateSubnet`, `DeleteSubnet`, `DescribeSubnets` (metadata: Ids, CidrBlock, State=`available`, AZ) |
@@ -53,13 +54,14 @@ A DinD-only sidecar (`noctaxris-ec2-imds`) on Internal `noctaxris-ec2` serves cl
 
 ### Authz notes
 
-Identity `EvaluateFull` on `ec2:RunInstances` / `DescribeInstances` / `DescribeImages` / `StopInstances` / `StartInstances` / `TerminateInstances` and the VPC / subnet / security-group / ENI actions listed above. Image pulls use the shared allowlist (`internal/compute/image_allow.go`); extend with `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` when needed.
+Identity `EvaluateFull` on `ec2:RunInstances` / `DescribeInstances` / `DescribeRegions` / `DescribeImages` / `StopInstances` / `StartInstances` / `TerminateInstances` and the VPC / subnet / security-group / ENI actions listed above. Image pulls use the shared allowlist (`internal/compute/image_allow.go`); extend with `NOCTAXRIS_IMAGE_PULL_ALLOWLIST` when needed.
 
 ## How to verify / CLI smoke
 
 Shared Compose and env setup: [index.md](index.md#shared-verification). Nested running state needs `noctaxris-engine`.
 
 ```bash
+aws ec2 describe-regions --endpoint-url "$EP"
 aws ec2 describe-images --image-ids ami-alpine --endpoint-url "$EP"
 UD=$(echo '#!/bin/sh
 touch /tmp/noctaxris-ud

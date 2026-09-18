@@ -162,4 +162,16 @@ func TestIAMGetAccessKeyLastUsedAndCredentialReport(t *testing.T) {
 	if !found {
 		t.Fatalf("credential report missing user row: %s", string(csvBytes))
 	}
+
+	rec = iamPost("Action=GetAccountSummary&Version=2010-05-08")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetAccountSummary: %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<GetAccountSummaryResponse") || !strings.Contains(body, "<key>Users</key>") {
+		t.Fatalf("GetAccountSummary body=%s", body)
+	}
+	if !strings.Contains(body, "<key>AccountAccessKeysPresent</key>") {
+		t.Fatalf("missing AccountAccessKeysPresent: %s", body)
+	}
 }

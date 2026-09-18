@@ -26,7 +26,7 @@ Certificates issued before lab-CA signing cannot authenticate to MQTT until re-i
 
 The bridge and broker path use `EvaluateIoTDevicePolicy` on the union of IoT policies attached to the certificate: actions `iot:Connect`, `iot:Publish`, `iot:Subscribe`, `iot:Receive` against topic / topicfilter / client ARN shapes. Deny-overrides; no matching Allow fails closed. Account binding comes from the ACTIVE certificate attached to a Thing (TLS certificate id), not from MQTT `clientId` alone.
 
-MQTT **ClientId must equal the attached thing name** (`${iot:Connection.Thing.ThingName}`). Filename-shaped client IDs (for example `device.pem`) are denied. Live shadow handling:
+In-process `AllowMQTTConnect` requires ClientId to equal the attached thing name (`${iot:Connection.Thing.ThingName}`). Filename-shaped client IDs (for example `device.pem`) are denied. Live Mosquitto CONNECT authenticates the TLS certificate and does not call that check. Live shadow handling:
 
 | Thing certs | Behavior |
 |-------------|----------|
@@ -103,7 +103,7 @@ Identity `EvaluateFull` on `iot:*`, `iot-data:*`, and `iot-jobs-data:*` for sign
 
 ### MQTT ClientId
 
-Connect policies that use `${iot:Connection.Thing.ThingName}` require the MQTT ClientId to equal the thing name. The TLS certificate still supplies identity. Using the certificate id or a filename as ClientId is denied.
+Connect policies that use `${iot:Connection.Thing.ThingName}` require the MQTT ClientId to equal the thing name. The TLS certificate still supplies identity. Using the certificate id or a filename as ClientId is denied by `AllowMQTTConnect`. The nested Mosquitto listener does not enforce ClientId on CONNECT; unit tests cover the in-process helper.
 
 ## How to verify / CLI smoke
 
@@ -111,10 +111,22 @@ Shared Compose and env setup: [index.md](index.md#shared-verification).
 
 Lab protocol is JSON (`AWSIotService.*` / `AWSIotDataService.*` X-Amz-Target). Prefer SDK triples under `tests/sdk/`. Live Compose smoke skipped when Docker is unavailable.
 
-MQTT shadow / rules round-trip needs DinD, `compose.lab-brokers.yaml`, and device certs from `CreateKeysAndCertificate` after shared MQTT is enabled. SDK live MQTT rows soft-skip when shared flags or engine are unavailable. Topic-rule unit tests use `PublishTopic` and do not require Mosquitto.
+MQTT shadow / rules round-trip needs DinD, `compose.lab-brokers.yaml`, and device certs from `CreateKeysAndCertificate` after shared MQTT is enabled. SDK live MQTT rows soft-skip when shared flags or engine are unavailable. Topic-rule unit tests use `PublishTopic` and do not require Mosquitto. Live Mosquitto CONNECT was not executed in this cut.
+
+DescribeEndpoint, Jobs HTTP, and credentials provider (lab addresses on `:4566`):
+
+```bash
+aws iot describe-endpoint --endpoint-type iot:Data-ATS --endpoint-url "$EP"
+aws iot describe-endpoint --endpoint-type iot:Jobs --endpoint-url "$EP"
+aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url "$EP"
+# Jobs data plane: GET /things/{thingName}/jobs
+# Credentials: mTLS GET /role-aliases/{alias}/credentials with matching x-amzn-iot-thingname
+```
 
 ## Not yet / deferred
 
+- Live Mosquitto CONNECT ClientId enforcement (in-process `AllowMQTTConnect` does; the broker CONNECT path does not)
+- Retained MQTT store (`ListRetainedMessages` is an empty HTTP 200 list)
 - Richer IoT SQL (WHERE, SELECT projections, nested functions)
 - Thing types, thing groups, fleet indexing
 - Operator custom CA upload APIs

@@ -90,6 +90,17 @@ func TestEC2InstanceAndImageXML(t *testing.T) {
 		t.Fatalf("empty=%s", emptyDesc)
 	}
 
+	regions, err := ec2svc.DescribeRegionsXML(ec2svc.LabRegions(), "req-regions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(regions), "<regionName>us-east-1</regionName>") {
+		t.Fatalf("regions=%s", regions)
+	}
+	if !strings.Contains(string(regions), "<regionEndpoint>") || !strings.Contains(string(regions), "<optInStatus>opt-in-not-required</optInStatus>") {
+		t.Fatalf("regions=%s", regions)
+	}
+
 	chg := []ec2svc.StateChange{{
 		InstanceID:   "i-abc",
 		PreviousName: "running",

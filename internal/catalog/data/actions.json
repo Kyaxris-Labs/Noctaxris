@@ -157,6 +157,10 @@
       "value": "iam:GetCredentialReport"
     },
     {
+      "name": "ActionIAMGetAccountSummary",
+      "value": "iam:GetAccountSummary"
+    },
+    {
       "name": "ActionIAMCreatePolicy",
       "value": "iam:CreatePolicy"
     },
@@ -1603,6 +1607,10 @@
     {
       "name": "ActionEC2DescribeInstances",
       "value": "ec2:DescribeInstances"
+    },
+    {
+      "name": "ActionEC2DescribeRegions",
+      "value": "ec2:DescribeRegions"
     },
     {
       "name": "ActionEC2DescribeImages",
@@ -4203,6 +4211,7 @@
     "ec2:DescribeImages",
     "ec2:DescribeInstances",
     "ec2:DescribeNetworkInterfaces",
+    "ec2:DescribeRegions",
     "ec2:DescribeSecurityGroups",
     "ec2:DescribeSubnets",
     "ec2:DescribeVpcs",
@@ -4393,6 +4402,7 @@
     "iam:EnableMFADevice",
     "iam:GenerateCredentialReport",
     "iam:GetAccessKeyLastUsed",
+    "iam:GetAccountSummary",
     "iam:GetCredentialReport",
     "iam:GetGroup",
     "iam:GetGroupPolicy",
@@ -4863,7 +4873,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 972,
+  "count": 974,
   "source": "Action* constants in actions.go",
-  "generated": "2026-09-18T09:19:14.749374+00:00"
+  "generated": "2026-09-18T10:26:58.610915+00:00"
 }

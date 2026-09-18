@@ -117,6 +117,21 @@ func TestEC2DescribeImagesCatalogAndFilter(t *testing.T) {
 		t.Fatalf("want available state: %q", body)
 	}
 
+	regions := mustEC2Query(t, handler, "Action=DescribeRegions&Version=2016-11-15", now)
+	if regions.Code != http.StatusOK {
+		t.Fatalf("DescribeRegions status=%d body=%q", regions.Code, regions.Body.String())
+	}
+	rbody := regions.Body.String()
+	if !strings.Contains(rbody, "<DescribeRegionsResponse") || !strings.Contains(rbody, "<regionName>us-east-1</regionName>") {
+		t.Fatalf("DescribeRegions body=%q", rbody)
+	}
+	if !strings.Contains(rbody, "<optInStatus>opt-in-not-required</optInStatus>") {
+		t.Fatalf("DescribeRegions missing optInStatus: %q", rbody)
+	}
+	if !strings.Contains(rbody, "<regionEndpoint>") {
+		t.Fatalf("DescribeRegions missing regionEndpoint: %q", rbody)
+	}
+
 	one := mustEC2Query(t, handler,
 		"Action=DescribeImages&Version=2016-11-15&ImageId.1=ami-alpine", now)
 	if one.Code != http.StatusOK {

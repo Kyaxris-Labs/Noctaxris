@@ -26,6 +26,8 @@ func TestIAMRequestResourceListReportNotBareStar(t *testing.T) {
 		{catalog.ActionIAMGenerateCredentialReport, "arn:aws:iam::" + accountID + ":root"},
 		{catalog.ActionIAMGetCredentialReport, "arn:aws:iam::" + accountID + ":root"},
 		{"GetCredentialReport", "arn:aws:iam::" + accountID + ":root"},
+		{catalog.ActionIAMGetAccountSummary, "arn:aws:iam::" + accountID + ":root"},
+		{"GetAccountSummary", "arn:aws:iam::" + accountID + ":root"},
 	}
 	for _, tc := range cases {
 		got := s.iamRequestResource(accountID, tc.action, map[string]string{}, nil)

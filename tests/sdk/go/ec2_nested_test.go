@@ -89,3 +89,32 @@ func TestEC2RunStopStartTerminatePendingOK(t *testing.T) {
 		t.Fatal("expected TerminatingInstances")
 	}
 }
+
+func TestEC2DescribeRegionsEnabledLabRegion(t *testing.T) {
+	requireReady(t)
+	cfg := loadAWSConfig(t)
+	c := ec2.NewFromConfig(cfg, func(o *ec2.Options) {
+		o.BaseEndpoint = aws.String(endpoint())
+	})
+	out, err := c.DescribeRegions(context.Background(), &ec2.DescribeRegionsInput{
+		AllRegions: aws.Bool(false),
+	})
+	if err != nil {
+		t.Fatalf("DescribeRegions: %v", err)
+	}
+	found := false
+	for _, region := range out.Regions {
+		if aws.ToString(region.RegionName) == "us-east-1" {
+			found = true
+			if aws.ToString(region.OptInStatus) != "opt-in-not-required" {
+				t.Fatalf("OptInStatus=%q", aws.ToString(region.OptInStatus))
+			}
+			if aws.ToString(region.Endpoint) == "" {
+				t.Fatal("empty Endpoint")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("us-east-1 missing: %+v", out.Regions)
+	}
+}

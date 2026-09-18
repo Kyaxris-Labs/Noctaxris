@@ -223,6 +223,14 @@ func (s *Server) handleIAM(
 			return
 		}
 		payload, err = iam.GetCredentialReportXML(csv, generated, state, requestID)
+	case catalog.ActionIAMGetAccountSummary, "GetAccountSummary":
+		sum, sumErr := s.store.AccountIAMSummary(accountID)
+		if sumErr != nil {
+			s.writeAWSError(w, requestID, http.StatusInternalServerError, "InternalFailure",
+				"Unable to get account summary.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
+		payload, err = iam.GetAccountSummaryXML(sum, requestID)
 	case catalog.ActionIAMCreatePolicy, "CreatePolicy":
 		doc := params["PolicyDocument"]
 		name := params["PolicyName"]
@@ -674,7 +682,8 @@ func (s *Server) iamRequestResource(accountID, action string, params map[string]
 	case catalog.ActionIAMListSAMLProviders, "ListSAMLProviders":
 		return "arn:aws:iam::" + accountID + ":saml-provider/*"
 	case catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport",
-		catalog.ActionIAMGetCredentialReport, "GetCredentialReport":
+		catalog.ActionIAMGetCredentialReport, "GetCredentialReport",
+		catalog.ActionIAMGetAccountSummary, "GetAccountSummary":
 		return "arn:aws:iam::" + accountID + ":root"
 	case catalog.ActionIAMCreateUser, "CreateUser",
 		catalog.ActionIAMGetUser, "GetUser",

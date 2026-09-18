@@ -62,6 +62,36 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
 | `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` for forgot/attr-verify; any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
 
+## AWS CLI, SDK, and Prowler
+
+Point clients at the loopback API. Use the same root pair as `NOCTAXRIS_ROOT_ACCESS_KEY_ID` / `NOCTAXRIS_ROOT_SECRET_ACCESS_KEY` (or an IAM user key created after start):
+
+```bash
+export AWS_ACCESS_KEY_ID="$NOCTAXRIS_ROOT_ACCESS_KEY_ID"
+export AWS_SECRET_ACCESS_KEY="$NOCTAXRIS_ROOT_SECRET_ACCESS_KEY"
+export AWS_DEFAULT_REGION=us-east-1
+export AWS_ENDPOINT_URL=http://127.0.0.1:4566
+export AWS_EC2_METADATA_DISABLED=true
+```
+
+`AWS_ENDPOINT_URL` is what boto3 and Prowler STS read when set. `AWS_EC2_METADATA_DISABLED=true` stops the SDK from stalling on instance metadata (`169.254.169.254`). There is no general `*.amazonaws.com` Host/SNI mux; keep the custom endpoint.
+
+Enumerate bar: the process must start and list existing lab services (STS, IAM, S3, EC2, CloudTrail at least). Individual checks may fail or skip. The SDK Prowler smoke skips when `prowler` is not on `PATH` or `AWS_ENDPOINT_URL` / `NOCTAXRIS_ENDPOINT` is unset. Live `prowler aws` against a running instance is not executed in this cut.
+
+Query protocol `Action=ListBuckets` stays unknown. boto3 lists buckets with REST `GET /`.
+
+### IoT DescribeEndpoint, Jobs, and credentials
+
+`DescribeEndpoint` (`GET /endpoint?endpointType=` or JSON 1.1 `AWSIotService.DescribeEndpoint`) returns lab `endpointAddress` values on `:4566`. Types: `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider`. Set `NOCTAXRIS_IOT_ENDPOINT_HOST` when you need distinct `data-ats.iot.` / `jobs.iot.` / `credentials.iot.` hostnames for hosts-file SNI labs.
+
+```bash
+aws iot describe-endpoint --endpoint-type iot:Data-ATS --endpoint-url "$AWS_ENDPOINT_URL"
+aws iot describe-endpoint --endpoint-type iot:Jobs --endpoint-url "$AWS_ENDPOINT_URL"
+aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url "$AWS_ENDPOINT_URL"
+```
+
+Jobs HTTP: `GET /things/{thingName}/jobs` (SigV4 service `iot-jobs-data`). Credentials provider: mTLS `GET /role-aliases/{alias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing. Live Mosquitto CONNECT smokes soft-skip; ClientId equal to thing name is enforced in-process (`AllowMQTTConnect`), not on the nested broker CONNECT.
+
 ### Cognito confirmation codes (`NOCTAXRIS_COGNITO_INSECURE_CODES`)
 
 Default Cognito forgot-password, sign-up, and attribute-verify confirmation codes are random (8+ hex characters), single-use, and expire after one hour. `ConfirmForgotPassword`, `ConfirmSignUp`, and `VerifyUserAttribute` reject wrong or reused codes with `CodeMismatchException`.

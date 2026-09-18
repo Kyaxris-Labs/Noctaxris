@@ -34,6 +34,8 @@ func (s *Server) handleEC2(
 		s.ec2RunInstances(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionEC2DescribeInstances:
 		s.ec2DescribeInstances(w, r, body, requestID, eventID, verified, readOnly)
+	case catalog.ActionEC2DescribeRegions:
+		s.ec2DescribeRegions(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionEC2DescribeImages:
 		s.ec2DescribeImages(w, r, body, requestID, eventID, verified, readOnly)
 	case catalog.ActionEC2TerminateInstances:
@@ -60,6 +62,8 @@ func ec2Action(action string) string {
 		return catalog.ActionEC2RunInstances
 	case "DescribeInstances":
 		return catalog.ActionEC2DescribeInstances
+	case "DescribeRegions":
+		return catalog.ActionEC2DescribeRegions
 	case "DescribeImages":
 		return catalog.ActionEC2DescribeImages
 	case "TerminateInstances":
@@ -275,6 +279,42 @@ func (s *Server) ec2DescribeInstances(
 	}
 	s.writeEC2OK(w, payload)
 	s.writeSuccessAudit(r, requestID, eventID, verified, ec2EventSource, "DescribeInstances", true)
+}
+
+func (s *Server) ec2DescribeRegions(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	if !s.authorize(verified, catalog.ActionEC2DescribeRegions, "*") {
+		s.writeEC2Error(w, r, requestID, http.StatusForbidden, "UnauthorizedOperation",
+			"User is not authorized to perform ec2:DescribeRegions.", readOnly, eventID, verified)
+		return
+	}
+	params := formParams(r, body)
+	wanted := map[string]struct{}{}
+	for _, name := range formMemberList(params, "RegionName") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			wanted[name] = struct{}{}
+		}
+	}
+	var regions []ec2svc.Region
+	for _, region := range ec2svc.LabRegions() {
+		if len(wanted) > 0 {
+			if _, ok := wanted[region.RegionName]; !ok {
+				continue
+			}
+		}
+		regions = append(regions, region)
+	}
+	payload, err := ec2svc.DescribeRegionsXML(regions, requestID)
+	if err != nil {
+		s.writeEC2Error(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to build response.", readOnly, eventID, verified)
+		return
+	}
+	s.writeEC2OK(w, payload)
+	s.writeSuccessAudit(r, requestID, eventID, verified, ec2EventSource, "DescribeRegions", true)
 }
 
 func (s *Server) ec2DescribeImages(

@@ -127,6 +127,78 @@ func (s *Store) GetCredentialReport(accountID string) (content []byte, generated
 	return csvBlob, generated.UTC(), st, nil
 }
 
+// IAMAccountSummary is GetAccountSummary-shaped entity usage for one account.
+type IAMAccountSummary struct {
+	Users                    int
+	Groups                   int
+	Roles                    int
+	Policies                 int
+	PolicyVersionsInUse      int
+	InstanceProfiles         int
+	MFADevices               int
+	MFADevicesInUse          int
+	Providers                int
+	AccountAccessKeysPresent int
+}
+
+func (s *Store) countAccountRows(query, accountID string) (int, error) {
+	var n int
+	if err := s.db.QueryRow(query, accountID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// AccountIAMSummary counts IAM entities used by GetAccountSummary.
+func (s *Store) AccountIAMSummary(accountID string) (IAMAccountSummary, error) {
+	var out IAMAccountSummary
+	var err error
+	if out.Users, err = s.countAccountRows(`SELECT COUNT(*) FROM users WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary users: %w", err)
+	}
+	if out.Groups, err = s.countAccountRows(`SELECT COUNT(*) FROM iam_groups WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary groups: %w", err)
+	}
+	if out.Roles, err = s.countAccountRows(`SELECT COUNT(*) FROM roles WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary roles: %w", err)
+	}
+	if out.Policies, err = s.countAccountRows(`SELECT COUNT(*) FROM managed_policies WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary policies: %w", err)
+	}
+	if out.PolicyVersionsInUse, err = s.countAccountRows(
+		`SELECT COUNT(*) FROM managed_policy_versions v
+		 JOIN managed_policies p ON p.policy_arn = v.policy_arn
+		 WHERE p.account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary policy versions: %w", err)
+	}
+	if out.InstanceProfiles, err = s.countAccountRows(`SELECT COUNT(*) FROM iam_instance_profiles WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary instance profiles: %w", err)
+	}
+	if out.MFADevices, err = s.countAccountRows(`SELECT COUNT(*) FROM iam_mfa_devices WHERE account_id = ?`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary mfa: %w", err)
+	}
+	if out.MFADevicesInUse, err = s.countAccountRows(`SELECT COUNT(*) FROM iam_mfa_devices WHERE account_id = ? AND enabled = 1`, accountID); err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary mfa in use: %w", err)
+	}
+	oidc, err := s.countAccountRows(`SELECT COUNT(*) FROM oidc_providers WHERE account_id = ?`, accountID)
+	if err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary oidc: %w", err)
+	}
+	saml, err := s.countAccountRows(`SELECT COUNT(*) FROM saml_providers WHERE account_id = ?`, accountID)
+	if err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary saml: %w", err)
+	}
+	out.Providers = oidc + saml
+	rootKeys, err := s.countAccountRows(`SELECT COUNT(*) FROM access_keys WHERE account_id = ? AND is_root = 1`, accountID)
+	if err != nil {
+		return IAMAccountSummary{}, fmt.Errorf("account summary root keys: %w", err)
+	}
+	if rootKeys > 0 {
+		out.AccountAccessKeysPresent = 1
+	}
+	return out, nil
+}
+
 func (s *Store) buildCredentialReportCSV(accountID string) ([]byte, error) {
 	header := []string{
 		"user", "arn", "user_creation_time", "password_enabled", "password_last_used",

@@ -770,6 +770,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIAMGetAccessKeyLastUsed, "GetAccessKeyLastUsed",
 		catalog.ActionIAMGenerateCredentialReport, "GenerateCredentialReport",
 		catalog.ActionIAMGetCredentialReport, "GetCredentialReport",
+		catalog.ActionIAMGetAccountSummary, "GetAccountSummary",
 		catalog.ActionIAMCreatePolicy, "CreatePolicy",
 		catalog.ActionIAMGetPolicy, "GetPolicy",
 		catalog.ActionIAMListPolicies, "ListPolicies",
@@ -1313,6 +1314,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleMacie(w, r, body, requestID, eventID, action, verified, readOnly)
 	case catalog.ActionEC2RunInstances, "RunInstances",
 		catalog.ActionEC2DescribeInstances, "DescribeInstances",
+		catalog.ActionEC2DescribeRegions, "DescribeRegions",
 		catalog.ActionEC2DescribeImages, "DescribeImages",
 		catalog.ActionEC2TerminateInstances, "TerminateInstances",
 		catalog.ActionEC2StopInstances, "StopInstances",
@@ -2268,6 +2270,8 @@ func normalizeAction(action string) string {
 		return catalog.ActionIAMGenerateCredentialReport
 	case "GetCredentialReport":
 		return catalog.ActionIAMGetCredentialReport
+	case "GetAccountSummary":
+		return catalog.ActionIAMGetAccountSummary
 	case "CreatePolicy":
 		return catalog.ActionIAMCreatePolicy
 	case "GetPolicy":

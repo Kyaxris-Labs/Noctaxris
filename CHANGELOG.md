@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- IoT: `DescribeEndpoint` (`GET /endpoint?endpointType=`), REST named-shadow list (classic unnamed omitted), Jobs HTTP data plane (`iot-jobs-data`), credentials provider mTLS (`GET /role-aliases/{alias}/credentials` with matching `x-amzn-iot-thingname` and CredentialProvider SNI), MQTT ClientId equal to thing name
+- IAM: `GetAccountSummary` (Query `SummaryMap` usage plus lab quotas)
+- EC2: `DescribeRegions` (enabled lab region `us-east-1`, Query `regionInfo`)
+- Clients: document `AWS_ENDPOINT_URL=http://127.0.0.1:4566` and `AWS_EC2_METADATA_DISABLED=true` for CLI/SDK/Prowler enumerate (STS reads `AWS_ENDPOINT_URL`; no general `*.amazonaws.com` Host/SNI). SDK Prowler smoke soft-skips when `prowler` is missing or the endpoint env is unset. Live `prowler aws` was not executed in this cut
+- S3: Query `Action=ListBuckets` stays unknown; REST `GET /` is the boto3 list path
+- IoT: `DescribeEndpoint` (`GET /endpoint?endpointType=`), REST named-shadow list (classic unnamed omitted), Jobs HTTP data plane (`iot-jobs-data`), credentials provider mTLS (`GET /role-aliases/{alias}/credentials` with matching `x-amzn-iot-thingname` and CredentialProvider SNI). In-process `AllowMQTTConnect` requires ClientId equal to thing name; live Mosquitto CONNECT does not. `ListRetainedMessages` is an empty 200 list. Live Mosquitto CONNECT was not executed in this cut
 
 ## 1.4.1
 

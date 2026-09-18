@@ -490,4 +490,14 @@ func TestIAMForensicsXML(t *testing.T) {
 	if !strings.Contains(string(get), "text/csv") || !strings.Contains(string(get), "Content") {
 		t.Fatalf("get=%s", get)
 	}
+	sum, err := iamsvc.GetAccountSummaryXML(store.IAMAccountSummary{Users: 2, Roles: 1, AccountAccessKeysPresent: 1}, reqID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sum), "<key>Users</key>") || !strings.Contains(string(sum), "<value>2</value>") {
+		t.Fatalf("summary=%s", sum)
+	}
+	if !strings.Contains(string(sum), "GetAccountSummaryResponse") {
+		t.Fatalf("summary=%s", sum)
+	}
 }

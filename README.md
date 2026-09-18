@@ -65,7 +65,9 @@ curl http://127.0.0.1:4566/_noctaxris/ready
 export AWS_ACCESS_KEY_ID="$ROOT_AKID"
 export AWS_SECRET_ACCESS_KEY="$ROOT_SECRET"
 export AWS_DEFAULT_REGION=us-east-1
-EP=http://127.0.0.1:4566
+export AWS_ENDPOINT_URL=http://127.0.0.1:4566
+export AWS_EC2_METADATA_DISABLED=true
+EP="$AWS_ENDPOINT_URL"
 
 aws configure set default.s3.addressing_style path
 aws sts get-caller-identity --endpoint-url "$EP"
@@ -74,6 +76,14 @@ aws kms create-key --endpoint-url "$EP"
 ```
 
 Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Default host publish is `127.0.0.1:4566` only. Opt-in loopback TCP for selected nested data ports: add `-f docker/compose.lab-nested-ports.yaml` (see [ops.md](docs/ops.md#compose-overlays-lab-opt-in)). Per-service CLI smoke: [docs/services/](docs/services/index.md).
+
+## Client environments
+
+| Client | Point it at the lab |
+|--------|---------------------|
+| AWS CLI / SDK | `AWS_ENDPOINT_URL=http://127.0.0.1:4566` and `AWS_EC2_METADATA_DISABLED=true`. Same root pair as `NOCTAXRIS_ROOT_*` (or an IAM user key). |
+| Prowler AWS | Same env. STS reads `AWS_ENDPOINT_URL`. No general `*.amazonaws.com` Host/SNI. Enumerate bar is list STS/IAM/S3/EC2/CloudTrail; checks may fail. Live `prowler aws` smokes skip when the binary or endpoint env is missing. |
+| IoT data plane | `aws iot describe-endpoint` with `--endpoint-type iot:Data-ATS`, `iot:Jobs`, or `iot:CredentialProvider` and `--endpoint-url "$AWS_ENDPOINT_URL"`. Jobs HTTP `GET /things/{thing}/jobs`. Credentials mTLS `GET /role-aliases/{alias}/credentials`. |
 
 ## Services
 
@@ -110,7 +120,7 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="4" align="center" valign="middle">Identity</td>
       <td>IAM</td>
-      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA, GetAccessKeyLastUsed, GenerateCredentialReport / GetCredentialReport (lab CSV).</td>
+      <td>Users, roles, managed and inline policies, managed policy versions (max five), access keys, groups, permissions boundaries, instance profiles (including ListInstanceProfilesForRole), OIDC and SAML IdP CRUD, virtual MFA, GetAccessKeyLastUsed, GetAccountSummary, GenerateCredentialReport / GetCredentialReport (lab CSV).</td>
       <td>Out of lab scope: service-linked roles, full pagination and tagging parity. PassRole trust <code>aws:SourceArn</code> on Lambda, EventBridge PutTargets, ECS, Scheduler, Pipes, Secrets rotate, API Gateway CredentialsArn, and Cognito trigger RoleArn.</td>
     </tr>
     <tr>
@@ -138,7 +148,7 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
       <td rowspan="17" align="center" valign="middle">Data</td>
       <td>S3</td>
       <td>Path-style buckets and objects, bucket policy (same-account identity or policy, cross-account both Allow), SSE-S3/SSE-KMS, presigned GET/PUT, multipart upload (5 MiB min non-final parts), CopyObject (same account), bucket default encryption, versioning lite (Put/GetBucketVersioning, version-aware Get/Put/Delete with delete markers, ListObjectVersions including DeleteMarker), Object Lock lite (CreateBucket ObjectLockEnabled + retain-until; GOVERNANCE bypass header), Put/GetBucketLogging server access logs, Put/Get/DeleteBucketCors, Put/Get/DeleteLifecycleConfiguration (stored; no sweeper), SelectObjectContent lite (CSV/JSON <code>SELECT * FROM s3object [LIMIT n]</code>), Put/GetBucketNotificationConfiguration with emit on Put/Delete/CompleteMultipart to Lambda/SQS/EventBridge/SNS (empty config = off; destination authz re-checked). Get/Delete CloudTrail resources + versionId.</td>
-      <td>Out of lab scope: website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, lifecycle expiry sweeper, CORS OPTIONS evaluation, Select WHERE/projection/Parquet/event-stream framing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
+      <td>Query <code>Action=ListBuckets</code> unknown (REST <code>GET /</code> is boto3). Out of lab scope: website, replication, access points, virtual-hosted style, ACL cross-account, multipart presign, exact AWS notification retry timing, lifecycle expiry sweeper, CORS OPTIONS evaluation, Select WHERE/projection/Parquet/event-stream framing, full Object Lock Legal Hold / COMPLIANCE depth.</td>
     </tr>
     <tr>
       <td>DynamoDB</td>
@@ -381,7 +391,7 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>EC2 (lab nested)</td>
-      <td>RunInstances / DescribeInstances / DescribeImages / StopInstances / StartInstances / TerminateInstances (Query). Nested keep-alive containers on Internal <code>noctaxris-ec2</code> via DinD TLS (no host <code>docker.sock</code>). UserData decoded and executed once on create (failures logged; RunInstances still succeeds). IMDS lite sidecar on the same network with ExtraHosts for <code>169.254.169.254</code> and <code>AWS_EC2_METADATA_SERVICE_ENDPOINT</code> on port <code>9255</code> (no host publish). Lab AMI map (<code>ami-alpine</code>, <code>ami-amazonlinux2023</code>, <code>ami-ubuntu2204</code>); unknown AMI → alpine allowlist pin. Without engine, instances stay <code>pending</code>. VPC/subnet Create/Delete/Describe; security group CRUD plus Authorize/Revoke Ingress/Egress (persisted metadata only; not enforced on DinD); DescribeNetworkInterfaces (synthetic <code>eni-*</code> for instance private IPs) and CreateNetworkInterface stub. VPC Flow CreateFlowLogs / InjectFlowLogs remain under the same <code>ec2</code> service (see VPC Flow Logs row).</td>
+      <td>RunInstances / DescribeInstances / DescribeRegions / DescribeImages / StopInstances / StartInstances / TerminateInstances (Query). Nested keep-alive containers on Internal <code>noctaxris-ec2</code> via DinD TLS (no host <code>docker.sock</code>). UserData decoded and executed once on create (failures logged; RunInstances still succeeds). IMDS lite sidecar on the same network with ExtraHosts for <code>169.254.169.254</code> and <code>AWS_EC2_METADATA_SERVICE_ENDPOINT</code> on port <code>9255</code> (no host publish). Lab AMI map (<code>ami-alpine</code>, <code>ami-amazonlinux2023</code>, <code>ami-ubuntu2204</code>); unknown AMI → alpine allowlist pin. Without engine, instances stay <code>pending</code>. VPC/subnet Create/Delete/Describe; security group CRUD plus Authorize/Revoke Ingress/Egress (persisted metadata only; not enforced on DinD); DescribeNetworkInterfaces (synthetic <code>eni-*</code> for instance private IPs) and CreateNetworkInterface stub. VPC Flow CreateFlowLogs / InjectFlowLogs remain under the same <code>ec2</code> service (see VPC Flow Logs row).</td>
       <td>SG/ENI enforcement on nested Docker, SSH, RebootInstances, host port publish / socat.</td>
     </tr>
     <tr>
@@ -490,8 +500,8 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="1" align="center" valign="middle">Devices</td>
       <td>IoT Core / Data</td>
-      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows (classic + named, REST <code>?name=</code>); <code>ListNamedShadowsForThing</code> (classic omitted); <code>DescribeEndpoint</code> lab addresses; Jobs <code>CreateJob</code> plus device <code>GET /things/{thing}/jobs</code> and <code>PUT .../jobs/$next</code>; credentials provider mTLS <code>GET /role-aliases/{alias}/credentials</code> (thing-name header must match); opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; ClientId must equal thing name; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs (<code>iot-jobs-data</code> on Jobs device HTTP).</td>
-      <td>Fleet indexing, operator BYO CA APIs, retained MQTT store, WAN ATS hostnames.</td>
+      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows (classic + named, REST <code>?name=</code>); <code>ListNamedShadowsForThing</code> (classic omitted); <code>DescribeEndpoint</code> lab addresses; Jobs <code>CreateJob</code> plus device <code>GET /things/{thing}/jobs</code> and <code>PUT .../jobs/$next</code>; credentials provider mTLS <code>GET /role-aliases/{alias}/credentials</code> (thing-name header must match); opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; in-process ClientId must equal thing name; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs (<code>iot-jobs-data</code> on Jobs device HTTP).</td>
+      <td>Fleet indexing, operator BYO CA APIs, retained MQTT store (empty 200 list), live Mosquitto CONNECT ClientId (in-process <code>AllowMQTTConnect</code> does), WAN ATS hostnames.</td>
     </tr>
     <tr>
       <td rowspan="4" align="center" valign="middle">Control plane labs</td>

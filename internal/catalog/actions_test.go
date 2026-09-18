@@ -75,6 +75,7 @@ func TestActionConstants(t *testing.T) {
 		catalog.ActionIAMGetAccessKeyLastUsed:              "iam:GetAccessKeyLastUsed",
 		catalog.ActionIAMGenerateCredentialReport:          "iam:GenerateCredentialReport",
 		catalog.ActionIAMGetCredentialReport:               "iam:GetCredentialReport",
+		catalog.ActionIAMGetAccountSummary:                 "iam:GetAccountSummary",
 		catalog.ActionIAMCreatePolicy:                      "iam:CreatePolicy",
 		catalog.ActionIAMGetPolicy:                         "iam:GetPolicy",
 		catalog.ActionIAMListPolicies:                      "iam:ListPolicies",

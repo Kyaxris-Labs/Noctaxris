@@ -81,6 +81,13 @@ def test_iam_access_key_last_used_and_credential_report(iam_client, unique_prefi
         rows = list(csv.reader(io.StringIO(csv_text)))
         found = any(row and row[0] == user_name for row in rows[1:])
         assert found, f"credential report missing user {user_name}: {csv_text}"
+
+        summary = iam_client.get_account_summary()
+        summary_map = summary.get("SummaryMap") or {}
+        assert "Users" in summary_map, f"SummaryMap missing Users: {summary_map}"
+        assert "AccountAccessKeysPresent" in summary_map, (
+            f"SummaryMap missing AccountAccessKeysPresent: {summary_map}"
+        )
     finally:
         if access_key_id:
             try:

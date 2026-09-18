@@ -1980,6 +1980,12 @@ func TestActionMapperCoverage(t *testing.T) {
 		}
 	}
 	{
+		got := ec2Action("DescribeRegions")
+		if got == "" {
+			t.Fatalf("ec2Action(%q) empty", "DescribeRegions")
+		}
+	}
+	{
 		got := ec2Action("DescribeImages")
 		if got == "" {
 			t.Fatalf("ec2Action(%q) empty", "DescribeImages")
@@ -4489,6 +4495,12 @@ func TestActionMapperCoverage(t *testing.T) {
 		got := normalizeAction("GetCredentialReport")
 		if got == "" {
 			t.Fatalf("normalizeAction(%q) empty", "GetCredentialReport")
+		}
+	}
+	{
+		got := normalizeAction("GetAccountSummary")
+		if got == "" {
+			t.Fatalf("normalizeAction(%q) empty", "GetAccountSummary")
 		}
 	}
 	{

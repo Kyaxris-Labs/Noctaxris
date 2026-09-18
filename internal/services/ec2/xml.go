@@ -120,6 +120,49 @@ func DescribeImagesXML(images []store.EC2AMI, requestID string) ([]byte, error) 
 	return xml.Marshal(r)
 }
 
+// Region is one DescribeRegions item (Query regionInfo/item).
+type Region struct {
+	RegionName  string
+	Endpoint    string
+	OptInStatus string
+}
+
+// LabRegions returns the enabled lab region set (us-east-1).
+func LabRegions() []Region {
+	name := store.DefaultEC2Region
+	return []Region{{
+		RegionName:  name,
+		Endpoint:    "ec2." + name + ".amazonaws.com",
+		OptInStatus: "opt-in-not-required",
+	}}
+}
+
+// DescribeRegionsXML builds a DescribeRegions Query response.
+func DescribeRegionsXML(regions []Region, requestID string) ([]byte, error) {
+	type regionXML struct {
+		RegionName  string `xml:"regionName"`
+		Endpoint    string `xml:"regionEndpoint"`
+		OptInStatus string `xml:"optInStatus"`
+	}
+	type response struct {
+		XMLName    xml.Name `xml:"DescribeRegionsResponse"`
+		XMLNS      string   `xml:"xmlns,attr"`
+		RequestID  string   `xml:"requestId"`
+		RegionInfo struct {
+			Item []regionXML `xml:"item"`
+		} `xml:"regionInfo"`
+	}
+	r := response{XMLNS: ec2XMLNS, RequestID: requestID}
+	for _, region := range regions {
+		r.RegionInfo.Item = append(r.RegionInfo.Item, regionXML{
+			RegionName:  region.RegionName,
+			Endpoint:    region.Endpoint,
+			OptInStatus: region.OptInStatus,
+		})
+	}
+	return xml.Marshal(r)
+}
+
 // DescribeInstancesXML builds a DescribeInstances Query response.
 func DescribeInstancesXML(instances []store.EC2Instance, requestID string) ([]byte, error) {
 	type reservation struct {

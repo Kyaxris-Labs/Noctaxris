@@ -10,6 +10,7 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 |------|---------|
 | Users | `CreateUser`, `GetUser`, `ListUsers`, `DeleteUser` |
 | Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey`, `GetAccessKeyLastUsed` (AKIA* last-used service/region/time; updated on successful SigV4 calls) |
+| Account summary | `GetAccountSummary` (Query `SummaryMap` with live entity counts and lab quotas) |
 | Credential report | `GenerateCredentialReport` (lab CSV, state COMPLETE), `GetCredentialReport` (fail closed until Generate) |
 | Managed policies | `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy`, `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (max five versions; default document feeds Evaluate) |
 | Attachments | `AttachUserPolicy`, `DetachUserPolicy`, `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedUserPolicies`, `ListAttachedRolePolicies` |
@@ -30,7 +31,7 @@ Group-attached and inline policies feed identity documents for authorization. Ac
 
 IAM APIs authorize through `EvaluateFull`: identity policies (including group docs), optional permissions boundary, session policies, SCP, and RCP. Boundaries intersect with identity. SCPs and RCPs never grant on their own. Management account is exempt from SCP. Root skips the boundary intersection. Assumed-role sessions resolve identity documents from the IAM role ARN (attachments and inline role policies), not the STS session ARN.
 
-List and credential-report actions authorize against account-scoped resources (`arn:aws:iam::ACCOUNT:user/*`, `role/*`, `group/*`, `policy/*`, `instance-profile/*`, IdP wildcards, and account `root` for Generate/GetCredentialReport), not bare `*`. Named mutation APIs still bind the specific user/role/group/policy ARN from the request.
+List, account-summary, and credential-report actions authorize against account-scoped resources (`arn:aws:iam::ACCOUNT:user/*`, `role/*`, `group/*`, `policy/*`, `instance-profile/*`, IdP wildcards, and account `root` for GetAccountSummary and Generate/GetCredentialReport), not bare `*`. Named mutation APIs still bind the specific user/role/group/policy ARN from the request.
 
 Condition-key catalogs for lab IAM (plus global keys) are loaded from the service catalog. Request context populates username, userid, PrincipalType, SecureTransport, and clock keys; see [index.md](index.md#cross-cutting) for the operator matrix. PassRole trust evaluation sets `aws:SourceAccount` and `aws:SourceArn` from the resource being configured on Lambda, EventBridge `PutTargets`, ECS task-definition, Scheduler `CreateSchedule`/`UpdateSchedule`, Pipes `CreatePipe`, Secrets Manager Lambda `RotateSecret`, API Gateway HTTP `CredentialsArn` / `AuthorizerCredentialsArn`, and Cognito user-pool trigger RoleArn (pool ARN). `CreateRole` accepts `MaxSessionDuration` (default 3600). OIDC providers persist the full `ClientIDList` and thumbprint list.
 
@@ -46,6 +47,7 @@ TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS"
 aws iam create-role --role-name LabRole --assume-role-policy-document "$TRUST" --endpoint-url "$EP"
 
 aws iam get-access-key-last-used --access-key-id "$ACCESS_KEY_ID" --endpoint-url "$EP"
+aws iam get-account-summary --endpoint-url "$EP"
 aws iam generate-credential-report --endpoint-url "$EP"
 aws iam get-credential-report --endpoint-url "$EP"
 ```

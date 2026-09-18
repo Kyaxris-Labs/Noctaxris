@@ -6,11 +6,11 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 
 | Service | Status | Doc |
 |---------|--------|-----|
-| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, instance profiles including ListInstanceProfilesForRole, IdPs, MFA, GetAccessKeyLastUsed, credential report |
+| [IAM](iam.md) | Shipped | Users, roles, policies, managed policy versions (max five), keys, groups, boundaries, instance profiles including ListInstanceProfilesForRole, IdPs, MFA, GetAccessKeyLastUsed, GetAccountSummary, credential report |
 | [STS](sts.md) | Shipped | All 11 actions (lab MFA on GetSessionToken) |
 | [Organizations](organizations.md) | Shipped | Accounts, OUs, MoveAccount, SCP/RCP attach with OU-path inheritance, ListPolicies / ListPoliciesForTarget / ListParents / ListAccountsForParent |
 | [KMS](kms.md) | Shipped | CMKs, key-policy-required crypto, cross-account dual eval, grants, lab aliases, tags, deletion sweeper, key-material rotation |
-| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite with delete markers, Object Lock lite, server access logging, bucket notifications (Lambda/SQS/EventBridge/SNS emit; empty=off), cross-account dual eval |
+| [S3](s3.md) | Shipped | Path-style objects, multipart, CopyObject, bucket encryption, versioning lite with delete markers, Object Lock lite, server access logging, bucket notifications (Lambda/SQS/EventBridge/SNS emit; empty=off), cross-account dual eval. REST `GET /` ListBuckets; Query `Action=ListBuckets` unknown |
 | [DynamoDB](dynamodb.md) | Shipped | Tables, items, up to two lab GSIs, BatchGet/BatchWrite, TransactWrite/TransactGet (same-account Put/Delete/Update/ConditionCheck + ConditionExpression, ClientRequestToken, stream append), TTL, DescribeContinuousBackups stub, resource policies, cross-account dual eval, stream enablement |
 | [DynamoDB Streams](dynamodbstreams.md) | Shipped | Enable stream, List/Describe, GetShardIterator/GetRecords, NEW_IMAGE / OLD_IMAGE / NEW_AND_OLD_IMAGES / KEYS_ONLY; Lambda ESM + FilterCriteria (including OldImage) in [lambda.md](lambda.md) |
 | [SQS](sqs.md) | Shipped | Standard and FIFO queues, DelaySeconds, RedrivePolicy and RedriveAllowPolicy (DLQ provenance attribute), policies, cross-account dual eval |
@@ -25,7 +25,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Transfer Family](transfer.md) | Shipped | Server/user CRUD incl. DescribeUser/ListUsers; Import/Delete SSH public keys (metadata); ONLINE; lab Put/Get/List file API on `:4566` HTTP (JSON + `/transfer/.../home/...`; not real SFTP); PassRole on Role |
 | [ECR](ecr.md) | Shipped | Repository CRUD, auth token, policies, cross-account dual eval, Registry V2 (monolithic PUT + chunked PATCH), DinD sync |
 | [ECS](ecs.md) | Shipped | Task definitions, RunTask/list/stop, CreateService DesiredCount reconciler, PassRole, nested DinD |
-| [EC2](ec2.md) | Shipped | Lab RunInstances nested DinD (`noctaxris-ec2`); UserData once on create; IMDS lite sidecar (DinD-only, no host `:9169`); Describe/Stop/Start/Terminate; AMI→allowlisted image map; VPC/subnet/SG/ENI metadata CRUD (rules not enforced); VPC Flow under same service |
+| [EC2](ec2.md) | Shipped | Lab RunInstances nested DinD (`noctaxris-ec2`); UserData once on create; IMDS lite sidecar (DinD-only, no host `:9169`); DescribeRegions (lab `us-east-1`); Describe/Stop/Start/Terminate; AMI→allowlisted image map; VPC/subnet/SG/ENI metadata CRUD (rules not enforced); VPC Flow under same service |
 | [EKS](eks.md) | Shipped | Create/Describe/List/DeleteCluster REST; metadata-only ACTIVE + nested endpoint string; empty ListNodegroups; no live kubectl |
 | [CloudTrail](cloudtrail.md) | Shipped | LookupEvents (incl. EventCategory=insight); CreateTrail + StartLogging continuous AWSLogs hive delivery (+ optional gzip); selectors lite; digests + ValidateLogs; org trail flag; lab InjectEvents / InjectInsightsEvents; richer audit + sibling KMS Decrypt |
 | [GuardDuty](guardduty.md) | Shipped | Create/ListDetectors; List/GetFindings; lab InjectFindings (opt-in) |
@@ -67,7 +67,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Cost and Usage Reports](cur.md) | Shipped | Report definition CRUD; FOCUS lite (S3/Lambda enumerators); CSV Put to S3; Parquet via nested DuckDB (`noctaxris-lab-duck` / `NOCTAXRIS_DUCKDB_URL`) |
 | [Cost Explorer](ce.md) | Shipped | GetCostAndUsage / GetCostForecast over seeded amounts |
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
-| [IoT Core / Data](iot.md) | Shipped | Things, lab CA-signed certs, policies, principals; Topic Rules (topic match + SQS/SNS/S3/DDB/Kinesis/Lambda/republish); HTTP shadows; opt-in MQTT shadow bridge (`NOCTAXRIS_SHARED_MQTT`) |
+| [IoT Core / Data](iot.md) | Shipped | Things, lab CA-signed certs, policies, principals; Topic Rules; HTTP shadows; `DescribeEndpoint` / Jobs HTTP / credentials provider; opt-in MQTT (`NOCTAXRIS_SHARED_MQTT`; live CONNECT does not enforce ClientId) |
 | [Lightsail](lightsail.md) | Shipped | Instance state machine; disks/static IPs/key pairs/ports (stored-state); GetBlueprints/GetBundles |
 | [Auto Scaling](autoscaling.md) | Shipped | Launch config + ASG CRUD; DesiredCapacity reconciles lab EC2 (Pending without engine; InService when running) |
 | [Elastic Beanstalk](elastic-beanstalk.md) | Shipped | Application/version/environment lite; Ready/Green; ListAvailableSolutionStacks |
@@ -126,7 +126,9 @@ Export root keys from `docker/.env`, then set a common CLI environment before an
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_DEFAULT_REGION=us-east-1
-EP=http://127.0.0.1:4566
+export AWS_ENDPOINT_URL=http://127.0.0.1:4566
+export AWS_EC2_METADATA_DISABLED=true
+EP="$AWS_ENDPOINT_URL"
 ```
 
 Prefer WSL or Linux for AWS CLI smoke against `http://127.0.0.1:4566`. On Windows, run the same commands inside WSL when Docker Desktop publishes that port on the Windows host.

@@ -79,3 +79,24 @@ func TestCredentialReportGenerateAndGet(t *testing.T) {
 		t.Fatalf("user column=%q", rows[1][0])
 	}
 }
+
+func TestAccountIAMSummaryCounts(t *testing.T) {
+	st := openTestStore(t)
+	const account = "000000000097"
+	if err := st.EnsureRoot(account, "AKIAROOTEXAMPLE97", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateUser(account, "summary-user"); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := st.AccountIAMSummary(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Users < 1 {
+		t.Fatalf("Users=%d", sum.Users)
+	}
+	if sum.AccountAccessKeysPresent != 1 {
+		t.Fatalf("AccountAccessKeysPresent=%d", sum.AccountAccessKeysPresent)
+	}
+}

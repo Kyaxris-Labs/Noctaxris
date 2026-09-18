@@ -156,4 +156,18 @@ func TestIAMAccessKeyLastUsedAndCredentialReport(t *testing.T) {
 	if !found {
 		t.Fatalf("credential report missing user %s: %s", userName, report.Content)
 	}
+
+	summary, err := client.GetAccountSummary(ctx, &iam.GetAccountSummaryInput{})
+	if err != nil {
+		t.Fatalf("GetAccountSummary: %v", err)
+	}
+	if summary.SummaryMap == nil {
+		t.Fatal("GetAccountSummary empty SummaryMap")
+	}
+	if _, ok := summary.SummaryMap["Users"]; !ok {
+		t.Fatalf("SummaryMap missing Users: %v", summary.SummaryMap)
+	}
+	if _, ok := summary.SummaryMap["AccountAccessKeysPresent"]; !ok {
+		t.Fatalf("SummaryMap missing AccountAccessKeysPresent: %v", summary.SummaryMap)
+	}
 }
