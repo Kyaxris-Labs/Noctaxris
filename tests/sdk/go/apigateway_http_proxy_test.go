@@ -37,7 +37,7 @@ func TestHTTPProxyIntegrationSoftSkipUnlessEnv(t *testing.T) {
 
 	allow := os.Getenv("NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST")
 	uri := "https://example.com/lab"
-	// Prefer first allowlist entry if it looks like a URL prefix.
+	// Prefer first allowlist entry if it is an http(s) URL (origin or path on that origin).
 	for _, part := range splitComma(allow) {
 		if len(part) > 8 && (part[:7] == "http://" || part[:8] == "https://") {
 			uri = part

@@ -19,7 +19,7 @@ HTTP API (API Gateway v2) lite: CreateApi / UpdateApi (CORS) / CreateIntegration
 
 ### HTTP_PROXY / VPC_LINK (opt-in)
 
-Default deny. Set `NOCTAXRIS_APIGW_HTTP_PROXY=1` and list destinations in `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (comma-separated hosts or URL prefixes). Link-local / metadata / loopback / private hosts require an allowlist entry that names that host. No redirect follow; pinned DialContext. Details: [apigateway.md](apigateway.md#http_proxy--vpc_link-opt-in), [configuration.md](../configuration.md), [security-defaults.md](../security-defaults.md).
+Default deny. Set `NOCTAXRIS_APIGW_HTTP_PROXY=1` and list destinations in `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (comma-separated hosts or http(s) URLs). URL entries match parsed scheme, host, and port (optional path prefix on that origin), not a raw string prefix. Userinfo cannot retarget the host. Link-local / metadata / loopback / private hosts require an allowlist entry that names that host. No redirect follow; pinned DialContext. Details: [apigateway.md](apigateway.md#http_proxy--vpc_link-opt-in), [configuration.md](../configuration.md), [security-defaults.md](../security-defaults.md).
 
 ### Route auth
 

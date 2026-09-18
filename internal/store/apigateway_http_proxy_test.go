@@ -35,11 +35,62 @@ func TestValidateAPIGatewayHTTPProxyURIDenyEvilURL(t *testing.T) {
 	}
 }
 
+func TestValidateAPIGatewayHTTPProxyURIOriginNotStringPrefix(t *testing.T) {
+	t.Setenv(store.EnvAPIGatewayHTTPProxy, "1")
+	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com")
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/ok"); err != nil {
+		t.Fatalf("same origin: %v", err)
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/api/v1"); err != nil {
+		t.Fatalf("same origin any path: %v", err)
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com.evil.com/steal"); err == nil {
+		t.Fatal("expected deny host suffix")
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com@evil.com/steal"); err == nil {
+		t.Fatal("expected deny userinfo host")
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com:8443/ok"); err == nil {
+		t.Fatal("expected deny non-default port")
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("http://example.com/ok"); err == nil {
+		t.Fatal("expected deny scheme mismatch")
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com:443/ok"); err != nil {
+		t.Fatalf("default https port: %v", err)
+	}
+	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com@evil.com/")
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://evil.com/steal"); err == nil {
+		t.Fatal("expected deny allowlist userinfo entry")
+	}
+}
+
+func TestValidateAPIGatewayHTTPProxyURIPathBoundary(t *testing.T) {
+	t.Setenv(store.EnvAPIGatewayHTTPProxy, "1")
+	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com/api")
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/api"); err != nil {
+		t.Fatalf("exact path: %v", err)
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/api/v1"); err != nil {
+		t.Fatalf("path child: %v", err)
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/apievil"); err == nil {
+		t.Fatal("expected deny path sibling")
+	}
+	if err := store.ValidateAPIGatewayHTTPProxyURI("https://example.com/other"); err == nil {
+		t.Fatal("expected deny other path")
+	}
+}
+
 func TestValidateAPIGatewayHTTPProxyURIMetadataNeedsExplicitAllowlist(t *testing.T) {
 	t.Setenv(store.EnvAPIGatewayHTTPProxy, "1")
 	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com/")
 	if err := store.ValidateAPIGatewayHTTPProxyURI("http://169.254.169.254/latest/meta-data/"); err == nil {
 		t.Fatal("expected deny metadata when not explicitly allowlisted")
+	}
+	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com")
+	if err := store.ValidateAPIGatewayHTTPProxyURI("http://example.com@169.254.169.254/latest/meta-data/"); err == nil {
+		t.Fatal("expected deny userinfo metadata when not listed")
 	}
 	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "http://169.254.169.254/")
 	if err := store.ValidateAPIGatewayHTTPProxyURI("http://169.254.169.254/latest/meta-data/"); err != nil {
@@ -81,5 +132,13 @@ func TestCreateAPIGatewayIntegrationHTTPProxyGates(t *testing.T) {
 	}
 	if in.IntegrationType != store.APIGatewayIntegrationHTTPProxy {
 		t.Fatalf("type=%q", in.IntegrationType)
+	}
+
+	t.Setenv(store.EnvAPIGatewayHTTPProxyAllowlist, "https://example.com")
+	if _, err := st.CreateAPIGatewayIntegration(acct, api.APIID, "HTTP_PROXY", "https://example.com.evil.com/steal", "", ""); err == nil {
+		t.Fatal("expected host-suffix deny")
+	}
+	if _, err := st.CreateAPIGatewayIntegration(acct, api.APIID, "HTTP_PROXY", "https://example.com@evil.com/steal", "", ""); err == nil {
+		t.Fatal("expected userinfo deny")
 	}
 }

@@ -48,7 +48,7 @@ No throttle/quota metering in lab lite.
 |------|-------------|
 | `MOCK` | Returns HTTP 200; body from `requestTemplates["application/json"]` when set, else `{"message":"OK"}` |
 | `AWS_PROXY` | Lambda ARN or `arn:aws:apigateway:region:lambda:path/2015-03-31/functions/.../invocations`. Payload format is REST proxy 1.0. Without nested DinD, invoke returns 503 |
-| `HTTP_PROXY` / `VPC_LINK` | Opt-in: `NOCTAXRIS_APIGW_HTTP_PROXY=1` plus `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (hosts or URL prefixes). Link-local/metadata/private need an allowlist entry naming that host. No redirect follow; pinned DialContext |
+| `HTTP_PROXY` / `VPC_LINK` | Opt-in: `NOCTAXRIS_APIGW_HTTP_PROXY=1` plus `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (hosts or http(s) URLs). URL entries match parsed scheme, host, and port (optional path prefix on that origin). Userinfo cannot retarget the host. Link-local/metadata/private need an allowlist entry naming that host. No redirect follow; pinned DialContext |
 
 Without `credentials` on AWS_PROXY (or authorizer credentials), invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com` (`lambda:AddPermission`).
 

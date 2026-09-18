@@ -15,8 +15,9 @@ import (
 // EnvAPIGatewayHTTPProxy enables HTTP_PROXY / VPC_LINK integrations when set to "1".
 const EnvAPIGatewayHTTPProxy = "NOCTAXRIS_APIGW_HTTP_PROXY"
 
-// EnvAPIGatewayHTTPProxyAllowlist is a comma-separated list of hosts or URL prefixes
+// EnvAPIGatewayHTTPProxyAllowlist is a comma-separated list of hosts or http(s) URLs
 // allowed as HTTP_PROXY / VPC_LINK IntegrationUri destinations when proxy is on.
+// URL entries match parsed scheme, host, and port (optional path prefix on that origin).
 const EnvAPIGatewayHTTPProxyAllowlist = "NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST"
 
 const (
@@ -34,7 +35,7 @@ func APIGatewayHTTPProxyEnabled() bool {
 // ValidateAPIGatewayHTTPProxyURI checks IntegrationUri for HTTP_PROXY / VPC_LINK.
 // Fail-closed when env unset; when on, destination must match allowlist.
 // Link-local / metadata / loopback / private hosts are rejected unless the matching
-// allowlist entry itself names that unsafe host (or URL prefix to it).
+// allowlist entry itself names that unsafe host (or an http(s) URL to it).
 // Shared by HTTP API and REST PutIntegration callers.
 func ValidateAPIGatewayHTTPProxyURI(integrationURI string) error {
 	if !APIGatewayHTTPProxyEnabled() {
@@ -53,7 +54,7 @@ func ValidateAPIGatewayHTTPProxyURI(integrationURI string) error {
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("%w: IntegrationUri scheme must be http or https", ErrAPIGatewayBadRequest)
 	}
-	entry, ok := matchAPIGatewayHTTPProxyAllowlist(uri, u)
+	entry, ok := matchAPIGatewayHTTPProxyAllowlist(u)
 	if !ok {
 		return fmt.Errorf("%w: IntegrationUri not in %s", ErrAPIGatewayBadRequest, EnvAPIGatewayHTTPProxyAllowlist)
 	}
@@ -67,21 +68,46 @@ func ValidateAPIGatewayHTTPProxyURI(integrationURI string) error {
 	return nil
 }
 
-func matchAPIGatewayHTTPProxyAllowlist(uri string, u *url.URL) (entry string, ok bool) {
+func matchAPIGatewayHTTPProxyAllowlist(u *url.URL) (entry string, ok bool) {
 	raw := strings.TrimSpace(os.Getenv(EnvAPIGatewayHTTPProxyAllowlist))
-	if raw == "" {
+	if raw == "" || u == nil {
 		return "", false
 	}
-	want := strings.TrimSpace(uri)
 	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", false
+	}
 	hostPort := strings.ToLower(u.Host)
+	reqScheme := strings.ToLower(u.Scheme)
+	reqPort := apigwHTTPProxyEffectivePort(u)
+	reqPath := u.EscapedPath()
+	if reqPath == "" {
+		reqPath = "/"
+	}
 	for _, part := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(part)
 		if entry == "" {
 			continue
 		}
 		if strings.Contains(entry, "://") {
-			if strings.HasPrefix(want, entry) {
+			eu, err := url.Parse(entry)
+			if err != nil || eu.Scheme == "" || eu.Host == "" {
+				continue
+			}
+			// Userinfo must not name the listed host (https://listed@evil.example/...).
+			if eu.User != nil {
+				continue
+			}
+			if strings.ToLower(eu.Scheme) != reqScheme {
+				continue
+			}
+			if strings.ToLower(eu.Hostname()) != host {
+				continue
+			}
+			if apigwHTTPProxyEffectivePort(eu) != reqPort {
+				continue
+			}
+			if apigwHTTPProxyPathAllowed(eu.EscapedPath(), reqPath) {
 				return entry, true
 			}
 			continue
@@ -92,6 +118,37 @@ func matchAPIGatewayHTTPProxyAllowlist(uri string, u *url.URL) (entry string, ok
 		}
 	}
 	return "", false
+}
+
+func apigwHTTPProxyEffectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
+func apigwHTTPProxyPathAllowed(entryPath, reqPath string) bool {
+	if entryPath == "" || entryPath == "/" {
+		return true
+	}
+	if reqPath == entryPath {
+		return true
+	}
+	prefix := entryPath
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return strings.HasPrefix(reqPath, prefix)
 }
 
 func apigwHTTPProxyEntryAllowsUnsafe(entry string) bool {
@@ -180,7 +237,7 @@ func FetchAPIGatewayHTTPProxy(ctx context.Context, method, integrationURI string
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	entry, _ := matchAPIGatewayHTTPProxyAllowlist(strings.TrimSpace(integrationURI), u)
+	entry, _ := matchAPIGatewayHTTPProxyAllowlist(u)
 	allowUnsafeDial := apigwHTTPProxyEntryAllowsUnsafe(entry)
 
 	method = strings.ToUpper(strings.TrimSpace(method))

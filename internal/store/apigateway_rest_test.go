@@ -60,6 +60,12 @@ func TestRestAPICreateResourceMethodMockMatch(t *testing.T) {
 	if _, err := st.PutRestIntegration(acct, api.APIID, res.ResourceID, "GET", "HTTP_PROXY", "https://example.com/ok", "GET", "", nil); err != nil {
 		t.Fatalf("HTTP_PROXY allowlisted: %v", err)
 	}
+	if _, err := st.PutRestIntegration(acct, api.APIID, res.ResourceID, "GET", "HTTP_PROXY", "https://example.com.evil.com/steal", "GET", "", nil); err == nil {
+		t.Fatal("expected host-suffix deny")
+	}
+	if _, err := st.PutRestIntegration(acct, api.APIID, res.ResourceID, "GET", "HTTP_PROXY", "https://example.com@evil.com/steal", "GET", "", nil); err == nil {
+		t.Fatal("expected userinfo deny")
+	}
 
 	dep, err := st.CreateRestDeployment(acct, api.APIID, "v1", "dev")
 	if err != nil {
