@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.5.0
+
+Minor after 1.4.1: Go 1.27.1, resource-policy `:root` tightening, nested IMDS path lock, wall-clock ASIA expiry, HTTP_PROXY origin matching, IoT retained MQTT and Jobs/credentials, SigV4 mux service matching. Docker Hub: `kyaxris/noctaxris` (`1.5.0`, `1.5`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 - Toolchain: Go 1.27.1. Digest-pinned `golang:1.27.1-bookworm`, `docker:29-dind`, `busybox:1.37`, and distroless `static-debian12:nonroot`. CI govulncheck `v1.8.0`. Go modules and AWS SDK v2 / Node.js test clients refreshed. Nested Engine stays `github.com/moby/moby/client`. Lab alpine pin is `alpine:3.23` (`alpine:3.20` remains allowlisted).
 - Authz: account `:root` (or the 12-digit account id) in an S3/SQS/SNS/Lambda/Secrets resource policy is not a same-account OR grant to IAM users, roles, or anonymous. Role trust and KMS key policies still treat `:root` as the account (AND with identity). Resource-policy-only Allow still applies session and permissions-boundary explicit Deny
 - IAM: `GetAccountSummary`, `GenerateCredentialReport`, and `GetCredentialReport` authorize against `*` (no resource type)
