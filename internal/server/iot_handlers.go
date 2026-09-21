@@ -105,6 +105,8 @@ func (s *Server) handleIoT(
 		s.iotListNamedShadowsForThing(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTListRetainedMessages:
 		s.iotListRetainedMessages(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTDataPublish:
+		s.iotPublish(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTJobsGetPendingJobExecutions:
 		s.iotGetPendingJobExecutionsJSON(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTJobsDescribeJobExecution:
@@ -196,6 +198,8 @@ func iotAction(action string) string {
 		return catalog.ActionIoTDataListNamedShadowsForThing
 	case "ListRetainedMessages":
 		return catalog.ActionIoTListRetainedMessages
+	case "Publish":
+		return catalog.ActionIoTDataPublish
 	case "GetPendingJobExecutions":
 		return catalog.ActionIoTJobsGetPendingJobExecutions
 	case "DescribeJobExecution":
@@ -1414,6 +1418,60 @@ func (s *Server) iotListRetainedMessages(
 	out, _ := iotsvc.ListRetainedMessagesJSON(msgs)
 	s.writeIoTOK(w, out)
 	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListRetainedMessages", readOnly)
+}
+
+func (s *Server) iotPublish(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	topic := iotStringParam(params, "topic", "Topic")
+	resource := "*"
+	if verified != nil && topic != "" {
+		resource = store.IoTTopicARN(s.iotRegion(verified), verified.AccountID, topic)
+	}
+	if verified == nil || !s.authorize(verified, catalog.ActionIoTDataPublish, resource) {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot-data:Publish.", readOnly, eventID, verified)
+		return
+	}
+	if topic == "" {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"topic is required.", readOnly, eventID, verified)
+		return
+	}
+	qos := iotIntParam(params, "qos", "Qos", "QoS")
+	payload := iotPublishPayload(params)
+	if iotBoolParam(params, "retain", "Retain") {
+		if err := s.store.PutIoTRetainedMessage(verified.AccountID, s.iotRegion(verified), topic, payload, qos); err != nil {
+			if errors.Is(err, store.ErrIoTBadRequest) {
+				s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+					err.Error(), false, eventID, verified)
+				return
+			}
+			s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+				"Unable to publish retained message.", false, eventID, verified)
+			return
+		}
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotDataEventSource, "Publish", false)
+}
+
+func iotPublishPayload(params map[string]any) []byte {
+	for _, k := range []string{"payload", "Payload"} {
+		raw, ok := params[k]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			return []byte(v)
+		case []byte:
+			return v
+		}
+	}
+	return nil
 }
 
 func (s *Server) iotGetPendingJobExecutionsJSON(

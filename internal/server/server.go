@@ -1478,6 +1478,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIoTDataUpdateThingShadow,
 		catalog.ActionIoTDataGetThingShadow,
 		catalog.ActionIoTDataDeleteThingShadow,
+		catalog.ActionIoTDataPublish,
 		catalog.ActionIoTCreateTopicRule,
 		catalog.ActionIoTGetTopicRule,
 		catalog.ActionIoTListTopicRules,

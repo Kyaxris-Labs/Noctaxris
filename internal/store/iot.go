@@ -233,6 +233,11 @@ func IoTClientARN(region, accountID, clientID string) string {
 	return fmt.Sprintf("arn:aws:iot:%s:%s:client/%s", iotRegion(region), accountID, clientID)
 }
 
+// IoTTopicARN builds arn:aws:iot:REGION:ACCOUNT:topic/TOPIC
+func IoTTopicARN(region, accountID, topic string) string {
+	return fmt.Sprintf("arn:aws:iot:%s:%s:topic/%s", iotRegion(region), accountID, topic)
+}
+
 // CreateIoTThing creates a thing. Identical recreate is idempotent; conflicting attrs fail.
 func (s *Store) CreateIoTThing(accountID, region, thingName string, attrs map[string]string) (IoTThing, error) {
 	if err := s.EnsureIoTSchema(); err != nil {

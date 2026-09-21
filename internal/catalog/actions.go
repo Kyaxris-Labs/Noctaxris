@@ -1082,6 +1082,7 @@ const (
 	ActionIoTDataUpdateThingShadow            = "iot-data:UpdateThingShadow"
 	ActionIoTDataGetThingShadow               = "iot-data:GetThingShadow"
 	ActionIoTDataDeleteThingShadow            = "iot-data:DeleteThingShadow"
+	ActionIoTDataPublish                      = "iot-data:Publish"
 	ActionIoTCreateTopicRule                  = "iot:CreateTopicRule"
 	ActionIoTGetTopicRule                     = "iot:GetTopicRule"
 	ActionIoTListTopicRules                   = "iot:ListTopicRules"

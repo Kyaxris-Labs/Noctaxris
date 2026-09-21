@@ -2981,6 +2981,10 @@
       "value": "iot-data:DeleteThingShadow"
     },
     {
+      "name": "ActionIoTDataPublish",
+      "value": "iot-data:Publish"
+    },
+    {
       "name": "ActionIoTCreateTopicRule",
       "value": "iot:CreateTopicRule"
     },
@@ -4447,6 +4451,7 @@
     "iot-data:DeleteThingShadow",
     "iot-data:GetThingShadow",
     "iot-data:ListNamedShadowsForThing",
+    "iot-data:Publish",
     "iot-data:UpdateThingShadow",
     "iot-jobs-data:DescribeJobExecution",
     "iot-jobs-data:GetPendingJobExecutions",
@@ -4873,7 +4878,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 974,
+  "count": 975,
   "source": "Action* constants in actions.go",
-  "generated": "2026-09-18T10:26:58.610915+00:00"
+  "generated": "2026-09-21T04:53:33.962749+00:00"
 }

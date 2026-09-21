@@ -2,10 +2,10 @@
 
 **Status:** shipped (lab lite)
 
-Control-plane Things / certificates / policies / principals / topic rules, plus HTTP JSON and REST thing shadows. Optional MQTT shadow + rules bridge when shared Mosquitto is enabled.
+Control-plane Things / certificates / policies / principals / topic rules, plus HTTP JSON and REST thing shadows and topic Publish. Optional MQTT shadow + rules bridge when shared Mosquitto is enabled.
 
 **Protocol:** JSON 1.1 lab facade. Control-plane JSON and Compose health stay HTTP `:4566`. Device credentials and data-plane HTTP use `NOCTAXRIS_IOT_TLS_LISTEN` when set (Compose loopback `:8443`); otherwise they share `:4566`.  
-**Targets:** `AWSIotService.<Action>` (control plane, SigV4 service `iot`) and `AWSIotDataService.<Action>` (shadows, SigV4 service `iot-data`). REST shadows use SigV4 service `iotdevicegateway`. Jobs data plane uses `iot-jobs-data`.
+**Targets:** `AWSIotService.<Action>` (control plane, SigV4 service `iot`) and `AWSIotDataService.<Action>` (shadows and HTTP Publish, SigV4 service `iot-data`). REST shadows and `POST /topics/{topic}` use SigV4 service `iot-data` or `iotdevicegateway`. Jobs data plane uses `iot-jobs-data`.
 
 ## MQTT wire (opt-in)
 
@@ -34,7 +34,7 @@ The bridge and broker path use `EvaluateIoTDevicePolicy` on the union of IoT pol
 | Empty `certificateId` | `/rejected` (fail closed) |
 | Live broker publish | Unique cert that `AllowMQTTConnect` Allows for the topic thing (ClientId already bound to that name) |
 
-Control-plane and HTTP shadow APIs keep identity `EvaluateFull`.
+Control-plane, HTTP shadow, and HTTP Publish APIs keep identity `EvaluateFull`.
 
 Mosquitto TLS material is bind-mounted into `noctaxris-lab-mqtt`. ACL and dynsec are rewritten on attach/policy/cert changes. If broker config/CA/ACL mounts change after the container first started, Ensure recreates the singleton automatically (binds fingerprint mismatch).
 
@@ -85,7 +85,7 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 | Endpoints | `DescribeEndpoint` JSON 1.1 and REST `GET /endpoint?endpointType=` for `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider`. Lab `endpointAddress` host is `127.0.0.1` (or `NOCTAXRIS_IOT_ENDPOINT_HOST`). Port is `4566` unless `NOCTAXRIS_IOT_TLS_LISTEN` is set, then that listener's port |
 | Jobs | Control-plane `CreateJob` / `DescribeJob`; device HTTP `GET /things/{thingName}/jobs`, `GET /things/{thingName}/jobs/{jobId}`, `PUT /things/{thingName}/jobs/$next` (`iot-jobs-data:*`) |
 | Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress` (literal IP URLs may omit SNI; Host must still match). Minted ASIA `expiration` / `ExpiresAt` uses wall clock (same as SigV4), not lab `SetClock` |
-| Retained MQTT | `ListRetainedMessages` returns stored topic summaries (`topic`, `payloadSize`, `qos`, `lastModifiedTime` ms). Payload stays in SQLite and is omitted from List. Empty account is HTTP 200 with `retainedTopics: []`. Shared Mosquitto `#` deliveries with `Retained()` upsert the same rows |
+| Retained MQTT | `ListRetainedMessages` returns stored topic summaries (`topic`, `payloadSize`, `qos`, `lastModifiedTime` ms). HTTP `Publish` (`AWSIotDataService.Publish` and `AWSIotService.Publish` JSON 1.1, both `iot-data:Publish` so SigV4 scope is `iot-data` / `iotdata` / `iotdevicegateway`; REST `POST /topics/{topic}` with `qos` and `retain` query params) with `retain=true` upserts the same rows. Payload stays in SQLite and is omitted from List. Empty payload with retain deletes the topic. Empty account is HTTP 200 with `retainedTopics: []`. Shared Mosquitto `#` deliveries with `Retained()` upsert the same rows |
 
 ### Notes
 
@@ -94,13 +94,13 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 - Attached policies cannot be deleted until detached.
 - Shadows merge `state` maps; null child keys delete. Version increments on each update.
 - Topic rule SQL must include a quoted `FROM` topic filter; duplicate `ruleName` returns `ResourceAlreadyExistsException`.
-- Retained MQTT: empty payload on Put clears the topic. A live MQTT PUBLISH to a client that already subscribed is RETAIN=0, so SQLite is updated when the broker later redelivers a retained copy (bridge subscribe).
+- Retained MQTT: empty payload on Put or HTTP Publish with retain clears the topic. A live MQTT PUBLISH to a client that already subscribed is RETAIN=0, so SQLite is updated when the broker later redelivers a retained copy (bridge subscribe).
 
 ### Authz notes
 
 Identity `EvaluateFull` on `iot:*`, `iot-data:*`, and `iot-jobs-data:*` for signed HTTP APIs. Device certificates use attached IoT policies (`iot:*`). Device certificates cannot call `ListThings` or `ListRoleAliases`.
 
-Shadow, Jobs, and named-shadow REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`) run when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`, or when a lab-CA device certificate is present and the attached IoT policy Allows the action (`iot:GetThingShadow` / `iot:ListNamedShadowsForThing` / Jobs actions). Unsigned HTTP without SigV4 or mTLS is 403. A request signed as `s3` is path-style S3 (`things` / `api` as the bucket). Wrong-scope signatures are not treated as IoT writes.
+Shadow, Jobs, named-shadow, and HTTP Publish REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`, `POST /topics/{topic}`) run when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`, or when a lab-CA device certificate is present and the attached IoT policy Allows the action (`iot:GetThingShadow` / `iot:ListNamedShadowsForThing` / `iot:Publish` / Jobs actions). Identity on signed Publish is `iot-data:Publish`. Unsigned HTTP without SigV4 or mTLS is 403. A request signed as `s3` is path-style S3 (`things` / `api` / `topics` as the bucket). Wrong-scope signatures are not treated as IoT writes.
 
 `GET /endpoint` is IoT only when SigV4 service is `iot` (or another `iot*` service). Path-style S3 `GET /endpoint` stays S3.
 
@@ -138,6 +138,8 @@ aws iot list-retained-messages --endpoint-url "$EP"
 # Compose: curl --cacert iot-lab-ca.crt --cert device.crt --key device.key \
 #   https://127.0.0.1:8443/role-aliases/ALIAS/credentials -H "x-amzn-iot-thingname: THING"
 # ListRetainedMessages: topic, qos, lastModifiedTime, payloadSize (no payload). Empty list is HTTP 200.
+# HTTP Publish retain: JSON 1.1 AWSIotDataService.Publish (or AWSIotService.Publish) with retain=true,
+# or REST POST /topics/{topic}?qos=1&retain=true. Empty payload clears. No GetRetainedMessage HTTP.
 ```
 
 ## Not yet / deferred
@@ -147,4 +149,3 @@ aws iot list-retained-messages --endpoint-url "$EP"
 - Thing types, thing groups, fleet indexing
 - Operator custom CA upload APIs
 - WAN ATS MQTT hostnames (nested / engine endpoints only)
-- HTTP `iot-data:Publish` catalog action (in-process `PublishTopic` covers lab tests)

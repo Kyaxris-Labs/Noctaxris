@@ -65,8 +65,32 @@ func isIoTDescribeEndpointPath(path string) bool {
 	return p == "/endpoint"
 }
 
+func isIoTPublishRESTPath(path string) bool {
+	return iotPublishTopicFromPath(path) != ""
+}
+
+func iotPublishTopicFromPath(path string) string {
+	parts := iotPathParts(path)
+	if len(parts) < 2 || parts[0] != "topics" {
+		return ""
+	}
+	segs := make([]string, 0, len(parts)-1)
+	for _, p := range parts[1:] {
+		u, err := url.PathUnescape(p)
+		if err != nil {
+			u = p
+		}
+		u = strings.TrimSpace(u)
+		if u != "" {
+			segs = append(segs, u)
+		}
+	}
+	return strings.Join(segs, "/")
+}
+
 func isIoTDataPlaneRESTPath(path string) bool {
-	return isIoTShadowRESTPath(path) || isIoTJobsDataPath(path) || isIoTListNamedShadowsPath(path)
+	return isIoTShadowRESTPath(path) || isIoTJobsDataPath(path) ||
+		isIoTListNamedShadowsPath(path) || isIoTPublishRESTPath(path)
 }
 
 func isIoTMuxRESTPath(path string) bool {
@@ -185,6 +209,11 @@ func (s *Server) handleIoTREST(
 		s.iotRESTShadow(w, r, body, requestID, eventID, verified, readOnly, parts[1])
 	case isIoTJobsDataPath(path):
 		s.iotRESTJobs(w, r, body, requestID, eventID, verified, readOnly)
+	case isIoTPublishRESTPath(path) && r.Method == http.MethodPost:
+		s.iotRESTPublish(w, r, body, requestID, eventID, verified, readOnly)
+	case isIoTPublishRESTPath(path):
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusMethodNotAllowed, "MethodNotAllowedException",
+			"Unsupported method for topic publish.", readOnly, eventID, verified)
 	default:
 		s.writeIoTRESTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 			"Unknown IoT data-plane path.", readOnly, eventID, verified)
@@ -207,6 +236,48 @@ func (s *Server) iotRESTAuthorize(
 		return "", "", false
 	}
 	return verified.AccountID, s.iotRegion(verified), true
+}
+
+func (s *Server) iotRESTPublish(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	_ = readOnly
+	topic := iotPublishTopicFromPath(r.URL.Path)
+	qos := 0
+	if q := strings.TrimSpace(r.URL.Query().Get("qos")); q != "" {
+		qos, _ = strconv.Atoi(q)
+	}
+	retain := iotRetainFlag(r.URL.Query().Get("retain"))
+	region := store.DefaultIoTRegion
+	accountHint := ""
+	if verified != nil {
+		region = s.iotRegion(verified)
+		accountHint = verified.AccountID
+	}
+	resource := store.IoTTopicARN(region, accountHint, topic)
+	accountID, region, ok := s.iotRESTAuthorize(r, verified,
+		catalog.ActionIoTDataPublish, "iot:Publish", resource)
+	if !ok {
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusForbidden, "UnauthorizedException",
+			"Not authorized to publish to this topic.", true, eventID, verified)
+		return
+	}
+	if retain {
+		if err := s.store.PutIoTRetainedMessage(accountID, region, topic, body, qos); err != nil {
+			if errors.Is(err, store.ErrIoTBadRequest) {
+				s.writeIoTRESTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+					err.Error(), false, eventID, verified)
+				return
+			}
+			s.writeIoTRESTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+				"Unable to publish retained message.", false, eventID, verified)
+			return
+		}
+	}
+	out, _ := iotsvc.EmptyJSON()
+	s.writeIoTRESTOK(w, out)
+	s.iotMaybeAudit(r, requestID, eventID, verified, iotDataEventSource, "Publish", false)
 }
 
 func (s *Server) iotRESTShadow(
@@ -638,6 +709,36 @@ func iotIntParam(params map[string]any, keys ...string) int {
 		}
 	}
 	return 0
+}
+
+func iotRetainFlag(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func iotBoolParam(params map[string]any, keys ...string) bool {
+	for _, k := range keys {
+		raw, ok := params[k]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case bool:
+			return v
+		case string:
+			return iotRetainFlag(v)
+		case float64:
+			return v != 0
+		case json.Number:
+			n, err := v.Int64()
+			return err == nil && n != 0
+		}
+	}
+	return false
 }
 
 func iotStringParam(params map[string]any, keys ...string) string {
