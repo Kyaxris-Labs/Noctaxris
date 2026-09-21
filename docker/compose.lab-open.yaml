@@ -1,4 +1,4 @@
-# Opt-in overlay for CTF labs that need Function URL / HTTP API AuthType NONE
+# Opt-in overlay for Function URL / HTTP API AuthType NONE
 # on the Compose container bind (0.0.0.0). Default compose.yaml leaves this unset.
 #
 # Usage (from docker/):
