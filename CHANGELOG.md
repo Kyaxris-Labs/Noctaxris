@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.6.0
+
+Minor after 1.5.0: IoT device TLS listener, HTTP Publish retain, GetRetainedMessage. Docker Hub: `kyaxris/noctaxris` (`1.6.0`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 - IoT: dedicated device TLS listener on `NOCTAXRIS_IOT_TLS_LISTEN` (`ClientAuth` `VerifyClientCertIfGiven` against the lab IoT CA, so Python and `curl --cert` present the device cert). `DescribeEndpoint` uses that port when set, otherwise `4566`. Compose publishes loopback `:8443` for the listener. Control-plane and health stay HTTP `:4566`
 - IoT: unsigned `GET /role-aliases/{alias}/credentials` without a peer certificate is still 403. Named-shadow REST remains SigV4 or mTLS
 - IoT: HTTP `iot-data:Publish` (`AWSIotDataService.Publish` and `AWSIotService.Publish` JSON 1.1; REST `POST /topics/{topic}` with `qos` and `retain`). `retain=true` writes the same retained rows `ListRetainedMessages` already lists (`topic`, `payloadSize`, `qos`, `lastModifiedTime`; no payload). Empty payload with retain clears the topic. IAM deny is 403. Unsigned callers stay 403. mTLS on `:8443` is unchanged
