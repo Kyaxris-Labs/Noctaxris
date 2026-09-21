@@ -1100,6 +1100,7 @@ const (
 	ActionIoTDescribeJob                      = "iot:DescribeJob"
 	ActionIoTListNamedShadowsForThing         = "iot:ListNamedShadowsForThing"
 	ActionIoTListRetainedMessages             = "iot:ListRetainedMessages"
+	ActionIoTGetRetainedMessage               = "iot:GetRetainedMessage"
 	ActionIoTDataListNamedShadowsForThing     = "iot-data:ListNamedShadowsForThing"
 	ActionIoTJobsGetPendingJobExecutions      = "iot-jobs-data:GetPendingJobExecutions"
 	ActionIoTJobsDescribeJobExecution         = "iot-jobs-data:DescribeJobExecution"

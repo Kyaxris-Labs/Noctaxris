@@ -298,6 +298,28 @@ func CredentialsProviderJSON(accessKeyID, secret, sessionToken string, expiratio
 	})
 }
 
+// GetRetainedMessageJSON builds GetRetainedMessage (payload is JSON 1.1 []byte / base64).
+// Stored qos 2 is clamped to 1 to match the AWS Data Plane range. userProperties is omitted when unset.
+func GetRetainedMessageJSON(m store.IoTRetainedMessage) ([]byte, error) {
+	qos := m.QoS
+	if qos < 0 {
+		qos = 0
+	}
+	if qos > 1 {
+		qos = 1
+	}
+	payload := m.Payload
+	if payload == nil {
+		payload = []byte{}
+	}
+	return json.Marshal(map[string]any{
+		"topic":            m.Topic,
+		"payload":          payload,
+		"qos":              qos,
+		"lastModifiedTime": m.LastModified,
+	})
+}
+
 // ListRetainedMessagesJSON builds ListRetainedMessages (summaries only; no payload).
 func ListRetainedMessagesJSON(msgs []store.IoTRetainedMessage) ([]byte, error) {
 	items := make([]map[string]any, 0, len(msgs))

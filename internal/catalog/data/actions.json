@@ -3053,6 +3053,10 @@
       "value": "iot:ListRetainedMessages"
     },
     {
+      "name": "ActionIoTGetRetainedMessage",
+      "value": "iot:GetRetainedMessage"
+    },
+    {
       "name": "ActionIoTDataListNamedShadowsForThing",
       "value": "iot-data:ListNamedShadowsForThing"
     },
@@ -4479,6 +4483,7 @@
     "iot:DisableTopicRule",
     "iot:EnableTopicRule",
     "iot:GetPolicy",
+    "iot:GetRetainedMessage",
     "iot:GetTopicRule",
     "iot:ListCertificates",
     "iot:ListNamedShadowsForThing",
@@ -4878,7 +4883,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 975,
+  "count": 976,
   "source": "Action* constants in actions.go",
-  "generated": "2026-09-21T04:53:33.962749+00:00"
+  "generated": "2026-09-21T06:00:55.048383+00:00"
 }

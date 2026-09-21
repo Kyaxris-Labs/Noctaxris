@@ -1495,6 +1495,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		catalog.ActionIoTDescribeJob,
 		catalog.ActionIoTListNamedShadowsForThing,
 		catalog.ActionIoTListRetainedMessages,
+		catalog.ActionIoTGetRetainedMessage,
 		catalog.ActionIoTDataListNamedShadowsForThing,
 		catalog.ActionIoTJobsGetPendingJobExecutions,
 		catalog.ActionIoTJobsDescribeJobExecution,

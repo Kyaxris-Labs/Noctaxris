@@ -911,8 +911,33 @@ func (s *Store) PutIoTRetainedMessage(accountID, region, topic string, payload [
 	return nil
 }
 
+// GetIoTRetainedMessage returns one retained MQTT topic, including payload.
+func (s *Store) GetIoTRetainedMessage(accountID, region, topic string) (IoTRetainedMessage, bool, error) {
+	if err := s.EnsureIoTSchema(); err != nil {
+		return IoTRetainedMessage{}, false, err
+	}
+	region = iotRegion(region)
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		return IoTRetainedMessage{}, false, fmt.Errorf("%w: topic required", ErrIoTBadRequest)
+	}
+	var m IoTRetainedMessage
+	err := s.db.QueryRow(
+		`SELECT topic, payload, qos, last_modified
+		 FROM iot_retained_messages WHERE account_id = ? AND region = ? AND topic = ?`,
+		accountID, region, topic,
+	).Scan(&m.Topic, &m.Payload, &m.QoS, &m.LastModified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return IoTRetainedMessage{}, false, nil
+	}
+	if err != nil {
+		return IoTRetainedMessage{}, false, fmt.Errorf("get retained message: %w", err)
+	}
+	return m, true, nil
+}
+
 // ListIoTRetainedMessages returns retained MQTT topics for an account/region.
-// Payload is stored for MQTT retain and a future Get; List JSON must not emit it.
+// Payload is stored for MQTT retain and GetRetainedMessage; List JSON must not emit it.
 func (s *Store) ListIoTRetainedMessages(accountID, region string) ([]IoTRetainedMessage, error) {
 	if err := s.EnsureIoTSchema(); err != nil {
 		return nil, err

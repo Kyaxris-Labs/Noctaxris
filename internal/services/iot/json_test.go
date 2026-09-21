@@ -114,3 +114,36 @@ func TestListRetainedMessagesJSONShape(t *testing.T) {
 		t.Fatalf("lastModifiedTime=%v", item["lastModifiedTime"])
 	}
 }
+
+func TestGetRetainedMessageJSONShape(t *testing.T) {
+	raw, err := iotsvc.GetRetainedMessageJSON(store.IoTRetainedMessage{
+		Topic:        "lab/status",
+		Payload:      []byte("on"),
+		QoS:          2,
+		LastModified: 1_700_000_000_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"userProperties"`) {
+		t.Fatalf("userProperties present: %s", raw)
+	}
+	var body struct {
+		Topic            string `json:"topic"`
+		Payload          []byte `json:"payload"`
+		QoS              int    `json:"qos"`
+		LastModifiedTime int64  `json:"lastModifiedTime"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Topic != "lab/status" || string(body.Payload) != "on" {
+		t.Fatalf("get body=%s", raw)
+	}
+	if body.QoS != 1 {
+		t.Fatalf("qos clamp want 1 got %d body=%s", body.QoS, raw)
+	}
+	if body.LastModifiedTime != 1_700_000_000_000 {
+		t.Fatalf("lastModifiedTime=%d", body.LastModifiedTime)
+	}
+}

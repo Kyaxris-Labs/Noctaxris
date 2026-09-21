@@ -92,4 +92,28 @@ func TestIoTRetainedMessagesPutListAccountIsolation(t *testing.T) {
 	if err := st.PutIoTRetainedMessage(a1, region, "", []byte("x"), 0); err == nil || !errors.Is(err, store.ErrIoTBadRequest) {
 		t.Fatalf("empty topic err=%v", err)
 	}
+
+	gotOne, found, err := st.GetIoTRetainedMessage(a1, region, "lab/one")
+	if err != nil || !found {
+		t.Fatalf("get lab/one found=%v err=%v", found, err)
+	}
+	if !bytes.Equal(gotOne.Payload, []byte("alpha2")) || gotOne.QoS != 2 {
+		t.Fatalf("get lab/one %+v", gotOne)
+	}
+	_, found, err = st.GetIoTRetainedMessage(a1, region, "lab/two")
+	if err != nil || found {
+		t.Fatalf("cleared lab/two found=%v err=%v", found, err)
+	}
+	_, found, err = st.GetIoTRetainedMessage(a2, region, "lab/one")
+	if err != nil || !found {
+		t.Fatalf("get a2 lab/one found=%v err=%v", found, err)
+	}
+	_, found, err = st.GetIoTRetainedMessage(a1, region, "missing/topic")
+	if err != nil || found {
+		t.Fatalf("missing found=%v err=%v", found, err)
+	}
+	_, _, err = st.GetIoTRetainedMessage(a1, region, "")
+	if err == nil || !errors.Is(err, store.ErrIoTBadRequest) {
+		t.Fatalf("empty topic get err=%v", err)
+	}
 }

@@ -4,7 +4,8 @@
 
 - IoT: dedicated device TLS listener on `NOCTAXRIS_IOT_TLS_LISTEN` (`ClientAuth` `VerifyClientCertIfGiven` against the lab IoT CA, so Python and `curl --cert` present the device cert). `DescribeEndpoint` uses that port when set, otherwise `4566`. Compose publishes loopback `:8443` for the listener. Control-plane and health stay HTTP `:4566`
 - IoT: unsigned `GET /role-aliases/{alias}/credentials` without a peer certificate is still 403. Named-shadow REST remains SigV4 or mTLS
-- IoT: HTTP `iot-data:Publish` (`AWSIotDataService.Publish` and `AWSIotService.Publish` JSON 1.1; REST `POST /topics/{topic}` with `qos` and `retain`). `retain=true` writes the same retained rows `ListRetainedMessages` already lists (`topic`, `payloadSize`, `qos`, `lastModifiedTime`; no payload). Empty payload with retain clears the topic. IAM deny is 403. Unsigned callers stay 403. `GetRetainedMessage` HTTP is still not implemented. mTLS on `:8443` is unchanged
+- IoT: HTTP `iot-data:Publish` (`AWSIotDataService.Publish` and `AWSIotService.Publish` JSON 1.1; REST `POST /topics/{topic}` with `qos` and `retain`). `retain=true` writes the same retained rows `ListRetainedMessages` already lists (`topic`, `payloadSize`, `qos`, `lastModifiedTime`; no payload). Empty payload with retain clears the topic. IAM deny is 403. Unsigned callers stay 403. mTLS on `:8443` is unchanged
+- IoT: HTTP `iot:GetRetainedMessage` (`AWSIotDataService.GetRetainedMessage` and `AWSIotService.GetRetainedMessage` JSON 1.1; REST `GET /retainedMessage/{topic}`). Response is `topic`, base64 `payload`, `qos` 0-1, `lastModifiedTime` ms. Missing topic is 404. Empty topic is 400. IAM deny is 403. Unsigned callers stay 403. `ListRetainedMessages` still omits payload
 
 ## 1.5.0
 
@@ -418,7 +419,7 @@ First public semver release. Docker Hub image: `kyaxris/noctaxris` (`1.0.0`, `la
 - DynamoDB `DescribeContinuousBackups` lab stub; KMS `ListResourceTags` / `TagResource` / `UntagResource` (Terraform provider v5 post-create)
 - CloudFormation YAML `TemplateBody`, lab intrinsics (`Ref` / `Fn::GetAtt` / `Fn::Sub` / `Fn::Join`), types SQS / DynamoDB / Lambda (`ZipFile`)
 
-### CTF fidelity
+### Policy and function depth
 
 - IAM managed policy versions: `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (five-version cap; default document syncs into Evaluate)
 - Lambda layers REST: map `/2018-10-31/layers/...` and `/2015-03-31/layers/...` for CLI Publish/Get/List/Delete layer version

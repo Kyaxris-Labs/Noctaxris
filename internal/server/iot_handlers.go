@@ -105,6 +105,8 @@ func (s *Server) handleIoT(
 		s.iotListNamedShadowsForThing(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTListRetainedMessages:
 		s.iotListRetainedMessages(w, r, body, requestID, eventID, verified, readOnly, params)
+	case catalog.ActionIoTGetRetainedMessage:
+		s.iotGetRetainedMessage(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTDataPublish:
 		s.iotPublish(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionIoTJobsGetPendingJobExecutions:
@@ -198,6 +200,8 @@ func iotAction(action string) string {
 		return catalog.ActionIoTDataListNamedShadowsForThing
 	case "ListRetainedMessages":
 		return catalog.ActionIoTListRetainedMessages
+	case "GetRetainedMessage":
+		return catalog.ActionIoTGetRetainedMessage
 	case "Publish":
 		return catalog.ActionIoTDataPublish
 	case "GetPendingJobExecutions":
@@ -1418,6 +1422,46 @@ func (s *Server) iotListRetainedMessages(
 	out, _ := iotsvc.ListRetainedMessagesJSON(msgs)
 	s.writeIoTOK(w, out)
 	s.writeSuccessAudit(r, requestID, eventID, verified, iotEventSource, "ListRetainedMessages", readOnly)
+}
+
+func (s *Server) iotGetRetainedMessage(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool, params map[string]any,
+) {
+	topic := iotStringParam(params, "topic", "Topic")
+	resource := "*"
+	if verified != nil && topic != "" {
+		resource = store.IoTTopicARN(s.iotRegion(verified), verified.AccountID, topic)
+	}
+	if verified == nil || !s.authorize(verified, catalog.ActionIoTGetRetainedMessage, resource) {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform iot:GetRetainedMessage.", readOnly, eventID, verified)
+		return
+	}
+	if topic == "" {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"topic is required.", readOnly, eventID, verified)
+		return
+	}
+	msg, found, err := s.store.GetIoTRetainedMessage(verified.AccountID, s.iotRegion(verified), topic)
+	if err != nil {
+		if errors.Is(err, store.ErrIoTBadRequest) {
+			s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeIoTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to get retained message.", readOnly, eventID, verified)
+		return
+	}
+	if !found {
+		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Retained message not found.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.GetRetainedMessageJSON(msg)
+	s.writeIoTOK(w, out)
+	s.writeSuccessAudit(r, requestID, eventID, verified, iotDataEventSource, "GetRetainedMessage", readOnly)
 }
 
 func (s *Server) iotPublish(

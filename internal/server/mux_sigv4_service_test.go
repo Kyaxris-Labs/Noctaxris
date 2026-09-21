@@ -98,6 +98,16 @@ func TestIoTRESTAfterAuthBindsDataPlaneService(t *testing.T) {
 	if !isIoTRESTAfterAuth(named, &authn.Verified{Service: "iot-data"}) {
 		t.Fatal("iot-data named-shadow REST")
 	}
+	retain, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:4566/retainedMessage/lab/topic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isIoTRESTAfterAuth(retain, &authn.Verified{Service: "s3"}) {
+		t.Fatal("s3 must not claim GetRetainedMessage REST")
+	}
+	if !isIoTRESTAfterAuth(retain, &authn.Verified{Service: "iot-data"}) {
+		t.Fatal("iot-data GetRetainedMessage REST")
+	}
 	ep, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:4566/endpoint", nil)
 	if err != nil {
 		t.Fatal(err)

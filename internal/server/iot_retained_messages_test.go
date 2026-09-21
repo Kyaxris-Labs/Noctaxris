@@ -285,3 +285,155 @@ func TestIoTHTTPPublishIAMDenyAndUnsigned(t *testing.T) {
 		t.Fatalf("unsigned Publish want 403 MissingAuthenticationToken, got %d %s", unsignedRec.Code, unsignedRec.Body.String())
 	}
 }
+
+func decodeGetRetainedMessage(t *testing.T, rec *httptest.ResponseRecorder) struct {
+	Topic            string
+	Payload          []byte
+	QoS              int
+	LastModifiedTime int64
+} {
+	t.Helper()
+	var body struct {
+		Topic            string `json:"topic"`
+		Payload          []byte `json:"payload"`
+		QoS              int    `json:"qos"`
+		LastModifiedTime int64  `json:"lastModifiedTime"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode GetRetainedMessage: %v body=%q", err, rec.Body.String())
+	}
+	return struct {
+		Topic            string
+		Payload          []byte
+		QoS              int
+		LastModifiedTime int64
+	}{body.Topic, body.Payload, body.QoS, body.LastModifiedTime}
+}
+
+func TestIoTGetRetainedMessageAfterPublishListDeny(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	jsonPub := mustJSONTarget(t, handler, "AWSIotDataService.Publish", "iot-data", map[string]any{
+		"topic":   "json/topic",
+		"payload": "hello",
+		"qos":     1,
+		"retain":  true,
+	}, now)
+	if jsonPub.Code != http.StatusOK {
+		t.Fatalf("JSON Publish status=%d body=%q", jsonPub.Code, jsonPub.Body.String())
+	}
+	restPub := mustIoTREST(t, handler, http.MethodPost,
+		"http://127.0.0.1:4566/topics/rest/nested/topic?qos=0&retain=true",
+		"iot-data", []byte("world!"), now)
+	if restPub.Code != http.StatusOK {
+		t.Fatalf("REST Publish status=%d body=%q", restPub.Code, restPub.Body.String())
+	}
+
+	gotJSON := mustJSONTarget(t, handler, "AWSIotDataService.GetRetainedMessage", "iot-data", map[string]any{
+		"topic": "json/topic",
+	}, now)
+	if gotJSON.Code != http.StatusOK {
+		t.Fatalf("AWSIotDataService.GetRetainedMessage status=%d body=%q", gotJSON.Code, gotJSON.Body.String())
+	}
+	if strings.Contains(gotJSON.Body.String(), `"userProperties"`) {
+		t.Fatalf("userProperties present: %s", gotJSON.Body.String())
+	}
+	decoded := decodeGetRetainedMessage(t, gotJSON)
+	if decoded.Topic != "json/topic" || string(decoded.Payload) != "hello" || decoded.QoS != 1 {
+		t.Fatalf("json get %+v body=%s", decoded, gotJSON.Body.String())
+	}
+	if decoded.LastModifiedTime <= 0 {
+		t.Fatalf("json lastModifiedTime=%d", decoded.LastModifiedTime)
+	}
+
+	gotCtl := mustJSONTarget(t, handler, "AWSIotService.GetRetainedMessage", "iot-data", map[string]any{
+		"topic": "json/topic",
+	}, now)
+	if gotCtl.Code != http.StatusOK {
+		t.Fatalf("AWSIotService.GetRetainedMessage status=%d body=%q", gotCtl.Code, gotCtl.Body.String())
+	}
+	if string(decodeGetRetainedMessage(t, gotCtl).Payload) != "hello" {
+		t.Fatalf("ctl get body=%s", gotCtl.Body.String())
+	}
+
+	gotREST := mustIoTREST(t, handler, http.MethodGet,
+		"http://127.0.0.1:4566/retainedMessage/rest/nested/topic",
+		"iot-data", nil, now)
+	if gotREST.Code != http.StatusOK {
+		t.Fatalf("REST GetRetainedMessage status=%d body=%q", gotREST.Code, gotREST.Body.String())
+	}
+	restDecoded := decodeGetRetainedMessage(t, gotREST)
+	if restDecoded.Topic != "rest/nested/topic" || string(restDecoded.Payload) != "world!" || restDecoded.QoS != 0 {
+		t.Fatalf("rest get %+v body=%s", restDecoded, gotREST.Body.String())
+	}
+
+	listed := mustJSONTarget(t, handler, "AWSIotService.ListRetainedMessages", "iot", map[string]any{}, now)
+	byTopic := retainedTopicsByName(t, listed)
+	if byTopic["json/topic"] == nil || byTopic["rest/nested/topic"] == nil {
+		t.Fatalf("list missing topics: %s", listed.Body.String())
+	}
+
+	missing := mustJSONTarget(t, handler, "AWSIotDataService.GetRetainedMessage", "iot-data", map[string]any{
+		"topic": "no/such",
+	}, now)
+	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), "ResourceNotFoundException") {
+		t.Fatalf("missing Get status=%d body=%q", missing.Code, missing.Body.String())
+	}
+	missingREST := mustIoTREST(t, handler, http.MethodGet,
+		"http://127.0.0.1:4566/retainedMessage/no/such",
+		"iot-data", nil, now)
+	if missingREST.Code != http.StatusNotFound {
+		t.Fatalf("REST missing status=%d body=%q", missingREST.Code, missingREST.Body.String())
+	}
+
+	empty := mustJSONTarget(t, handler, "AWSIotDataService.GetRetainedMessage", "iot-data", map[string]any{}, now)
+	if empty.Code != http.StatusBadRequest || !strings.Contains(empty.Body.String(), "InvalidRequestException") {
+		t.Fatalf("empty topic status=%d body=%q", empty.Code, empty.Body.String())
+	}
+
+	_, userARN, err := st.CreateUser(testAccountID, "iot-get-retain-deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	akid, secret, err := st.CreateUserAccessKey(testAccountID, "iot-get-retain-deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"iot:GetRetainedMessage","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(userARN, "noget", deny); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"topic": "json/topic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", raw)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AWSIotDataService.GetRetainedMessage")
+	signHeader(t, req, raw, akid, secret, testRegion, "iot-data", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "AccessDeniedException") {
+		t.Fatalf("deny JSON GetRetainedMessage status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	restReq := mustNewRequest(t, http.MethodGet,
+		"http://127.0.0.1:4566/retainedMessage/json/topic", []byte{})
+	restReq.Header.Set("Content-Type", "application/json")
+	signHeader(t, restReq, []byte{}, akid, secret, testRegion, "iot-data", now)
+	restRec := httptest.NewRecorder()
+	handler.ServeHTTP(restRec, restReq)
+	if restRec.Code != http.StatusForbidden {
+		t.Fatalf("deny REST GetRetainedMessage status=%d body=%q", restRec.Code, restRec.Body.String())
+	}
+
+	unsigned := mustNewRequest(t, http.MethodGet,
+		"http://127.0.0.1:4566/retainedMessage/json/topic", nil)
+	unsignedRec := httptest.NewRecorder()
+	handler.ServeHTTP(unsignedRec, unsigned)
+	if unsignedRec.Code != http.StatusForbidden || !strings.Contains(unsignedRec.Body.String(), "MissingAuthenticationToken") {
+		t.Fatalf("unsigned Get want 403 MissingAuthenticationToken, got %d %s", unsignedRec.Code, unsignedRec.Body.String())
+	}
+}

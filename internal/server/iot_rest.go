@@ -69,9 +69,14 @@ func isIoTPublishRESTPath(path string) bool {
 	return iotPublishTopicFromPath(path) != ""
 }
 
-func iotPublishTopicFromPath(path string) string {
+func isIoTGetRetainedMessageRESTPath(path string) bool {
 	parts := iotPathParts(path)
-	if len(parts) < 2 || parts[0] != "topics" {
+	return len(parts) >= 1 && parts[0] == "retainedMessage"
+}
+
+func iotTopicFromPrefixedPath(path, prefix string) string {
+	parts := iotPathParts(path)
+	if len(parts) < 2 || parts[0] != prefix {
 		return ""
 	}
 	segs := make([]string, 0, len(parts)-1)
@@ -88,9 +93,18 @@ func iotPublishTopicFromPath(path string) string {
 	return strings.Join(segs, "/")
 }
 
+func iotPublishTopicFromPath(path string) string {
+	return iotTopicFromPrefixedPath(path, "topics")
+}
+
+func iotRetainedMessageTopicFromPath(path string) string {
+	return iotTopicFromPrefixedPath(path, "retainedMessage")
+}
+
 func isIoTDataPlaneRESTPath(path string) bool {
 	return isIoTShadowRESTPath(path) || isIoTJobsDataPath(path) ||
-		isIoTListNamedShadowsPath(path) || isIoTPublishRESTPath(path)
+		isIoTListNamedShadowsPath(path) || isIoTPublishRESTPath(path) ||
+		isIoTGetRetainedMessageRESTPath(path)
 }
 
 func isIoTMuxRESTPath(path string) bool {
@@ -214,6 +228,11 @@ func (s *Server) handleIoTREST(
 	case isIoTPublishRESTPath(path):
 		s.writeIoTRESTError(w, r, body, requestID, http.StatusMethodNotAllowed, "MethodNotAllowedException",
 			"Unsupported method for topic publish.", readOnly, eventID, verified)
+	case isIoTGetRetainedMessageRESTPath(path) && r.Method == http.MethodGet:
+		s.iotRESTGetRetainedMessage(w, r, body, requestID, eventID, verified, readOnly)
+	case isIoTGetRetainedMessageRESTPath(path):
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusMethodNotAllowed, "MethodNotAllowedException",
+			"Unsupported method for retained message.", readOnly, eventID, verified)
 	default:
 		s.writeIoTRESTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
 			"Unknown IoT data-plane path.", readOnly, eventID, verified)
@@ -278,6 +297,51 @@ func (s *Server) iotRESTPublish(
 	out, _ := iotsvc.EmptyJSON()
 	s.writeIoTRESTOK(w, out)
 	s.iotMaybeAudit(r, requestID, eventID, verified, iotDataEventSource, "Publish", false)
+}
+
+func (s *Server) iotRESTGetRetainedMessage(
+	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
+	verified *authn.Verified, readOnly bool,
+) {
+	topic := iotRetainedMessageTopicFromPath(r.URL.Path)
+	region := store.DefaultIoTRegion
+	accountHint := ""
+	if verified != nil {
+		region = s.iotRegion(verified)
+		accountHint = verified.AccountID
+	}
+	resource := store.IoTTopicARN(region, accountHint, topic)
+	accountID, region, ok := s.iotRESTAuthorize(r, verified,
+		catalog.ActionIoTGetRetainedMessage, "iot:GetRetainedMessage", resource)
+	if !ok {
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusForbidden, "UnauthorizedException",
+			"Not authorized to get this retained message.", readOnly, eventID, verified)
+		return
+	}
+	if topic == "" {
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"topic is required.", readOnly, eventID, verified)
+		return
+	}
+	msg, found, err := s.store.GetIoTRetainedMessage(accountID, region, topic)
+	if err != nil {
+		if errors.Is(err, store.ErrIoTBadRequest) {
+			s.writeIoTRESTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailureException",
+			"Unable to get retained message.", readOnly, eventID, verified)
+		return
+	}
+	if !found {
+		s.writeIoTRESTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
+			"Retained message not found.", readOnly, eventID, verified)
+		return
+	}
+	out, _ := iotsvc.GetRetainedMessageJSON(msg)
+	s.writeIoTRESTOK(w, out)
+	s.iotMaybeAudit(r, requestID, eventID, verified, iotDataEventSource, "GetRetainedMessage", readOnly)
 }
 
 func (s *Server) iotRESTShadow(
