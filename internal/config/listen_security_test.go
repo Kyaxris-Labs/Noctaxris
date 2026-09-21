@@ -73,6 +73,26 @@ func TestValidateListenSecurityPortOnlyRequiresTLSOrOptIn(t *testing.T) {
 	}
 }
 
+func TestValidateIoTTLSListen(t *testing.T) {
+	t.Setenv(config.EnvAllowNonLoopbackListen, "")
+	empty := config.Config{}
+	if err := config.ValidateIoTTLSListen(empty); err != nil {
+		t.Fatalf("empty listen should be ok: %v", err)
+	}
+	loop := config.Config{IoTTLSListen: "127.0.0.1:8443"}
+	if err := config.ValidateIoTTLSListen(loop); err != nil {
+		t.Fatalf("loopback should be ok: %v", err)
+	}
+	allIfaces := config.Config{IoTTLSListen: "0.0.0.0:8443"}
+	if err := config.ValidateIoTTLSListen(allIfaces); err == nil {
+		t.Fatal("expected error for 0.0.0.0:8443 without allow")
+	}
+	t.Setenv(config.EnvAllowNonLoopbackListen, "1")
+	if err := config.ValidateIoTTLSListen(allIfaces); err != nil {
+		t.Fatalf("opt-in should allow 0.0.0.0:8443: %v", err)
+	}
+}
+
 func TestOpenDataPlaneAllowed(t *testing.T) {
 	loop := config.Config{ListenAddr: "127.0.0.1:4566"}
 	if !loop.OpenDataPlaneAllowed() {

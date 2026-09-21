@@ -10,7 +10,7 @@ Compose mounts API sealed state (`noctaxris-data`), the master key (`noctaxris-s
 
 ## Listen and example roots
 
-Process listen is loopback only for `localhost`, `127.0.0.0/8`, and `::1`. Port-only (`:4566`), `0.0.0.0`, and `::` are non-loopback and require TLS or `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1` (Compose sets the opt-in for the in-container `0.0.0.0` bind; host publish stays `127.0.0.1:4566`).
+Process listen is loopback only for `localhost`, `127.0.0.0/8`, and `::1`. Port-only (`:4566`), `0.0.0.0`, and `::` are non-loopback and require TLS or `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1` (Compose sets the opt-in for the in-container `0.0.0.0` binds; host publish stays `127.0.0.1:4566` and `127.0.0.1:8443`).
 
 The shipped `docker/.env.example` root pair (`AKIAROOTEXAMPLE01` / example secret) is allowed on loopback listen only. Startup refuses that pair when listen is non-loopback, including default Compose. Copy `.env.example` to `.env` and replace both root values with unique lab credentials before `compose up`.
 
@@ -142,7 +142,7 @@ Raise the sysctl on the machine that runs DinD (Linux host or Docker Desktop/WSL
 cat /proc/sys/vm/max_map_count
 sudo sysctl -w vm.max_map_count=262144
 
-# Docker Desktop (Windows WSL2 backend) — inside the Desktop VM
+# Docker Desktop (Windows WSL2 backend), inside the Desktop VM
 wsl -d docker-desktop sysctl -w vm.max_map_count=262144
 ```
 

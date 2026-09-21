@@ -75,7 +75,7 @@ aws s3 mb s3://lab-bucket --endpoint-url "$EP"
 aws kms create-key --endpoint-url "$EP"
 ```
 
-Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Default host publish is `127.0.0.1:4566` only. Opt-in loopback TCP for selected nested data ports: add `-f docker/compose.lab-nested-ports.yaml` (see [ops.md](docs/ops.md#compose-overlays-lab-opt-in)). Per-service CLI smoke: [docs/services/](docs/services/index.md).
+Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy `docker/.env.example` to `docker/.env`, replace both root values with unique lab credentials, then `docker compose -f docker/compose.yaml --env-file docker/.env up --build`. Default host publish is `127.0.0.1:4566` (HTTP control plane) and `127.0.0.1:8443` (IoT device TLS). Opt-in loopback TCP for selected nested data ports: add `-f docker/compose.lab-nested-ports.yaml` (see [ops.md](docs/ops.md#compose-overlays-lab-opt-in)). Per-service CLI smoke: [docs/services/](docs/services/index.md).
 
 ## Client environments
 
@@ -83,7 +83,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 |--------|---------------------|
 | AWS CLI / SDK | `AWS_ENDPOINT_URL=http://127.0.0.1:4566` and `AWS_EC2_METADATA_DISABLED=true`. Same root pair as `NOCTAXRIS_ROOT_*` (or an IAM user key). |
 | Prowler AWS | Same env. STS reads `AWS_ENDPOINT_URL`. No general `*.amazonaws.com` Host/SNI. Enumerate bar is list STS/IAM/S3/EC2/CloudTrail; checks may fail. Live `prowler aws` smokes skip when the binary or endpoint env is missing. |
-| IoT data plane | `aws iot describe-endpoint` with `--endpoint-type iot:Data-ATS`, `iot:Jobs`, or `iot:CredentialProvider` and `--endpoint-url "$AWS_ENDPOINT_URL"`. Jobs HTTP `GET /things/{thing}/jobs`. Credentials mTLS `GET /role-aliases/{alias}/credentials`. |
+| IoT data plane | `aws iot describe-endpoint` with `--endpoint-type iot:Data-ATS`, `iot:Jobs`, or `iot:CredentialProvider` and `--endpoint-url "$AWS_ENDPOINT_URL"` (HTTP `:4566`). Jobs HTTP `GET /things/{thing}/jobs`. Credentials mTLS `GET /role-aliases/{alias}/credentials` on Compose `:8443` (`curl --cert` / Python client cert; unsigned GET without a peer cert stays 403). |
 
 ## Services
 
@@ -99,7 +99,7 @@ Nested Lambda, ECS, and data engines need Compose with `noctaxris-engine`. Copy 
 | API edge | API Gateway REST, HTTP API, WebSocket lab lite |
 | Analytics and AI | Athena, OpenSearch, EMR, Bedrock Runtime, Textract, Transcribe |
 | Billing | Pricing, BCM Data Exports, Cost and Usage Reports, Cost Explorer, Budgets |
-| Devices | IoT Core / IoT Data (HTTP shadows, named-shadow list, Jobs data plane, credentials provider, Topic Rules; opt-in MQTT) |
+| Devices | IoT Core / IoT Data (HTTP shadows, named-shadow list, Jobs data plane, credentials provider on `:8443` mTLS, Topic Rules; opt-in MQTT) |
 | Control plane labs | Lightsail, Auto Scaling, Elastic Beanstalk, AWS Backup |
 
 Open the service matrix for detailed actions and gaps. Full notes and CLI smoke: [docs/services/](docs/services/index.md).
@@ -500,7 +500,7 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     <tr>
       <td rowspan="1" align="center" valign="middle">Devices</td>
       <td>IoT Core / Data</td>
-      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows (classic + named, REST <code>?name=</code>); <code>ListNamedShadowsForThing</code> (classic omitted); <code>DescribeEndpoint</code> lab addresses; Jobs <code>CreateJob</code> plus device <code>GET /things/{thing}/jobs</code> and <code>PUT .../jobs/$next</code>; credentials provider mTLS <code>GET /role-aliases/{alias}/credentials</code> (thing-name header must match); opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; CONNECT ClientId must equal thing name; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs (<code>iot-jobs-data</code> on Jobs device HTTP). <code>ListRetainedMessages</code> returns persisted summaries (<code>topic</code>, <code>qos</code>, <code>lastModifiedTime</code>, <code>payloadSize</code>; payload stored, omitted from List).</td>
+      <td>Things CRUD; lab CA-signed CreateKeysAndCertificate + cert/policy CRUD; Attach/DetachPolicy; AttachThingPrincipal; Topic Rules (Create/Get/List/Replace/Delete/Enable/Disable; SELECT FROM topic +/# match; SQS/SNS/S3/DDB/Kinesis/Lambda/republish dispatch, missing targets fail closed); HTTP shadows (classic + named, REST <code>?name=</code>); <code>ListNamedShadowsForThing</code> (classic omitted; SigV4 or device mTLS); <code>DescribeEndpoint</code> lab addresses (port follows <code>NOCTAXRIS_IOT_TLS_LISTEN</code> when set); Jobs <code>CreateJob</code> plus device <code>GET /things/{thing}/jobs</code> and <code>PUT .../jobs/$next</code>; credentials provider mTLS on Compose <code>:8443</code> (<code>GET /role-aliases/{alias}/credentials</code>, thing-name header must match, <code>VerifyClientCertIfGiven</code> so Python/<code>curl --cert</code> send the device cert; unsigned without a peer cert stays 403); opt-in MQTT shadow bridge when <code>NOCTAXRIS_SHARED_MQTT=1</code> (Mosquitto mTLS + IoT policy fail-closed; CONNECT ClientId must equal thing name; nested <code>noctaxris-lab-mqtt:1883</code>, API bridge via <code>noctaxris-engine:1883</code>; non-$aws/ publish evaluates rules). Identity authz on HTTP APIs (<code>iot-jobs-data</code> on Jobs device HTTP). <code>ListRetainedMessages</code> returns persisted summaries (<code>topic</code>, <code>qos</code>, <code>lastModifiedTime</code>, <code>payloadSize</code>; payload stored, omitted from List).</td>
       <td>Fleet indexing, operator BYO CA APIs, GetRetainedMessage HTTP, WAN ATS hostnames.</td>
     </tr>
     <tr>
@@ -533,10 +533,10 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
 
 | Setting | Value |
 |---------|--------|
-| Listen | `127.0.0.1:4566` only |
+| Listen | `127.0.0.1:4566` HTTP control plane. Compose also publishes loopback `:8443` for IoT device TLS |
 | Docker | No host `docker.sock` (nested `noctaxris-engine` for Lambda, ECS, CodeBuild, Batch, and nested data engines) |
 | Compute runtime | Nested DinD only (`NOCTAXRIS_COMPUTE_RUNTIME` unset or `dind`). Live Lambda/ECS compute needs healthy `noctaxris-engine` |
-| Data ports | Compose publishes only `127.0.0.1:4566`. Nested DataKind ports stay off the host |
+| Data ports | Compose publishes `127.0.0.1:4566` and `127.0.0.1:8443`. Nested DataKind ports stay off the host |
 | API replicas | **One process per data root.** Multi-replica against the same SQLite volume is unsupported and can corrupt state |
 | Credentials | Root keys via env injection |
 | At rest | Secrets and CMK material sealed under the data volume |

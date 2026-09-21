@@ -142,20 +142,21 @@ func (s *Server) iotEndpointAddress(endpointType string) string {
 	if host == "" {
 		host = "127.0.0.1"
 	}
+	port := s.iotDeviceHTTPPort()
 	if net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
-		return net.JoinHostPort(host, iotLabEndpointPort)
+		return net.JoinHostPort(host, port)
 	}
 	switch endpointType {
 	case "iot:Data":
-		return net.JoinHostPort("data.iot."+host, iotLabEndpointPort)
+		return net.JoinHostPort("data.iot."+host, port)
 	case "iot:Data-ATS":
-		return net.JoinHostPort("data-ats.iot."+host, iotLabEndpointPort)
+		return net.JoinHostPort("data-ats.iot."+host, port)
 	case "iot:Jobs":
-		return net.JoinHostPort("jobs.iot."+host, iotLabEndpointPort)
+		return net.JoinHostPort("jobs.iot."+host, port)
 	case "iot:CredentialProvider":
-		return net.JoinHostPort("credentials.iot."+host, iotLabEndpointPort)
+		return net.JoinHostPort("credentials.iot."+host, port)
 	default:
-		return net.JoinHostPort(host, iotLabEndpointPort)
+		return net.JoinHostPort(host, port)
 	}
 }
 
@@ -410,11 +411,29 @@ func (s *Server) iotRESTJobs(
 	}
 }
 
+// iotCredentialsPresentedHost is TLS SNI when the client sent it. Go and curl omit
+// SNI for literal IP URLs, so empty SNI may fall back to Host when wantHost is an
+// IP or localhost (Compose 127.0.0.1:8443). Hostname CredentialProvider labs still
+// require SNI.
+func iotCredentialsPresentedHost(r *http.Request, wantHost string) string {
+	if r == nil || r.TLS == nil {
+		return ""
+	}
+	sni := strings.TrimSpace(r.TLS.ServerName)
+	if sni != "" {
+		return sni
+	}
+	if net.ParseIP(wantHost) == nil && !strings.EqualFold(wantHost, "localhost") {
+		return ""
+	}
+	return iotEndpointHost(r.Host)
+}
+
 func (s *Server) handleIoTCredentials(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, readOnly bool,
 ) {
 	wantHost := iotEndpointHost(s.iotEndpointAddress("iot:CredentialProvider"))
-	if r.TLS == nil || !strings.EqualFold(strings.TrimSpace(r.TLS.ServerName), wantHost) {
+	if r.TLS == nil || !strings.EqualFold(iotCredentialsPresentedHost(r, wantHost), wantHost) {
 		s.writeIoTRESTError(w, r, body, requestID, http.StatusForbidden, "ForbiddenException",
 			"TLS SNI must match the CredentialProvider endpointAddress.", readOnly, eventID, nil)
 		return

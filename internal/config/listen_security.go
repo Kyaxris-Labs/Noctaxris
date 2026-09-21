@@ -83,6 +83,21 @@ func ValidateListenSecurity(c Config) error {
 		c.ListenAddr, EnvAllowNonLoopbackListen)
 }
 
+// ValidateIoTTLSListen fails closed for a non-loopback device TLS bind without allow.
+func ValidateIoTTLSListen(c Config) error {
+	if strings.TrimSpace(c.IoTTLSListen) == "" {
+		return nil
+	}
+	if ListenIsLoopback(c.IoTTLSListen) {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv(EnvAllowNonLoopbackListen)) == "1" {
+		return nil
+	}
+	return fmt.Errorf("NOCTAXRIS_IOT_TLS_LISTEN %q is non-loopback; keep loopback or set %s=1 when host publish stays loopback (Compose)",
+		c.IoTTLSListen, EnvAllowNonLoopbackListen)
+}
+
 // OpenDataPlaneAllowed reports whether AuthType/AuthorizationType NONE is permitted.
 // Loopback listen allows NONE by default. Non-loopback requires NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1.
 func (c Config) OpenDataPlaneAllowed() bool {

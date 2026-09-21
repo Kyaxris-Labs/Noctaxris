@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -79,5 +80,33 @@ func TestIoTListNamedShadowsExcludesClassic(t *testing.T) {
 		"iotdevicegateway", nil, now)
 	if shadowGet.Code != http.StatusOK || !strings.Contains(shadowGet.Body.String(), `"n"`) {
 		t.Fatalf("named REST get status=%d body=%q", shadowGet.Code, shadowGet.Body.String())
+	}
+}
+
+func TestIoTListNamedShadowsUnsignedHTTPForbidden(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if rec := mustJSONTarget(t, handler, "AWSIotService.CreateThing", "iot", map[string]any{
+		"thingName": "unsigned-shadow-thing",
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("CreateThing %d %s", rec.Code, rec.Body.String())
+	}
+	named := mustJSONTarget(t, handler, "AWSIotDataService.UpdateThingShadow", "iot-data", map[string]any{
+		"thingName":  "unsigned-shadow-thing",
+		"shadowName": "delta",
+		"payload":    map[string]any{"state": map[string]any{"reported": map[string]any{"n": 1}}},
+	}, now)
+	if named.Code != http.StatusOK {
+		t.Fatalf("named UpdateThingShadow %d %s", named.Code, named.Body.String())
+	}
+
+	req := mustNewRequest(t, http.MethodGet,
+		"http://127.0.0.1:4566/api/things/shadow/ListNamedShadowsForThing/unsigned-shadow-thing", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unsigned named-shadow list status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }

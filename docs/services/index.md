@@ -67,7 +67,7 @@ Each page covers what is implemented, how to verify with AWS CLI smoke, what rem
 | [Cost and Usage Reports](cur.md) | Shipped | Report definition CRUD; FOCUS lite (S3/Lambda enumerators); CSV Put to S3; Parquet via nested DuckDB (`noctaxris-lab-duck` / `NOCTAXRIS_DUCKDB_URL`) |
 | [Cost Explorer](ce.md) | Shipped | GetCostAndUsage / GetCostForecast over seeded amounts |
 | [Budgets](budgets.md) | Shipped | Budget CRUD, SNS notify on CreateBudget for SNS subscribers |
-| [IoT Core / Data](iot.md) | Shipped | Things, lab CA-signed certs, policies, principals; Topic Rules; HTTP shadows; `DescribeEndpoint` / Jobs HTTP / credentials provider; `ListRetainedMessages` summaries (`topic`, `qos`, `lastModifiedTime`, `payloadSize`); opt-in MQTT (`NOCTAXRIS_SHARED_MQTT`; CONNECT ClientId equals thing name) |
+| [IoT Core / Data](iot.md) | Shipped | Things, lab CA-signed certs, policies, principals; Topic Rules; HTTP shadows; `DescribeEndpoint` / Jobs HTTP / credentials provider mTLS on Compose `:8443`; `ListRetainedMessages` summaries (`topic`, `qos`, `lastModifiedTime`, `payloadSize`); opt-in MQTT (`NOCTAXRIS_SHARED_MQTT`; CONNECT ClientId equals thing name) |
 | [Lightsail](lightsail.md) | Shipped | Instance state machine; disks/static IPs/key pairs/ports (stored-state); GetBlueprints/GetBundles |
 | [Auto Scaling](autoscaling.md) | Shipped | Launch config + ASG CRUD; DesiredCapacity reconciles lab EC2 (Pending without engine; InService when running) |
 | [Elastic Beanstalk](elastic-beanstalk.md) | Shipped | Application/version/environment lite; Ready/Green; ListAvailableSolutionStacks |

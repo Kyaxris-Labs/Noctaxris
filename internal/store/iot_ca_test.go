@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"net"
 	"path/filepath"
 	"testing"
 
@@ -30,6 +31,80 @@ func TestEnsureLabIoTCAIdempotent(t *testing.T) {
 	dir := store.LabIoTSecretsDir(st.DataRoot())
 	if _, err := filepath.Abs(dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsureLabIoTServerCertificateIdempotentServerAuth(t *testing.T) {
+	st := openIoTStore(t)
+	dns, ips := store.DefaultIoTServerSANs()
+	c1, err := st.EnsureLabIoTServerCertificate(dns, ips)
+	if err != nil {
+		t.Fatalf("EnsureLabIoTServerCertificate: %v", err)
+	}
+	if c1.CertPEM == "" || c1.KeyPEM == "" {
+		t.Fatal("missing server material")
+	}
+	c2, err := st.EnsureLabIoTServerCertificate(dns, ips)
+	if err != nil {
+		t.Fatalf("EnsureLabIoTServerCertificate second: %v", err)
+	}
+	if c1.CertPEM != c2.CertPEM {
+		t.Fatal("server cert changed on second ensure")
+	}
+
+	block, _ := pem.Decode([]byte(c1.CertPEM))
+	if block == nil {
+		t.Fatal("bad server PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse server cert: %v", err)
+	}
+	hasClient := false
+	hasServer := false
+	for _, eku := range cert.ExtKeyUsage {
+		switch eku {
+		case x509.ExtKeyUsageClientAuth:
+			hasClient = true
+		case x509.ExtKeyUsageServerAuth:
+			hasServer = true
+		}
+	}
+	if !hasServer || hasClient {
+		t.Fatalf("EKU want ServerAuth only, server=%v client=%v", hasServer, hasClient)
+	}
+
+	ca, err := st.EnsureLabIoTCA()
+	if err != nil {
+		t.Fatalf("EnsureLabIoTCA: %v", err)
+	}
+	caBlock, _ := pem.Decode([]byte(ca.CertPEM))
+	if caBlock == nil {
+		t.Fatal("bad CA PEM")
+	}
+	caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parse CA: %v", err)
+	}
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		t.Fatalf("server cert not signed by lab CA: %v", err)
+	}
+
+	hasLocalhost := false
+	for _, n := range cert.DNSNames {
+		if n == "localhost" {
+			hasLocalhost = true
+		}
+	}
+	hasLoopback := false
+	wantIP := net.ParseIP("127.0.0.1")
+	for _, ip := range cert.IPAddresses {
+		if ip.Equal(wantIP) {
+			hasLoopback = true
+		}
+	}
+	if !hasLocalhost || !hasLoopback {
+		t.Fatalf("SANs want localhost and 127.0.0.1, dns=%v ips=%v", cert.DNSNames, cert.IPAddresses)
 	}
 }
 

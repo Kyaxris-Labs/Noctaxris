@@ -94,7 +94,7 @@ func TestIoTCredentialsPathDoesNotClaimUnsignedS3(t *testing.T) {
 	if unsignedRec.Code == http.StatusOK || strings.Contains(unsignedRec.Body.String(), "accessKeyId") {
 		t.Fatalf("unsigned credentials GET must not mint: %d %s", unsignedRec.Code, unsignedRec.Body.String())
 	}
-	if unsignedRec.Code != http.StatusForbidden {
-		t.Fatalf("unsigned credentials GET want 403, got %d %s", unsignedRec.Code, unsignedRec.Body.String())
+	if unsignedRec.Code != http.StatusForbidden || !strings.Contains(unsignedRec.Body.String(), "MissingAuthenticationToken") {
+		t.Fatalf("unsigned credentials GET want 403 MissingAuthenticationToken, got %d %s", unsignedRec.Code, unsignedRec.Body.String())
 	}
 }

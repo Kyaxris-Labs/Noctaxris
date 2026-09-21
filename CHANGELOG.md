@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- IoT: dedicated device TLS listener on `NOCTAXRIS_IOT_TLS_LISTEN` (`ClientAuth` `VerifyClientCertIfGiven` against the lab IoT CA, so Python and `curl --cert` present the device cert). `DescribeEndpoint` uses that port when set, otherwise `4566`. Compose publishes loopback `:8443` for the listener. Control-plane and health stay HTTP `:4566`
+- IoT: unsigned `GET /role-aliases/{alias}/credentials` without a peer certificate is still 403. Named-shadow REST remains SigV4 or mTLS
+
 ## 1.5.0
 
 Minor after 1.4.1: Go 1.27.1, resource-policy `:root` tightening, nested IMDS path lock, wall-clock ASIA expiry, HTTP_PROXY origin matching, IoT retained MQTT and Jobs/credentials, SigV4 mux service matching. Docker Hub: `kyaxris/noctaxris` (`1.5.0`, `1.5`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
@@ -33,7 +36,7 @@ Minor after 1.3.1: Floci-parity edge and control-plane depth (API Gateway author
 ### Edge, identity, and messaging labs
 
 - API Gateway REST: TOKEN/REQUEST Lambda authorizers (`Create`/`Get`/`GetAuthorizers`/`DeleteAuthorizer`; method `CUSTOM`/`TOKEN`/`REQUEST` + `AuthorizerId`); usage plans and API keys lite (`Create`/`Get`/`Delete` ApiKey and UsagePlan, UsagePlanKey associate); invoke fail-closed Allow/Deny and `x-api-key` when `apiKeyRequired` or stage is under a usage plan
-- KMS: asymmetric lab keys — `CreateKey` `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` (`KeyUsage` `SIGN_VERIFY`); sealed PKCS8 material; `Sign`/`Verify` (`RSASSA_PSS_SHA_256` primary, also `RSASSA_PKCS1_V1_5_SHA_256`); `GetPublicKey` PEM SPKI; symmetric keys reject Sign/Verify fail-closed
+- KMS: asymmetric lab keys. `CreateKey` `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` (`KeyUsage` `SIGN_VERIFY`); sealed PKCS8 material; `Sign`/`Verify` (`RSASSA_PSS_SHA_256` primary, also `RSASSA_PKCS1_V1_5_SHA_256`); `GetPublicKey` PEM SPKI; symmetric keys reject Sign/Verify fail-closed
 - Step Functions: `waitForTaskToken` Task pause (Resource `.waitForTaskToken` or Parameters with `WaitForTaskToken` / `$$.Task.Token`); `SendTaskSuccess` / `SendTaskFailure` / `SendTaskHeartbeat`; execution stays `RUNNING` until callback
 - SSM: parameter version labels (`LabelParameterVersion`, `GetParameterHistory`); `GetParameter`/`GetParameters` resolve `Name:version` / `Name:label` or `Version`/`Label`; Put overwrite keeps history; max 10 labels/version with AWS-like move on reattach
 - CodePipeline: Manual Approval pause on `StartPipelineExecution` (`InProgress` + token via `GetPipelineState`); `PutApprovalResult` Approved continues to CodeBuild / Rejected fails; `GetPipelineExecution` and `ListPipelineExecutions` store-state
@@ -48,7 +51,7 @@ Minor after 1.3.1: Floci-parity edge and control-plane depth (API Gateway author
 - S3: bucket CORS (`Put`/`Get`/`DeleteBucketCors`), lifecycle configuration (`Put`/`Get`/`DeleteLifecycleConfiguration`, stored rules only), and `SelectObjectContent` lite (CSV/JSON, `SELECT * FROM s3object [LIMIT n]`, simplified JSON records; unsupported SQL fail closed)
 - Lightsail: stored-state disks (`Create/Get/GetDisks/Attach/Detach/DeleteDisk`), static IPs (`Allocate/Get/GetStaticIps/Attach/Detach/ReleaseStaticIp`), key pairs (`Create/Get/GetKeyPairs/DeleteKeyPair` dummy material), and public ports (`Open/CloseInstancePublicPorts`, `GetInstancePortStates`); no VMs
 - EMR: CancelSteps (marks steps CANCELLED); persist InstanceGroups/Fleets from RunJobFlow; ListInstanceGroups/ListInstanceFleets; cluster AddTags/RemoveTags; Create/Describe/Delete/List SecurityConfiguration (stored JSON); still no Spark
-- CUR: FOCUS enumerator + projection lite — in-process S3/Lambda usage counters; FOCUS CSV when `Format=FOCUS` or `AdditionalSchemaElements` includes `FOCUS`; `Format=Parquet` stages FOCUS NDJSON then DuckDB Parquet (same `NOCTAXRIS_CUR_EMIT` gate)
+- CUR: FOCUS enumerator + projection lite: in-process S3/Lambda usage counters; FOCUS CSV when `Format=FOCUS` or `AdditionalSchemaElements` includes `FOCUS`; `Format=Parquet` stages FOCUS NDJSON then DuckDB Parquet (same `NOCTAXRIS_CUR_EMIT` gate)
 - Auto Scaling: scaling policies (`Put`/`Describe`/`Delete`), lifecycle hooks, `Attach`/`Detach`/`Describe` instances (membership without DinD), and ELBv2 target-group attach/detach/describe (ARN validated against the ELBv2 store)
 - AWS Backup: selections (`Create`/`Get`/`List`/`DeleteBackupSelection` with `IamRoleArn` + `Resources`); `ListBackupJobs` filters; `StopBackupJob` no-op on completed; `DeleteRecoveryPoint` metadata removal
 - Glue: Schema Registry lite (`Create/Get/List/Delete` Registry and Schema, `Register/Get/List` SchemaVersion); GetTable/GetTables resolve empty Columns from SchemaReference (AVRO/JSON)

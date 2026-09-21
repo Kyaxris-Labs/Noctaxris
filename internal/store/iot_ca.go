@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,14 +20,22 @@ import (
 )
 
 const (
-	labIoTCACertFile = "iot-lab-ca.crt"
-	labIoTCAKeyFile  = "iot-lab-ca.key"
+	labIoTCACertFile     = "iot-lab-ca.crt"
+	labIoTCAKeyFile      = "iot-lab-ca.key"
+	labIoTServerCertFile = "iot-lab-server.crt"
+	labIoTServerKeyFile  = "iot-lab-server.key"
 )
 
 var labIoTCAMu sync.Mutex
 
 // LabIoTCA holds PEM-encoded lab IoT CA certificate and private key.
 type LabIoTCA struct {
+	CertPEM string
+	KeyPEM  string
+}
+
+// LabIoTServerCert is a lab-CA-signed server certificate for the device TLS listener.
+type LabIoTServerCert struct {
 	CertPEM string
 	KeyPEM  string
 }
@@ -134,6 +143,108 @@ func (s *Store) LabIoTCACertificatePEM() (string, error) {
 	return ca.CertPEM, nil
 }
 
+func labIoTServerPaths(dataRoot string) (certPath, keyPath string) {
+	dir := LabIoTSecretsDir(dataRoot)
+	return filepath.Join(dir, labIoTServerCertFile), filepath.Join(dir, labIoTServerKeyFile)
+}
+
+// DefaultIoTServerSANs returns loopback names used when IoTEndpointHost is empty.
+func DefaultIoTServerSANs() (dnsNames []string, ips []net.IP) {
+	return []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+}
+
+// EnsureLabIoTServerCertificate creates or loads a lab-CA-signed server cert (idempotent).
+func (s *Store) EnsureLabIoTServerCertificate(dnsNames []string, ips []net.IP) (LabIoTServerCert, error) {
+	labIoTCAMu.Lock()
+	defer labIoTCAMu.Unlock()
+	if s == nil {
+		return LabIoTServerCert{}, fmt.Errorf("ensure lab iot server cert: store is nil")
+	}
+	certPath, keyPath := labIoTServerPaths(s.dataRoot)
+	certPEM, certErr := os.ReadFile(certPath)
+	keyPEM, keyErr := os.ReadFile(keyPath)
+	if certErr == nil && keyErr == nil {
+		return LabIoTServerCert{CertPEM: string(certPEM), KeyPEM: string(keyPEM)}, nil
+	}
+	if certErr != nil && !os.IsNotExist(certErr) {
+		return LabIoTServerCert{}, fmt.Errorf("read lab iot server cert: %w", certErr)
+	}
+	if keyErr != nil && !os.IsNotExist(keyErr) {
+		return LabIoTServerCert{}, fmt.Errorf("read lab iot server key: %w", keyErr)
+	}
+	if certErr == nil || keyErr == nil {
+		return LabIoTServerCert{}, fmt.Errorf("ensure lab iot server cert: incomplete material on disk")
+	}
+	ca, err := s.ensureLabIoTCAUnlocked()
+	if err != nil {
+		return LabIoTServerCert{}, err
+	}
+	newCertPEM, newKeyPEM, err := signIoTServerCertificate(ca, dnsNames, ips)
+	if err != nil {
+		return LabIoTServerCert{}, err
+	}
+	dir := filepath.Dir(certPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return LabIoTServerCert{}, fmt.Errorf("create lab iot server cert dir: %w", err)
+	}
+	if err := os.WriteFile(certPath, []byte(newCertPEM), 0o600); err != nil {
+		return LabIoTServerCert{}, fmt.Errorf("write lab iot server cert: %w", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(newKeyPEM), 0o600); err != nil {
+		return LabIoTServerCert{}, fmt.Errorf("write lab iot server key: %w", err)
+	}
+	return LabIoTServerCert{CertPEM: newCertPEM, KeyPEM: newKeyPEM}, nil
+}
+
+func signIoTServerCertificate(ca LabIoTCA, dnsNames []string, ips []net.IP) (certPEM, keyPEM string, err error) {
+	caCert, caKey, err := parseCAKeyPair(ca)
+	if err != nil {
+		return "", "", err
+	}
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", "", err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return "", "", err
+	}
+	now := time.Now().UTC()
+	cleanDNS := make([]string, 0, len(dnsNames))
+	for _, n := range dnsNames {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			cleanDNS = append(cleanDNS, n)
+		}
+	}
+	cleanIPs := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip != nil {
+			cleanIPs = append(cleanIPs, ip)
+		}
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   "noctaxris-iot-server",
+			Organization: []string{"Noctaxris Lab"},
+		},
+		NotBefore:   now.Add(-time.Hour),
+		NotAfter:    now.Add(825 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    cleanDNS,
+		IPAddresses: cleanIPs,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		return "", "", err
+	}
+	certBuf := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBuf := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})
+	return string(certBuf), string(keyBuf), nil
+}
+
 // signIoTDeviceCertificate issues a device cert signed by the lab CA with ClientAuth EKU.
 // certificateId is embedded in CN or URI SAN when stable; returned id is SHA-256 of DER.
 func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID string) (certPEM, keyPEM, certificateID string, err error) {
@@ -171,11 +282,11 @@ func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID string) (certPEM, 
 				CommonName:   cn,
 				Organization: []string{"Noctaxris Lab"},
 			},
-			NotBefore:    now.Add(-time.Hour),
-			NotAfter:     now.Add(825 * 24 * time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			URIs:         uris,
+			NotBefore:   now.Add(-time.Hour),
+			NotAfter:    now.Add(825 * 24 * time.Hour),
+			KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			URIs:        uris,
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &deviceKey.PublicKey, caKey)
 		if err != nil {

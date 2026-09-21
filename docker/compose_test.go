@@ -53,10 +53,18 @@ func TestComposePublishesLocalhostOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Default bind is loopback; NOCTAXRIS_PUBLISH_ADDR may override for host-gateway labs.
-	if !strings.Contains(string(b), "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566") {
+	content := string(b)
+	if !strings.Contains(content, "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566") {
 		t.Fatal("compose must default-publish 127.0.0.1:4566 via NOCTAXRIS_PUBLISH_ADDR")
 	}
-	if strings.Contains(string(b), `"0.0.0.0:4566:4566"`) || strings.Contains(string(b), `- "4566:4566"`) {
+	if !strings.Contains(content, "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:8443:8443") {
+		t.Fatal("compose must default-publish 127.0.0.1:8443 via NOCTAXRIS_PUBLISH_ADDR")
+	}
+	if !strings.Contains(content, `NOCTAXRIS_IOT_TLS_LISTEN: "0.0.0.0:8443"`) {
+		t.Fatal("compose must set NOCTAXRIS_IOT_TLS_LISTEN to 0.0.0.0:8443 inside the container")
+	}
+	if strings.Contains(content, `"0.0.0.0:4566:4566"`) || strings.Contains(content, `- "4566:4566"`) ||
+		strings.Contains(content, `"0.0.0.0:8443:8443"`) || strings.Contains(content, `- "8443:8443"`) {
 		t.Fatal("default compose must not hardcode non-loopback host publish")
 	}
 }

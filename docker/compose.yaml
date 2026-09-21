@@ -16,13 +16,17 @@ services:
       # DinD host-gateway reachability may set NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 with
       # compose.lab-host-gateway.yaml (lab-only; prefer TLS if exposing beyond loopback).
       - "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:4566:4566"
+      # Device HTTP / credentials provider mTLS. Control plane stays HTTP :4566.
+      - "${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:8443:8443"
     environment:
       NOCTAXRIS_LISTEN: "0.0.0.0:4566"
+      # Dedicated IoT credentials / data-plane TLS. ClientAuth requests the device cert.
+      NOCTAXRIS_IOT_TLS_LISTEN: "0.0.0.0:8443"
       # Required for the container bind above. Default host publish is 127.0.0.1:4566.
       # Do not set NOCTAXRIS_PUBLISH_ADDR=0.0.0.0 without TLS except short lab sessions.
       NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN: "1"
       # Intentionally unset: Function URL / HTTP API AuthType NONE stay off on this
-      # non-loopback bind. Opt in for CTF labs only:
+      # non-loopback bind. Opt in with compose.lab-open.yaml only:
       # NOCTAXRIS_ALLOW_OPEN_DATA_PLANE: "1"
       NOCTAXRIS_DATA_ROOT: "/var/lib/noctaxris"
       # Sibling secrets volume (outside data root; required under read_only rootfs).

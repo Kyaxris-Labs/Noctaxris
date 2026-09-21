@@ -95,6 +95,10 @@ type Config struct {
 	// (NOCTAXRIS_IOT_ENDPOINT_HOST). Empty uses 127.0.0.1. Non-IP values produce
 	// distinct data/jobs/credentials hostnames for hosts-file and TLS SNI labs.
 	IoTEndpointHost string
+	// IoTTLSListen is the dedicated device-HTTP / credentials TLS bind
+	// (NOCTAXRIS_IOT_TLS_LISTEN). Empty leaves device mTLS on the main listener
+	// only when NOCTAXRIS_TLS_CERT/KEY are set. Compose uses 0.0.0.0:8443.
+	IoTTLSListen string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -113,9 +117,9 @@ func LoadFromEnv() (Config, error) {
 		LambdaEndpointURL:   getenv("NOCTAXRIS_LAMBDA_ENDPOINT_URL", ""),
 		SAMLIdPMetadataPath: getenv("NOCTAXRIS_SAML_IDP_METADATA", ""),
 		SAMLIdPName:         getenv("NOCTAXRIS_SAML_IDP_NAME", "default"),
-		OIDCIssuerURL:          getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),
-		OIDCClientID:           getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
-		HTTPAPIAllowSetCookie:  strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "1") ||
+		OIDCIssuerURL:       getenv("NOCTAXRIS_OIDC_ISSUER_URL", ""),
+		OIDCClientID:        getenv("NOCTAXRIS_OIDC_CLIENT_ID", ""),
+		HTTPAPIAllowSetCookie: strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "1") ||
 			strings.EqualFold(os.Getenv("NOCTAXRIS_HTTP_API_ALLOW_SET_COOKIE"), "true"),
 		FunctionURLCORSOrigins: splitCSVEnv("NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS"),
 		AllowAnonymousS3: strings.EqualFold(os.Getenv(EnvAllowAnonymousS3), "1") ||
@@ -128,7 +132,7 @@ func LoadFromEnv() (Config, error) {
 		VPCFlowInject:         envTruthy("NOCTAXRIS_VPCFLOW_INJECT"),
 		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
-		CognitoInsecureCodes: envTruthy(EnvCognitoInsecureCodes),
+		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
 	}
 
 	sharedKafka, err := envStrictBool(EnvSharedKafka)
@@ -144,6 +148,7 @@ func LoadFromEnv() (Config, error) {
 	cfg.SharedMQTT = sharedMQTT
 
 	cfg.IoTEndpointHost = strings.TrimSpace(getenv("NOCTAXRIS_IOT_ENDPOINT_HOST", ""))
+	cfg.IoTTLSListen = strings.TrimSpace(getenv("NOCTAXRIS_IOT_TLS_LISTEN", ""))
 
 	proxies, err := ParseTrustedProxies(os.Getenv(EnvTrustedProxies))
 	if err != nil {
@@ -182,6 +187,9 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	if err := ValidateListenSecurity(cfg); err != nil {
+		return Config{}, err
+	}
+	if err := ValidateIoTTLSListen(cfg); err != nil {
 		return Config{}, err
 	}
 

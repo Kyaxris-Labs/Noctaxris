@@ -69,6 +69,30 @@ func TestIoTDescribeEndpointLabAddresses(t *testing.T) {
 	}
 }
 
+func TestIoTDescribeEndpointIoTTLSListenPort(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.IoTTLSListen = "127.0.0.1:8443"
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	types := []string{"iot:Data", "iot:Data-ATS", "iot:Jobs", "iot:CredentialProvider"}
+	for _, et := range types {
+		rec := mustIoTREST(t, handler, http.MethodGet,
+			"http://127.0.0.1:4566/endpoint?endpointType="+et, "iot", nil, now)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%q", et, rec.Code, rec.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["endpointAddress"] != "127.0.0.1:8443" {
+			t.Fatalf("%s address=%v want 127.0.0.1:8443", et, out["endpointAddress"])
+		}
+	}
+}
+
 func TestIoTDescribeEndpointDistinctHosts(t *testing.T) {
 	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
 		cfg.IoTEndpointHost = "lab.example.local"
@@ -81,6 +105,29 @@ func TestIoTDescribeEndpointDistinctHosts(t *testing.T) {
 		"iot:Data-ATS":           "data-ats.iot.lab.example.local:4566",
 		"iot:Jobs":               "jobs.iot.lab.example.local:4566",
 		"iot:CredentialProvider": "credentials.iot.lab.example.local:4566",
+	}
+	for et, want := range cases {
+		rec := mustIoTREST(t, handler, http.MethodGet,
+			"http://127.0.0.1:4566/endpoint?endpointType="+et, "iot", nil, now)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"endpointAddress":"`+want+`"`) {
+			t.Fatalf("%s status=%d body=%q want %s", et, rec.Code, rec.Body.String(), want)
+		}
+	}
+}
+
+func TestIoTDescribeEndpointDistinctHostsIoTTLSListen(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.IoTEndpointHost = "lab.example.local"
+		cfg.IoTTLSListen = "127.0.0.1:8443"
+	})
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	cases := map[string]string{
+		"iot:Data":               "data.iot.lab.example.local:8443",
+		"iot:Data-ATS":           "data-ats.iot.lab.example.local:8443",
+		"iot:Jobs":               "jobs.iot.lab.example.local:8443",
+		"iot:CredentialProvider": "credentials.iot.lab.example.local:8443",
 	}
 	for et, want := range cases {
 		rec := mustIoTREST(t, handler, http.MethodGet,

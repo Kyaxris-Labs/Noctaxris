@@ -30,6 +30,33 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.ComputeRuntime != "dind" {
 		t.Fatalf("ComputeRuntime = %q, want dind default", cfg.ComputeRuntime)
 	}
+	if cfg.IoTTLSListen != "" {
+		t.Fatalf("IoTTLSListen = %q, want empty", cfg.IoTTLSListen)
+	}
+}
+
+func TestLoadFromEnvIoTTLSListen(t *testing.T) {
+	t.Setenv("NOCTAXRIS_IOT_TLS_LISTEN", "127.0.0.1:8443")
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IoTTLSListen != "127.0.0.1:8443" {
+		t.Fatalf("IoTTLSListen = %q, want 127.0.0.1:8443", cfg.IoTTLSListen)
+	}
+	t.Setenv(config.EnvAllowNonLoopbackListen, "")
+	t.Setenv("NOCTAXRIS_IOT_TLS_LISTEN", "0.0.0.0:8443")
+	if _, err := config.LoadFromEnv(); err == nil {
+		t.Fatal("expected error for 0.0.0.0:8443 without allow")
+	}
+	t.Setenv(config.EnvAllowNonLoopbackListen, "1")
+	cfg, err = config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IoTTLSListen != "0.0.0.0:8443" {
+		t.Fatalf("IoTTLSListen = %q, want 0.0.0.0:8443", cfg.IoTTLSListen)
+	}
 }
 
 func TestLoadFromEnvDockerHost(t *testing.T) {
@@ -160,4 +187,3 @@ func TestLoadFromEnvCognitoInsecureCodes(t *testing.T) {
 		t.Fatal("CognitoInsecureCodes=1 want true")
 	}
 }
-

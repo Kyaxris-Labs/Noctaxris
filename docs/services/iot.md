@@ -4,7 +4,7 @@
 
 Control-plane Things / certificates / policies / principals / topic rules, plus HTTP JSON and REST thing shadows. Optional MQTT shadow + rules bridge when shared Mosquitto is enabled.
 
-**Protocol:** JSON 1.1 lab facade plus REST data-plane paths on `:4566`  
+**Protocol:** JSON 1.1 lab facade. Control-plane JSON and Compose health stay HTTP `:4566`. Device credentials and data-plane HTTP use `NOCTAXRIS_IOT_TLS_LISTEN` when set (Compose loopback `:8443`); otherwise they share `:4566`.  
 **Targets:** `AWSIotService.<Action>` (control plane, SigV4 service `iot`) and `AWSIotDataService.<Action>` (shadows, SigV4 service `iot-data`). REST shadows use SigV4 service `iotdevicegateway`. Jobs data plane uses `iot-jobs-data`.
 
 ## MQTT wire (opt-in)
@@ -81,10 +81,10 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 | Principals | `AttachThingPrincipal`, `ListThingPrincipals` |
 | Topic rules | `CreateTopicRule`, `GetTopicRule`, `ListTopicRules`, `ReplaceTopicRule`, `DeleteTopicRule`, `EnableTopicRule`, `DisableTopicRule` + in-process action dispatch |
 | Shadows | `UpdateThingShadow`, `GetThingShadow`, `DeleteThingShadow` (classic + optional `shadowName` / REST `?name=`) over HTTP JSON 1.1 and REST `GET|POST|DELETE /things/{thingName}/shadow`; same SQLite store over MQTT when shared MQTT is on |
-| Named shadows | `ListNamedShadowsForThing` REST `GET /api/things/shadow/ListNamedShadowsForThing/{thingName}` (classic unnamed shadow omitted; empty list if only classic exists or the thing is unknown) |
-| Endpoints | `DescribeEndpoint` JSON 1.1 and REST `GET /endpoint?endpointType=` for `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider` (lab `endpointAddress`, default `127.0.0.1:4566`) |
+| Named shadows | `ListNamedShadowsForThing` REST `GET /api/things/shadow/ListNamedShadowsForThing/{thingName}` (classic unnamed shadow omitted; empty list if only classic exists or the thing is unknown; SigV4 or device mTLS) |
+| Endpoints | `DescribeEndpoint` JSON 1.1 and REST `GET /endpoint?endpointType=` for `iot:Data`, `iot:Data-ATS`, `iot:Jobs`, `iot:CredentialProvider`. Lab `endpointAddress` host is `127.0.0.1` (or `NOCTAXRIS_IOT_ENDPOINT_HOST`). Port is `4566` unless `NOCTAXRIS_IOT_TLS_LISTEN` is set, then that listener's port |
 | Jobs | Control-plane `CreateJob` / `DescribeJob`; device HTTP `GET /things/{thingName}/jobs`, `GET /things/{thingName}/jobs/{jobId}`, `PUT /things/{thingName}/jobs/$next` (`iot-jobs-data:*`) |
-| Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress`. Minted ASIA `expiration` / `ExpiresAt` uses wall clock (same as SigV4), not lab `SetClock` |
+| Credentials | mTLS `GET /role-aliases/{roleAlias}/credentials` with `x-amzn-iot-thingname` matching the certificate thing, device policy `iot:AssumeRoleWithCertificate`, IAM trust `credentials.iot.amazonaws.com`, TLS SNI matching the CredentialProvider `endpointAddress` (literal IP URLs may omit SNI; Host must still match). Minted ASIA `expiration` / `ExpiresAt` uses wall clock (same as SigV4), not lab `SetClock` |
 | Retained MQTT | `ListRetainedMessages` returns stored topic summaries (`topic`, `payloadSize`, `qos`, `lastModifiedTime` ms). Payload stays in SQLite and is omitted from List. Empty account is HTTP 200 with `retainedTopics: []`. Shared Mosquitto `#` deliveries with `Retained()` upsert the same rows |
 
 ### Notes
@@ -100,9 +100,17 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 
 Identity `EvaluateFull` on `iot:*`, `iot-data:*`, and `iot-jobs-data:*` for signed HTTP APIs. Device certificates use attached IoT policies (`iot:*`). Device certificates cannot call `ListThings` or `ListRoleAliases`.
 
-Shadow, Jobs, and named-shadow REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`) run only when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`. A request signed as `s3` is path-style S3 (`things` / `api` as the bucket). Wrong-scope signatures are not treated as IoT writes.
+Shadow, Jobs, and named-shadow REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`) run when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`, or when a lab-CA device certificate is present and the attached IoT policy Allows the action (`iot:GetThingShadow` / `iot:ListNamedShadowsForThing` / Jobs actions). Unsigned HTTP without SigV4 or mTLS is 403. A request signed as `s3` is path-style S3 (`things` / `api` as the bucket). Wrong-scope signatures are not treated as IoT writes.
 
 `GET /endpoint` is IoT only when SigV4 service is `iot` (or another `iot*` service). Path-style S3 `GET /endpoint` stays S3.
+
+### Dedicated device TLS
+
+`NOCTAXRIS_IOT_TLS_LISTEN` starts a second `http.Server` with `ClientAuth = VerifyClientCertIfGiven` and `ClientCAs` equal to the lab IoT CA. Python `ssl` and `curl --cert` send the device cert because of that ClientAuth mode. Compose sets `0.0.0.0:8443` inside the container and publishes `${NOCTAXRIS_PUBLISH_ADDR:-127.0.0.1}:8443:8443`. Non-loopback binds still need `NOCTAXRIS_ALLOW_NONLOOPBACK_LISTEN=1`.
+
+DescribeEndpoint device, credentials, jobs, and data addresses use that port when the env is set. Empty env keeps `:4566`. Control plane and Compose health stay HTTP `:4566`.
+
+Credentials GET still fail closed without a peer certificate (403 `MissingAuthenticationToken` on the cleartext listener; handshake failure or 403 on TLS without `--cert`). There is no unsigned cleartext bypass. Named-shadow REST is still SigV4 or mTLS.
 
 Credentials provider `GET /role-aliases/{alias}/credentials` is claimed only when a device client certificate is present (mTLS still required to mint). Unsigned callers without mTLS get the usual missing-signature 403. Signed `s3` GetObject on that key reaches S3.
 
@@ -118,15 +126,17 @@ Lab protocol is JSON (`AWSIotService.*` / `AWSIotDataService.*` X-Amz-Target). P
 
 MQTT shadow / rules round-trip needs DinD, `compose.lab-brokers.yaml`, and device certs from `CreateKeysAndCertificate` after shared MQTT is enabled. SDK live MQTT rows soft-skip when shared flags or engine are unavailable. Topic-rule unit tests use `PublishTopic` and do not require Mosquitto. Live Mosquitto CONNECT ClientId checks are unit-tested via generated dynsec/ACL plus `AllowMQTTConnect`.
 
-DescribeEndpoint, Jobs HTTP, and credentials provider (lab addresses on `:4566`):
+DescribeEndpoint, Jobs HTTP, and credentials provider. Control-plane `--endpoint-url` stays HTTP `:4566`. Device addresses follow `NOCTAXRIS_IOT_TLS_LISTEN` when set (Compose `:8443`):
 
 ```bash
 aws iot describe-endpoint --endpoint-type iot:Data-ATS --endpoint-url "$EP"
 aws iot describe-endpoint --endpoint-type iot:Jobs --endpoint-url "$EP"
 aws iot describe-endpoint --endpoint-type iot:CredentialProvider --endpoint-url "$EP"
 aws iot list-retained-messages --endpoint-url "$EP"
-# Jobs data plane: GET /things/{thingName}/jobs
+# Jobs data plane: GET /things/{thingName}/jobs (SigV4 or device mTLS)
 # Credentials: mTLS GET /role-aliases/{alias}/credentials with matching x-amzn-iot-thingname
+# Compose: curl --cacert iot-lab-ca.crt --cert device.crt --key device.key \
+#   https://127.0.0.1:8443/role-aliases/ALIAS/credentials -H "x-amzn-iot-thingname: THING"
 # ListRetainedMessages: topic, qos, lastModifiedTime, payloadSize (no payload). Empty list is HTTP 200.
 ```
 

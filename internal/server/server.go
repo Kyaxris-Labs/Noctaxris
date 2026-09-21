@@ -145,21 +145,52 @@ func (s *Server) ListenAndServe() error {
 // ListenAndServeContext serves until ctx is cancelled, then drains tickers and
 // shuts down the HTTP server with a timeout.
 func (s *Server) ListenAndServeContext(ctx context.Context) error {
-	srv := &http.Server{
+	handler := s.Handler()
+	main := &http.Server{
 		Addr:              s.cfg.ListenAddr,
-		Handler:           s.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		var err error
 		if s.cfg.TLSCertFile != "" && s.cfg.TLSKeyFile != "" {
-			err = srv.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+			caPEM := ""
+			if s.store != nil {
+				if pem, e := s.store.LabIoTCACertificatePEM(); e == nil {
+					caPEM = pem
+				}
+			}
+			tlsCfg, e := tlsConfigFromPEMFiles(s.cfg.TLSCertFile, s.cfg.TLSKeyFile, caPEM)
+			if e != nil {
+				errCh <- e
+				return
+			}
+			main.TLSConfig = tlsCfg
+			err = main.ListenAndServeTLS("", "")
 		} else {
-			err = srv.ListenAndServe()
+			err = main.ListenAndServe()
 		}
 		errCh <- err
 	}()
+
+	var iotSrv *http.Server
+	if strings.TrimSpace(s.cfg.IoTTLSListen) != "" {
+		tlsCfg, err := s.iotDeviceListenerTLSConfig()
+		if err != nil {
+			return err
+		}
+		iotSrv = &http.Server{
+			Addr:              s.cfg.IoTTLSListen,
+			Handler:           handler,
+			TLSConfig:         tlsCfg,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			errCh <- iotSrv.ListenAndServeTLS("", "")
+		}()
+	}
+
 	s.startSharedMQTTIfEnabled()
 
 	select {
@@ -167,7 +198,10 @@ func (s *Server) ListenAndServeContext(ctx context.Context) error {
 		s.StopBackgroundWorkers()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		_ = main.Shutdown(shutdownCtx)
+		if iotSrv != nil {
+			_ = iotSrv.Shutdown(shutdownCtx)
+		}
 		err := <-errCh
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
