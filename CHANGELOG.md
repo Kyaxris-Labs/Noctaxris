@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-- Temporary `ASIA` access key ids use the same 20-character uppercase hex mint as IAM `AKIA` keys (`newPrefixedAccessKeyID`). STS, IoT credentials provider, nested Lambda/ECS/CodeBuild/Batch role env, and in-process delivery sessions all go through `MintTempCredentialsOpts`.
+## 1.6.1
+
+Patch after 1.6.0: temporary ASIA access key ids are 20-character uppercase hex. Docker Hub: `kyaxris/noctaxris` (`1.6.1`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- Temporary `ASIA` access key ids use the same 20-character uppercase hex mint as IAM `AKIA` keys (`newPrefixedAccessKeyID`). STS, IoT credentials provider, nested Lambda/ECS/CodeBuild/Batch role env, and in-process delivery sessions all go through `MintTempCredentialsOpts`. A minted role session authorizes data-plane calls and IAM from that role's identity policy. A missing session token is `InvalidClientTokenId`
 
 ## 1.6.0
 
