@@ -152,6 +152,9 @@ func TestMintTempCredentialsAndLookup(t *testing.T) {
 	if !strings.HasPrefix(keyID, "ASIA") {
 		t.Fatalf("accessKeyID = %q, want ASIA prefix", keyID)
 	}
+	if keyID != strings.ToUpper(keyID) || len(keyID) != 20 {
+		t.Fatalf("accessKeyID = %q, want 20-char uppercase ASIA id", keyID)
+	}
 
 	ak, err := st.LookupAccessKeyRecord(keyID)
 	if err != nil {

@@ -16,13 +16,21 @@ func newIAMResourceID(prefix string) (string, error) {
 	return prefix + strings.ToUpper(hex.EncodeToString(b[:])), nil
 }
 
-func newAccessKeyID() (string, error) {
+func newPrefixedAccessKeyID(prefix string) (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	// AKIA + 16 hex chars ≈ AWS long-lived key id shape (20 chars total).
-	return "AKIA" + strings.ToUpper(hex.EncodeToString(b[:])), nil
+	// prefix + 16 uppercase hex ≈ AWS 20-char access key id (AKIA long-lived, ASIA STS).
+	return prefix + strings.ToUpper(hex.EncodeToString(b[:])), nil
+}
+
+func newAccessKeyID() (string, error) {
+	return newPrefixedAccessKeyID("AKIA")
+}
+
+func newTempAccessKeyID() (string, error) {
+	return newPrefixedAccessKeyID("ASIA")
 }
 
 func newAccessKeySecret() (string, error) {

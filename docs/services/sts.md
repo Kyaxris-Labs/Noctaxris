@@ -20,7 +20,7 @@ All 11 STS actions are routed. Federation is fail-closed without configured IdP.
 | `GetDelegatedAccessToken` | Fail-closed stub |
 | `GetWebIdentityToken` | Fail-closed stub |
 
-Session policies intersect via `EvaluateWithSession` / `EvaluateFull`. Temporary credentials require `X-Amz-Security-Token` on later SigV4 calls.
+Session policies intersect via `EvaluateWithSession` / `EvaluateFull`. Temporary credentials require `X-Amz-Security-Token` on later SigV4 calls. Minted `ASIA` access key ids are 20 characters with uppercase hex after the prefix (same generator as IAM `AKIA`). IoT credentials provider and nested compute role sessions use that same store mint.
 
 ### Authz notes
 

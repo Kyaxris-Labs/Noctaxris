@@ -1,8 +1,6 @@
 package store
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -89,13 +87,4 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
-}
-
-func newTempAccessKeyID() (string, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	// ASIA + 16 hex chars ≈ AWS temporary key id shape (20 chars total).
-	return "ASIA" + hex.EncodeToString(b[:]), nil
 }

@@ -9,7 +9,7 @@ Lab IAM control plane for users, roles, managed and inline policies, access keys
 | Area | Actions |
 |------|---------|
 | Users | `CreateUser`, `GetUser`, `ListUsers`, `DeleteUser` |
-| Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey`, `GetAccessKeyLastUsed` (AKIA* last-used service/region/time; updated on successful SigV4 calls) |
+| Access keys | `CreateAccessKey`, `DeleteAccessKey`, `ListAccessKeys`, `UpdateAccessKey`, `GetAccessKeyLastUsed` (AKIA* last-used service/region/time; updated on successful SigV4 calls). Long-lived ids are 20-character uppercase hex (`AKIA` + 16). Temporary STS ids use the same mint with prefix `ASIA`. |
 | Account summary | `GetAccountSummary` (Query `SummaryMap` with live entity counts and lab quotas) |
 | Credential report | `GenerateCredentialReport` (lab CSV, state COMPLETE), `GetCredentialReport` (fail closed until Generate) |
 | Managed policies | `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy`, `CreatePolicyVersion`, `GetPolicyVersion`, `ListPolicyVersions`, `DeletePolicyVersion`, `SetDefaultPolicyVersion` (max five versions; default document feeds Evaluate) |

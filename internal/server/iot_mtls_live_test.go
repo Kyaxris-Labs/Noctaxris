@@ -175,11 +175,25 @@ func TestIoTCredentialsLiveTLSDeviceCert(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("mTLS credentials status=%d body=%q", resp.StatusCode, raw)
 	}
-	body := string(raw)
-	if !strings.Contains(body, `"accessKeyId"`) ||
-		!strings.Contains(body, `"secretAccessKey"`) ||
-		!strings.Contains(body, `"sessionToken"`) {
-		t.Fatalf("credentials shape: %s", body)
+	if !strings.Contains(string(raw), `"accessKeyId"`) ||
+		!strings.Contains(string(raw), `"secretAccessKey"`) ||
+		!strings.Contains(string(raw), `"sessionToken"`) {
+		t.Fatalf("credentials shape: %s", raw)
+	}
+	var creds struct {
+		Credentials struct {
+			AccessKeyID string `json:"accessKeyId"`
+		} `json:"credentials"`
+	}
+	if err := json.Unmarshal(raw, &creds); err != nil {
+		t.Fatal(err)
+	}
+	akid := creds.Credentials.AccessKeyID
+	if !strings.HasPrefix(akid, "ASIA") || len(akid) != 20 || akid != strings.ToUpper(akid) {
+		t.Fatalf("IoT minted accessKeyId=%q, want 20-char uppercase ASIA id", akid)
+	}
+	if _, err := st.LookupAccessKeyRecord(akid); err != nil {
+		t.Fatalf("IoT ASIA not in access_keys: %v", err)
 	}
 
 	noCert := iotLabCAClient(t, st, "127.0.0.1", tls.Certificate{}, false)

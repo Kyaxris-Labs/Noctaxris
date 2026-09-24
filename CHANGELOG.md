@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Temporary `ASIA` access key ids use the same 20-character uppercase hex mint as IAM `AKIA` keys (`newPrefixedAccessKeyID`). STS, IoT credentials provider, nested Lambda/ECS/CodeBuild/Batch role env, and in-process delivery sessions all go through `MintTempCredentialsOpts`.
+
 ## 1.6.0
 
 Minor after 1.5.0: IoT device TLS listener, HTTP Publish retain, GetRetainedMessage. Docker Hub: `kyaxris/noctaxris` (`1.6.0`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

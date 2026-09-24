@@ -42,8 +42,12 @@ func TestMintRoleSessionEnvInjectsCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(env["AWS_ACCESS_KEY_ID"], "ASIA") {
-		t.Fatalf("AWS_ACCESS_KEY_ID=%q", env["AWS_ACCESS_KEY_ID"])
+	akid := env["AWS_ACCESS_KEY_ID"]
+	if !strings.HasPrefix(akid, "ASIA") || len(akid) != 20 {
+		t.Fatalf("AWS_ACCESS_KEY_ID=%q, want 20-char ASIA id", akid)
+	}
+	if akid != strings.ToUpper(akid) {
+		t.Fatalf("AWS_ACCESS_KEY_ID=%q, want uppercase", akid)
 	}
 	if env["AWS_SECRET_ACCESS_KEY"] == "" || env["AWS_SESSION_TOKEN"] == "" {
 		t.Fatal("missing secret or session token")
