@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func mustSecretsJSON(t *testing.T, handler http.Handler, target string, payload map[string]any, now time.Time) *httptest.ResponseRecorder {
@@ -299,6 +301,88 @@ func TestSecretsResourcePolicyAloneGrantsGetSecretValue(t *testing.T) {
 	val, _ := getOut["SecretString"].(string)
 	if val != "classified" {
 		t.Fatalf("SecretString=%q want classified body=%q", val, getRec.Body.String())
+	}
+}
+
+func TestSecretsSessionPolicyIntersectsResourcePolicy(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	createRec := mustSecretsJSON(t, handler, "CreateSecret", map[string]any{
+		"Name":         "sess-intersect-secret",
+		"SecretString": "plaintext-should-be-denied",
+	}, now)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("CreateSecret status=%d body=%q", createRec.Code, createRec.Body.String())
+	}
+
+	_, userARN, err := st.CreateUser(testAccountID, "sess-sm-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(userARN, "kms-decrypt",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:Decrypt","Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	allowUser := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"%s"},"Action":"secretsmanager:GetSecretValue","Resource":"*"}]}`, userARN)
+	putPolRec := mustSecretsJSON(t, handler, "PutResourcePolicy", map[string]any{
+		"SecretId":       "sess-intersect-secret",
+		"ResourcePolicy": allowUser,
+	}, now)
+	if putPolRec.Code != http.StatusOK {
+		t.Fatalf("PutResourcePolicy status=%d body=%q", putPolRec.Code, putPolRec.Body.String())
+	}
+
+	const sessSecret = "temp-sess-sm-secret"
+	const sessToken = "temp-sess-sm-token"
+	akid, err := st.MintTempCredentialsOpts(store.MintTempOpts{
+		AccountID:     testAccountID,
+		UserName:      "sess-sm-user",
+		Secret:        sessSecret,
+		SessionToken:  sessToken,
+		Expires:       now.Add(time.Hour),
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"kms:Decrypt","Resource":"*"}]}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{"SecretId": "sess-intersect-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", raw)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+	req.Header.Set("X-Amz-Security-Token", sessToken)
+	signHeader(t, req, raw, akid, sessSecret, testRegion, "secretsmanager", now)
+	denyRec := httptest.NewRecorder()
+	handler.ServeHTTP(denyRec, req)
+	if denyRec.Code != http.StatusForbidden {
+		t.Fatalf("session without secretsmanager Allow status=%d want 403 body=%q", denyRec.Code, denyRec.Body.String())
+	}
+
+	akidOK, err := st.MintTempCredentialsOpts(store.MintTempOpts{
+		AccountID:     testAccountID,
+		UserName:      "sess-sm-user",
+		Secret:        sessSecret + "-ok",
+		SessionToken:  sessToken + "-ok",
+		Expires:       now.Add(time.Hour),
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["secretsmanager:GetSecretValue","kms:Decrypt"],"Resource":"*"}]}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqOK := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", raw)
+	reqOK.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	reqOK.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
+	reqOK.Header.Set("X-Amz-Security-Token", sessToken+"-ok")
+	signHeader(t, reqOK, raw, akidOK, sessSecret+"-ok", testRegion, "secretsmanager", now)
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, reqOK)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("session with secretsmanager Allow status=%d want 200 body=%q", okRec.Code, okRec.Body.String())
 	}
 }
 

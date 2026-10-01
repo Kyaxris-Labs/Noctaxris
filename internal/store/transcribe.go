@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 var (
@@ -69,6 +71,9 @@ func (s *Store) StartTranscriptionJobStub(accountID, region, jobName, mediaURI, 
 	if jobName == "" {
 		return TranscribeJob{}, fmt.Errorf("%w: TranscriptionJobName is required", ErrTranscribeBadRequest)
 	}
+	if err := validate.DataPathSegment("TranscriptionJobName", jobName); err != nil {
+		return TranscribeJob{}, fmt.Errorf("%w: %v", ErrTranscribeBadRequest, err)
+	}
 	mediaURI = strings.TrimSpace(mediaURI)
 	if mediaURI == "" {
 		return TranscribeJob{}, fmt.Errorf("%w: Media.MediaFileUri is required", ErrTranscribeBadRequest)
@@ -106,9 +111,12 @@ func (s *Store) StartTranscriptionJobStub(accountID, region, jobName, mediaURI, 
 		return TranscribeJob{}, fmt.Errorf("start transcription job: mkdir: %w", err)
 	}
 	transcriptPath := filepath.Join(dir, jobName+".json")
+	if !validate.PathUnderRoot(s.dataRoot, transcriptPath) {
+		return TranscribeJob{}, fmt.Errorf("%w: TranscriptionJobName must stay under data root", ErrTranscribeBadRequest)
+	}
 	canned := map[string]any{
-		"jobName":        jobName,
-		"accountId":      accountID,
+		"jobName":   jobName,
+		"accountId": accountID,
 		"results": map[string]any{
 			"transcripts": []map[string]any{
 				{"transcript": "Noctaxris stub transcript."},

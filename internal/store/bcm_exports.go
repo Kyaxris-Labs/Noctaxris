@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 	"github.com/google/uuid"
 )
 
@@ -72,6 +73,9 @@ func (s *Store) CreateBCMExport(accountID, region, name, description, format str
 	if name == "" {
 		return BCMExport{}, fmt.Errorf("%w: Name required", ErrBCMExportBadRequest)
 	}
+	if err := validate.DataPathSegment("Name", name); err != nil {
+		return BCMExport{}, fmt.Errorf("%w: %v", ErrBCMExportBadRequest, err)
+	}
 	format = strings.ToUpper(strings.TrimSpace(format))
 	if format == "" {
 		format = "CSV"
@@ -90,6 +94,9 @@ func (s *Store) CreateBCMExport(accountID, region, name, description, format str
 		ext = ".json"
 	}
 	filePath := filepath.Join(dir, name+"-"+id[:8]+ext)
+	if !validate.PathUnderRoot(s.dataRoot, filePath) {
+		return BCMExport{}, fmt.Errorf("%w: Name must stay under data root", ErrBCMExportBadRequest)
+	}
 	sample, err := bcmSampleContent(format, accountID)
 	if err != nil {
 		return BCMExport{}, err
@@ -116,12 +123,12 @@ func (s *Store) CreateBCMExport(accountID, region, name, description, format str
 func bcmSampleContent(format, accountID string) ([]byte, error) {
 	if format == "JSON" {
 		return json.Marshal([]map[string]any{{
-			"identity/LineItemId":      "lab-line-1",
-			"bill/BillingPeriodStart":  "2026-07-01",
-			"lineItem/UsageAccountId":  accountID,
-			"lineItem/ProductCode":     "AmazonS3",
-			"lineItem/UnblendedCost":   "1.23",
-			"lineItem/CurrencyCode":    "USD",
+			"identity/LineItemId":     "lab-line-1",
+			"bill/BillingPeriodStart": "2026-07-01",
+			"lineItem/UsageAccountId": accountID,
+			"lineItem/ProductCode":    "AmazonS3",
+			"lineItem/UnblendedCost":  "1.23",
+			"lineItem/CurrencyCode":   "USD",
 		}})
 	}
 	csv := "identity/LineItemId,bill/BillingPeriodStart,lineItem/UsageAccountId,lineItem/ProductCode,lineItem/UnblendedCost,lineItem/CurrencyCode\n" +
@@ -179,6 +186,8 @@ func (s *Store) DeleteBCMExport(accountID, exportARN string) error {
 	if err != nil {
 		return fmt.Errorf("delete bcm export: %w", err)
 	}
-	_ = os.Remove(e.FilePath)
+	if validate.PathUnderRoot(s.dataRoot, e.FilePath) {
+		_ = os.Remove(e.FilePath)
+	}
 	return nil
 }

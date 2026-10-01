@@ -51,6 +51,38 @@ func TestPolicyDocument(t *testing.T) {
 	}
 }
 
+func TestDataPathSegment(t *testing.T) {
+	if err := validate.DataPathSegment("UserName", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate.DataPathSegment("Name", "job_1.v2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", ".", "..", "../evil", `..\evil`, "a/b", `a\b`, "bad name"} {
+		if err := validate.DataPathSegment("Name", bad); err == nil || !validate.IsInvalid(err) {
+			t.Fatalf("Name %q: want invalid, got %v", bad, err)
+		}
+	}
+}
+
+func TestPathUnderRootAndJoinDataPath(t *testing.T) {
+	root := t.TempDir()
+	joined, err := validate.JoinDataPath(root, "transfer", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validate.PathUnderRoot(root, joined) {
+		t.Fatalf("joined %q not under %q", joined, root)
+	}
+	if _, err := validate.JoinDataPath(root, "..", "escape"); err == nil {
+		t.Fatal("expected reject .. segment")
+	}
+	outside := filepath.Join(filepath.Dir(root), "outside")
+	if validate.PathUnderRoot(root, outside) {
+		t.Fatalf("outside %q should not be under %q", outside, root)
+	}
+}
+
 func TestReadableFilePath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "meta.xml")

@@ -140,7 +140,7 @@ func isPinnedLabImage(ref string) bool {
 		"neo4j:5-community":                           {},
 		"redpandadata/redpanda:v24.2.4":               {},
 		"eclipse-mosquitto:2.0.20":                    {},
-		"floci/floci-duck:latest":                     {},
+		"floci/floci-duck:0.3.0":                      {},
 	}
 	_, ok := pinnedExact[lower]
 	return ok

@@ -18,6 +18,10 @@ var (
 
 	// IAM resource names follow AWS IAM name constraints.
 	iamNamePattern = regexp.MustCompile(`^[\w+=,.@-]+$`)
+
+	// Data path segments used under NOCTAXRIS_DATA_ROOT (Transfer user, BCM export name,
+	// Transcribe job name). Single segment only: no separators or ".." .
+	dataPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9@][A-Za-z0-9@._-]{0,199}$`)
 )
 
 // ErrInvalid is returned when an input fails validation.
@@ -129,6 +133,65 @@ func PolicyDocument(doc string) error {
 		return fmt.Errorf("%w: PolicyDocument: Statement required", ErrInvalid)
 	}
 	return nil
+}
+
+// DataPathSegment validates a single path segment for joins under the data root.
+// Rejects empty values, ".", "..", null bytes, path separators, and other non-segment shapes.
+func DataPathSegment(field, name string) error {
+	if field == "" {
+		field = "Name"
+	}
+	if name == "" || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("%w: %s: required", ErrInvalid, field)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("%w: %s: must be a single path segment", ErrInvalid, field)
+	}
+	if strings.ContainsAny(name, `/\`) || (filepath.Separator != '/' && strings.ContainsRune(name, filepath.Separator)) {
+		return fmt.Errorf("%w: %s: must be a single path segment", ErrInvalid, field)
+	}
+	if !dataPathSegmentPattern.MatchString(name) {
+		return fmt.Errorf("%w: %s: must match [A-Za-z0-9@][A-Za-z0-9@._-]{0,199}", ErrInvalid, field)
+	}
+	return nil
+}
+
+// PathUnderRoot reports whether cleaned candidate is root or a descendant of cleaned root.
+func PathUnderRoot(root, candidate string) bool {
+	root = filepath.Clean(root)
+	candidate = filepath.Clean(candidate)
+	if root == "" || candidate == "" {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	if candidate == root {
+		return true
+	}
+	prefix := root
+	if !strings.HasSuffix(prefix, sep) {
+		prefix += sep
+	}
+	return strings.HasPrefix(candidate, prefix)
+}
+
+// JoinDataPath joins root with validated segments and requires the result stay under root.
+func JoinDataPath(root string, segments ...string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("%w: root: required", ErrInvalid)
+	}
+	parts := make([]string, 0, len(segments)+1)
+	parts = append(parts, filepath.Clean(root))
+	for i, seg := range segments {
+		if err := DataPathSegment(fmt.Sprintf("segment[%d]", i), seg); err != nil {
+			return "", err
+		}
+		parts = append(parts, seg)
+	}
+	joined := filepath.Join(parts...)
+	if !PathUnderRoot(root, joined) {
+		return "", fmt.Errorf("%w: path escapes root", ErrInvalid)
+	}
+	return joined, nil
 }
 
 // ReadableFilePath cleans path, rejects empty/null bytes, and ensures the file exists and is regular.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -160,6 +161,33 @@ func TestTranscribeJobLifecycle(t *testing.T) {
 	_, err = st.StartTranscriptionJobStub(account, "us-east-1", "job-missing", "s3://bucket/missing.wav", "en-US")
 	if !errors.Is(err, store.ErrTranscribeBadRequest) {
 		t.Fatalf("want bad request for missing object, got %v", err)
+	}
+}
+
+func TestTranscribeJobNameRejectsDotDot(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	if _, err := st.CreateBucket(account, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(account, "bucket", "audio.wav", store.PutObjectMeta{
+		Data: []byte("x"), PlainSize: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../escape", "..\\escape", "a/b", ".", ".."} {
+		_, err := st.StartTranscriptionJobStub(account, "us-east-1", name, "s3://bucket/audio.wav", "en-US")
+		if !errors.Is(err, store.ErrTranscribeBadRequest) {
+			t.Fatalf("jobName %q: err=%v want ErrTranscribeBadRequest", name, err)
+		}
+	}
+	job, err := st.StartTranscriptionJobStub(account, "us-east-1", "job_ok-1", "s3://bucket/audio.wav", "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := strings.TrimPrefix(job.TranscriptURI, "file://")
+	if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(st.DataRoot())) {
+		t.Fatalf("transcript path escapes data root: %s", path)
 	}
 }
 

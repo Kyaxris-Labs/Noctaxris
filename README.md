@@ -299,7 +299,7 @@ Open the service matrix for detailed actions and gaps. Full notes and CLI smoke:
     </tr>
     <tr>
       <td>Transfer Family</td>
-      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DescribeUser/ListUsers/DeleteUser, ImportSshPublicKey/DeleteSshPublicKey (SQLite metadata). Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (path traversal fail-closed) via HTTP on <code>:4566</code> (same API port; SigV4 service <code>transfer</code>). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
+      <td>CreateServer/DescribeServer/ListServers/DeleteServer, CreateUser/DescribeUser/ListUsers/DeleteUser, ImportSshPublicKey/DeleteSshPublicKey (SQLite metadata). Servers report ONLINE. Lab file Put/Get/List on <code>/transfer/{serverId}/home/{user}/...</code> or JSON PutFile/GetFile/ListDirectory under the sandbox (<code>UserName</code> must be a single path segment) via HTTP on <code>:4566</code> (same API port; SigV4 service <code>transfer</code>). Omits EndpointType (no VPC theatre); EndpointDetails rejected; PassRole on CreateUser Role. Not a real SFTP listener.</td>
       <td>AS2, FTPS depth, IdP integration, WAN expose, live SSH/SFTP listener.</td>
     </tr>
     <tr>

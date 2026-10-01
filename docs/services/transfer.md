@@ -9,7 +9,7 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 | Area | Actions / paths |
 |------|-----------------|
 | Server | `CreateServer`, `DescribeServer`, `ListServers`, `DeleteServer` (`State=ONLINE`) |
-| User | `CreateUser`, `DescribeUser`, `ListUsers`, `DeleteUser` |
+| User | `CreateUser`, `DescribeUser`, `ListUsers`, `DeleteUser` (`UserName` is a single path segment under the data root) |
 | SSH keys | `ImportSshPublicKey`, `DeleteSshPublicKey` (SQLite metadata; echoed on `DescribeUser`; `SshPublicKeyCount` on `ListUsers`) |
 | Protocol | SFTP only (label; not a live SFTP daemon) |
 | Storage | Per-user sandbox directory under data root |
@@ -17,7 +17,7 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 
 ### Authz notes
 
-Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create). Lab file actions use `transfer:PutFile`, `transfer:GetFile`, `transfer:ListDirectory`. Non-empty CreateUser `Role` requires `iam:PassRole` plus `transfer.amazonaws.com` trust. Paths are confined with `filepath.Clean`; `../` escapes fail closed.
+Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create). File actions use `transfer:PutFile`, `transfer:GetFile`, `transfer:ListDirectory`. Non-empty CreateUser `Role` requires `iam:PassRole` plus `transfer.amazonaws.com` trust. `UserName` must be a single path segment (`[A-Za-z0-9@][A-Za-z0-9@._-]{0,199}`); relative file paths stay under that home with `filepath.Clean`.
 
 ## How to verify / CLI smoke
 
@@ -43,7 +43,7 @@ Lab file API on the API port (not SFTP):
 #   PUT|GET $EP/transfer/$SID/home/alice/inbox/hello.txt
 ```
 
-No live SFTP port is published. Unit tests assert ONLINE create, JSON PutFile/GetFile roundtrip, HTTP `/transfer/.../home/...` Put/Get roundtrip, and path-traversal rejection.
+No live SFTP port is published. Unit tests assert ONLINE create, JSON PutFile/GetFile roundtrip, HTTP `/transfer/.../home/...` Put/Get roundtrip, and rejection of `UserName` values that are not a single path segment.
 
 ## Not yet / deferred
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 	"github.com/google/uuid"
 )
 
@@ -123,8 +124,15 @@ func TransferUserARN(region, accountID, serverID, userName string) string {
 	return fmt.Sprintf("arn:aws:transfer:%s:%s:user/%s/%s", region, accountID, serverID, userName)
 }
 
-func (s *Store) transferHomeRoot(accountID, serverID, userName string) string {
-	return filepath.Join(s.dataRoot, "transfer", accountID, serverID, "home", userName)
+func (s *Store) transferHomeRoot(accountID, serverID, userName string) (string, error) {
+	if err := validate.DataPathSegment("UserName", userName); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrTransferBadRequest, err)
+	}
+	home := filepath.Join(s.dataRoot, "transfer", accountID, serverID, "home", userName)
+	if !validate.PathUnderRoot(s.dataRoot, home) {
+		return "", fmt.Errorf("%w: UserName must stay under data root", ErrTransferBadRequest)
+	}
+	return home, nil
 }
 
 // CreateTransferServer creates a server with SFTP protocol and sandbox home roots.
@@ -226,6 +234,10 @@ func (s *Store) CreateTransferUser(accountID, serverID, userName, homeDirectory,
 	if userName == "" {
 		return TransferUser{}, fmt.Errorf("%w: UserName is required", ErrTransferBadRequest)
 	}
+	home, err := s.transferHomeRoot(accountID, serverID, userName)
+	if err != nil {
+		return TransferUser{}, err
+	}
 	if _, err := s.DescribeTransferServer(accountID, serverID); err != nil {
 		return TransferUser{}, err
 	}
@@ -233,7 +245,7 @@ func (s *Store) CreateTransferUser(accountID, serverID, userName, homeDirectory,
 		homeDirectory = "/" + userName
 	}
 	var existing string
-	err := s.db.QueryRow(
+	err = s.db.QueryRow(
 		`SELECT user_name FROM transfer_users WHERE account_id = ? AND server_id = ? AND user_name = ?`,
 		accountID, serverID, userName,
 	).Scan(&existing)
@@ -243,7 +255,6 @@ func (s *Store) CreateTransferUser(accountID, serverID, userName, homeDirectory,
 	if !errors.Is(err, sql.ErrNoRows) {
 		return TransferUser{}, fmt.Errorf("create transfer user: %w", err)
 	}
-	home := s.transferHomeRoot(accountID, serverID, userName)
 	if err := os.MkdirAll(home, 0o750); err != nil {
 		return TransferUser{}, fmt.Errorf("create transfer user: mkdir: %w", err)
 	}
@@ -280,7 +291,9 @@ func (s *Store) DeleteTransferUser(accountID, serverID, userName string) error {
 	if n == 0 {
 		return ErrTransferUserNotFound
 	}
-	_ = os.RemoveAll(s.transferHomeRoot(accountID, serverID, userName))
+	if home, err := s.transferHomeRoot(accountID, serverID, userName); err == nil {
+		_ = os.RemoveAll(home)
+	}
 	return nil
 }
 
@@ -426,7 +439,7 @@ func (s *Store) TransferUserHomePath(accountID, serverID, userName string) (stri
 	if err != nil {
 		return "", fmt.Errorf("transfer user home: %w", err)
 	}
-	return s.transferHomeRoot(accountID, serverID, userName), nil
+	return s.transferHomeRoot(accountID, serverID, userName)
 }
 
 func (s *Store) transferRequireOnlineServer(accountID, serverID string) error {

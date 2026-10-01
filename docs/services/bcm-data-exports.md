@@ -8,7 +8,7 @@ CreateExport, ListExports, GetExport, and DeleteExport lite. Writes a CSV or JSO
 
 | Area | Actions |
 |------|---------|
-| Exports | `CreateExport`, `GetExport`, `ListExports`, `DeleteExport` |
+| Exports | `CreateExport`, `GetExport`, `ListExports`, `DeleteExport` (`Name` is a single path segment under the data root) |
 
 ### Authz notes
 

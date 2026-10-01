@@ -700,10 +700,10 @@ func (s *Server) authorize(verified *authn.Verified, action, resource string) bo
 // authorizeDataplaneOR applies SCP/RCP, then a resource evaluator (S3/SQS/SNS/DynamoDB).
 // Same-account: identity Allow OR resource policy Allow. Cross-account (resourceAccountID
 // differs from caller): identity Allow AND resource policy Allow via EvaluateResourceAccess.
-// Session and permissions-boundary explicit Deny still apply when the resource
-// document alone Allows. Boundary and session Allow intersection runs only when
-// identity Allows (implicit deny in those documents does not block a direct
-// resource-policy grant).
+// Session and permissions-boundary explicit Deny always apply. When a session policy is
+// present, its Allow set intersects even if only the resource policy granted the action
+// (AWS session-policy intersection with resource-based grants that name the principal).
+// Permissions-boundary Allow intersection still runs only when identity Allows.
 func (s *Server) authorizeDataplaneOR(
 	verified *authn.Verified,
 	action, resource, resourceAccountID string,
@@ -723,16 +723,16 @@ func (s *Server) authorizeDataplaneOR(
 	if authz.SessionOrBoundaryExplicitDeny(ctx, in) {
 		return false
 	}
+	if len(in.SessionDocs) > 0 {
+		if authz.Evaluate(ctx, in.SessionDocs) != authz.Allow {
+			return false
+		}
+	}
 	if authz.Evaluate(ctx, in.IdentityDocs) != authz.Allow {
 		return true
 	}
 	if !ctx.Principal.IsRoot && strings.TrimSpace(in.BoundaryDoc) != "" {
 		if authz.Evaluate(ctx, []string{in.BoundaryDoc}) != authz.Allow {
-			return false
-		}
-	}
-	if len(in.SessionDocs) > 0 {
-		if authz.Evaluate(ctx, in.SessionDocs) != authz.Allow {
 			return false
 		}
 	}

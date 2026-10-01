@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Transfer: `CreateUser` `UserName` must be a single path segment under the data root (same shape as other data-root names)
+- BCM Data Exports: export `Name` must be a single path segment under the data root
+- Transcribe: `TranscriptionJobName` must be a single path segment under the data root
+- Secrets Manager / data-plane OR authz: when a session policy is present, its Allow set intersects resource-policy grants that name the principal
+- Athena: DuckDB engine path applies the same SELECT subset parse as in-process before forwarding `QueryString`
+- Nested DuckDB default image is `floci/floci-duck:0.3.0` (allowlist pin matches); override with `NOCTAXRIS_DUCKDB_IMAGE`
+
 ## 1.6.1
 
 Patch after 1.6.0: temporary ASIA access key ids are 20-character uppercase hex. Docker Hub: `kyaxris/noctaxris` (`1.6.1`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

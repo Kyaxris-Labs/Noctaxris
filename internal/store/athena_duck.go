@@ -50,6 +50,10 @@ func (s *Store) StartAthenaDuckQueryExecution(accountID string, in AthenaStartIn
 	if q == "" {
 		return AthenaQueryExecution{}, fmt.Errorf("%w: QueryString is required", ErrAthenaBadRequest)
 	}
+	parsed, err := parseAthenaSelect(q)
+	if err != nil {
+		return AthenaQueryExecution{}, err
+	}
 	wg := strings.TrimSpace(in.WorkGroup)
 	if wg == "" {
 		wg = DefaultAthenaWorkGroup
@@ -75,21 +79,10 @@ func (s *Store) StartAthenaDuckQueryExecution(accountID string, in AthenaStartIn
 		ResultRows:       [][]string{},
 	}
 
-	// Prefer db.table from SQL when present; else QueryExecutionContext.Database.
-	parsedDB := dbName
-	if m := athenaSelectRE.FindStringSubmatch(q); m != nil {
-		fromPart, _ := splitAthenaFromAndSuffix(strings.TrimSpace(m[2]))
-		if jm := athenaJoinRE.FindStringSubmatch(fromPart); jm != nil {
-			ldb, _ := splitAthenaDBTable(strings.TrimSpace(jm[1]))
-			if ldb != "" {
-				parsedDB = ldb
-			}
-		} else if fm := athenaFromRE.FindStringSubmatch(fromPart); fm != nil {
-			ldb, _ := splitAthenaDBTable(strings.TrimSpace(fm[1]))
-			if ldb != "" {
-				parsedDB = ldb
-			}
-		}
+	// Prefer db.table from the SELECT subset parse; else QueryExecutionContext.Database.
+	parsedDB := strings.TrimSpace(parsed.Database)
+	if parsedDB == "" {
+		parsedDB = dbName
 	}
 	if parsedDB == "" {
 		exec.State = "FAILED"

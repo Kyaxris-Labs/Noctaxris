@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-SELECT over Glue Data Catalog tables and lab S3 objects. Default path is the in-process SQL subset. Optional DuckDB HTTP sidecar on DinD-internal `noctaxris-data` (no host port publish) for broader SQL and Parquet. Identity authz.
+SELECT over Glue Data Catalog tables and S3 objects. Default path is the in-process SQL subset. Optional DuckDB HTTP sidecar on DinD-internal `noctaxris-data` (no host port publish) for the same SELECT subset with Parquet via Glue views. Identity authz.
 
 ## Implemented
 
@@ -11,7 +11,7 @@ SELECT over Glue Data Catalog tables and lab S3 objects. Default path is the in-
 | Query | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` |
 | WorkGroup | `CreateWorkGroup`, `GetWorkGroup`, `ListWorkGroups`, `UpdateWorkGroup`, `DeleteWorkGroup`. Default `primary` is seeded (or treated as implicit ENABLED). `StartQueryExecution` rejects `DISABLED` workgroups; when `EnforceWorkGroupConfiguration` is true and the workgroup has `OutputLocation`, that location overrides the request; otherwise a workgroup `OutputLocation` fills in when the request omits `ResultConfiguration.OutputLocation` |
 | SQL subset (in-process) | `SELECT cols FROM db.table [alias] [JOIN\|INNER JOIN db.t2 b ON a.x = b.x] [WHERE col = 'literal' \| col != 'literal' \| col <> 'literal' \| col <\|<=\|>\|>= 'literal' \| col BETWEEN 'a' AND 'b' \| col IN ('a','b') \| col LIKE 'pat%' \| json_extract(col,'$.path') = 'v'] [GROUP BY col] [ORDER BY col [ASC\|DESC]] [LIMIT n]`; `SELECT COUNT(*) FROM db.table ...`; `SELECT col, COUNT(*) ... GROUP BY col` (or `table` with `QueryExecutionContext.Database`) |
-| DuckDB engine | When selected or available: Glue tables become `CREATE VIEW` over `read_csv_auto` / `read_json_auto` / `read_parquet`; user SQL runs via nested `floci/floci-duck`-compatible `/query` (DinD exec to sidecar) or `NOCTAXRIS_DUCKDB_URL` |
+| DuckDB engine | When selected or available: Glue tables become `CREATE VIEW` over `read_csv_auto` / `read_json_auto` / `read_parquet`; `QueryString` must pass the same SELECT subset as in-process, then runs via nested `floci/floci-duck`-compatible `/query` (DinD exec to sidecar) or `NOCTAXRIS_DUCKDB_URL` |
 | Catalog | Resolves tables from Glue (`StorageDescriptor.Location`, columns, SerDe/InputFormat for CSV vs JSON vs Parquet) |
 | Trail-shaped JSON | Top-level `{"Records":[...]}` objects expand one row per record; `.gz` objects decompress before parse |
 | Results | In-memory result set. Optional `ResultConfiguration.OutputLocation` writes CSV under lab S3; write failures mark the query `FAILED` |
@@ -33,7 +33,7 @@ Parquet Glue tables (`InputFormat` / SerDe containing `parquet`) require the Duc
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `NOCTAXRIS_DUCKDB_URL` | empty | Pre-configured DuckDB HTTP base URL (skips nested ensure) |
-| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:latest` | Nested sidecar image (allowlisted) |
+| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:0.3.0` | Nested sidecar image (allowlisted immutable tag) |
 | `NOCTAXRIS_DUCKDB_S3_ENDPOINT` | `http://host.docker.internal:4566` | Lab S3 endpoint as seen from the DuckDB container |
 
 Nested DuckDB stays on `noctaxris-data` with no host port publish. The API reaches `/query` via DinD exec (the API process is not on that network). Sidecar ExtraHosts include `host.docker.internal:host-gateway` for lab S3 reads.

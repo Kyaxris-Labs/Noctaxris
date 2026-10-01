@@ -44,7 +44,7 @@ func TestAllowImagePullLabAndPinned(t *testing.T) {
 		"neo4j:5-community",
 		"redpandadata/redpanda:v24.2.4",
 		"eclipse-mosquitto:2.0.20",
-		"floci/floci-duck:latest",
+		"floci/floci-duck:0.3.0",
 	}
 	for _, ref := range ok {
 		if err := compute.AllowImagePull(ref, listen); err != nil {

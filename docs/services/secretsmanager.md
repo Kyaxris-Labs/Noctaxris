@@ -23,7 +23,7 @@ Secret metadata and sealed values live in SQLite. ARNs include a random six-char
 
 ### Authz notes
 
-Secrets Manager uses `authorizeDataplaneOR` with the shared resource dual-eval helper (same OR/AND rules as DynamoDB table policies) and the secret owner account from the secret ARN. Same-account access: allow if identity **or** secret resource policy Allows. Cross-account access: allow only when identity **and** secret resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. `CreateSecret` and `ListSecrets` use identity-only `EvaluateFull`. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
+Secrets Manager uses `authorizeDataplaneOR` with the shared resource dual-eval helper (same OR/AND rules as DynamoDB table policies) and the secret owner account from the secret ARN. Same-account access: allow if identity **or** secret resource policy Allows. Cross-account access: allow only when identity **and** secret resource policy both Allow. Empty resource policy denies cross-account callers. Explicit Deny in either wins. When a session policy is present, its Allow set always intersects (including resource-policy-only grants). Permissions-boundary Allow intersection still runs when identity Allows. `CreateSecret` and `ListSecrets` use identity-only `EvaluateFull`. Org SCP/RCP filters apply before evaluation.
 
 Plaintext paths also call `EvaluateKMS` on the secret CMK: `kms:Encrypt` for `CreateSecret` / `PutSecretValue` / `RotateSecret`, and `kms:Decrypt` for `GetSecretValue` (identity plus key policy, matching S3/DynamoDB SSE-KMS). Seal/unseal and KMS authz bind EncryptionContext `SecretARN` (secret ARN) and `SecretVersionId` (lab version id string). A secretsmanager Allow alone is not enough when the CMK key policy or caller identity denies KMS. `PutResourcePolicy` requires every statement to name a `Principal` (missing Principal is rejected at put and would match-none at eval).
 
@@ -74,7 +74,7 @@ aws secretsmanager get-resource-policy \
   --endpoint-url "$EP"
 ```
 
-A principal with no identity Allow for `secretsmanager:GetSecretValue` can still pass the Secrets Manager dual-eval when the secret resource policy Allows that action (same OR semantics as DynamoDB table policies), but `GetSecretValue` still requires caller `kms:Decrypt` via EvaluateKMS on the secret CMK. Handler tests cover this path.
+A principal with no identity Allow for `secretsmanager:GetSecretValue` can still pass the Secrets Manager dual-eval when the secret resource policy Allows that action (same OR semantics as DynamoDB table policies), provided any session policy also Allows the action. `GetSecretValue` still requires caller `kms:Decrypt` via EvaluateKMS on the secret CMK. Handler tests cover this path.
 
 ```bash
 aws secretsmanager delete-resource-policy \

@@ -47,7 +47,7 @@ FOCUS projection runs when `Format` is `Parquet` or `FOCUS`, or when `Additional
 |----------|---------|-------------|
 | `NOCTAXRIS_CUR_EMIT` | on | Set `0` / `off` / `false` to skip S3 artifact writes |
 | `NOCTAXRIS_DUCKDB_URL` | empty | Pre-configured DuckDB HTTP base URL (skips nested `noctaxris-lab-duck` ensure); shared with Athena |
-| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:latest` | Allowlisted nested DuckDB HTTP shim image |
+| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:0.3.0` | Allowlisted nested DuckDB HTTP shim image |
 | `NOCTAXRIS_DUCKDB_S3_ENDPOINT` | `http://host.docker.internal:4566` | Lab S3/API URL as seen from the DuckDB container |
 
 Nested DuckDB stays on `noctaxris-data` with no host port publish. The API reaches `/query` via DinD exec (same path as Athena).

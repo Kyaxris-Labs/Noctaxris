@@ -79,6 +79,24 @@ func TestTransferPathTraversalRejected(t *testing.T) {
 	}
 }
 
+func TestTransferUserNameRejectsDotDot(t *testing.T) {
+	st := openStreamCStore(t)
+	account := "000000000001"
+	sv, err := st.CreateTransferServer(account, "us-east-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../escape", "..\\escape", "a/b", ".", ".."} {
+		_, err := st.CreateTransferUser(account, sv.ServerID, name, "/x", "")
+		if !errors.Is(err, store.ErrTransferBadRequest) {
+			t.Fatalf("UserName %q: err=%v want ErrTransferBadRequest", name, err)
+		}
+	}
+	if _, err := st.CreateTransferUser(account, sv.ServerID, "bob_1", "/bob_1", ""); err != nil {
+		t.Fatalf("legitimate UserName: %v", err)
+	}
+}
+
 func TestTransferUserDescribeListAndSshKeys(t *testing.T) {
 	st := openStreamCStore(t)
 	account := "000000000001"

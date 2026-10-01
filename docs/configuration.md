@@ -53,7 +53,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_CLOUDTRAIL_GZIP` | disabled | Set to `1` to gzip-compress CloudTrail trail delivery objects under the AWSLogs hive (`.json.gz`). Athena reads decompress by suffix/magic. |
 | `NOCTAXRIS_ATHENA_ENGINE` | `auto` | Athena SQL engine: `auto` prefers DuckDB when `NOCTAXRIS_DUCKDB_URL` or nested DinD DuckDB is available then falls back in-process; `duckdb` fail-closed without engine; `inprocess` skips DuckDB. |
 | `NOCTAXRIS_DUCKDB_URL` | empty | Pre-configured DuckDB HTTP base URL (skips nested `noctaxris-lab-duck` ensure). Used by Athena and CUR Parquet emit. |
-| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:latest` | Allowlisted nested DuckDB HTTP shim image. |
+| `NOCTAXRIS_DUCKDB_IMAGE` | `floci/floci-duck:0.3.0` | Allowlisted nested DuckDB HTTP shim image. |
 | `NOCTAXRIS_DUCKDB_S3_ENDPOINT` | `http://host.docker.internal:4566` | Lab S3/API URL as seen from the DuckDB container. |
 | `NOCTAXRIS_CUR_EMIT` | on | Set `0` / `off` / `false` to skip CUR S3 artifact writes on Put/Modify. |
 | `NOCTAXRIS_GUARDDUTY_INJECT` | disabled | Set to `1` to enable lab-only `guardduty:InjectFindings` (`NoctaxrisGuardDuty.InjectFindings`). Default off returns AccessDenied. |

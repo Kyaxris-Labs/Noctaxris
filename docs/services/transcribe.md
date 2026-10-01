@@ -8,7 +8,7 @@
 
 | Area | Actions |
 |------|---------|
-| Jobs | `StartTranscriptionJob`, `GetTranscriptionJob`, `ListTranscriptionJobs` |
+| Jobs | `StartTranscriptionJob`, `GetTranscriptionJob`, `ListTranscriptionJobs` (`TranscriptionJobName` is a single path segment under the data root) |
 | Input | `Media.MediaFileUri` must be `s3://` and exist in lab S3 |
 | Output | Canned transcript file under data root (`file://...`) |
 | Authz | Identity `EvaluateFull` on `transcribe:*` |

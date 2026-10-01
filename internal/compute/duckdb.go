@@ -18,7 +18,7 @@ const (
 	// DefaultDuckPort is the floci-duck-compatible HTTP listen port.
 	DefaultDuckPort = 3000
 	// DefaultDuckImage is the allowlisted DuckDB HTTP shim image (floci-duck compatible).
-	DefaultDuckImage = "floci/floci-duck:latest"
+	DefaultDuckImage = "floci/floci-duck:0.3.0"
 
 	// EnvDuckDBURL points at an already-reachable DuckDB HTTP base URL (skips container ensure).
 	EnvDuckDBURL = "NOCTAXRIS_DUCKDB_URL"
@@ -59,9 +59,9 @@ type DuckQueryResult struct {
 
 // DuckTableRef describes a Glue-backed table for CREATE VIEW injection.
 type DuckTableRef struct {
-	Name            string
-	Location        string // s3://bucket/prefix
-	InputFormat     string
+	Name             string
+	Location         string // s3://bucket/prefix
+	InputFormat      string
 	SerializationLib string
 }
 

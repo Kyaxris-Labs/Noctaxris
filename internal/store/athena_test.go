@@ -348,3 +348,35 @@ func TestAthenaDuckRunnerFailClosed(t *testing.T) {
 		t.Fatalf("state=%s", exec.State)
 	}
 }
+
+func TestAthenaDuckQueryStringRequiresSelectSubset(t *testing.T) {
+	st := openTestStore(t)
+	account := "000000000001"
+	seedAthenaPeopleCSV(t, st, account)
+	ran := false
+	_, err := st.StartAthenaDuckQueryExecution(account, store.AthenaStartInput{
+		QueryString: "PRAGMA version",
+		Database:    "labdb",
+	}, func(_, _ string) ([]store.AthenaColumnInfo, [][]string, error) {
+		ran = true
+		return nil, nil, nil
+	})
+	if err == nil || !errors.Is(err, store.ErrAthenaBadRequest) {
+		t.Fatalf("non-SELECT QueryString: err=%v want ErrAthenaBadRequest", err)
+	}
+	if ran {
+		t.Fatal("Duck runner must not run for non-SELECT QueryString")
+	}
+	exec, err := st.StartAthenaDuckQueryExecution(account, store.AthenaStartInput{
+		QueryString: "SELECT name FROM people WHERE name = 'alice'",
+		Database:    "labdb",
+	}, func(querySQL, _ string) ([]store.AthenaColumnInfo, [][]string, error) {
+		if !strings.Contains(querySQL, "alice") {
+			t.Fatalf("query=%q", querySQL)
+		}
+		return []store.AthenaColumnInfo{{Name: "name", Type: "varchar"}}, [][]string{{"alice"}}, nil
+	})
+	if err != nil || exec.State != "SUCCEEDED" {
+		t.Fatalf("SELECT subset: err=%v state=%s", err, exec.State)
+	}
+}

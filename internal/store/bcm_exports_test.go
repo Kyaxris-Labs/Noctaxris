@@ -95,3 +95,21 @@ func TestBCMExportARNAndCRUD(t *testing.T) {
 		t.Fatalf("delete missing err=%v", err)
 	}
 }
+
+func TestBCMExportNameRejectsDotDot(t *testing.T) {
+	st := openBCMStore(t)
+	account := "000000000001"
+	for _, name := range []string{"../escape", "..\\escape", "a/b", ".", ".."} {
+		_, err := st.CreateBCMExport(account, "us-east-1", name, "d", "CSV")
+		if !errors.Is(err, store.ErrBCMExportBadRequest) {
+			t.Fatalf("Name %q: err=%v want ErrBCMExportBadRequest", name, err)
+		}
+	}
+	exp, err := st.CreateBCMExport(account, "us-east-1", "cur_export-1", "ok", "CSV")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(filepath.Clean(exp.FilePath), filepath.Clean(st.DataRoot())) {
+		t.Fatalf("export path escapes data root: %s", exp.FilePath)
+	}
+}
