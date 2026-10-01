@@ -14,7 +14,7 @@ Lab-complete customer-managed keys: sealed CMK material, key policies with expli
 | Key policy | `GetKeyPolicy`, `PutKeyPolicy` |
 | Cryptographic | `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext`, `ReEncrypt` (optional `EncryptionContext` bound as GCM AAD; decrypt/re-encrypt must supply the same map) |
 | Asymmetric | `Sign`, `Verify`, `GetPublicKey` for `KeySpec`/`CustomerMasterKeySpec` `RSA_2048` with `KeyUsage` `SIGN_VERIFY` (PKCS8 private material sealed at rest). Primary algorithm `RSASSA_PSS_SHA_256`; also accepts `RSASSA_PKCS1_V1_5_SHA_256`. `GetPublicKey` returns PEM-encoded SPKI (base64). Symmetric keys reject Sign/Verify with `InvalidKeyUsageException` |
-| Grants | `CreateGrant`, `ListGrants`, `RetireGrant`, `RevokeGrant` |
+| Grants | `CreateGrant` (optional `Constraints.EncryptionContextEquals` / `EncryptionContextSubset`), `ListGrants`, `RetireGrant`, `RevokeGrant` (`KeyId` + `GrantId`) |
 | Aliases | `CreateAlias`, `ListAliases`, `DeleteAlias`, `UpdateAlias` |
 | Tags | `ListResourceTags`, `TagResource`, `UntagResource`; `CreateKey` accepts `Tags` |
 | Lab convenience aliases | Per-account `alias/aws/s3`, `alias/aws/dynamodb`, `alias/aws/sqs` (lab CMK approximations, not AWS-owned keys) |
@@ -25,7 +25,7 @@ CreateKey seeds a default key policy that allows the account root (and the IAM u
 
 KMS uses `EvaluateKMS`: for key-scoped operations, identity Allow alone is not enough. The key policy (or a matching grant) must explicitly allow the principal and action. Key policy statements must name a `Principal` on put (`PutKeyPolicy` rejects Principal-less documents) and at eval missing Principal matches none. Org SCP/RCP filters apply on the data-plane path. CreateKey is identity-evaluated (no key yet). Cross-service seals (Secrets Manager, SSM SecureString, DynamoDB SSE, S3 SSE-KMS) pass AWS-shaped EncryptionContext maps into EvaluateKMS and ciphertext AAD; see those service pages for the keys.
 
-When `EncryptionContext` is present, request condition keys include `kms:EncryptionContext:<key>` for each pair and `kms:EncryptionContextKeys` (sorted, comma-joined). Ciphertext integrity binds the same map as AES-GCM AAD: a mismatched or omitted context fails decrypt with `InvalidCiphertextException`.
+When `EncryptionContext` is present, request condition keys include `kms:EncryptionContext:<key>` for each pair and `kms:EncryptionContextKeys` (sorted, comma-joined). Ciphertext integrity binds the same map as AES-GCM AAD: a mismatched or omitted context fails decrypt with `InvalidCiphertextException`. Grants with EncryptionContext constraints match only when the request context satisfies Equals (exact map) or Subset (contains all pairs). `RevokeGrant` requires `KeyId` and removes the grant only on that CMK.
 
 Cross-account Encrypt and similar crypto APIs use a full key ARN. Both the caller identity policy and the trusting account key policy must Allow.
 

@@ -378,7 +378,8 @@ func TestConfigRecorderAndCompliance(t *testing.T) {
 	if _, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "config-q", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-recorder")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.PutConfigDeliveryChannel(account, "default", "config-bucket", "", ""); err != nil {
@@ -444,7 +445,8 @@ func TestConfigStartFailsWhenHistoryPutFails(t *testing.T) {
 	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-fail")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	longPrefix := strings.Repeat("p/", 480)

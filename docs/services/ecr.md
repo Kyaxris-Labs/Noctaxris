@@ -15,7 +15,7 @@ Lab-complete ECR core: repository CRUD, authorization tokens, repository policie
 | Registry V2 | `GET /v2/`, blob upload (monolithic PUT or chunked `PATCH` then finalize `PUT` with `digest`), manifest GET/PUT/HEAD, tags list. `GET`/`POST` `/v2/token` returns Docker Registry token JSON (`token` / `access_token`) for the `GetAuthorizationToken` password. `WWW-Authenticate` Bearer realm points at `/v2/token` |
 | DinD sync | On manifest PUT with a tag, pull the image into `noctaxris-engine` so ECS and Lambda Image paths can use lab registry refs |
 
-Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (account from `sts get-caller-identity`). Blobs and manifests persist under the data volume.
+Repository URI for docker login and push: `127.0.0.1:4566/ACCOUNT/REPOSITORY` (account from `sts get-caller-identity`). Blobs and manifests persist under the data volume. Control-plane `PutImage` stores the manifest body at a relative path under the data root (same layout as Registry V2); tag GET refuses paths that escape the data root.
 
 ### Authz notes
 

@@ -194,6 +194,33 @@ func JoinDataPath(root string, segments ...string) (string, error) {
 	return joined, nil
 }
 
+// ResolveUnderRoot joins root with a relative path and requires the result stay under root.
+// Rejects absolute paths, null bytes, and ".." escapes. Unlike JoinDataPath, rel may contain
+// multiple path separators (for example ecr/manifests/account/repo/sha256/hex.json).
+func ResolveUnderRoot(root, rel string) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("%w: root: required", ErrInvalid)
+	}
+	if rel == "" || strings.ContainsRune(rel, 0) {
+		return "", fmt.Errorf("%w: path: required", ErrInvalid)
+	}
+	if filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
+		return "", fmt.Errorf("%w: path: must be relative", ErrInvalid)
+	}
+	relClean := filepath.Clean(rel)
+	if relClean == "." || relClean == "" {
+		return "", fmt.Errorf("%w: path: invalid", ErrInvalid)
+	}
+	if relClean == ".." || strings.HasPrefix(relClean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: path escapes root", ErrInvalid)
+	}
+	joined := filepath.Join(filepath.Clean(root), relClean)
+	if !PathUnderRoot(root, joined) {
+		return "", fmt.Errorf("%w: path escapes root", ErrInvalid)
+	}
+	return joined, nil
+}
+
 // ReadableFilePath cleans path, rejects empty/null bytes, and ensures the file exists and is regular.
 func ReadableFilePath(path string) (cleaned string, err error) {
 	if path == "" || strings.ContainsRune(path, 0) {

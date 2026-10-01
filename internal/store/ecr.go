@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 const (
@@ -357,11 +359,17 @@ func (s *Store) ensureRepositoryExists(accountID, repoName string) error {
 }
 
 // PutImage stores or updates image metadata for a repository digest.
+// manifestPath must be a relative path under the data root (or empty to keep an existing path).
 func (s *Store) PutImage(accountID, repoName, digest string, tags []string, manifestPath string) (Image, error) {
 	repoName = normalizeRepositoryName(repoName)
 	digest = strings.TrimSpace(digest)
 	if repoName == "" || digest == "" {
 		return Image{}, fmt.Errorf("put image: repository and digest are required")
+	}
+	if manifestPath != "" {
+		if _, err := validate.ResolveUnderRoot(s.dataRoot, manifestPath); err != nil {
+			return Image{}, fmt.Errorf("put image: invalid manifest path: %w", err)
+		}
 	}
 	if err := s.ensureRepositoryExists(accountID, repoName); err != nil {
 		return Image{}, err

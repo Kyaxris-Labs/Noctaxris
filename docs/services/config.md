@@ -19,7 +19,7 @@ Snapshot and history bodies (`application/json`) use a lab configuration-item sh
 
 ### Authz notes
 
-Identity `EvaluateFull` on `config:*`. PassRole applies when ConfigurationRecorder.roleARN is set.
+Identity `EvaluateFull` on `config:*`. PassRole applies when ConfigurationRecorder.roleARN is set. `StartConfigurationRecorder` requires a non-empty recorder `roleARN` trusted by `config.amazonaws.com` with identity Allow for `s3:PutObject` on the snapshot key; bucket policy Deny for that role fails delivery.
 
 ## How to verify / CLI smoke
 
@@ -56,7 +56,7 @@ aws configservice get-resource-config-history \
   --endpoint-url "$EP"
 ```
 
-Omit roleARN or create a role trusted by `config.amazonaws.com` before PassRole checks. Expect DescribeCompliance to return an empty list until a config rule row exists; stored rules return `NOT_APPLICABLE` (no invented COMPLIANT rows). If the snapshot `PutObject` fails, Start returns an error and the recorder stays not recording. Continuous history requires the recorder to be recording (Start already required a delivery channel pointing at an existing lab bucket).
+Create a role trusted by `config.amazonaws.com` with `s3:PutObject` before Start (PassRole applies on Put when roleARN is set). Expect DescribeCompliance to return an empty list until a config rule row exists; stored rules return `NOT_APPLICABLE` (no invented COMPLIANT rows). If the snapshot `PutObject` fails or the role cannot deliver, Start returns an error and the recorder stays not recording. Continuous history requires the recorder to be recording (Start already required a delivery channel pointing at an existing lab bucket).
 
 ## Not yet / deferred
 

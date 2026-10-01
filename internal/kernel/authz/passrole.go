@@ -36,6 +36,9 @@ const ServicePrincipalSNS = "sns.amazonaws.com"
 // ServicePrincipalConfig is the AWS Config service principal used in role trust.
 const ServicePrincipalConfig = "config.amazonaws.com"
 
+// ServicePrincipalSES is the Amazon SES service principal used for Bounce/Complaint SNS publish.
+const ServicePrincipalSES = "ses.amazonaws.com"
+
 // ServicePrincipalCodeBuild is the AWS CodeBuild service principal used in role trust.
 const ServicePrincipalCodeBuild = "codebuild.amazonaws.com"
 

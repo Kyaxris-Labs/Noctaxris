@@ -51,9 +51,9 @@ func (s *Server) handleSQS(
 				"QueueName is required.", readOnly, eventID, verified)
 			return
 		}
-		attrs := stringMapParam(params["Attributes"])
 		resource = store.QueueARN(region, accountID, name)
-		queuePolicy = attrs["Policy"]
+		// CreateQueue requires identity Allow; caller-supplied Policy must not OR-authorize create.
+		queuePolicy = ""
 		resourceAccountID = accountID
 	default:
 		q, resolveErr := s.resolveSQSQueue(accountID, params)

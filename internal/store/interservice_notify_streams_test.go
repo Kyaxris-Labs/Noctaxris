@@ -158,7 +158,8 @@ func TestConfigSNSNotifyOnStart(t *testing.T) {
 	if _, err := st.CreateBucket(account, "config-bucket"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-sns")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.PutConfigDeliveryChannel(account, "default", "config-bucket", "", topic.TopicARN); err != nil {
@@ -221,6 +222,10 @@ func TestSESBounceSNSNotify(t *testing.T) {
 	}
 	topic, err := st.CreateTopic(account, "us-east-1", "ses-bounces", nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	sesPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ses.amazonaws.com"},"Action":"sns:Publish","Resource":"` + topic.TopicARN + `"}]}`
+	if err := st.SetTopicAttributes(account, topic.TopicName, map[string]string{"Policy": sesPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	q, err := st.CreateQueue(account, "us-east-1", "127.0.0.1:4566", "ses-bounces-q", nil)

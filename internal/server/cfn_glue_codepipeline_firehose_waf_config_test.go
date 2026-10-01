@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func mustCFNForm(t *testing.T, handler http.Handler, values url.Values, now time.Time) *httptest.ResponseRecorder {
@@ -401,11 +403,21 @@ func TestConfigRecorder(t *testing.T) {
 	if _, err := st.CreateBucket(testAccountID, "config-lab"); err != nil {
 		t.Fatal(err)
 	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"config.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(testAccountID, "config-lab-role", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "config-delivery", allow); err != nil {
+		t.Fatal(err)
+	}
 
 	body := []byte(url.Values{
-		"Action":                     {"PutConfigurationRecorder"},
-		"Version":                    {"2014-11-12"},
-		"ConfigurationRecorder.Name": {"default"},
+		"Action":                        {"PutConfigurationRecorder"},
+		"Version":                       {"2014-11-12"},
+		"ConfigurationRecorder.Name":    {"default"},
+		"ConfigurationRecorder.roleARN": {roleARN},
 	}.Encode())
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -463,6 +475,20 @@ func TestConfigRecorder(t *testing.T) {
 	}
 }
 
+func mustConfigDeliveryRoleARN(t *testing.T, st *store.Store, roleName string) string {
+	t.Helper()
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"config.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(testAccountID, roleName, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(roleARN, "config-delivery", allow); err != nil {
+		t.Fatal(err)
+	}
+	return roleARN
+}
+
 func TestConfigGetResourceConfigHistory(t *testing.T) {
 	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
@@ -471,10 +497,12 @@ func TestConfigGetResourceConfigHistory(t *testing.T) {
 	if _, err := st.CreateBucket(testAccountID, "config-hist"); err != nil {
 		t.Fatal(err)
 	}
+	roleARN := mustConfigDeliveryRoleARN(t, st, "config-hist-role")
 	putRec := []byte(url.Values{
-		"Action":                     {"PutConfigurationRecorder"},
-		"Version":                    {"2014-11-12"},
-		"ConfigurationRecorder.Name": {"default"},
+		"Action":                        {"PutConfigurationRecorder"},
+		"Version":                       {"2014-11-12"},
+		"ConfigurationRecorder.Name":    {"default"},
+		"ConfigurationRecorder.roleARN": {roleARN},
 	}.Encode())
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", putRec)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -543,17 +571,19 @@ func TestConfigGetResourceConfigHistory(t *testing.T) {
 }
 
 func TestConfigGetResourceConfigHistoryObjectPutDelete(t *testing.T) {
-	srv, _, _ := newTestServerStore(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/config-obj-delivery", nil, "s3", now, nil)
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/config-obj-data", nil, "s3", now, nil)
 
+	roleARN := mustConfigDeliveryRoleARN(t, st, "config-obj-role")
 	putRec := []byte(url.Values{
-		"Action":                     {"PutConfigurationRecorder"},
-		"Version":                    {"2014-11-12"},
-		"ConfigurationRecorder.Name": {"default"},
+		"Action":                        {"PutConfigurationRecorder"},
+		"Version":                       {"2014-11-12"},
+		"ConfigurationRecorder.Name":    {"default"},
+		"ConfigurationRecorder.roleARN": {roleARN},
 	}.Encode())
 	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", putRec)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

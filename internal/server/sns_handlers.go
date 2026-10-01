@@ -90,10 +90,8 @@ func (s *Server) handleSNS(
 			return
 		}
 		resource = store.TopicARN(region, accountID, name)
-		// Policy attribute at create (SQS CreateQueue parity) feeds dual-eval authz.
-		if p := snsAttributesFromForm(params)["Policy"]; strings.TrimSpace(p) != "" {
-			topicPolicy = p
-		}
+		// CreateTopic requires identity Allow; caller-supplied Policy must not OR-authorize create.
+		topicPolicy = ""
 	default:
 		if action == catalog.ActionSNSUnsubscribe || action == "Unsubscribe" ||
 			action == catalog.ActionSNSGetSubscriptionAttributes || action == "GetSubscriptionAttributes" ||

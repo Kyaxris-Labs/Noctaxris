@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/google/uuid"
 )
 
@@ -250,6 +251,9 @@ func (s *Store) SetSESIdentityNotificationTopic(accountID, identity, notificatio
 		if err != nil || topic.AccountID != accountID {
 			return fmt.Errorf("set identity notification topic: SNS topic not found in account")
 		}
+		if !s.sesTopicPolicyAllowsPublish(accountID, topicARN) {
+			return fmt.Errorf("set identity notification topic: SNS topic policy does not allow ses.amazonaws.com to Publish")
+		}
 	}
 	_, err := s.db.Exec(
 		`UPDATE ses_identities SET bounce_topic_arn = ? WHERE account_id = ? AND identity = ?`,
@@ -387,6 +391,22 @@ func (s *Store) sesBounceTopicARN(accountID, identity string) string {
 	return strings.TrimSpace(arn)
 }
 
+func (s *Store) sesTopicPolicyAllowsPublish(accountID, topicARN string) bool {
+	policyDoc, err := s.deliveryTargetResourcePolicyDoc(accountID, topicARN)
+	if err != nil {
+		return false
+	}
+	// Topic policies commonly use SNS:Publish (default owner policy) or sns:Publish.
+	for _, action := range []string{"sns:Publish", "SNS:Publish"} {
+		if authz.ServicePrincipalResourcePolicyAllows(
+			policyDoc, action, topicARN, authz.ServicePrincipalSES, nil,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) maybePublishSESBounce(accountID, source string, destinations []string, messageID string) {
 	var bounced []string
 	for _, d := range destinations {
@@ -403,6 +423,9 @@ func (s *Store) maybePublishSESBounce(accountID, source string, destinations []s
 	}
 	topic, err := s.GetTopicByARN(topicARN)
 	if err != nil || topic.AccountID != accountID {
+		return
+	}
+	if !s.sesTopicPolicyAllowsPublish(accountID, topicARN) {
 		return
 	}
 	payload, err := json.Marshal(map[string]any{

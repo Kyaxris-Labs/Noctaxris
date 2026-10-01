@@ -90,6 +90,12 @@ type Alias struct {
 	TargetKeyID string
 }
 
+// GrantConstraints is the EncryptionContext ceiling on a KMS grant (lab subset of AWS Constraints).
+type GrantConstraints struct {
+	EncryptionContextEquals map[string]string `json:"EncryptionContextEquals,omitempty"`
+	EncryptionContextSubset map[string]string `json:"EncryptionContextSubset,omitempty"`
+}
+
 // Grant is a KMS grant on a CMK.
 type Grant struct {
 	GrantID           string
@@ -99,6 +105,7 @@ type Grant struct {
 	RetiringPrincipal string
 	Operations        []string
 	Name              string
+	Constraints       GrantConstraints
 }
 
 // DefaultKeyPolicy returns the lab default key policy JSON allowing account root
@@ -816,6 +823,11 @@ func normalizeAliasName(name string) string {
 
 // CreateGrant stores a grant on a CMK.
 func (s *Store) CreateGrant(accountID, keyID, granteePrincipal, retiringPrincipal string, operations []string, name string) (Grant, error) {
+	return s.CreateGrantWithConstraints(accountID, keyID, granteePrincipal, retiringPrincipal, operations, name, GrantConstraints{})
+}
+
+// CreateGrantWithConstraints stores a grant with optional EncryptionContext constraints.
+func (s *Store) CreateGrantWithConstraints(accountID, keyID, granteePrincipal, retiringPrincipal string, operations []string, name string, constraints GrantConstraints) (Grant, error) {
 	if _, err := s.GetKey(keyID); err != nil {
 		return Grant{}, fmt.Errorf("create grant: %w", err)
 	}
@@ -829,6 +841,14 @@ func (s *Store) CreateGrant(accountID, keyID, granteePrincipal, retiringPrincipa
 	if err != nil {
 		return Grant{}, fmt.Errorf("create grant: marshal operations: %w", err)
 	}
+	constraintsJSON := ""
+	if len(constraints.EncryptionContextEquals) > 0 || len(constraints.EncryptionContextSubset) > 0 {
+		raw, mErr := json.Marshal(constraints)
+		if mErr != nil {
+			return Grant{}, fmt.Errorf("create grant: marshal constraints: %w", mErr)
+		}
+		constraintsJSON = string(raw)
+	}
 	grantID := uuid.NewString()
 	retiring := sql.NullString{}
 	if strings.TrimSpace(retiringPrincipal) != "" {
@@ -840,9 +860,9 @@ func (s *Store) CreateGrant(accountID, keyID, granteePrincipal, retiringPrincipa
 	}
 	_, err = s.db.Exec(
 		`INSERT INTO kms_grants
-		 (grant_id, key_id, account_id, grantee_principal, retiring_principal, operations, name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		grantID, keyID, accountID, granteePrincipal, retiring, string(opsJSON), nameVal,
+		 (grant_id, key_id, account_id, grantee_principal, retiring_principal, operations, name, constraints_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		grantID, keyID, accountID, granteePrincipal, retiring, string(opsJSON), nameVal, constraintsJSON,
 	)
 	if err != nil {
 		return Grant{}, fmt.Errorf("create grant: %w", err)
@@ -855,13 +875,14 @@ func (s *Store) CreateGrant(accountID, keyID, granteePrincipal, retiringPrincipa
 		RetiringPrincipal: retiringPrincipal,
 		Operations:        append([]string(nil), operations...),
 		Name:              name,
+		Constraints:       constraints,
 	}, nil
 }
 
 // ListGrants returns grants for a key.
 func (s *Store) ListGrants(keyID string) ([]Grant, error) {
 	rows, err := s.db.Query(
-		`SELECT grant_id, key_id, account_id, grantee_principal, retiring_principal, operations, name
+		`SELECT grant_id, key_id, account_id, grantee_principal, retiring_principal, operations, name, constraints_json
 		 FROM kms_grants WHERE key_id = ? ORDER BY grant_id`,
 		keyID,
 	)
@@ -893,12 +914,13 @@ type grantScanner interface {
 
 func scanGrant(row grantScanner) (Grant, error) {
 	var (
-		g        Grant
-		retiring sql.NullString
-		name     sql.NullString
-		opsRaw   string
+		g          Grant
+		retiring   sql.NullString
+		name       sql.NullString
+		opsRaw     string
+		constraints string
 	)
-	if err := row.Scan(&g.GrantID, &g.KeyID, &g.AccountID, &g.GranteePrincipal, &retiring, &opsRaw, &name); err != nil {
+	if err := row.Scan(&g.GrantID, &g.KeyID, &g.AccountID, &g.GranteePrincipal, &retiring, &opsRaw, &name, &constraints); err != nil {
 		return Grant{}, err
 	}
 	if retiring.Valid {
@@ -912,6 +934,11 @@ func scanGrant(row grantScanner) (Grant, error) {
 	}
 	if g.Operations == nil {
 		g.Operations = []string{}
+	}
+	if strings.TrimSpace(constraints) != "" {
+		if err := json.Unmarshal([]byte(constraints), &g.Constraints); err != nil {
+			return Grant{}, fmt.Errorf("parse constraints: %w", err)
+		}
 	}
 	return g, nil
 }
@@ -936,9 +963,30 @@ func (s *Store) RetireGrant(grantID, callerARN string) error {
 	return s.deleteGrant(grantID)
 }
 
-// RevokeGrant removes a grant by id (key owner path).
+// RevokeGrant removes a grant by id (key owner path). Prefer RevokeGrantOnKey.
 func (s *Store) RevokeGrant(grantID string) error {
 	return s.deleteGrant(grantID)
+}
+
+// RevokeGrantOnKey removes a grant only when it belongs to keyID.
+func (s *Store) RevokeGrantOnKey(keyID, grantID string) error {
+	keyID = strings.TrimSpace(keyID)
+	grantID = strings.TrimSpace(grantID)
+	if keyID == "" || grantID == "" {
+		return sql.ErrNoRows
+	}
+	res, err := s.db.Exec(`DELETE FROM kms_grants WHERE grant_id = ? AND key_id = ?`, grantID, keyID)
+	if err != nil {
+		return fmt.Errorf("delete grant %s: %w", grantID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete grant %s: %w", grantID, err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) deleteGrant(grantID string) error {
@@ -956,9 +1004,15 @@ func (s *Store) deleteGrant(grantID string) error {
 	return nil
 }
 
-// FindMatchingGrant reports whether a grant on keyID allows principalARN the given operation.
+// FindMatchingGrant reports whether a grant on keyID allows principalARN the given operation
+// under the request EncryptionContext (Constraints.EncryptionContextEquals / Subset).
 // operation may be "Encrypt" or "kms:Encrypt".
 func (s *Store) FindMatchingGrant(keyID, principalARN, operation string) (bool, error) {
+	return s.FindMatchingGrantWithContext(keyID, principalARN, operation, nil)
+}
+
+// FindMatchingGrantWithContext is FindMatchingGrant with EncryptionContext for grant Constraints.
+func (s *Store) FindMatchingGrantWithContext(keyID, principalARN, operation string, encCtx map[string]string) (bool, error) {
 	grants, err := s.ListGrants(keyID)
 	if err != nil {
 		return false, err
@@ -968,13 +1022,47 @@ func (s *Store) FindMatchingGrant(keyID, principalARN, operation string) (bool, 
 		if g.GranteePrincipal != principalARN {
 			continue
 		}
+		opOK := false
 		for _, op := range g.Operations {
 			if normalizeGrantOp(op) == want {
-				return true, nil
+				opOK = true
+				break
+			}
+		}
+		if !opOK {
+			continue
+		}
+		if !grantConstraintsAllow(g.Constraints, encCtx) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func grantConstraintsAllow(c GrantConstraints, encCtx map[string]string) bool {
+	if len(c.EncryptionContextEquals) == 0 && len(c.EncryptionContextSubset) == 0 {
+		return true
+	}
+	if encCtx == nil {
+		encCtx = map[string]string{}
+	}
+	if len(c.EncryptionContextEquals) > 0 {
+		if len(encCtx) != len(c.EncryptionContextEquals) {
+			return false
+		}
+		for k, v := range c.EncryptionContextEquals {
+			if encCtx[k] != v {
+				return false
 			}
 		}
 	}
-	return false, nil
+	for k, v := range c.EncryptionContextSubset {
+		if encCtx[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeGrantOp(op string) string {

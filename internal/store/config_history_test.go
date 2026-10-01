@@ -24,7 +24,8 @@ func TestConfigHistoryOnlyWhenRecording(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatalf("expected no history before recording: %#v", items)
 	}
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-hist")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateBucket(account, "hist-bucket"); err != nil {
@@ -98,7 +99,8 @@ func TestConfigObjectHistoryPutDelete(t *testing.T) {
 		t.Fatalf("expected no object history before recording: %#v", items)
 	}
 
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-obj-hist")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.PutConfigDeliveryChannel(account, "default", "obj-hist-delivery", "", ""); err != nil {
@@ -152,7 +154,8 @@ func TestConfigObjectHistoryPutDelete(t *testing.T) {
 func TestConfigHistoryChronologicalOrder(t *testing.T) {
 	st := openTestStore(t)
 	account := "000000000002"
-	if _, err := st.PutConfigRecorder(account, "default", "", "ALL"); err != nil {
+	roleARN := ensureConfigDeliveryRole(t, st, account, "config-order")
+	if _, err := st.PutConfigRecorder(account, "default", roleARN, "ALL"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateBucket(account, "order-bucket"); err != nil {

@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/sts"
 )
 
 var (
@@ -251,7 +255,7 @@ func (s *Store) buildConfigSnapshotLite(accountID, recorderName string, captured
 	return snap, nil
 }
 
-func (s *Store) putConfigHistorySnapshots(accountID, recorderName string, channels []ConfigDeliveryChannel, capturedAt int64) error {
+func (s *Store) putConfigHistorySnapshots(accountID, recorderName, roleARN string, channels []ConfigDeliveryChannel, capturedAt int64) error {
 	snap, err := s.buildConfigSnapshotLite(accountID, recorderName, capturedAt)
 	if err != nil {
 		return err
@@ -262,6 +266,11 @@ func (s *Store) putConfigHistorySnapshots(accountID, recorderName string, channe
 	}
 	for _, ch := range channels {
 		key := ConfigHistoryObjectKey(accountID, ch.S3KeyPrefix, recorderName, capturedAt)
+		objectARN := "arn:aws:s3:::" + ch.S3BucketName + "/" + key
+		if !s.configDeliveryAllowsPutObject(accountID, roleARN, ch.S3BucketName, objectARN) {
+			return fmt.Errorf("%w: recorder role is not authorized to put configuration snapshot to s3://%s/%s",
+				ErrConfigBadRequest, ch.S3BucketName, key)
+		}
 		if _, err := s.PutObject(accountID, ch.S3BucketName, key, PutObjectMeta{
 			Data:        body,
 			PlainSize:   int64(len(body)),
@@ -273,11 +282,85 @@ func (s *Store) putConfigHistorySnapshots(accountID, recorderName string, channe
 	return nil
 }
 
+// configDeliveryAllowsPutObject requires a recorder role trusted by config.amazonaws.com,
+// role identity Allow for s3:PutObject, and no Deny (plus Allow when a bucket policy is set)
+// under EvaluateS3 for that role session.
+func (s *Store) configDeliveryAllowsPutObject(accountID, roleARN, bucket, objectARN string) bool {
+	roleARN = strings.TrimSpace(roleARN)
+	if roleARN == "" {
+		return false
+	}
+	roleAccountID, roleName, ok := sts.ParseRoleARN(roleARN)
+	if !ok || roleAccountID != accountID {
+		return false
+	}
+	_, trust, err := s.GetRole(accountID, roleName)
+	if err != nil {
+		return false
+	}
+	if !authz.TrustAllowsService(trust, authz.ServicePrincipalConfig) {
+		return false
+	}
+	if !s.deliveryRoleSessionAllows(accountID, roleARN, actionS3PutObject, objectARN, "config-delivery", DefaultConfigRegion, "") {
+		return false
+	}
+	bucketPolicy := ""
+	if doc, pErr := s.GetBucketPolicy(accountID, bucket); pErr == nil {
+		bucketPolicy = doc
+	} else if !errors.Is(pErr, ErrNoSuchBucketPolicy) {
+		return false
+	}
+	if strings.TrimSpace(bucketPolicy) == "" {
+		return true
+	}
+	// Re-evaluate as the role with bucket policy so resource Deny / missing Allow fail closed.
+	docs, err := s.identityPolicyDocsForRoleARN(roleARN)
+	if err != nil {
+		return false
+	}
+	secret, err := randomHexSecret(16)
+	if err != nil {
+		return false
+	}
+	sessionToken, err := randomHexSecret(16)
+	if err != nil {
+		return false
+	}
+	accessKeyID, err := s.MintTempCredentialsOpts(MintTempOpts{
+		AccountID:    accountID,
+		RoleARN:      roleARN,
+		SessionName:  "config-delivery",
+		Secret:       secret,
+		SessionToken: sessionToken,
+		Expires:      time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		return false
+	}
+	principal := identity.RoleSessionPrincipal(accountID, roleName, "config-delivery", accessKeyID)
+	ctx := authz.RequestContext{
+		Principal: principal,
+		Action:    actionS3PutObject,
+		Resource:  objectARN,
+		Region:    DefaultConfigRegion,
+	}
+	return authz.EvaluateS3(authz.S3Request{
+		Caller:            ctx,
+		IdentityDocs:      docs,
+		BucketPolicyDoc:   bucketPolicy,
+		ResourceAccountID: accountID,
+	}) == authz.Allow
+}
+
 // StartConfigRecorder writes a configuration snapshot to each delivery channel S3 bucket, then sets recording=1.
 func (s *Store) StartConfigRecorder(accountID, name string) error {
 	name = strings.TrimSpace(name)
-	if _, err := s.GetConfigRecorder(accountID, name); err != nil {
+	rec, err := s.GetConfigRecorder(accountID, name)
+	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(rec.RoleARN) == "" {
+		return fmt.Errorf("%w: ConfigurationRecorder.roleARN is required for snapshot delivery", ErrConfigBadRequest)
 	}
 	channels, err := s.ListConfigDeliveryChannels(accountID)
 	if err != nil {
@@ -295,7 +378,7 @@ func (s *Store) StartConfigRecorder(accountID, name string) error {
 		}
 	}
 	capturedAt := time.Now().UTC().UnixMilli()
-	if err := s.putConfigHistorySnapshots(accountID, name, channels, capturedAt); err != nil {
+	if err := s.putConfigHistorySnapshots(accountID, name, rec.RoleARN, channels, capturedAt); err != nil {
 		return fmt.Errorf("start configuration recorder: %w", err)
 	}
 	res, err := s.db.Exec(

@@ -22,7 +22,7 @@ Queue and message metadata live in SQLite. Message bodies use SSE-SQS or SSE-KMS
 
 ### Authz notes
 
-SQS uses `EvaluateSQS` with the queue owner account from store metadata (or queue ARN account). Same-account access: allow if identity **or** queue policy Allows. Cross-account access: allow only when identity **and** queue policy both Allow (empty queue policy denies cross-account callers). Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
+SQS uses `EvaluateSQS` with the queue owner account from store metadata (or queue ARN account). Same-account access: allow if identity **or** queue policy Allows. Cross-account access: allow only when identity **and** queue policy both Allow (empty queue policy denies cross-account callers). Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect. `CreateQueue` requires identity Allow for `sqs:CreateQueue` (a Policy attribute on create does not authorize the create call).
 
 ## How to verify / CLI smoke
 

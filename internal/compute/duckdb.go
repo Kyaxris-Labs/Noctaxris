@@ -135,10 +135,14 @@ func DuckCreateViewSQL(tableName, location, readFn string) string {
 }
 
 // DuckSetupSQL builds setup_sql for all Glue tables in a database.
+// Locations must be s3://bucket/prefix (same gate as in-process Athena).
 func DuckSetupSQL(tables []DuckTableRef) string {
 	var b strings.Builder
 	for _, t := range tables {
 		if strings.TrimSpace(t.Name) == "" || strings.TrimSpace(t.Location) == "" {
+			continue
+		}
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(t.Location)), "s3://") {
 			continue
 		}
 		fn := DuckReadFunction(t.InputFormat, t.SerializationLib)

@@ -1731,7 +1731,7 @@ func (s *Server) decryptObjectPayload(verified *authn.Verified, meta store.Objec
 
 func (s *Server) authorizeKMSOp(verified *authn.Verified, action string, key store.Key, encCtx map[string]string) bool {
 	grantSatisfied := false
-	if ok, gerr := s.store.FindMatchingGrant(key.KeyID, verified.Principal.ARN(), action); gerr == nil {
+	if ok, gerr := s.store.FindMatchingGrantWithContext(key.KeyID, verified.Principal.ARN(), action, encCtx); gerr == nil {
 		grantSatisfied = ok
 	}
 	return s.authorizeDataplaneKMS(verified, action, key.ARN, key.KeyPolicy, grantSatisfied, encCtx)

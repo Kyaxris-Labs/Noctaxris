@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -101,14 +102,26 @@ func (s *Server) handleKMS(
 				return
 			}
 		}
-	case catalog.ActionKMSRetireGrant, "RetireGrant",
-		catalog.ActionKMSRevokeGrant, "RevokeGrant":
+	case catalog.ActionKMSRetireGrant, "RetireGrant":
 		needsKey = false
 		if keyParam != "" {
 			keyID, err = s.store.ResolveKeyID(accountID, keyParam)
 			if err == nil {
 				needsKey = true
 			}
+		}
+	case catalog.ActionKMSRevokeGrant, "RevokeGrant":
+		needsKey = true
+		if keyParam == "" {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"KeyId is required.", readOnly, eventID, verified)
+			return
+		}
+		keyID, err = s.store.ResolveKeyID(accountID, keyParam)
+		if err != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
+				"Key not found.", readOnly, eventID, verified)
+			return
 		}
 	default:
 		needsKey = true
@@ -145,7 +158,7 @@ func (s *Server) handleKMS(
 
 	grantSatisfied := false
 	if keyID != "" {
-		ok, gerr := s.store.FindMatchingGrant(keyID, verified.Principal.ARN(), action)
+		ok, gerr := s.store.FindMatchingGrantWithContext(keyID, verified.Principal.ARN(), action, encCtx)
 		if gerr == nil {
 			grantSatisfied = ok
 		}
@@ -421,7 +434,13 @@ func (s *Server) handleKMS(
 		retiring, _ := params["RetiringPrincipal"].(string)
 		name, _ := params["Name"].(string)
 		ops := stringSliceParam(params["Operations"])
-		g, createErr := s.store.CreateGrant(accountID, keyID, grantee, retiring, ops, name)
+		constraints, constrErr := parseKMSGrantConstraints(params["Constraints"])
+		if constrErr != nil {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				constrErr.Error(), readOnly, eventID, verified)
+			return
+		}
+		g, createErr := s.store.CreateGrantWithConstraints(accountID, keyID, grantee, retiring, ops, name, constraints)
 		if createErr != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
 				"Unable to create grant.", readOnly, eventID, verified)
@@ -451,7 +470,12 @@ func (s *Server) handleKMS(
 		payload, err = kmssvc.EmptyOKJSON()
 	case catalog.ActionKMSRevokeGrant, "RevokeGrant":
 		grantID, _ := params["GrantId"].(string)
-		if err := s.store.RevokeGrant(grantID); err != nil {
+		if strings.TrimSpace(grantID) == "" {
+			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+				"GrantId is required.", readOnly, eventID, verified)
+			return
+		}
+		if err := s.store.RevokeGrantOnKey(keyID, grantID); err != nil {
 			s.writeKMSError(w, r, body, requestID, http.StatusBadRequest, "NotFoundException",
 				"Grant not found.", readOnly, eventID, verified)
 			return
@@ -787,11 +811,11 @@ func (s *Server) handleKMSReEncrypt(
 	}
 
 	grantFrom := false
-	if ok, gerr := s.store.FindMatchingGrant(sourceKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptFrom); gerr == nil {
+	if ok, gerr := s.store.FindMatchingGrantWithContext(sourceKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptFrom, srcEncCtx); gerr == nil {
 		grantFrom = ok
 	}
 	grantTo := false
-	if ok, gerr := s.store.FindMatchingGrant(destKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptTo); gerr == nil {
+	if ok, gerr := s.store.FindMatchingGrantWithContext(destKeyID, verified.Principal.ARN(), catalog.ActionKMSReEncryptTo, destEncCtx); gerr == nil {
 		grantTo = ok
 	}
 
@@ -928,4 +952,60 @@ func parseKMSTagKeys(v any) []string {
 		}
 	}
 	return out
+}
+
+func parseKMSGrantConstraints(v any) (store.GrantConstraints, error) {
+	var out store.GrantConstraints
+	if v == nil {
+		return out, nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return out, fmt.Errorf("Constraints must be an object")
+	}
+	for k := range m {
+		switch k {
+		case "EncryptionContextEquals", "EncryptionContextSubset":
+		default:
+			return out, fmt.Errorf("Constraints.%s is not supported", k)
+		}
+	}
+	if raw, exists := m["EncryptionContextEquals"]; exists && raw != nil {
+		eq, ok := grantConstraintStringMap(raw)
+		if !ok {
+			return out, fmt.Errorf("Constraints.EncryptionContextEquals must be a string map")
+		}
+		out.EncryptionContextEquals = eq
+	}
+	if raw, exists := m["EncryptionContextSubset"]; exists && raw != nil {
+		sub, ok := grantConstraintStringMap(raw)
+		if !ok {
+			return out, fmt.Errorf("Constraints.EncryptionContextSubset must be a string map")
+		}
+		out.EncryptionContextSubset = sub
+	}
+	return out, nil
+}
+
+func grantConstraintStringMap(v any) (map[string]string, bool) {
+	switch t := v.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(t))
+		for k, val := range t {
+			out[k] = val
+		}
+		return out, true
+	case map[string]any:
+		out := make(map[string]string, len(t))
+		for k, val := range t {
+			s, ok := val.(string)
+			if !ok {
+				return nil, false
+			}
+			out[k] = s
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }

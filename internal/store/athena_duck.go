@@ -118,6 +118,22 @@ func (s *Store) StartAthenaDuckQueryExecution(accountID string, in AthenaStartIn
 		return exec, nil
 	}
 
+	for _, t := range tables {
+		if strings.TrimSpace(t.Location) == "" {
+			continue
+		}
+		if _, _, locErr := parseS3Location(t.Location); locErr != nil {
+			exec.State = "FAILED"
+			exec.StateChangeReason = locErr.Error()
+			exec.ErrorMessage = exec.StateChangeReason
+			exec.CompletionMS = now
+			if saveErr := s.saveAthenaExecution(accountID, exec); saveErr != nil {
+				return AthenaQueryExecution{}, saveErr
+			}
+			return exec, nil
+		}
+	}
+
 	setup := buildAthenaDuckSetupSQL(tables)
 	cols, rows, runErr := run(q, setup)
 	if runErr != nil {
@@ -156,6 +172,9 @@ func buildAthenaDuckSetupSQL(tables []AthenaDuckTable) string {
 	var b strings.Builder
 	for _, t := range tables {
 		if strings.TrimSpace(t.Name) == "" || strings.TrimSpace(t.Location) == "" {
+			continue
+		}
+		if _, _, err := parseS3Location(t.Location); err != nil {
 			continue
 		}
 		fn := duckReadFunction(t.InputFormat, t.SerializationLib)

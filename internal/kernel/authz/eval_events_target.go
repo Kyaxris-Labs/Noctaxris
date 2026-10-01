@@ -92,6 +92,42 @@ func EventTargetResourcePolicyAllows(policyDoc, action, resourceARN, servicePrin
 	return eventTargetPathAllowed(serviceDeny, serviceAllow) || eventTargetPathAllowed(rootDeny, rootAllow)
 }
 
+// ServicePrincipalResourcePolicyAllows is EventTargetResourcePolicyAllows without the
+// account-root OR path. Use for SES→SNS Bounce where AWS requires Principal Service
+// ses.amazonaws.com (account root alone must not authorize the publish).
+func ServicePrincipalResourcePolicyAllows(policyDoc, action, resourceARN, servicePrincipal string, conditionKeys map[string]string) bool {
+	policyDoc = strings.TrimSpace(policyDoc)
+	if policyDoc == "" || action == "" || resourceARN == "" || servicePrincipal == "" {
+		return false
+	}
+	doc, err := parsePolicyDocument(policyDoc)
+	if err != nil {
+		return false
+	}
+	if conditionKeys == nil {
+		conditionKeys = map[string]string{}
+	}
+	for _, st := range doc.Statement {
+		if conditionCatalogUnknown(st.Condition) {
+			return false
+		}
+	}
+	var serviceDeny, serviceAllow bool
+	for _, st := range doc.Statement {
+		if resourcePrincipalStatementMatches(st, action, resourceARN, conditionKeys, func(spec principalSpec) bool {
+			return principalServiceMatches(spec, servicePrincipal)
+		}) {
+			switch {
+			case strings.EqualFold(st.Effect, "Deny"):
+				serviceDeny = true
+			case strings.EqualFold(st.Effect, "Allow"):
+				serviceAllow = true
+			}
+		}
+	}
+	return eventTargetPathAllowed(serviceDeny, serviceAllow)
+}
+
 func eventTargetPathAllowed(denyHit, allowHit bool) bool {
 	if denyHit {
 		return false

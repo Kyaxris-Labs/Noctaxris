@@ -273,7 +273,8 @@ func (s *Store) AssociateSoftwareTokenMFA(accountID, poolID, username, sessionOr
 		if loadErr != nil {
 			return "", "", loadErr
 		}
-		if row.Kind != cognitoSessionKindAssoc && row.Kind != cognitoSessionKindMFA {
+		// SOFTWARE_TOKEN_MFA sessions are for RespondToAuthChallenge only, not re-associate.
+		if row.Kind != cognitoSessionKindAssoc {
 			return "", "", ErrCognitoUnauthorized
 		}
 		accountID, poolID, clientID, username = row.AccountID, row.PoolID, row.ClientID, row.Username
@@ -290,6 +291,16 @@ func (s *Store) AssociateSoftwareTokenMFA(accountID, poolID, username, sessionOr
 		return "", "", getErr
 	} else if status != "CONFIRMED" {
 		return "", "", fmt.Errorf("%w: User is not confirmed", ErrCognitoUnauthorized)
+	}
+	// Re-enroll after MFA is already enabled requires an access token (JWT), not a session.
+	if strings.Count(sessionOrAccess, ".") != 2 {
+		enabled, mfaErr := s.userMFAEnabled(accountID, poolID, username)
+		if mfaErr != nil {
+			return "", "", mfaErr
+		}
+		if enabled {
+			return "", "", ErrCognitoUnauthorized
+		}
 	}
 	if clientID == "" {
 		// Lab associate via MFA session may lack client; pick any client for the pool.

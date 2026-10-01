@@ -16,7 +16,7 @@ Local email catcher. Verify identities, send mail into the store, list identitie
 
 ### Authz notes
 
-Identity `EvaluateFull` on `ses:*` (v1 Query and v2 REST). List on `/v2/email/identities` requires `ses:ListEmailIdentities` (distinct from v1 `ses:ListIdentities`). Org SCP/RCP filters apply. Source address must be a verified identity or Send* returns MessageRejected.
+Identity `EvaluateFull` on `ses:*` (v1 Query and v2 REST). List on `/v2/email/identities` requires `ses:ListEmailIdentities` (distinct from v1 `ses:ListIdentities`). Org SCP/RCP filters apply. Source address must be a verified identity or Send* returns MessageRejected. Bounce SNS topics must Allow Principal Service `ses.amazonaws.com` for `sns:Publish` (SetIdentityNotificationTopic and bounce publish both check).
 
 ## How to verify / CLI smoke
 

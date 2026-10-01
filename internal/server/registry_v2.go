@@ -21,6 +21,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 	distreference "github.com/distribution/reference"
 	"github.com/google/uuid"
 	digestpkg "github.com/opencontainers/go-digest"
@@ -828,7 +829,11 @@ func (s *Server) getRegistryManifest(w http.ResponseWriter, r *http.Request, acc
 		digest = images[0].ImageDigest
 		relPath = images[0].ManifestPath
 	}
-	absPath := filepath.Join(s.cfg.DataRoot, relPath)
+	absPath, err := validate.ResolveUnderRoot(s.cfg.DataRoot, relPath)
+	if err != nil {
+		s.writeRegistryError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "manifest unknown")
+		return
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {

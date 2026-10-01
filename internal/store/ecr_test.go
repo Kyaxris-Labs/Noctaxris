@@ -101,9 +101,12 @@ func TestECRPutImageListImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	img, err := st.PutImage(account, "img-repo", "sha256:abc123", []string{"latest", "lab"}, "/ecr/manifest.json")
+	img, err := st.PutImage(account, "img-repo", "sha256:abc123", []string{"latest", "lab"}, "ecr/manifests/lab.json")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := st.PutImage(account, "img-repo", "sha256:evil", nil, "../outside.json"); err == nil {
+		t.Fatal("want reject path escape")
 	}
 	if img.ImageDigest != "sha256:abc123" || len(img.ImageTags) != 2 {
 		t.Fatalf("put=%+v", img)

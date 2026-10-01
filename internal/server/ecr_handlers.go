@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
@@ -11,6 +13,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	ecrsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/ecr"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/validate"
 )
 
 const (
@@ -544,7 +547,7 @@ func (s *Server) ecrPutImage(
 			"User is not authorized to perform ecr:PutImage.", readOnly, eventID, verified)
 		return
 	}
-	manifest, _ := params["imageManifest"].(string)
+	manifestBody, _ := params["imageManifest"].(string)
 	digest := ""
 	tag := ""
 	if imageID, ok := params["imageId"].(map[string]any); ok {
@@ -554,16 +557,39 @@ func (s *Server) ecrPutImage(
 	if strings.TrimSpace(digest) == "" {
 		digest, _ = params["imageDigest"].(string)
 	}
-	if strings.TrimSpace(digest) == "" {
+	digest = strings.TrimSpace(digest)
+	if digest == "" {
 		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
 			"imageDigest is required.", readOnly, eventID, verified)
+		return
+	}
+	relPath, err := registryManifestRelPath(verified.AccountID, name, digest)
+	if err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"imageDigest is invalid.", readOnly, eventID, verified)
+		return
+	}
+	absPath, err := validate.ResolveUnderRoot(s.cfg.DataRoot, relPath)
+	if err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "InvalidParameterException",
+			"Unable to store image manifest.", readOnly, eventID, verified)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o700); err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to put image.", readOnly, eventID, verified)
+		return
+	}
+	if err := os.WriteFile(absPath, []byte(manifestBody), 0o600); err != nil {
+		s.writeECRError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to put image.", readOnly, eventID, verified)
 		return
 	}
 	var tags []string
 	if strings.TrimSpace(tag) != "" {
 		tags = []string{strings.TrimSpace(tag)}
 	}
-	img, err := s.store.PutImage(verified.AccountID, name, strings.TrimSpace(digest), tags, manifest)
+	img, err := s.store.PutImage(verified.AccountID, name, digest, tags, relPath)
 	if errors.Is(err, store.ErrRepositoryNotFound) {
 		s.writeECRError(w, r, body, requestID, http.StatusBadRequest, "RepositoryNotFoundException",
 			"The repository with name '"+name+"' does not exist in the registry with id '"+verified.AccountID+"'.", readOnly, eventID, verified)

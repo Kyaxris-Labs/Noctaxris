@@ -79,6 +79,43 @@ func cloudControlTypeAllowed(typeName string) bool {
 	return cloudControlSupportedCFNType(typeName)
 }
 
+// cloudControlRedactProperties strips secret material from Get/List/request-status Properties.
+func cloudControlRedactProperties(typeName, propsJSON string) string {
+	propsJSON = strings.TrimSpace(propsJSON)
+	if propsJSON == "" {
+		return propsJSON
+	}
+	var props map[string]any
+	if err := json.Unmarshal([]byte(propsJSON), &props); err != nil {
+		return propsJSON
+	}
+	changed := false
+	switch typeName {
+	case "AWS::SecretsManager::Secret":
+		if _, ok := props["SecretString"]; ok {
+			delete(props, "SecretString")
+			changed = true
+		}
+		if _, ok := props["SecretBinary"]; ok {
+			delete(props, "SecretBinary")
+			changed = true
+		}
+	case "AWS::SSM::Parameter":
+		if _, ok := props["Value"]; ok {
+			delete(props, "Value")
+			changed = true
+		}
+	}
+	if !changed {
+		return propsJSON
+	}
+	out, err := json.Marshal(props)
+	if err != nil {
+		return propsJSON
+	}
+	return string(out)
+}
+
 func (s *Store) recordCloudControlRequest(accountID, token, typeName, identifier, operation, status, props string) {
 	now := time.Now().UTC().UnixMilli()
 	_, _ = s.db.Exec(
@@ -185,6 +222,7 @@ func (s *Store) CloudControlGetResource(accountID, typeName, identifier string) 
 	if err != nil {
 		return CloudControlResource{}, fmt.Errorf("get cloudcontrol resource: %w", err)
 	}
+	r.Properties = cloudControlRedactProperties(r.TypeName, r.Properties)
 	return r, nil
 }
 
@@ -205,11 +243,11 @@ func (s *Store) cloudControlLiveGet(accountID, typeName, identifier string) (Clo
 		props, _ := json.Marshal(map[string]any{"RoleName": role.RoleName, "Arn": role.RoleARN})
 		return CloudControlResource{TypeName: typeName, Identifier: role.RoleName, Properties: string(props)}, nil
 	case "AWS::SSM::Parameter":
-		p, err := s.GetParameter(accountID, identifier, true)
+		p, err := s.GetParameter(accountID, identifier, false)
 		if err != nil {
 			return CloudControlResource{}, ErrCloudControlNotFound
 		}
-		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type, "Value": p.Value})
+		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type})
 		return CloudControlResource{TypeName: typeName, Identifier: p.Name, Properties: string(props)}, nil
 	default:
 		return CloudControlResource{}, ErrCloudControlNotFound
@@ -238,6 +276,7 @@ func (s *Store) CloudControlListResources(accountID, typeName string) ([]CloudCo
 		if err := rows.Scan(&r.TypeName, &r.Identifier, &r.Properties, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list cloudcontrol scan: %w", err)
 		}
+		r.Properties = cloudControlRedactProperties(r.TypeName, r.Properties)
 		seen[r.Identifier] = struct{}{}
 		out = append(out, r)
 	}
@@ -377,6 +416,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if err := s.cfnAuthorizeAction(auth, "ssm:PutParameter", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		value := cfnStringProp(patch, "Value")
 		ptype := cfnStringProp(patch, "Type")
 		if ptype == "" {
@@ -389,11 +431,21 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
-		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type, "Value": p.Value})
+		props, _ := json.Marshal(map[string]any{"Name": p.Name, "Type": p.Type})
 		return s.cloudControlPersistUpdate(accountID, typeName, p.Name, props)
 	case "AWS::S3::Bucket":
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
+		}
+		if _, ok := patch["BucketEncryption"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "s3:PutEncryptionConfiguration", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
+		}
+		if _, ok := patch["NotificationConfiguration"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "s3:PutBucketNotification", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
 		}
 		if err := s.applyCFNS3Encryption(accountID, identifier, patch); err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
@@ -459,6 +511,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if err := s.cfnAuthorizeAction(auth, "sqs:SetQueueAttributes", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		q, err := s.GetQueueByURL(identifier)
 		if err != nil {
 			q, err = s.GetQueue(accountID, identifier)
@@ -479,6 +534,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if err := s.cfnAuthorizeAction(auth, "sns:SetTopicAttributes", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		topic, err := s.GetTopicByARN(identifier)
 		if err != nil {
 			topic, err = s.GetTopic(accountID, identifier)
@@ -495,6 +553,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if err := s.cfnAuthorizeAction(auth, "secretsmanager:DescribeSecret", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		if err := s.modifyCFNSecret(accountID, identifier, map[string]any{}, patch); err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
@@ -508,6 +569,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		}
 		if _, ok := patch["SSESpecification"]; !ok {
 			return CloudControlResource{}, "", fmt.Errorf("%w: SSESpecification required", ErrCloudControlBadRequest)
+		}
+		if err := s.cfnAuthorizeAction(auth, "dynamodb:UpdateTable", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
 		}
 		if err := s.applyCFNDynamoSSE(accountID, identifier, patch); err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
@@ -536,6 +600,16 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if _, ok := patch["KeyPolicy"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "kms:PutKeyPolicy", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
+		}
+		if _, ok := patch["EnableKeyRotation"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "kms:EnableKeyRotation", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
+		}
 		if err := s.modifyCFNKMSKey(identifier, map[string]any{}, patch); err != nil {
 			return CloudControlResource{}, "", fmt.Errorf("%w: %v", ErrCloudControlBadRequest, err)
 		}
@@ -549,6 +623,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 			return CloudControlResource{}, "", ErrCloudControlNotFound
 		}
 		if raw, ok := patch["Policy"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "events:PutPermission", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
 			policyJSON := ""
 			if raw != nil {
 				var pErr error
@@ -580,6 +657,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		if err := cfnRejectCloudControlPatchKeys(typeName, patch); err != nil {
 			return CloudControlResource{}, "", err
 		}
+		if err := s.cfnAuthorizeAction(auth, "kms:UpdateAlias", "*"); err != nil {
+			return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+		}
 		target := cfnStringProp(patch, "TargetKeyId")
 		if target == "" {
 			return CloudControlResource{}, "", fmt.Errorf("%w: TargetKeyId required", ErrCloudControlBadRequest)
@@ -598,6 +678,9 @@ func (s *Store) CloudControlUpdateResourceAuthorized(accountID, typeName, identi
 		}
 		out := map[string]any{"LogGroupName": identifier}
 		if _, ok := patch["RetentionInDays"]; ok {
+			if err := s.cfnAuthorizeAction(auth, "logs:PutRetentionPolicy", "*"); err != nil {
+				return CloudControlResource{}, "", cloudControlMapProvisionErr(err)
+			}
 			days := cfnIntProp(patch, "RetentionInDays", 0)
 			if days <= 0 {
 				if err := s.DeleteRetentionPolicy(accountID, identifier); err != nil {
@@ -682,6 +765,7 @@ func (s *Store) CloudControlGetResourceRequestStatus(accountID, requestToken str
 	if err != nil {
 		return CloudControlRequestStatus{}, fmt.Errorf("get resource request status: %w", err)
 	}
+	st.Properties = cloudControlRedactProperties(st.TypeName, st.Properties)
 	return st, nil
 }
 

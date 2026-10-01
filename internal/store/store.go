@@ -139,7 +139,8 @@ CREATE TABLE IF NOT EXISTS kms_grants (
   grantee_principal TEXT NOT NULL,
   retiring_principal TEXT,
   operations TEXT NOT NULL,
-  name TEXT
+  name TEXT,
+  constraints_json TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS s3_buckets (
   account_id TEXT NOT NULL,
@@ -541,6 +542,7 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"sfn resource policy", EnsureSFNResourcePolicySchema},
 		{"sfn task tokens", EnsureSFNTaskTokenSchema},
 		{"kms key material", EnsureKMSKeyMaterialSchema},
+		{"kms grant constraints", EnsureKMSGrantConstraintsSchema},
 		{"codebuild", EnsureCodeBuildSchema},
 		{"batch", EnsureBatchSchema},
 		{"cfn", EnsureCFNSchema},

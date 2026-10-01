@@ -21,7 +21,7 @@ Topic and subscription metadata live in SQLite.
 
 ### Authz notes
 
-SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account from the topic ARN. Same-account access: allow if identity **or** topic policy Allows. Cross-account access: allow only when identity **and** topic policy both Allow. Empty topic policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect.
+SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account from the topic ARN. Same-account access: allow if identity **or** topic policy Allows. Cross-account access: allow only when identity **and** topic policy both Allow. Empty topic policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect. `CreateTopic` requires identity Allow for `sns:CreateTopic` (a Policy attribute on create does not authorize the create call).
 
 Subscription delivery to SQS or Lambda also requires the destination resource policy to Allow `sns.amazonaws.com` (EventBridge-style service principal check). Missing policy skips that subscription (logged).
 

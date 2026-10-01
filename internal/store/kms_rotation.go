@@ -40,6 +40,19 @@ func (s *Store) EnsureKMSKeyMaterialSchema() error {
 	return EnsureKMSKeyMaterialSchema(s.db)
 }
 
+// EnsureKMSGrantConstraintsSchema adds constraints_json to kms_grants when missing.
+func EnsureKMSGrantConstraintsSchema(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("ensure kms grant constraints schema: db is nil")
+	}
+	return execMigrateStmt(db, `ALTER TABLE kms_grants ADD COLUMN constraints_json TEXT NOT NULL DEFAULT ''`, nil)
+}
+
+// EnsureKMSGrantConstraintsSchema ensures grant constraints storage on an open store.
+func (s *Store) EnsureKMSGrantConstraintsSchema() error {
+	return EnsureKMSGrantConstraintsSchema(s.db)
+}
+
 // SweepExpiredPendingKeys hard-deletes PendingDeletion keys whose DeletionDate is at or before now.
 // Also removes aliases and grants for those keys. Returns the number of keys deleted.
 func (s *Store) SweepExpiredPendingKeys(now time.Time) (int, error) {

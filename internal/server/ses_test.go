@@ -62,11 +62,15 @@ func TestSESCatcherRoundTrip(t *testing.T) {
 }
 
 func TestSESHandlersCoverageWave(t *testing.T) {
-	srv, _, _ := newTestServerStore(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
 	topicARN := snsCreateTopic(t, handler, "ses-bounce", now)
+	sesPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ses.amazonaws.com"},"Action":"sns:Publish","Resource":"` + topicARN + `"}]}`
+	if err := st.SetTopicAttributes(testAccountID, "ses-bounce", map[string]string{"Policy": sesPolicy}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Missing EmailAddress
 	if rec := mustSESQuery(t, handler, "Action=VerifyEmailIdentity&Version=2010-12-01", now); rec.Code != http.StatusBadRequest {

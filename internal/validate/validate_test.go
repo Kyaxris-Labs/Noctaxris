@@ -83,6 +83,23 @@ func TestPathUnderRootAndJoinDataPath(t *testing.T) {
 	}
 }
 
+func TestResolveUnderRoot(t *testing.T) {
+	root := t.TempDir()
+	got, err := validate.ResolveUnderRoot(root, "ecr/manifests/acct/repo/sha256/ab.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validate.PathUnderRoot(root, got) {
+		t.Fatalf("resolved %q not under %q", got, root)
+	}
+	if _, err := validate.ResolveUnderRoot(root, "../outside.json"); err == nil || !validate.IsInvalid(err) {
+		t.Fatalf("want escape reject, got %v", err)
+	}
+	if _, err := validate.ResolveUnderRoot(root, "/abs/path"); err == nil || !validate.IsInvalid(err) {
+		t.Fatalf("want absolute reject, got %v", err)
+	}
+}
+
 func TestReadableFilePath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "meta.xml")

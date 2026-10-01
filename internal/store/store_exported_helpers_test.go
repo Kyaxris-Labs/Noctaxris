@@ -33,6 +33,7 @@ func TestEnsureSchemaWrappersCoverage(t *testing.T) {
 		st.EnsureEMRSchema,
 		st.EnsureEventsSchema,
 		st.EnsureKMSKeyMaterialSchema,
+		st.EnsureKMSGrantConstraintsSchema,
 		st.EnsureLightsailSchema,
 		st.EnsureLogsResourcePolicySchema,
 		st.EnsureLogsSchema,

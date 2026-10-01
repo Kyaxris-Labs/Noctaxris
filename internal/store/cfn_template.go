@@ -43,12 +43,17 @@ func parseCFNTemplate(templateBody string) (cfnTemplate, error) {
 	return tpl, nil
 }
 
+const (
+	cfnYAMLMaxDepth   = 256
+	cfnYAMLMaxNodes   = 100000
+)
+
 func parseCFNYAML(body string) (map[string]any, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(body), &root); err != nil {
 		return nil, err
 	}
-	v, err := cfnYAMLNodeToAny(&root)
+	v, err := cfnYAMLNodeToAny(&root, map[*yaml.Node]struct{}{}, 0, new(int))
 	if err != nil {
 		return nil, err
 	}
@@ -59,18 +64,25 @@ func parseCFNYAML(body string) (map[string]any, error) {
 	return m, nil
 }
 
-func cfnYAMLNodeToAny(n *yaml.Node) (any, error) {
+func cfnYAMLNodeToAny(n *yaml.Node, visiting map[*yaml.Node]struct{}, depth int, nodes *int) (any, error) {
 	if n == nil {
 		return nil, nil
+	}
+	if depth > cfnYAMLMaxDepth {
+		return nil, fmt.Errorf("YAML nesting exceeds limit")
+	}
+	*nodes++
+	if *nodes > cfnYAMLMaxNodes {
+		return nil, fmt.Errorf("YAML node count exceeds limit")
 	}
 	switch n.Kind {
 	case yaml.DocumentNode:
 		if len(n.Content) == 0 {
 			return nil, nil
 		}
-		return cfnYAMLNodeToAny(n.Content[0])
+		return cfnYAMLNodeToAny(n.Content[0], visiting, depth+1, nodes)
 	case yaml.MappingNode:
-		if intrinsic := cfnYAMLTaggedIntrinsic(n); intrinsic != nil {
+		if intrinsic := cfnYAMLTaggedIntrinsic(n, visiting, depth, nodes); intrinsic != nil {
 			return intrinsic, nil
 		}
 		out := make(map[string]any, len(n.Content)/2)
@@ -78,7 +90,7 @@ func cfnYAMLNodeToAny(n *yaml.Node) (any, error) {
 			keyNode := n.Content[i]
 			valNode := n.Content[i+1]
 			key := keyNode.Value
-			val, err := cfnYAMLNodeToAny(valNode)
+			val, err := cfnYAMLNodeToAny(valNode, visiting, depth+1, nodes)
 			if err != nil {
 				return nil, err
 			}
@@ -86,12 +98,12 @@ func cfnYAMLNodeToAny(n *yaml.Node) (any, error) {
 		}
 		return out, nil
 	case yaml.SequenceNode:
-		if intrinsic := cfnYAMLTaggedIntrinsic(n); intrinsic != nil {
+		if intrinsic := cfnYAMLTaggedIntrinsic(n, visiting, depth, nodes); intrinsic != nil {
 			return intrinsic, nil
 		}
 		out := make([]any, 0, len(n.Content))
 		for _, child := range n.Content {
-			v, err := cfnYAMLNodeToAny(child)
+			v, err := cfnYAMLNodeToAny(child, visiting, depth+1, nodes)
 			if err != nil {
 				return nil, err
 			}
@@ -99,18 +111,27 @@ func cfnYAMLNodeToAny(n *yaml.Node) (any, error) {
 		}
 		return out, nil
 	case yaml.ScalarNode:
-		if intrinsic := cfnYAMLTaggedIntrinsic(n); intrinsic != nil {
+		if intrinsic := cfnYAMLTaggedIntrinsic(n, visiting, depth, nodes); intrinsic != nil {
 			return intrinsic, nil
 		}
 		return cfnYAMLDecodeScalar(n)
 	case yaml.AliasNode:
-		return cfnYAMLNodeToAny(n.Alias)
+		if n.Alias == nil {
+			return nil, fmt.Errorf("YAML alias has no target")
+		}
+		if _, seen := visiting[n.Alias]; seen {
+			return nil, fmt.Errorf("YAML alias cycle")
+		}
+		visiting[n.Alias] = struct{}{}
+		v, err := cfnYAMLNodeToAny(n.Alias, visiting, depth+1, nodes)
+		delete(visiting, n.Alias)
+		return v, err
 	default:
 		return nil, fmt.Errorf("unsupported YAML node kind %v", n.Kind)
 	}
 }
 
-func cfnYAMLTaggedIntrinsic(n *yaml.Node) any {
+func cfnYAMLTaggedIntrinsic(n *yaml.Node, visiting map[*yaml.Node]struct{}, depth int, nodes *int) any {
 	// Short-form CFN tags use local tags like !Ref (not !!str / tag:yaml.org).
 	if n.Tag == "" || strings.HasPrefix(n.Tag, "!!") || strings.HasPrefix(n.Tag, "tag:yaml.org") {
 		return nil
@@ -125,13 +146,13 @@ func cfnYAMLTaggedIntrinsic(n *yaml.Node) any {
 			return map[string]any{"Ref": n.Value}
 		}
 	case "Sub":
-		v, err := cfnYAMLUntaggedValue(n)
+		v, err := cfnYAMLUntaggedValue(n, visiting, depth, nodes)
 		if err != nil {
 			return nil
 		}
 		return map[string]any{"Fn::Sub": v}
 	case "GetAtt":
-		v, err := cfnYAMLUntaggedValue(n)
+		v, err := cfnYAMLUntaggedValue(n, visiting, depth, nodes)
 		if err != nil {
 			return nil
 		}
@@ -146,7 +167,7 @@ func cfnYAMLTaggedIntrinsic(n *yaml.Node) any {
 			return map[string]any{"Fn::GetAtt": t}
 		}
 	case "Join":
-		v, err := cfnYAMLUntaggedValue(n)
+		v, err := cfnYAMLUntaggedValue(n, visiting, depth, nodes)
 		if err != nil {
 			return nil
 		}
@@ -155,10 +176,10 @@ func cfnYAMLTaggedIntrinsic(n *yaml.Node) any {
 	return nil
 }
 
-func cfnYAMLUntaggedValue(n *yaml.Node) (any, error) {
+func cfnYAMLUntaggedValue(n *yaml.Node, visiting map[*yaml.Node]struct{}, depth int, nodes *int) (any, error) {
 	clone := *n
 	clone.Tag = ""
-	return cfnYAMLNodeToAny(&clone)
+	return cfnYAMLNodeToAny(&clone, visiting, depth+1, nodes)
 }
 
 func cfnYAMLDecodeScalar(n *yaml.Node) (any, error) {

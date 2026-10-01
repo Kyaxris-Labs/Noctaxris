@@ -74,6 +74,11 @@ func TestCognitoSoftwareTokenMFAChallenge(t *testing.T) {
 	if challenged.AccessToken != "" {
 		t.Fatal("must not issue tokens before MFA challenge response")
 	}
+	if _, _, err := st.AssociateSoftwareTokenMFA("", "", "", challenged.Session); err == nil {
+		t.Fatal("SOFTWARE_TOKEN_MFA session must not re-associate TOTP")
+	} else if !errors.Is(err, store.ErrCognitoUnauthorized) {
+		t.Fatalf("want Unauthorized, got %v", err)
+	}
 
 	totp, err := store.GenerateCognitoTOTP(secretCode, time.Now().UTC())
 	if err != nil {

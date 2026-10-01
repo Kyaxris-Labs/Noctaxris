@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 1.6.3
+
+Patch after 1.6.2: ECR manifest path resolve, Athena Glue `s3://` locations, KMS grant binding and encryption-context constraints, Cognito MFA session re-enroll gate, CloudFormation YAML alias cycle caps, SQS/SNS create identity-only authz, Config recorder role for snapshot delivery, Cloud Control secret redaction and Update authz, SES bounce topic policy. Docker Hub: `kyaxris/noctaxris` (`1.6.3`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- ECR: control-plane `PutImage` writes the image manifest under a data-root path (`ecr/manifests/...`); registry tag GET resolves that path with `validate.ResolveUnderRoot`
+- Athena: DuckDB view setup requires Glue `StorageLocation` values to be `s3://bucket/prefix` (same gate as in-process)
+- KMS: `RevokeGrant` requires `KeyId` and deletes only grants on that key; `CreateGrant` persists and enforces `Constraints.EncryptionContextEquals` / `EncryptionContextSubset` on grant match
+- Cognito: `SOFTWARE_TOKEN_MFA` sessions cannot call `AssociateSoftwareToken` (re-enroll needs an access token after sign-in)
+- CloudFormation: YAML TemplateBody alias walks reject cycles and cap nesting/node count
+- SQS / SNS: `CreateQueue` / `CreateTopic` authorize with identity only (caller `Policy` attribute does not OR-authorize create)
+- Config: `StartConfigurationRecorder` requires a recorder `roleARN` trusted by `config.amazonaws.com` with `s3:PutObject` (and respects bucket policy Deny)
+- Cloud Control: Get/List/request-status redact `SecretString` / SSM `Value`; `UpdateResource` authorizes underlying service actions for SSM, S3, SQS, SNS, Secrets, DynamoDB, KMS, EventBus, Logs
+- SES: Bounce notification topic must Allow `ses.amazonaws.com` to `sns:Publish` (Set and Send paths)
+
 ## 1.6.2
 
 Patch after 1.6.1: single-segment data-root names, session Allow intersection on data-plane OR, Athena DuckDB SELECT subset, Duck image pin. Docker Hub: `kyaxris/noctaxris` (`1.6.2`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
