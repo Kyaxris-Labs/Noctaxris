@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.6.2
+
+Patch after 1.6.1: single-segment data-root names, session Allow intersection on data-plane OR, Athena DuckDB SELECT subset, Duck image pin. Docker Hub: `kyaxris/noctaxris` (`1.6.2`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 - Transfer: `CreateUser` `UserName` must be a single path segment under the data root (same shape as other data-root names)
 - BCM Data Exports: export `Name` must be a single path segment under the data root
 - Transcribe: `TranscriptionJobName` must be a single path segment under the data root
