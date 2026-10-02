@@ -876,18 +876,25 @@ func (s *Store) Subscribe(accountID, topicNameOrARN, protocol, endpoint string) 
 }
 
 // ConfirmSubscription confirms a pending HTTP(S) subscription by token.
+// Unknown or malformed tokens fail closed (no subscription is confirmed).
 func (s *Store) ConfirmSubscription(topicARN, token string) (Subscription, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return Subscription{}, fmt.Errorf("%w: Token is required", ErrSNSInvalidParameter)
 	}
+	if _, err := uuid.Parse(token); err != nil {
+		return Subscription{}, fmt.Errorf("%w: Token is invalid", ErrSNSInvalidParameter)
+	}
 	row := s.db.QueryRow(
 		`SELECT subscription_arn, topic_arn, protocol, endpoint, confirmed, owner, COALESCE(confirm_token,''), COALESCE(attributes_json,'{}')
-		 FROM sns_subscriptions WHERE confirm_token = ?`,
+		 FROM sns_subscriptions WHERE confirm_token = ? AND confirm_token != ''`,
 		token,
 	)
 	sub, err := scanSubscription(row)
 	if err != nil {
+		if errors.Is(err, ErrNoSuchSubscription) {
+			return Subscription{}, ErrNoSuchSubscription
+		}
 		return Subscription{}, err
 	}
 	if topicARN != "" && sub.TopicARN != topicARN {

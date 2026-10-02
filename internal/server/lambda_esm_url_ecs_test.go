@@ -95,7 +95,7 @@ func TestLambdaEventSourceMappingCRUD(t *testing.T) {
 }
 
 func TestLambdaFunctionURLConfigAndNONEInvoke(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -133,6 +133,15 @@ func TestLambdaFunctionURLConfigAndNONEInvoke(t *testing.T) {
 	}, now)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GetFunctionUrlConfig status=%d", getRec.Code)
+	}
+
+	if _, err := st.AddFunctionPermissionWithOpts(testAccountID, "url-fn", store.AddFunctionPermissionOpts{
+		StatementID:         "PublicURL",
+		Action:              "lambda:InvokeFunctionUrl",
+		Principal:           "*",
+		FunctionUrlAuthType: "NONE",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	// AuthType NONE: no SigV4. Expect compute unavailable without DockerHost.

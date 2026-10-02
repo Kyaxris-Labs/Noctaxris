@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -220,8 +221,9 @@ func DefaultDataPlanePortForNeptune(graphEngine string) int {
 }
 
 // NeptuneNestedBootstrapEnv returns env for nested Neptune backends.
-// Neo4j disables auth (NEO4J_AUTH=none) so nested peers can use Bolt without brokered credentials,
-// matching Neptune's edge IAM auth model. Never log returned values.
+// Neo4j disables auth (NEO4J_AUTH=none) so nested peers can use Bolt without brokered credentials.
+// Gremlin Server has no password gate in this lab image. Wire auth is nested-Internal theatre only;
+// do not treat this as multi-tenant edge IAM. Never log returned values.
 func NeptuneNestedBootstrapEnv(graphEngine string) map[string]string {
 	switch strings.ToLower(strings.TrimSpace(graphEngine)) {
 	case "neo4j", "opencypher", "cypher", "bolt":
@@ -259,6 +261,8 @@ func DefaultDataPlanePort(kind DataKind) int {
 
 // RedpandaStartCmd returns pinned Redpanda start args for nested MSK.
 // advertiseHost is the nested-network hostname clients use (container name).
+// The Kafka API is PLAINTEXT only (no SASL, TLS listener, or IAM wire auth). Shared
+// noctaxris-lab-kafka is the same theatre: one broker, not multi-tenant ACLs.
 func RedpandaStartCmd(advertiseHost string) []string {
 	host := strings.TrimSpace(advertiseHost)
 	if host == "" {
@@ -275,6 +279,35 @@ func RedpandaStartCmd(advertiseHost string) []string {
 		"--kafka-addr", "internal://0.0.0.0:9092",
 		"--advertise-kafka-addr", "internal://" + host + ":9092",
 	}
+}
+
+// EnvRedisAuth enables Valkey/Redis --requirepass on nested ElastiCache and MemoryDB.
+// Default off (no AUTH). Set to 1 / true / on to require the lab master password on the wire.
+const EnvRedisAuth = "NOCTAXRIS_REDIS_AUTH"
+
+// LabElastiCacheRequirePass is the nested Valkey password when Redis AUTH is opted in.
+// Matches the Secrets Manager master secret minted on CreateCacheCluster.
+const LabElastiCacheRequirePass = "noctaxris-cache-lab"
+
+// LabMemoryDBRequirePass is the nested Valkey password when Redis AUTH is opted in.
+// Matches the Secrets Manager master secret minted on CreateCluster.
+const LabMemoryDBRequirePass = "noctaxris-memorydb-lab"
+
+// RedisAuthEnabled reports whether nested ElastiCache/MemoryDB should start with --requirepass.
+// Default false. Does not invent multi-tenant Redis ACL users.
+func RedisAuthEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(EnvRedisAuth))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "on")
+}
+
+// ValkeyRequirePassCmd returns CMD for the Valkey lab image with --requirepass.
+// Empty password returns nil (image default: no AUTH). Never log the password.
+func ValkeyRequirePassCmd(password string) []string {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return nil
+	}
+	return []string{"valkey-server", "--requirepass", password}
 }
 
 // MosquittoStartCmd returns Mosquitto start args using the mounted lab TLS config path.

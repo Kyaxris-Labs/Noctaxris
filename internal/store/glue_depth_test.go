@@ -62,8 +62,15 @@ func TestGlueCoverageWave2DatabaseTableCrawlerJSON(t *testing.T) {
 	if err != nil || len(emptyCrawl) != 0 {
 		t.Fatalf("empty crawlers=%v err=%v", emptyCrawl, err)
 	}
+	roleARN, err := st.CreateRole(account, "glue-wave2-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "s3", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 	cr, err := st.CreateGlueCrawler(account, store.GlueCrawlerCreate{
-		Name: "wave2-crawl", DatabaseName: "wave2db",
+		Name: "wave2-crawl", Role: roleARN, DatabaseName: "wave2db",
 		Targets: []store.GlueS3Target{{Path: "s3://glue-wave2/orders/"}},
 	})
 	if err != nil {

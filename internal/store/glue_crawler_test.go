@@ -22,8 +22,16 @@ func TestGlueStartCrawlerCreatesTableFromCSV(t *testing.T) {
 	if _, err := st.CreateGlueDatabase(account, "labdb", ""); err != nil {
 		t.Fatal(err)
 	}
+	roleARN, err := st.CreateRole(account, "glue-crawl-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "s3", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.CreateGlueCrawler(account, store.GlueCrawlerCreate{
 		Name:         "csv-crawler",
+		Role:         roleARN,
 		DatabaseName: "labdb",
 		Targets:      []store.GlueS3Target{{Path: "s3://crawl-lab/data/"}},
 	}); err != nil {
@@ -54,14 +62,22 @@ func TestGlueStartCrawlerFailsWhenBucketMissing(t *testing.T) {
 	if _, err := st.CreateGlueDatabase(account, "labdb", ""); err != nil {
 		t.Fatal(err)
 	}
+	roleARN, err := st.CreateRole(account, "glue-bad-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "s3", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.CreateGlueCrawler(account, store.GlueCrawlerCreate{
 		Name:         "bad-crawler",
+		Role:         roleARN,
 		DatabaseName: "labdb",
 		Targets:      []store.GlueS3Target{{Path: "s3://no-such-bucket/prefix/"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := st.StartGlueCrawler(account, "bad-crawler")
+	_, err = st.StartGlueCrawler(account, "bad-crawler")
 	if err == nil {
 		t.Fatal("expected error for missing bucket")
 	}

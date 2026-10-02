@@ -259,6 +259,9 @@ func TestECSIMDSSidecarCmdFailsClosed(t *testing.T) {
 	if !strings.Contains(cmd, "send_error(404)") {
 		t.Fatal("expected 404 deny")
 	}
+	if !strings.Contains(cmd, ".peer") {
+		t.Fatal("expected peer-file gate in sidecar handler")
+	}
 	if !ecsIMDSSidecarServesExactPaths([]string{"/bin/sh", "-c", cmd}) {
 		t.Fatal("new sidecar cmd should count as exact-path")
 	}
@@ -384,5 +387,32 @@ func TestECSIMDSHandlerPythonRejectsDirectoryListing(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), "ASIA1") {
 		t.Fatalf("exact GET body=%s", payload)
+	}
+
+	// Peer file present but mismatched: deny. Matching 127.0.0.1: allow.
+	peerPath := filepath.Join(credDir, id+".peer")
+	if err := os.WriteFile(peerPath, []byte("10.255.255.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := http.Get(base + "/v2/credentials/" + id)
+	if err != nil {
+		t.Fatalf("GET peer-mismatch: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, denied.Body)
+	_ = denied.Body.Close()
+	if denied.StatusCode != http.StatusNotFound {
+		t.Fatalf("peer-mismatch status=%d want 404", denied.StatusCode)
+	}
+	if err := os.WriteFile(peerPath, []byte("127.0.0.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := http.Get(base + "/v2/credentials/" + id)
+	if err != nil {
+		t.Fatalf("GET peer-match: %v", err)
+	}
+	allowBody, _ := io.ReadAll(allowed.Body)
+	_ = allowed.Body.Close()
+	if allowed.StatusCode != http.StatusOK || !strings.Contains(string(allowBody), "ASIA1") {
+		t.Fatalf("peer-match status=%d body=%s", allowed.StatusCode, allowBody)
 	}
 }

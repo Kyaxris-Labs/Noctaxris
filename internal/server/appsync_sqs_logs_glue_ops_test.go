@@ -366,7 +366,7 @@ func TestLogsStreamEventsAndFilterOps(t *testing.T) {
 }
 
 func TestGlueDatabaseTableCrawlerOps(t *testing.T) {
-	srv, _, _ := newTestServerStore(t)
+	srv, st, _ := newTestServerStore(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -423,6 +423,9 @@ func TestGlueDatabaseTableCrawlerOps(t *testing.T) {
 
 	mustCreateIAMRole(t, handler, "glue-ops-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}`, now)
 	roleARN := "arn:aws:iam::" + testAccountID + ":role/glue-ops-role"
+	if err := st.PutInlinePolicy(roleARN, "s3", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
 
 	bkt := mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/glue-ops-bkt", nil, "s3", now, nil)
 	if bkt.Code < 200 || bkt.Code >= 300 {

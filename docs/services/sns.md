@@ -23,6 +23,8 @@ Topic and subscription metadata live in SQLite.
 
 SNS uses `EvaluateSNS` via `authorizeDataplaneOR` with the topic owner account from the topic ARN. Same-account access: allow if identity **or** topic policy Allows. Cross-account access: allow only when identity **and** topic policy both Allow. Empty topic policy denies cross-account callers. Explicit Deny in either wins. Org SCP/RCP filters apply before evaluation. When identity Allows, permissions boundary and session intersect. `CreateTopic` requires identity Allow for `sns:CreateTopic` (a Policy attribute on create does not authorize the create call).
 
+HTTP(S) subscribe to the lab catcher stays pending until confirmed. Catcher `GET|POST /_noctaxris/sns-http-catcher?Action=ConfirmSubscription&Token=...&TopicArn=...` is unsigned (lab sink on the shared listener): confirmation succeeds only when `Token` is the stored pending-subscription UUID for that topic. Unknown, empty, or non-UUID tokens fail closed. Query-protocol `sns:ConfirmSubscription` on the AWS API still requires SigV4 and identity Allow. `AuthenticateOnUnsubscribe` is not implemented.
+
 Subscription delivery to SQS or Lambda also requires the destination resource policy to Allow `sns.amazonaws.com` (EventBridge-style service principal check). Missing policy skips that subscription (logged).
 
 Cross-account `Publish` uses `TopicArn` of the owner account. Cross-account `Subscribe` to a foreign topic ARN is allowed when topic-policy dual-eval Allows `sns:Subscribe`. SQS subscription endpoints may be foreign queue ARNs; delivery uses the queue owner account and requires the queue policy to Allow `sns.amazonaws.com`. Lambda subscription endpoints resolve the function account from the endpoint ARN (policy + async invoke under the function owner). Subscribe rejects a Lambda ARN whose account differs from the subscriber (AWS-shaped: function owners subscribe their own functions to a topic).
@@ -85,6 +87,7 @@ aws sns publish --topic-arn "$TOPIC_ARN" --message hello-xa --endpoint-url "$EP"
 ## Out of lab scope
 
 - Full SNS SAR beyond the lab set (SMS, email, nested filter-policy operators, delivery retry timing) (out of lab scope; lab FilterPolicy + RawMessageDelivery + RedrivePolicy DLQ cover CFN/SDK pipelines)
+- `AuthenticateOnUnsubscribe` and signed unsubscribe confirmation beyond Token existence
 - Exact AWS retry and jitter timing for delivery failures (out of lab scope)
 - High-throughput FIFO quotas (out of lab scope)
 

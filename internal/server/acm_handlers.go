@@ -57,7 +57,10 @@ func acmAction(action string) string {
 	case "DeleteCertificate":
 		return catalog.ActionACMDeleteCertificate
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "acm:" + action
 	}
 }
 

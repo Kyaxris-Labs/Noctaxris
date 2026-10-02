@@ -37,6 +37,7 @@ See also [ops.md](../ops.md) for Compose overlays and nested smoke.
 | Status | `Creating` → `Active` or `CreateFailed` |
 | Failure hint | Lab `FailureReason` on CreateFailed when mmap / memory-lock / nested wait evidence is classified |
 | Network | Internal nested network only; no host publish of 9200/443 |
+| Nested wire | Nested container starts with `DISABLE_SECURITY_PLUGIN=true` (and `DISABLE_INSTALL_DEMO_CONFIG=true`): no OpenSearch security-plugin wire auth among DinD peers on `noctaxris-data`. Nested-ports overlay raises exposure. |
 | Engine | `EngineVersion` string stored (default `OpenSearch_2.11`) |
 | Query facade | SigV4 lab paths on `:4566` for index + allowlisted `_search` (see below) |
 
@@ -57,7 +58,7 @@ Sign requests with SigV4 service `es` (same IAM prefix as control-plane OpenSear
 
 ### Authz notes
 
-Identity `EvaluateFull` on `es:*` (OpenSearch Service IAM prefix). Lab query paths authorize with `es:DescribeDomain` as the gate for the configured account after SigV4.
+Identity `EvaluateFull` on `es:*` (OpenSearch Service IAM prefix). Control-plane CRUD uses the matching `es:*` actions. Lab query facade paths (after SigV4 service `es`) require both `es:DescribeDomain` on the domain and the HTTP verb action: `es:ESHttpPut` / `es:ESHttpPost` / `es:ESHttpGet` / `es:ESHttpDelete` for document routes, and `es:ESHttpPost` or `es:ESHttpGet` for `_search`. `es:DescribeDomain` alone is not enough to index or search. Nested wire auth is off (`DISABLE_SECURITY_PLUGIN=true`); the facade IAM gate is what callers hit on `:4566`.
 
 ## How to verify / CLI smoke
 

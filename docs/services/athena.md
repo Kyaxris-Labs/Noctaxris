@@ -40,7 +40,7 @@ Nested DuckDB stays on `noctaxris-data` with no host port publish. The API reach
 
 ### Authz notes
 
-Identity `EvaluateFull` on `athena:*`.
+Identity `EvaluateFull` on `athena:*`. When the DuckDB engine path runs, `StartQueryExecution` also authorizes caller `s3:GetObject` on each object key under Glue table `StorageLocation` prefixes that Duck will scan (identity or bucket policy). Missing Allow fails closed (`AccessDeniedException` / `FAILED`) before the sidecar query starts. In-process scans still fail the query when a listed object `GetObject` is denied.
 
 ## How to verify / CLI smoke
 

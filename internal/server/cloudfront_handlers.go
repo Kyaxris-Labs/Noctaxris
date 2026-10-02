@@ -77,7 +77,10 @@ func cloudfrontAction(action string) string {
 	case "ListInvalidations":
 		return catalog.ActionCloudFrontListInvalidations
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "cloudfront:" + action
 	}
 }
 

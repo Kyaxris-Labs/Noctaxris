@@ -11,10 +11,15 @@ Create, describe, and delete Valkey or Redis OSS cache clusters. Endpoint is a n
 | CRUD | `CreateCacheCluster`, `DescribeCacheClusters`, `DeleteCacheCluster` |
 | Engines | `redis`, `valkey` |
 | Endpoint | `{id}.cache.noctaxris.internal:6379` (nested network, not WAN or host published) |
+| Wire AUTH | Default: no AUTH on nested Valkey. Opt-in: `NOCTAXRIS_REDIS_AUTH=1` starts with `--requirepass noctaxris-cache-lab` (same value as the Secrets Manager master secret) |
 
 ### Authz notes
 
 Identity `EvaluateFull` on `elasticache:*`.
+
+### Nested wire
+
+Default Compose keeps Redis on Internal `noctaxris-data` only. Without AUTH, any peer on that network can speak RESP. That is Medium residual inside DinD. `NOCTAXRIS_NESTED_PORT_PUBLISH=1` with `compose.lab-nested-ports.yaml` publishes loopback `:6379` on the engine hop and raises exposure (treat as High if the host is shared). Prefer leaving AUTH off only on single-tenant lab hosts, or set `NOCTAXRIS_REDIS_AUTH=1`.
 
 ## How to verify / CLI smoke
 
@@ -38,7 +43,7 @@ Describe returns the nested endpoint. Create starts as `creating`. Status become
 
 ## Not yet / deferred
 
-- Redis AUTH / IAM auth token full matrix (nested lab image has no AUTH by default)
+- Redis ACL users / IAM auth token full matrix (opt-in is single `--requirepass` only)
 - Cluster mode enabled / replication groups full matrix
 - Encryption at rest
 - Host or WAN publish of cache ports (forbidden)

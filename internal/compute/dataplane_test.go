@@ -235,8 +235,14 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 		t.Fatalf("msk image=%q", DefaultDataPlaneImage(DataKindMSK))
 	}
 	cmd := RedpandaStartCmd("noctaxris-msk-x")
-	if len(cmd) < 3 || cmd[0] != "redpanda" || !strings.Contains(strings.Join(cmd, " "), "noctaxris-msk-x:9092") {
+	joined := strings.Join(cmd, " ")
+	if len(cmd) < 3 || cmd[0] != "redpanda" || !strings.Contains(joined, "noctaxris-msk-x:9092") {
 		t.Fatalf("redpanda cmd=%v", cmd)
+	}
+	for _, banned := range []string{"sasl", "tls", "ssl", "iam"} {
+		if strings.Contains(strings.ToLower(joined), banned) {
+			t.Fatalf("redpanda cmd must stay PLAINTEXT, found %q in %v", banned, cmd)
+		}
 	}
 	if DefaultDataPlanePort(DataKindMQTT) != 1883 {
 		t.Fatalf("mqtt port=%d", DefaultDataPlanePort(DataKindMQTT))
@@ -247,6 +253,32 @@ func TestNestedDataEndpointAndDefaults(t *testing.T) {
 	mqttCmd := MosquittoStartCmd("")
 	if len(mqttCmd) != 3 || mqttCmd[0] != "/usr/sbin/mosquitto" || mqttCmd[2] != "/etc/noctaxris/mqtt/mosquitto.conf" {
 		t.Fatalf("mosquitto cmd=%v", mqttCmd)
+	}
+}
+
+func TestRedisAuthOptInDefaultOff(t *testing.T) {
+	t.Setenv(EnvRedisAuth, "")
+	if RedisAuthEnabled() {
+		t.Fatal("Redis AUTH must default off")
+	}
+	if ValkeyRequirePassCmd("") != nil {
+		t.Fatal("empty password must yield nil CMD")
+	}
+	t.Setenv(EnvRedisAuth, "0")
+	if RedisAuthEnabled() {
+		t.Fatal("Redis AUTH 0 must be off")
+	}
+	t.Setenv(EnvRedisAuth, "1")
+	if !RedisAuthEnabled() {
+		t.Fatal("Redis AUTH 1 must be on")
+	}
+	cmd := ValkeyRequirePassCmd(LabElastiCacheRequirePass)
+	if len(cmd) != 3 || cmd[0] != "valkey-server" || cmd[1] != "--requirepass" || cmd[2] != LabElastiCacheRequirePass {
+		t.Fatalf("requirepass cmd=%v", cmd)
+	}
+	mdb := ValkeyRequirePassCmd(LabMemoryDBRequirePass)
+	if len(mdb) != 3 || mdb[2] != LabMemoryDBRequirePass {
+		t.Fatalf("memorydb requirepass cmd=%v", mdb)
 	}
 }
 

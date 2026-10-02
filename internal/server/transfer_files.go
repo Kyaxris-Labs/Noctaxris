@@ -61,6 +61,11 @@ func (s *Server) handleTransferLabHome(
 		http.NotFound(w, r)
 		return
 	}
+	if verified == nil || !strings.EqualFold(verified.Service, "transfer") {
+		s.writeTransferError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"SigV4 service must be transfer.", readOnly, eventID, verified)
+		return
+	}
 	arn := store.TransferServerARN(s.transferRegion(verified), verified.AccountID, serverID)
 	switch r.Method {
 	case http.MethodGet:

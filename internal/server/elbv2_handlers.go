@@ -114,7 +114,10 @@ func elbv2Action(action string) string {
 	case "DescribeLoadBalancerAttributes":
 		return "elasticloadbalancing:DescribeLoadBalancerAttributes"
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "elasticloadbalancing:" + action
 	}
 }
 

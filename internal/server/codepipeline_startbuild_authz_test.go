@@ -14,30 +14,12 @@ func TestCodePipelineStartRequiresCodeBuildStartBuild(t *testing.T) {
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
-	proj := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
-		"name": "cp-sb-proj",
-		"source": map[string]any{
-			"type": "NO_SOURCE",
-			"buildspec": "version: 0.2\nphases:\n  build:\n    commands:\n      - echo hi\n",
-		},
-		"environment": map[string]any{
-			"type":                     "LINUX_CONTAINER",
-			"image":                    "aws/codebuild/standard:7.0",
-			"computeType":              "BUILD_GENERAL1_SMALL",
-			"privilegedMode":           false,
-			"imagePullCredentialsType": "CODEBUILD",
-		},
-		"serviceRole": "arn:aws:iam::" + testAccountID + ":role/codebuild-service",
-	}, now)
-	if proj.Code != http.StatusOK && proj.Code != http.StatusBadRequest {
-		// Role may be missing; create role then project.
-	}
 	roleARN, err := st.CreateRole(testAccountID, "codebuild-service", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
 	if err != nil && !strings.Contains(err.Error(), "EntityAlreadyExists") {
 		t.Fatal(err)
 	}
 	_ = roleARN
-	proj = mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+	proj := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
 		"name": "cp-sb-proj",
 		"source": map[string]any{
 			"type": "NO_SOURCE",
@@ -125,5 +107,95 @@ func TestCodePipelineStartRequiresCodeBuildStartBuild(t *testing.T) {
 	handler.ServeHTTP(okRec, reqOK)
 	if okRec.Code != http.StatusOK {
 		t.Fatalf("StartPipeline with StartBuild status=%d body=%q", okRec.Code, okRec.Body.String())
+	}
+}
+
+func TestCodePipelineStartRequiresRoleStartBuild(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	cbRole, err := st.CreateRole(testAccountID, "cp-role-cb", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codebuild.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj := mustCodeBuildJSON(t, handler, "CreateProject", map[string]any{
+		"name": "cp-role-proj",
+		"source": map[string]any{
+			"type":      "NO_SOURCE",
+			"buildspec": "version: 0.2\nphases:\n  build:\n    commands:\n      - echo hi\n",
+		},
+		"environment": map[string]any{
+			"type":        "LINUX_CONTAINER",
+			"image":       "aws/codebuild/standard:7.0",
+			"computeType": "BUILD_GENERAL1_SMALL",
+		},
+		"serviceRole": cbRole,
+	}, now)
+	if proj.Code != http.StatusOK {
+		t.Fatalf("CreateProject status=%d body=%q", proj.Code, proj.Body.String())
+	}
+
+	pipeRole, err := st.CreateRole(testAccountID, "cp-pipe-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"codepipeline.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pipeline role can run CodePipeline APIs but not StartBuild yet.
+	pipePol, err := st.CreateManagedPolicy(testAccountID, "CPRolePipeOnly",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["codepipeline:*"],"Resource":"*"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachRolePolicy(testAccountID, "cp-pipe-role", pipePol); err != nil {
+		t.Fatal(err)
+	}
+
+	createPipe := mustJSONTarget(t, handler, "CodePipeline_20150709.CreatePipeline", "codepipeline", map[string]any{
+		"pipeline": map[string]any{
+			"name":    "cp-role-pipe",
+			"roleArn": pipeRole,
+			"stages": []map[string]any{
+				{
+					"name": "Build",
+					"actions": []map[string]any{
+						{
+							"name": "BuildAction",
+							"actionTypeId": map[string]any{
+								"category": "Build",
+								"owner":    "AWS",
+								"provider": "CodeBuild",
+								"version":  "1",
+							},
+							"configuration": map[string]string{"ProjectName": "cp-role-proj"},
+						},
+					},
+				},
+			},
+		},
+	}, now)
+	if createPipe.Code != http.StatusOK {
+		t.Fatalf("CreatePipeline status=%d body=%q", createPipe.Code, createPipe.Body.String())
+	}
+
+	deny := mustJSONTarget(t, handler, "CodePipeline_20150709.StartPipelineExecution", "codepipeline", map[string]any{
+		"name": "cp-role-pipe",
+	}, now)
+	if deny.Code != http.StatusForbidden || !strings.Contains(deny.Body.String(), "codebuild:StartBuild") {
+		t.Fatalf("StartPipeline role without StartBuild status=%d body=%q", deny.Code, deny.Body.String())
+	}
+
+	buildPol, err := st.CreateManagedPolicy(testAccountID, "CPRoleStartBuild",
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["codebuild:StartBuild"],"Resource":"*"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachRolePolicy(testAccountID, "cp-pipe-role", buildPol); err != nil {
+		t.Fatal(err)
+	}
+	ok := mustJSONTarget(t, handler, "CodePipeline_20150709.StartPipelineExecution", "codepipeline", map[string]any{
+		"name": "cp-role-pipe",
+	}, now)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("StartPipeline role with StartBuild status=%d body=%q", ok.Code, ok.Body.String())
 	}
 }

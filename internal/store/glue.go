@@ -20,6 +20,11 @@ var (
 
 const DefaultGlueRegion = "us-east-1"
 
+const (
+	actionGlueS3ListBucket = "s3:ListBucket"
+	actionGlueS3GetObject  = "s3:GetObject"
+)
+
 const glueSchema = `
 CREATE TABLE IF NOT EXISTS glue_databases (
   account_id TEXT NOT NULL,
@@ -552,10 +557,18 @@ func (s *Store) StartGlueCrawler(accountID, name string) (GlueCrawler, error) {
 }
 
 func (s *Store) runGlueCrawler(accountID string, cr GlueCrawler) error {
+	roleARN := strings.TrimSpace(cr.Role)
+	if roleARN == "" {
+		return fmt.Errorf("%w: crawler Role is required for S3 target reads", ErrGlueBadRequest)
+	}
 	for _, tgt := range cr.Targets {
 		bucket, prefix, err := parseS3Location(tgt.Path)
 		if err != nil {
 			return err
+		}
+		bucketARN := BucketARN(bucket)
+		if !s.RoleSessionAllows(accountID, roleARN, actionGlueS3ListBucket, bucketARN, "glue-crawler", DefaultGlueRegion) {
+			return fmt.Errorf("%w: crawler Role is not authorized to perform s3:ListBucket on %s", ErrGlueBadRequest, bucketARN)
 		}
 		listed, err := s.ListObjectsV2(accountID, bucket, prefix, "")
 		if err != nil {
@@ -565,6 +578,10 @@ func (s *Store) runGlueCrawler(accountID string, cr GlueCrawler) error {
 			return err
 		}
 		for _, obj := range listed.Contents {
+			objectARN := ObjectARN(bucket, obj.Key)
+			if !s.RoleSessionAllows(accountID, roleARN, actionGlueS3GetObject, objectARN, "glue-crawler", DefaultGlueRegion) {
+				return fmt.Errorf("%w: crawler Role is not authorized to perform s3:GetObject on %s", ErrGlueBadRequest, objectARN)
+			}
 			if err := s.crawlS3Object(accountID, cr.DatabaseName, bucket, prefix, obj.Key); err != nil {
 				return err
 			}

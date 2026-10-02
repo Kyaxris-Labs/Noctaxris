@@ -562,7 +562,8 @@ func (s *Store) ListWAFIPSets(accountID, scope string) ([]WAFIPSet, error) {
 //   - arn:aws:lambda:REGION:ACCOUNT:function:NAME (lab Function URL associate)
 //   - arn:aws:elasticloadbalancing:REGION:ACCOUNT:loadbalancer/app/NAME/ID (ELB lab listener)
 //
-// Rejected (no enforce path yet): apigateway restapis, cognito-idp user pools.
+// Rejected (no enforce path yet): apigateway restapis (REST execute),
+// cognito-idp user pools, NLB loadbalancer/net/... .
 func IsWAFAssociableResourceARN(resourceARN string) bool {
 	resourceARN = strings.TrimSpace(resourceARN)
 	if resourceARN == "" || !strings.HasPrefix(resourceARN, "arn:aws:") {

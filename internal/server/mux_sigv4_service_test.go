@@ -51,8 +51,20 @@ func TestSigV4ServiceMatchesAction(t *testing.T) {
 	if !sigv4ServiceMatchesAction("tagging", "tag:TagResources") {
 		t.Fatal("tagging signing name")
 	}
-	if !sigv4ServiceMatchesAction("sts", "CreateUser") {
-		t.Fatal("short name leaves routing to verified.Service")
+	if sigv4ServiceMatchesAction("sts", "CreateUser") {
+		t.Fatal("short names must not auto-match; Query binds via service mapper")
+	}
+	if !queryShortNameMatchesService("elasticache", "CreateCacheCluster") {
+		t.Fatal("elasticache owns CreateCacheCluster")
+	}
+	if queryShortNameMatchesService("s3", "CreateCacheCluster") {
+		t.Fatal("s3 must not own CreateCacheCluster")
+	}
+	if !queryShortNameMatchesService("neptune", "DescribeDBClusters") {
+		t.Fatal("neptune owns DescribeDBClusters")
+	}
+	if queryShortNameMatchesService("s3", "DescribeDBClusters") {
+		t.Fatal("s3 must not own DescribeDBClusters")
 	}
 	if expectedSigV4Service("dynamodb:GetItem") != "dynamodb" {
 		t.Fatalf("expected service %q", expectedSigV4Service("dynamodb:GetItem"))

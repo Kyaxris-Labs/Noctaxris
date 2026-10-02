@@ -2043,6 +2043,10 @@ func resolveAction(r *http.Request, body []byte) string {
 			return normalizeAction(short)
 		case strings.EqualFold(prefix, "AmazonSSM"):
 			return ssmAction(short)
+		case strings.EqualFold(prefix, "AmazonSQS"):
+			return normalizeAction(short)
+		case strings.EqualFold(prefix, "AmazonSNS"):
+			return snsAction(short)
 		case strings.EqualFold(prefix, "AWSEvents"):
 			return eventsAction(short)
 		case strings.EqualFold(prefix, "secretsmanager"):
@@ -2216,6 +2220,11 @@ func resolveAction(r *http.Request, body []byte) string {
 		case strings.Contains(strings.ToLower(prefix), "elasticmapreduce"),
 			strings.EqualFold(prefix, "ElasticMapReduce"):
 			return emrAction(short)
+		case strings.Contains(strings.ToLower(prefix), "cloudfront"):
+			return cloudfrontAction(short)
+		case strings.Contains(strings.ToLower(prefix), "elasticloadbalancing"),
+			strings.EqualFold(prefix, "ElasticLoadBalancing_v2"):
+			return elbv2Action(short)
 		case strings.EqualFold(prefix, "NoctaxrisLab"):
 			return labForensicsAction(short)
 		}

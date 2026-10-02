@@ -23,11 +23,11 @@ On `GetTable` / `GetTables`, when `StorageDescriptor.Columns` is empty and a `Sc
 
 ### Crawler lite
 
-`StartCrawler` runs synchronously in-process (no Spark). For each `S3Targets[].Path`, the crawler lists object keys under the prefix, infers CSV vs JSON from the key suffix or leading bytes, and creates or updates a catalog table from the header row (CSV) or first JSON object keys. Crawler state transitions `READY` → `RUNNING` → `READY`. Missing S3 buckets fail closed. When `Role` is set on create, `iam:PassRole` is enforced with trust for `glue.amazonaws.com`.
+`StartCrawler` runs synchronously in-process (no Spark). For each `S3Targets[].Path`, the crawler lists object keys under the prefix, infers CSV vs JSON from the key suffix or leading bytes, and creates or updates a catalog table from the header row (CSV) or first JSON object keys. Crawler state transitions `READY` → `RUNNING` → `READY`. Missing S3 buckets fail closed. When `Role` is set on `CreateCrawler`, caller `iam:PassRole` plus trust for `glue.amazonaws.com` is enforced. `StartCrawler` requires a non-empty crawler `Role` and evaluates that Role session for `s3:ListBucket` on each target bucket and `s3:GetObject` on listed object keys before reading. Missing Role or denied S3 actions fail closed (403).
 
 ### Authz notes
 
-Identity `EvaluateFull` on `glue:*`. No Lake Formation or resource policy path.
+Identity `EvaluateFull` on `glue:*`. Crawler S3 reads use the crawler `Role` session (not the caller identity) for `s3:ListBucket` / `s3:GetObject`. No Lake Formation or resource policy path.
 
 ## How to verify / CLI smoke
 
@@ -53,7 +53,13 @@ aws glue create-table --database-name labdb --table-input '{
 aws glue get-table --database-name labdb --name people --endpoint-url "$EP"
 aws s3 mb s3://crawl-lab --endpoint-url "$EP"
 printf 'id,name\n1,alice\n' | aws s3 cp - s3://crawl-lab/data/people.csv --endpoint-url "$EP"
-aws glue create-crawler --name csv-crawler --role "" --database-name labdb \
+GLUE_TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam create-role --role-name glue-crawler-role --assume-role-policy-document "$GLUE_TRUST" --endpoint-url "$EP"
+aws iam put-role-policy --role-name glue-crawler-role --policy-name s3 \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}' \
+  --endpoint-url "$EP"
+GLUE_ROLE=$(aws iam get-role --role-name glue-crawler-role --endpoint-url "$EP" --query Role.Arn --output text)
+aws glue create-crawler --name csv-crawler --role "$GLUE_ROLE" --database-name labdb \
   --targets '{"S3Targets":[{"Path":"s3://crawl-lab/data/"}]}' --endpoint-url "$EP"
 aws glue start-crawler --name csv-crawler --endpoint-url "$EP"
 aws glue get-crawler --name csv-crawler --endpoint-url "$EP"

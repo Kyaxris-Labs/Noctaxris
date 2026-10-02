@@ -120,7 +120,10 @@ func appconfigAction(action string) string {
 	case "ListDeployments":
 		return actionAppConfigListDeployments
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "appconfig:" + action
 	}
 }
 

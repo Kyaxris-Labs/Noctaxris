@@ -227,6 +227,8 @@ func ecsIMDSSidecarCmd() string {
 // ecsIMDSHandlerPython is the sidecar HTTP server: GET of an exact
 // /v2/credentials/<uuid> file only. Directory URLs, other methods, and
 // non-UUID paths return 404 (OWASP deny-by-default; no SimpleHTTP listing).
+// When a sibling <uuid>.peer file exists, only that TCP peer IP may read the
+// credential (bound after task start on Internal noctaxris-ecs).
 func ecsIMDSHandlerPython(root string, port int, bind string) string {
 	if strings.TrimSpace(bind) == "" {
 		bind = "0.0.0.0"
@@ -244,6 +246,17 @@ class H(BaseHTTPRequestHandler):
         return
     def _deny(self):
         self.send_error(404)
+    def _peer_allowed(self, base, cred_id):
+        peer_path = base / (cred_id + ".peer")
+        if not peer_path.is_file():
+            return True
+        try:
+            allowed = peer_path.read_text().strip()
+        except Exception:
+            return False
+        if not allowed:
+            return False
+        return self.client_address[0] == allowed
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         m = CRED_RE.fullmatch(path)
@@ -255,6 +268,9 @@ class H(BaseHTTPRequestHandler):
             base = (ROOT / "v2" / "credentials").resolve()
             target = (base / cred_id).resolve()
             if target.parent != base or not target.is_file():
+                self._deny()
+                return
+            if not self._peer_allowed(base, cred_id):
                 self._deny()
                 return
             data = target.read_bytes()
@@ -343,6 +359,10 @@ func normalizeECSIMDSCredID(id string) (string, error) {
 
 func ecsIMDSCredFilePath(id string) string {
 	return ecsIMDSDocRoot + ecsIMDSRelativePrefix + id
+}
+
+func ecsIMDSPeerFilePath(id string) string {
+	return ecsIMDSCredFilePath(id) + ".peer"
 }
 
 // matchECSIMDSCredPath accepts AWS RELATIVE_URI shape /v2/credentials/<uuid>
@@ -442,6 +462,63 @@ func (c *Client) registerECSIMDSCredentials(ctx context.Context, credID string, 
 	return nil
 }
 
+// bindECSIMDSCredentialsPeer pins a credential UUID to the task container's
+// address on noctaxris-ecs so sibling tasks cannot read another UUID file.
+func (c *Client) bindECSIMDSCredentialsPeer(ctx context.Context, credID, taskContainerID string) error {
+	id, err := normalizeECSIMDSCredID(credID)
+	if err != nil {
+		return err
+	}
+	taskID := strings.TrimSpace(taskContainerID)
+	if taskID == "" {
+		return fmt.Errorf("compute: imds peer bind requires task container ID")
+	}
+	if c == nil || c.cli == nil {
+		return fmt.Errorf("compute: client unavailable")
+	}
+	taskInsp, err := c.cli.ContainerInspect(ctx, taskID, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("compute: imds peer task inspect: %w", err)
+	}
+	task := taskInsp.Container
+	if task.NetworkSettings == nil || task.NetworkSettings.Networks == nil {
+		return fmt.Errorf("compute: imds peer task has no networks")
+	}
+	ep, ok := task.NetworkSettings.Networks[ECSNetworkName]
+	if !ok || ep == nil {
+		return fmt.Errorf("compute: imds peer task not on %s", ECSNetworkName)
+	}
+	ip := ep.IPAddress
+	if !ip.IsValid() {
+		return fmt.Errorf("compute: imds peer task has no address on %s", ECSNetworkName)
+	}
+	peerIP := ip.String()
+
+	inspRes, err := c.cli.ContainerInspect(ctx, ECSIMDSContainerName, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("compute: imds peer sidecar inspect: %w", err)
+	}
+	insp := inspRes.Container
+	res, err := c.Exec(ctx, ExecOpts{
+		ContainerID: insp.ID,
+		Cmd: []string{
+			"/bin/sh", "-c",
+			`mkdir -p "$(dirname "$NOCTAXRIS_IMDS_PEER_PATH")" && printf '%s' "$NOCTAXRIS_IMDS_PEER_IP" > "$NOCTAXRIS_IMDS_PEER_PATH"`,
+		},
+		Env: []string{
+			"NOCTAXRIS_IMDS_PEER_PATH=" + ecsIMDSPeerFilePath(id),
+			"NOCTAXRIS_IMDS_PEER_IP=" + peerIP,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("compute: imds peer bind exec: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("compute: imds peer bind exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
+}
+
 func (c *Client) unregisterECSIMDSCredentials(ctx context.Context, credID string) error {
 	id, err := normalizeECSIMDSCredID(credID)
 	if err != nil {
@@ -462,10 +539,11 @@ func (c *Client) unregisterECSIMDSCredentials(ctx context.Context, credID string
 		ContainerID: insp.ID,
 		Cmd: []string{
 			"/bin/sh", "-c",
-			`rm -f -- "$NOCTAXRIS_IMDS_PATH"`,
+			`rm -f -- "$NOCTAXRIS_IMDS_PATH" "$NOCTAXRIS_IMDS_PEER_PATH"`,
 		},
 		Env: []string{
 			"NOCTAXRIS_IMDS_PATH=" + ecsIMDSCredFilePath(id),
+			"NOCTAXRIS_IMDS_PEER_PATH=" + ecsIMDSPeerFilePath(id),
 		},
 	})
 	if err != nil {

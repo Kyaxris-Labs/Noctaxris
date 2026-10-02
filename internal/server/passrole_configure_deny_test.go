@@ -120,6 +120,50 @@ func TestBackupStartBackupJobPassRoleDeny(t *testing.T) {
 	}
 }
 
+func TestBackupCreateBackupSelectionPassRoleDeny(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "backup-sel-bad", passRoleTrustBad, now)
+	createVault := mustBackupREST(t, handler, http.MethodPut, "/backup-vaults/passrole-sel-vault", map[string]any{}, now)
+	if createVault.Code != http.StatusOK {
+		t.Fatalf("CreateBackupVault status=%d body=%q", createVault.Code, createVault.Body.String())
+	}
+	createPlan := mustBackupREST(t, handler, http.MethodPut, "/backup/plans/", map[string]any{
+		"BackupPlan": map[string]any{
+			"BackupPlanName": "passrole-sel-plan",
+			"Rules": []map[string]any{
+				{"RuleName": "daily", "TargetBackupVaultName": "passrole-sel-vault", "ScheduleExpression": "cron(0 5 ? * * *)"},
+			},
+		},
+	}, now)
+	if createPlan.Code != http.StatusOK {
+		t.Fatalf("CreateBackupPlan status=%d body=%q", createPlan.Code, createPlan.Body.String())
+	}
+	var planOut map[string]any
+	_ = json.Unmarshal(createPlan.Body.Bytes(), &planOut)
+	planID, _ := planOut["BackupPlanId"].(string)
+	if planID == "" {
+		t.Fatalf("missing BackupPlanId: %s", createPlan.Body.String())
+	}
+
+	badARN := "arn:aws:iam::" + testAccountID + ":role/backup-sel-bad"
+	createSel := mustBackupREST(t, handler, http.MethodPut, "/backup/plans/"+planID+"/selections/", map[string]any{
+		"BackupSelection": map[string]any{
+			"SelectionName": "passrole-sel-deny",
+			"IamRoleArn":    badARN,
+			"Resources":     []string{"arn:aws:dynamodb:us-east-1:" + testAccountID + ":table/passrole"},
+		},
+	}, now)
+	if createSel.Code != http.StatusForbidden {
+		t.Fatalf("CreateBackupSelection status=%d body=%q", createSel.Code, createSel.Body.String())
+	}
+	if !strings.Contains(createSel.Body.String(), "not authorized to pass role to Backup") {
+		t.Fatalf("body=%q", createSel.Body.String())
+	}
+}
+
 func TestEKSCreateClusterPassRoleDeny(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

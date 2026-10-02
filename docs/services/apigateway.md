@@ -112,10 +112,11 @@ aws apigateway put-integration --rest-api-id "$API_ID" --resource-id "$RES_ID" \
 |------|---------|
 | API | `CreateApi` with `ProtocolType=WEBSOCKET` (apigatewayv2 management under `/v2/apis`) |
 | Routes | `$connect`, `$disconnect`, `$default` → AWS_PROXY Lambda |
+| Route auth | `NONE` (open-data-plane gate) and `AWS_IAM` (`execute-api` SigV4) on lab invoke |
 | Lab invoke | `POST http://127.0.0.1:4566/ws-api/{apiId}/{stage}/$connect|$disconnect|$default` |
 | Management | `PostToConnection` via `POST /execute-api/{apiId}/{stage}/@connections/{connectionId}` (in-memory connection table) |
 
-Not a full internet WebSocket gateway: no `ws://` upgrade on `:4566`. Soft-skip Lambda invoke when nested compute is down.
+Not a full internet WebSocket gateway: no `ws://` upgrade on `:4566`. Soft-skip Lambda invoke when nested compute is down. WebSocket route `JWT` and `CUSTOM` (Lambda authorizer) are deferred: lab invoke returns `unsupported authorization` for those types until wired.
 
 ### WebSocket CLI smoke
 
@@ -128,6 +129,8 @@ curl -s -X POST "http://127.0.0.1:4566/ws-api/$API/\$default/\$connect"
 
 ## Deferred depth
 
+- WebSocket route `JWT` and `CUSTOM` (Lambda) authorizers on `/ws-api/...` lab invoke (HTTP API JWT/CUSTOM remain available on `/http-api/...`)
+- WAFv2 `AssociateWebACL` for REST API `restapis/...` ARNs (no REST execute enforce path yet; HTTP API / execute-api / AppSync / Function URL / ALB shapes associate and enforce)
 - Authorizer result caching / identity validation expressions / Cognito user pool authorizers
 - Usage plan throttle and quota metering
 - Models, validators, gateway responses

@@ -18,7 +18,7 @@ CodeBuild stages call nested `StartBuild` for each `ProjectName`. Without `NOCTA
 
 ### Authz notes
 
-Identity `EvaluateFull` on `codepipeline:*`. When `roleArn` is set, PassRole plus `codepipeline.amazonaws.com` trust is required.
+Identity `EvaluateFull` on `codepipeline:*`. When `roleArn` is set, PassRole plus `codepipeline.amazonaws.com` trust is required. Nested CodeBuild actions also require `codebuild:StartBuild` on each `ProjectName` (evaluated for the pipeline `roleArn` when set, otherwise for the StartPipelineExecution / PutApprovalResult caller) before StartBuild runs.
 
 ## How to verify / CLI smoke
 

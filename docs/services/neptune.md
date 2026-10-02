@@ -16,7 +16,7 @@ Create, describe, and delete Neptune clusters (`Engine=neptune`). Nested DinD de
 
 ### Authz notes
 
-Identity `EvaluateFull` on `rds:CreateDBCluster`, `rds:DescribeDBClusters`, and `rds:DeleteDBCluster` (Neptune shares the RDS control-plane IAM action prefix). Sign requests as SigV4 service `neptune`. DocumentDB remains on service `rds` / `docdb` with `Engine=docdb` and continues to reject `Engine=neptune`.
+Identity `EvaluateFull` on `neptune:CreateDBCluster`, `neptune:DescribeDBClusters`, and `neptune:DeleteDBCluster` (catalog prefix `neptune:*`, distinct from DocumentDB `rds:*`). An `rds:*` Allow does not authorize Neptune control plane. Sign requests as SigV4 service `neptune`. DocumentDB remains on service `rds` / `docdb` with `Engine=docdb` and continues to reject `Engine=neptune`.
 
 ### Nested graph backend selection
 
@@ -27,7 +27,7 @@ AWS `Engine` stays `neptune`. The nested graph process is selected separately (f
 3. Env `NOCTAXRIS_NEPTUNE_ENGINE` (`gremlin` default when unset/empty; `neo4j` opt-in)
 4. Default: `gremlin`
 
-Aliases: `tinkerpop` → gremlin; `opencypher` / `cypher` / `bolt` → neo4j. Unknown values return `InvalidParameterValue` (fail closed). Neo4j containers set `NEO4J_AUTH=none` so nested peers can speak Bolt without brokered passwords (Neptune authenticates at the AWS edge).
+Aliases: `tinkerpop` → gremlin; `opencypher` / `cypher` / `bolt` → neo4j. Unknown values return `InvalidParameterValue` (fail closed). Neo4j containers set `NEO4J_AUTH=none`. Gremlin Server has no password gate. Nested-Internal peers can open Gremlin/Bolt without brokered credentials (Medium among DinD peers). Nested-ports loopback publish of `:8182` / `:7687` raises that exposure.
 
 ## How to verify / CLI smoke
 
@@ -85,11 +85,12 @@ bolt://{id}.neptune.noctaxris.internal:7687
 
 ### Operator loopback (opt-in)
 
-Default Compose does not publish `:8182` or `:7687` on the host. For loopback Gremlin or Bolt from the operator machine, use `NOCTAXRIS_NESTED_PORT_PUBLISH=1` with `docker/compose.lab-nested-ports.yaml` (engine PortBindings plus `127.0.0.1` maps on `noctaxris-engine`). Fixed host ports are one-instance-per-port.
+Default Compose does not publish `:8182` or `:7687` on the host. For loopback Gremlin or Bolt from the operator machine, use `NOCTAXRIS_NESTED_PORT_PUBLISH=1` with `docker/compose.lab-nested-ports.yaml` (engine PortBindings plus `127.0.0.1` maps on `noctaxris-engine`). Fixed host ports are one-instance-per-port. Treat that overlay as High severity for unauthenticated Gremlin/Bolt on a shared host.
 
 ## Not yet / deferred
 
 - CreateDBInstance / instance matrix
 - IAM database authentication for Gremlin / Bolt
+- Password / TLS wire auth on nested Gremlin or Neo4j
 - HTTP Gremlin facade on `:4566`
 - Host or WAN publish of Gremlin/Bolt ports (forbidden as default; loopback only via nested-ports overlay)

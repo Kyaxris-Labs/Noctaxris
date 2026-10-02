@@ -60,7 +60,10 @@ func configAction(action string) string {
 	case "GetResourceConfigHistory":
 		return catalog.ActionConfigGetResourceConfigHistory
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "config:" + action
 	}
 }
 

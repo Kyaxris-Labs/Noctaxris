@@ -28,6 +28,29 @@ func TestQueryProtocolRejectsServiceScopeMismatch(t *testing.T) {
 	}
 }
 
+func TestQueryProtocolRejectsNonIAMShortNameServiceMismatch(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// CreateCacheCluster stays a short name; signing as s3 must not reach ElastiCache.
+	body := "Action=CreateCacheCluster&Version=2015-02-02&CacheClusterId=scope-mismatch&Engine=redis"
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", []byte(body))
+	signHeader(t, req, []byte(body), testAccessKey, testSecret, testRegion, "s3", now)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("mismatched ElastiCache Query status=%d want 403 body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Credential should be scoped to correct service") &&
+		!strings.Contains(rec.Body.String(), "SignatureDoesNotMatch") {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "CacheCluster") && strings.Contains(rec.Body.String(), "CreateCacheClusterResponse") {
+		t.Fatalf("s3-scoped CreateCacheCluster must not run ElastiCache body=%q", rec.Body.String())
+	}
+}
+
 func TestQueryProtocolAllowsMatchingServiceScope(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()

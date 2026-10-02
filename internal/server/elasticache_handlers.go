@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	ecsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/elasticache"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -111,8 +112,8 @@ func (s *Server) elasticacheCreate(
 			"Unable to store master secret.", readOnly, eventID, verified)
 		return
 	}
-	// Nested Valkey/Redis lab image has no AUTH by default. Secret is for control-plane labs.
-	_ = tryStartNestedDataEngine(s, verified.AccountID, "elasticache", c.CacheClusterID, nil)
+	// Nested Valkey/Redis: no AUTH by default. Opt in with NOCTAXRIS_REDIS_AUTH=1 (--requirepass).
+	_ = tryStartNestedCache(s, verified.AccountID, "elasticache", c.CacheClusterID, compute.LabElastiCacheRequirePass)
 	if updated, err := s.store.DescribeElastiCacheCluster(verified.AccountID, c.CacheClusterID); err == nil {
 		c = updated
 	}

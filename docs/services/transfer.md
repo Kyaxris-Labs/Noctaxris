@@ -2,7 +2,7 @@
 
 **Status:** shipped (lab core)
 
-Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. Servers create as `State=ONLINE`. There is no real SFTP/SSH listener and no extra Compose port: file Put/Get/List is a lab HTTP API on the same `:4566` API port only (SigV4 service `transfer`). Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe omits `EndpointType` (no VPC theatre). `EndpointDetails` and client `EndpointType` are rejected.
+Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root. Servers create as `State=ONLINE`. There is no real SFTP/SSH listener and no extra Compose port: file Put/Get/List is a lab HTTP API on the same `:4566` API port only (SigV4 service `transfer`; other credential scopes are rejected). Homes live under `transfer/ACCOUNT/SERVER/home/USER/` inside the lab data directory. Describe omits `EndpointType` (no VPC theatre). `EndpointDetails` and client `EndpointType` are rejected.
 
 ## Implemented
 
@@ -10,14 +10,14 @@ Server and user CRUD with an SFTP-shaped sandbox filesystem under the data root.
 |------|-----------------|
 | Server | `CreateServer`, `DescribeServer`, `ListServers`, `DeleteServer` (`State=ONLINE`) |
 | User | `CreateUser`, `DescribeUser`, `ListUsers`, `DeleteUser` (`UserName` is a single path segment under the data root) |
-| SSH keys | `ImportSshPublicKey`, `DeleteSshPublicKey` (SQLite metadata; echoed on `DescribeUser`; `SshPublicKeyCount` on `ListUsers`) |
+| SSH keys | `ImportSshPublicKey`, `DeleteSshPublicKey` (SQLite metadata only; echoed on `DescribeUser`; `SshPublicKeyCount` on `ListUsers`). Keys are not used for authentication: there is no SSH/SFTP daemon, so imported keys never gate Put/Get/List |
 | Protocol | SFTP only (label; not a live SFTP daemon) |
 | Storage | Per-user sandbox directory under data root |
-| Lab files | `PutFile` / `GetFile` / `ListDirectory` (JSON `X-Amz-Target` on `:4566`) and `PUT|GET /transfer/{serverId}/home/{user}/{path...}` on `:4566` |
+| Lab files | `PutFile` / `GetFile` / `ListDirectory` (JSON `X-Amz-Target` on `:4566`) and `PUT|GET /transfer/{serverId}/home/{user}/{path...}` on `:4566` (HTTP + SigV4 theatre, not SFTP) |
 
 ### Authz notes
 
-Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create). File actions use `transfer:PutFile`, `transfer:GetFile`, `transfer:ListDirectory`. Non-empty CreateUser `Role` requires `iam:PassRole` plus `transfer.amazonaws.com` trust. `UserName` must be a single path segment (`[A-Za-z0-9@][A-Za-z0-9@._-]{0,199}`); relative file paths stay under that home with `filepath.Clean`.
+Identity `EvaluateFull` on `transfer:*` against the server ARN (or `*` for list/create). File actions use `transfer:PutFile`, `transfer:GetFile`, `transfer:ListDirectory`. Lab home HTTP paths and JSON file targets require SigV4 service `transfer` (wrong service scope is rejected). Non-empty CreateUser `Role` requires `iam:PassRole` plus `transfer.amazonaws.com` trust. `UserName` must be a single path segment (`[A-Za-z0-9@][A-Za-z0-9@._-]{0,199}`); relative file paths stay under that home with `filepath.Clean`.
 
 ## How to verify / CLI smoke
 
@@ -47,6 +47,7 @@ No live SFTP port is published. Unit tests assert ONLINE create, JSON PutFile/Ge
 
 ## Not yet / deferred
 
-- Real SFTP listener (even on loopback); lab files stay HTTP on `:4566`
+- Real SFTP/SSH listener (even on loopback); lab files stay HTTP + SigV4 on `:4566`
+- SSH public-key authentication against a live daemon (imported keys stay Describe/List metadata)
 - `UpdateUser`, server `StartServer`/`StopServer`/`UpdateServer`, tagging
 - WAN expose

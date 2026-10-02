@@ -599,8 +599,14 @@ func (s *Server) glueStartCrawler(
 		return
 	}
 	if errors.Is(err, store.ErrGlueBadRequest) {
+		msg := err.Error()
+		if strings.Contains(msg, "not authorized") || strings.Contains(msg, "Role is required") {
+			s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				msg, readOnly, eventID, verified)
+			return
+		}
 		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
-			err.Error(), readOnly, eventID, verified)
+			msg, readOnly, eventID, verified)
 		return
 	}
 	if err != nil {

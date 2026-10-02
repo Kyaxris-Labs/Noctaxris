@@ -16,16 +16,32 @@ func CreateClusterJSON(c store.MSKCluster) ([]byte, error) {
 }
 
 // DescribeClusterJSON builds a DescribeCluster success body.
+// EncryptionInfo and ClientAuthentication declare PLAINTEXT / unauthenticated wire
+// theatre honestly (nested Redpanda has no SASL, TLS client auth, or IAM wire).
 func DescribeClusterJSON(c store.MSKCluster) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"ClusterInfo": map[string]any{
-			"ClusterArn":            c.ClusterARN,
-			"ClusterName":           c.ClusterName,
-			"State":                 c.State,
-			"CurrentVersion":        "K1",
-			"KafkaVersion":          c.KafkaVersion,
-			"NumberOfBrokerNodes":   c.NumberOfBrokerNodes,
+			"ClusterArn":             c.ClusterARN,
+			"ClusterName":            c.ClusterName,
+			"State":                  c.State,
+			"CurrentVersion":         "K1",
+			"KafkaVersion":           c.KafkaVersion,
+			"NumberOfBrokerNodes":    c.NumberOfBrokerNodes,
 			"ZookeeperConnectString": "",
+			"EncryptionInfo": map[string]any{
+				"EncryptionInTransit": map[string]any{
+					"ClientBroker": "PLAINTEXT",
+					"InCluster":    false,
+				},
+			},
+			"ClientAuthentication": map[string]any{
+				"Sasl": map[string]any{
+					"Scram": map[string]any{"Enabled": false},
+					"Iam":   map[string]any{"Enabled": false},
+				},
+				"Tls":             map[string]any{"Enabled": false},
+				"Unauthenticated": map[string]any{"Enabled": true},
+			},
 		},
 	})
 }

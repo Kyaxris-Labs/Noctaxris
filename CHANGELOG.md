@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Nested data wire theatre: MSK DescribeCluster declares PLAINTEXT / unauthenticated; ElastiCache and MemoryDB support opt-in `NOCTAXRIS_REDIS_AUTH=1` (`--requirepass` matching the lab master secret); docs cover nested-Internal vs nested-ports overlay severity (no multi-tenant Kafka/Redis ACL claims)
+
 ## 1.6.3
 
 Patch after 1.6.2: ECR manifest path resolve, Athena Glue `s3://` locations, KMS grant binding and encryption-context constraints, Cognito MFA session re-enroll gate, CloudFormation YAML alias cycle caps, SQS/SNS create identity-only authz, Config recorder role for snapshot delivery, Cloud Control secret redaction and Update authz, SES bounce topic policy. Docker Hub: `kyaxris/noctaxris` (`1.6.3`, `1.6`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

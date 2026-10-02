@@ -90,7 +90,8 @@ func TestGlueDatabaseTableCrawlerLifecycle(t *testing.T) {
 	start := mustJSONTarget(t, handler, "AWSGlue.StartCrawler", "glue", map[string]any{
 		"Name": "glue-depth-crawler",
 	}, now)
-	if start.Code != http.StatusOK && start.Code != http.StatusBadRequest {
+	// Role without s3:ListBucket/GetObject is denied (403) before crawl work.
+	if start.Code != http.StatusOK && start.Code != http.StatusBadRequest && start.Code != http.StatusForbidden {
 		t.Fatalf("StartCrawler unexpected %d %s", start.Code, start.Body.String())
 	}
 

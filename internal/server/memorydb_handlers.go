@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	mdbsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/memorydb"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
@@ -124,8 +125,9 @@ func (s *Server) memorydbCreate(
 			"Unable to store master secret.", readOnly, eventID, verified)
 		return
 	}
-	// Nested Valkey/Redis lab image has no AUTH by default. Secret is for control-plane labs.
-	_ = tryStartNestedDataEngine(s, verified.AccountID, "memorydb", c.Name, nil)
+	// Nested Valkey/Redis: no AUTH by default. Opt in with NOCTAXRIS_REDIS_AUTH=1 (--requirepass).
+	// ACLName / DescribeUsers / DescribeACLs are control-plane theatre only (no wire ACL).
+	_ = tryStartNestedCache(s, verified.AccountID, "memorydb", c.Name, compute.LabMemoryDBRequirePass)
 	if updated, err := s.store.DescribeMemoryDBCluster(verified.AccountID, s.memorydbRegion(verified), c.Name); err == nil {
 		c = updated
 	}

@@ -77,7 +77,10 @@ func beanstalkAction(action string) string {
 	case "ListAvailableSolutionStacks":
 		return catalog.ActionBeanstalkListAvailableSolutionStacks
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "elasticbeanstalk:" + action
 	}
 }
 

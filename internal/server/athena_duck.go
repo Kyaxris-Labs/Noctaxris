@@ -29,10 +29,7 @@ func (s *Server) tryStartAthenaDuck(verified *authn.Verified, accountID string, 
 	runner, readyErr := s.athenaDuckRunner(accountID)
 	if readyErr != nil {
 		if mode == compute.AthenaEngineDuckDB {
-			if authErr := s.authorizeAthenaDuckS3Reads(verified, accountID, in); authErr != nil {
-				return store.AthenaQueryExecution{}, true, authErr
-			}
-			// Fail closed when DuckDB was explicitly selected.
+			// Fail closed when DuckDB was explicitly selected (no scan; S3 authz runs when runner is ready).
 			exec, err = s.store.StartAthenaDuckQueryExecution(accountID, in, func(_, _ string) ([]store.AthenaColumnInfo, [][]string, error) {
 				return nil, nil, readyErr
 			})

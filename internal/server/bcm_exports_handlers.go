@@ -57,7 +57,10 @@ func bcmExportAction(action string) string {
 	case "DeleteExport":
 		return catalog.ActionBCMDeleteExport
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "bcm-data-exports:" + action
 	}
 }
 

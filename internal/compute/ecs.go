@@ -173,6 +173,12 @@ func (c *Client) RunECSTask(ctx context.Context, opts ECSRunOpts) (string, error
 		_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
 		return failAfterIMDS(fmt.Errorf("compute: ecs container start: %w", err))
 	}
+	if credID != "" {
+		if err := c.bindECSIMDSCredentialsPeer(ctx, credID, cid); err != nil {
+			_, _ = c.cli.ContainerRemove(context.Background(), cid, client.ContainerRemoveOptions{Force: true})
+			return failAfterIMDS(fmt.Errorf("compute: ecs imds peer bind: %w", err))
+		}
+	}
 	return cid, nil
 }
 

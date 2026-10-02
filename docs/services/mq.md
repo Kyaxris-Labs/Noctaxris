@@ -6,8 +6,8 @@ Broker CRUD for ActiveMQ or RabbitMQ engine strings. `PubliclyAccessible=true` i
 
 | Engine | Behavior |
 |--------|----------|
-| `RABBITMQ` | Nested DinD `rabbitmq:3.13-alpine` on Internal `noctaxris-data`. `CREATION_IN_PROGRESS` → `RUNNING` when the container is healthy; `CREATION_FAILED` when DinD is unset or start/wait fails. Nested AMQP endpoint (`amqp://noctaxris-mq-<broker-id>:5672`). Lab user `noctaxris` / `noctaxris-mq-lab`. |
-| `ACTIVEMQ` | Nested DinD `apache/activemq-classic:5.18.3` on Internal `noctaxris-data` (AMQP on 5672; OpenWire 61616 nested-only). Same `CREATION_IN_PROGRESS` → `RUNNING` / fail-closed `CREATION_FAILED` + `stub://` path as RabbitMQ. |
+| `RABBITMQ` | Nested DinD `rabbitmq:3.13-alpine` on Internal `noctaxris-data`. `CREATION_IN_PROGRESS` → `RUNNING` when the container is healthy; `CREATION_FAILED` when DinD is unset or start/wait fails. Nested AMQP endpoint (`amqp://noctaxris-mq-<broker-id>:5672`). Fixed lab user/password via `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` (`noctaxris` / `noctaxris-mq-lab`). |
+| `ACTIVEMQ` | Nested DinD `apache/activemq-classic:5.18.3` on Internal `noctaxris-data` (AMQP on 5672; OpenWire 61616 nested-only). Same `CREATION_IN_PROGRESS` → `RUNNING` / fail-closed `CREATION_FAILED` + `stub://` path as RabbitMQ. Nested bootstrap omits `ACTIVEMQ_CONNECTION_*` (open among nested peers on `noctaxris-data`). |
 
 ## Implemented
 

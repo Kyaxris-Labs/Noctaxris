@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
-	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
+"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
@@ -153,7 +152,6 @@ func TestTryStartAthenaDuckDeniesWithoutGetObject(t *testing.T) {
 	if err == nil || !errors.Is(err, store.ErrAthenaAccessDenied) {
 		t.Fatalf("tryStart without GetObject: err=%v", err)
 	}
-	_ = catalog.ActionS3GetObject
 }
 
 func newAthenaDuckAuthzTestServer(t *testing.T) (*Server, *store.Store) {
@@ -172,7 +170,7 @@ func newAthenaDuckAuthzTestServer(t *testing.T) (*Server, *store.Store) {
 			t.Errorf("close store: %v", err)
 		}
 	})
-	if err := st.EnsureRoot(testAccountID, testAccessKey, testSecret); err != nil {
+	if err := st.EnsureRoot(testAccountID, "AKIAROOTEXAMPLE01", "secret-root-value"); err != nil {
 		t.Fatal(err)
 	}
 	aud, err := audit.NewWriter(filepath.Join(dir, "cloudtrail"))

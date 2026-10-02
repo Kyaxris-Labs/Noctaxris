@@ -83,7 +83,10 @@ func cfnAction(action string) string {
 	case "DescribeStackResourceDrifts":
 		return catalog.ActionCFNDescribeStackResourceDrifts
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "cloudformation:" + action
 	}
 }
 

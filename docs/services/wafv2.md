@@ -43,7 +43,7 @@ Rules may use a `Label` string on the Evaluate helper, or a statement on invoke 
 
 Empty or unparseable `SourceIP` does not match. An empty resolved address list does not match.
 
-`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]`, `arn:aws:execute-api:...`, AppSync API ARNs, Lambda function ARNs for Function URL labs, and Application LB ARNs (`arn:aws:elasticloadbalancing:...:loadbalancer/app/...`) for the ELB lab listener. API Gateway REST (`restapis/...`), NLB `loadbalancer/net/...`, and Cognito user-pool ARNs are rejected until an enforce path exists. Unknown resource ARN services fail closed. Phantom Web ACL ARNs are rejected.
+`AssociateWebACL` accepts lab HTTP API ARNs shaped like `arn:aws:apigateway:REGION::/apis/APIID[/stages/STAGE]`, `arn:aws:execute-api:...`, AppSync API ARNs, Lambda function ARNs for Function URL labs, and Application LB ARNs (`arn:aws:elasticloadbalancing:...:loadbalancer/app/...`) for the ELB lab listener. API Gateway REST (`arn:aws:apigateway:...:/restapis/...`) is intentionally not associable: there is no REST execute-path WAF gate yet, so Associate fails closed rather than storing a no-op association. NLB `loadbalancer/net/...` and Cognito user-pool ARNs are likewise rejected. Unknown resource ARN services fail closed. Phantom Web ACL ARNs are rejected.
 
 ### Authz notes
 
@@ -84,6 +84,7 @@ A Block default action or matching ByteMatch / SizeConstraint / IPSet rule on th
 
 ## Not yet / deferred
 
+- Associate + enforce for API Gateway REST (`restapis/...`) execute paths
 - Real edge PoP / CAPTCHA / Bot Control beyond supported rules
 - Full WAF statement catalog (And/Or/Not, managed rule groups, rate-based, GeoMatch, IPSetForwardedIPConfig)
 - Trusted-proxy allowlist for `X-Forwarded-For`: set `NOCTAXRIS_TRUSTED_PROXIES` (comma-separated CIDRs). When empty (default), invoke enforcement uses the TCP peer only. With a matching peer, the first parseable XFF hop is used for IPSet SourceIP.

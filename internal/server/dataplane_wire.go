@@ -98,6 +98,17 @@ func tryStartNestedMQ(s *Server, accountID, brokerID, engineType string) error {
 	)
 }
 
+// tryStartNestedCache starts nested Valkey/Redis for ElastiCache or MemoryDB.
+// Default: no AUTH on the wire. With NOCTAXRIS_REDIS_AUTH=1, CMD uses --requirepass
+// matching the Secrets Manager master secret (single lab password; not multi-tenant ACL).
+func tryStartNestedCache(s *Server, accountID, kind, name, requirePass string) error {
+	var cmd []string
+	if compute.RedisAuthEnabled() {
+		cmd = compute.ValkeyRequirePassCmd(requirePass)
+	}
+	return tryStartNestedDataEngineWithOpts(s, accountID, kind, name, nil, "", cmd, "", 0)
+}
+
 // tryStartNestedNeptune starts nested Gremlin Server or Neo4j for a Neptune cluster.
 func tryStartNestedNeptune(s *Server, accountID, clusterID, graphEngine string) error {
 	return tryStartNestedDataEngineWithOpts(

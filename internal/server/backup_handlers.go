@@ -118,7 +118,10 @@ func backupAction(action string) string {
 	case "DeleteBackupSelection":
 		return catalog.ActionBackupDeleteBackupSelection
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "backup:" + action
 	}
 }
 

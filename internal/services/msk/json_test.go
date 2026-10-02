@@ -37,6 +37,16 @@ func TestMSKClusterJSON(t *testing.T) {
 	if info["NumberOfBrokerNodes"] != float64(2) {
 		t.Fatalf("describe=%v", desc)
 	}
+	enc, _ := info["EncryptionInfo"].(map[string]any)
+	inTransit, _ := enc["EncryptionInTransit"].(map[string]any)
+	if inTransit["ClientBroker"] != "PLAINTEXT" {
+		t.Fatalf("want PLAINTEXT wire, got EncryptionInfo=%v", enc)
+	}
+	clientAuth, _ := info["ClientAuthentication"].(map[string]any)
+	unauth, _ := clientAuth["Unauthenticated"].(map[string]any)
+	if unauth["Enabled"] != true {
+		t.Fatalf("want Unauthenticated enabled, got ClientAuthentication=%v", clientAuth)
+	}
 
 	listRaw, err := msksvc.ListClustersJSON([]store.MSKCluster{c})
 	if err != nil {

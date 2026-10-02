@@ -14,8 +14,8 @@ HTTPS Data API on `:4566` for `ExecuteStatement`, `BatchExecuteStatement`, and r
 | Batch | `BatchExecuteStatement` (one SQL run per `parameterSets` entry; empty `parameterSets` → `BadRequestException`) |
 | Transactions | `BeginTransaction` / `CommitTransaction` / `RollbackTransaction` via held wire sessions (`pgx` or `database/sql`); SQLite stores metadata only |
 | Execute in txn | `ExecuteStatement` / `BatchExecuteStatement` with `transactionId` use the held connection (no nested CLI for txn-scoped SQL) |
-| Authz | Identity `EvaluateFull` on `rds-data:*` |
-| Secrets | Rejects missing or mismatched `secretArn` (fail closed) |
+| Authz | Identity `EvaluateFull` on `rds-data:*`; callers also need `secretsmanager:GetSecretValue` on `secretArn` before credentials load (fail closed) |
+| Secrets | Rejects missing or mismatched `secretArn`; plaintext load authorizes `secretsmanager:GetSecretValue` (fail closed) |
 | Engine gate | `postgres`, `mysql`, `mariadb` only; other engines → `BadRequestException` |
 | Unavailable | No nested engine / wire dial failure for Begin or txn sessions → `DatabaseUnavailableException` (no canned SELECT success) |
 | Result shape | Wire drivers: typed fields where supported; nested CLI: SELECT cells as `stringValue` / `VARCHAR`. `formatRecordsAs=JSON` returns simplified row objects in `formattedRecords` (clears `records` / `columnMetadata`). Postgres Batch `RETURNING` populates `generatedFields` via `pgx` |

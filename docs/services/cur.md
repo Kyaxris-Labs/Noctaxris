@@ -13,7 +13,7 @@ Report definition CRUD for the legacy CUR API. Optional lab artifact written to 
 | Area | Actions |
 |------|---------|
 | Definitions | `PutReportDefinition`, `ModifyReportDefinition`, `DescribeReportDefinitions`, `DeleteReportDefinition` |
-| Tags | `TagResource` / `UntagResource` / `ListTagsForResource` stub empty OK |
+| Tags | `TagResource` / `UntagResource` / `ListTagsForResource` (identity `cur:TagResource` / `cur:UntagResource` / `cur:ListTagsForResource`; Deny fails closed) |
 | Emission | Best-effort PutObject: legacy or FOCUS CSV under `s3://S3Bucket/S3Prefix/ReportName/<runId>.csv`; Parquet under `.../<runId>.parquet` via DuckDB |
 | FOCUS lite | In-process `ResourceUsageEnumerator` SPI (built-in S3 bucket + Lambda function counters); `ProjectFOCUSRows` → FOCUS 1.2 / CUR 2.0 columns |
 
@@ -29,7 +29,7 @@ Report definition CRUD for the legacy CUR API. Optional lab artifact written to 
 
 ### Authz notes
 
-Identity `EvaluateFull` on `cur:*`.
+Identity `EvaluateFull` on `cur:*`, including `cur:TagResource`, `cur:UntagResource`, and `cur:ListTagsForResource` (tag APIs are not open stubs).
 
 ### Emission
 

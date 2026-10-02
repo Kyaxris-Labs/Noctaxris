@@ -143,4 +143,15 @@ func TestTransferLabHomeHTTPRoundTrip(t *testing.T) {
 	if string(raw) != string(payload) {
 		t.Fatalf("HTTP roundtrip body=%q want %q", raw, payload)
 	}
+
+	wrongSvc := mustNewRequest(t, http.MethodGet, homeURL, nil)
+	signHeader(t, wrongSvc, nil, testAccessKey, testSecret, testRegion, "s3", now)
+	wrongRec := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRec, wrongSvc)
+	if wrongRec.Code != http.StatusForbidden {
+		t.Fatalf("wrong SigV4 service status=%d body=%q want 403", wrongRec.Code, wrongRec.Body.String())
+	}
+	if !strings.Contains(wrongRec.Body.String(), "transfer") {
+		t.Fatalf("wrong service body=%q want transfer pin message", wrongRec.Body.String())
+	}
 }

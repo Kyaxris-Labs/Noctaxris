@@ -57,7 +57,10 @@ func budgetsAction(action string) string {
 	case "DeleteBudget":
 		return catalog.ActionBudgetsDeleteBudget
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "budgets:" + action
 	}
 }
 

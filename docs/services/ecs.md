@@ -21,9 +21,9 @@ Task definitions, tasks, and cluster metadata live in SQLite.
 
 ### Task credentials (container metadata)
 
-Nested `RunTask` with minted `AWS_*` maps `169.254.170.2` to sidecar `noctaxris-ecs-imds` on Internal `noctaxris-ecs` (CodeBuild and Batch share this path). AWS SDKs GET `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, which is `/v2/credentials/<uuid>` per the ECS task IAM role docs. The lab also sets `AWS_CONTAINER_CREDENTIALS_FULL_URI` (`http://169.254.170.2:9254/v2/credentials/<uuid>`) because the sidecar listens on `:9254`; relative URI alone still assumes `:80`.
+Nested `RunTask` with minted `AWS_*` maps `169.254.170.2` to sidecar `noctaxris-ecs-imds` on Internal `noctaxris-ecs` (CodeBuild and Batch share this path). The sidecar is cleartext HTTP inside DinD only: Compose never publishes `:9254` (or any IMDS port) on the operator host. AWS SDKs GET `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, which is `/v2/credentials/<uuid>` per the ECS task IAM role docs. The lab also sets `AWS_CONTAINER_CREDENTIALS_FULL_URI` (`http://169.254.170.2:9254/v2/credentials/<uuid>`) because the sidecar listens on `:9254`; relative URI alone still assumes `:80`.
 
-The sidecar GET-serves that exact UUID file only. `GET /v2/credentials/` and any other path or method return 404 (no directory listing of sibling task-role JSON). `StopTask` / nested `StopECSTask` deletes the file. No host port publish.
+The sidecar GET-serves that exact UUID file only. `GET /v2/credentials/` and any other path or method return 404 (no directory listing of sibling task-role JSON). After the task container starts, the credential UUID is peer-bound to that task's address on `noctaxris-ecs` so other nested peers cannot read it by UUID alone. `StopTask` / nested `StopECSTask` deletes the credential and peer files. Residual: cleartext on the Internal network to the owning task peer only.
 
 ### Authz notes
 

@@ -65,7 +65,10 @@ func cloudControlAction(action string) string {
 	case "GetResourceRequestStatus":
 		return catalog.ActionCloudControlGetResourceRequestStatus
 	default:
-		return action
+		if action == "" {
+			return action
+		}
+		return "cloudcontrol:" + action
 	}
 }
 
