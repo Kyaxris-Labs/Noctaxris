@@ -763,11 +763,19 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	cannedACL, aclOK := parseS3CannedACLHeader(r.Header.Get("x-amz-acl"))
+	aclHeader := strings.TrimSpace(r.Header.Get("x-amz-acl"))
+	cannedACL, aclOK := parseS3CannedACLHeader(aclHeader)
 	if !aclOK {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusBadRequest, "InvalidArgument",
 			"Unsupported x-amz-acl value", "PutObject")
 		return
+	}
+	if aclHeader != "" && !strings.EqualFold(cannedACL, "private") {
+		if !s.authorizeS3(verified, catalog.ActionS3PutObjectAcl, resource, ref.policy, ref.accountID) {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+				"Access Denied", "PutObject")
+			return
+		}
 	}
 
 	plainSum := md5.Sum(body)
@@ -780,6 +788,13 @@ func (s *Server) s3PutObject(w http.ResponseWriter, r *http.Request, body []byte
 		ETag:        etag,
 	}
 	s3ObjectLockFromRequest(r, &meta)
+	if strings.TrimSpace(meta.ObjectLockMode) != "" || strings.TrimSpace(meta.ObjectLockRetainUntil) != "" {
+		if !s.authorizeS3(verified, catalog.ActionS3PutObjectRetention, resource, ref.policy, ref.accountID) {
+			s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+				"Access Denied", "PutObject")
+			return
+		}
+	}
 	if ok := s.s3EncryptPutMeta(w, r, requestID, eventID, verified, readOnly, &meta, sse, kmsKeyParam, resource, "PutObject"); !ok {
 		return
 	}
@@ -1078,8 +1093,14 @@ func (s *Server) s3DeleteObject(w http.ResponseWriter, r *http.Request, requestI
 			"Access Denied", "DeleteObject")
 		return
 	}
+	bypassGovernance := s3BypassGovernanceRetention(r)
+	if bypassGovernance && !s.authorizeS3(verified, catalog.ActionS3BypassGovernanceRetention, resource, ref.policy, ref.accountID) {
+		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
+			"Access Denied", "DeleteObject")
+		return
+	}
 	versionID := r.URL.Query().Get("versionId")
-	delOpts := store.DeleteObjectOptions{BypassGovernanceRetention: s3BypassGovernanceRetention(r)}
+	delOpts := store.DeleteObjectOptions{BypassGovernanceRetention: bypassGovernance}
 	result, err := s.store.DeleteObjectVersionedWithOptions(ref.accountID, bucket, key, versionID, delOpts)
 	if errors.Is(err, store.ErrObjectLockRetention) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",

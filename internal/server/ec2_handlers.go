@@ -132,6 +132,13 @@ func (s *Server) ec2RunInstances(
 	maxCount, _ := strconv.Atoi(strings.TrimSpace(params.Get("MaxCount")))
 	region := s.ec2Region(verified)
 	iamProfile := ec2IamInstanceProfile(params)
+	if iamProfile != "" {
+		if err := s.checkEC2InstanceProfilePassRole(verified, iamProfile); err != nil {
+			s.writeEC2Error(w, r, requestID, http.StatusForbidden, "UnauthorizedOperation",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	instances, err := s.store.RunInstances(verified.AccountID, region, store.RunInstancesInput{
 		ImageID:            params.Get("ImageId"),
 		InstanceType:       params.Get("InstanceType"),

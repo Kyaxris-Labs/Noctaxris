@@ -16,7 +16,7 @@ func (s *Server) cognitoAdminGetUser(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	username, _ := params["Username"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoAdminGetUser, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminGetUser, cognitoUserResource(verified, poolID, username)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminGetUser.", readOnly, eventID, verified)
 		return
@@ -55,7 +55,7 @@ func (s *Server) cognitoAdminSetUserPassword(
 	username, _ := params["Username"].(string)
 	password, _ := params["Password"].(string)
 	permanent, _ := params["Permanent"].(bool)
-	if !s.authorize(verified, catalog.ActionCognitoAdminSetUserPassword, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminSetUserPassword, cognitoUserResource(verified, poolID, username)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminSetUserPassword.", readOnly, eventID, verified)
 		return
@@ -92,7 +92,7 @@ func (s *Server) cognitoAdminDeleteUser(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	username, _ := params["Username"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoAdminDeleteUser, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminDeleteUser, cognitoUserResource(verified, poolID, username)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminDeleteUser.", readOnly, eventID, verified)
 		return
@@ -129,7 +129,7 @@ func (s *Server) cognitoAdminDisableUser(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	username, _ := params["Username"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoAdminDisableUser, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminDisableUser, cognitoUserResource(verified, poolID, username)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminDisableUser.", readOnly, eventID, verified)
 		return
@@ -165,7 +165,7 @@ func (s *Server) cognitoListUsers(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	poolID, _ := params["UserPoolId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoListUsers, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoListUsers, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:ListUsers.", readOnly, eventID, verified)
 		return

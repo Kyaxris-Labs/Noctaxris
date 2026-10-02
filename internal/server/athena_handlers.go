@@ -103,10 +103,15 @@ func (s *Server) athenaStart(
 	}
 	var exec store.AthenaQueryExecution
 	var err error
-	if duckExec, used, duckErr := s.tryStartAthenaDuck(verified.AccountID, in); used {
+	if duckExec, used, duckErr := s.tryStartAthenaDuck(verified, verified.AccountID, in); used {
 		exec, err = duckExec, duckErr
 	} else {
 		exec, err = s.store.StartAthenaQueryExecution(verified.AccountID, in)
+	}
+	if errors.Is(err, store.ErrAthenaAccessDenied) {
+		s.writeAthenaError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform s3:GetObject on scanned keys.", readOnly, eventID, verified)
+		return
 	}
 	if errors.Is(err, store.ErrAthenaBadRequest) {
 		s.writeAthenaError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",

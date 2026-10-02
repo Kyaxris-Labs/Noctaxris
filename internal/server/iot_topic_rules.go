@@ -8,7 +8,18 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
+)
+
+const (
+	iotRuleActionSQSSendMessage     = "sqs:SendMessage"
+	iotRuleActionSNSPublish         = "sns:Publish"
+	iotRuleActionS3PutObject        = "s3:PutObject"
+	iotRuleActionDynamoPutItem      = "dynamodb:PutItem"
+	iotRuleActionKinesisPutRecord   = "kinesis:PutRecord"
+	iotRuleActionLambdaInvoke       = "lambda:InvokeFunction"
+	iotRuleDeliverySessionName      = "iot-rule-delivery"
 )
 
 // mqttRepublish holds the live MQTT bridge publish callback (optional).
@@ -138,7 +149,16 @@ func (s *Server) dispatchIoTRuleAction(rule store.IoTTopicRule, topic string, pa
 	}
 	if ddbv2, ok := action["dynamoDBv2"].(map[string]any); ok {
 		putItem, _ := ddbv2["putItem"].(map[string]any)
-		s.dispatchIoTRuleDynamo(rule, topic, payload, putItem)
+		merged := map[string]any{}
+		for k, v := range putItem {
+			merged[k] = v
+		}
+		if role := iotActionRoleARN(ddbv2); role != "" {
+			if _, ok := merged["roleArn"]; !ok {
+				merged["roleArn"] = role
+			}
+		}
+		s.dispatchIoTRuleDynamo(rule, topic, payload, merged)
 		return
 	}
 	if kin, ok := action["kinesis"].(map[string]any); ok {
@@ -152,6 +172,49 @@ func (s *Server) dispatchIoTRuleAction(rule store.IoTTopicRule, topic string, pa
 	log.Printf("iot rules %s: unsupported or empty action skipped", rule.RuleName)
 }
 
+func iotActionRoleARN(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m["roleArn"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	if v, ok := m["RoleArn"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func (s *Server) iotRuleDeliveryAuthorized(rule store.IoTTopicRule, roleARN, action, targetARN string) bool {
+	roleARN = strings.TrimSpace(roleARN)
+	if roleARN == "" || strings.TrimSpace(targetARN) == "" || strings.TrimSpace(action) == "" {
+		return false
+	}
+	region := rule.Region
+	if region == "" {
+		region = store.DefaultIoTRegion
+	}
+	return s.store.DeliveryAuthorizedRoleAndResource(
+		rule.AccountID, roleARN, action, targetARN,
+		authz.ServicePrincipalIoT, rule.RuleARN, iotRuleDeliverySessionName, region,
+	)
+}
+
+func (s *Server) iotRuleLambdaAuthorized(rule store.IoTTopicRule, roleARN, functionARN string) bool {
+	roleARN = strings.TrimSpace(roleARN)
+	functionARN = strings.TrimSpace(functionARN)
+	if functionARN == "" {
+		return false
+	}
+	if roleARN == "" {
+		return s.store.DeliveryTargetResourcePolicyAllows(
+			rule.AccountID, functionARN, iotRuleActionLambdaInvoke,
+			authz.ServicePrincipalIoT, rule.RuleARN,
+		)
+	}
+	return s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionLambdaInvoke, functionARN)
+}
+
 func (s *Server) dispatchIoTRuleSQS(rule store.IoTTopicRule, payload []byte, sqs map[string]any) {
 	queueURL, _ := sqs["queueUrl"].(string)
 	queueURL = strings.TrimSpace(queueURL)
@@ -159,9 +222,18 @@ func (s *Server) dispatchIoTRuleSQS(rule store.IoTTopicRule, payload []byte, sqs
 		log.Printf("iot rules %s: sqs skip (missing queueUrl)", rule.RuleName)
 		return
 	}
+	roleARN := iotActionRoleARN(sqs)
+	if roleARN == "" {
+		log.Printf("iot rules %s: sqs skip (missing roleArn)", rule.RuleName)
+		return
+	}
 	q, err := s.store.GetQueueByURL(queueURL)
 	if err != nil {
 		log.Printf("iot rules %s: sqs skip (queue missing): %v", rule.RuleName, err)
+		return
+	}
+	if !s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionSQSSendMessage, q.QueueARN) {
+		log.Printf("iot rules %s: sqs skip (delivery denied)", rule.RuleName)
 		return
 	}
 	body := payload
@@ -183,9 +255,18 @@ func (s *Server) dispatchIoTRuleSNS(rule store.IoTTopicRule, payload []byte, sns
 		log.Printf("iot rules %s: sns skip (missing topicArn)", rule.RuleName)
 		return
 	}
+	roleARN := iotActionRoleARN(sns)
+	if roleARN == "" {
+		log.Printf("iot rules %s: sns skip (missing roleArn)", rule.RuleName)
+		return
+	}
 	topic, err := s.store.GetTopicByARN(targetARN)
 	if err != nil {
 		log.Printf("iot rules %s: sns skip (topic missing): %v", rule.RuleName, err)
+		return
+	}
+	if !s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionSNSPublish, topic.TopicARN) {
+		log.Printf("iot rules %s: sns skip (delivery denied)", rule.RuleName)
 		return
 	}
 	if _, err := s.store.Publish(topic.AccountID, topic.TopicName, string(payload), "", nil); err != nil {
@@ -205,8 +286,18 @@ func (s *Server) dispatchIoTRuleS3(rule store.IoTTopicRule, payload []byte, s3a 
 		log.Printf("iot rules %s: s3 skip (bucket/key required)", rule.RuleName)
 		return
 	}
+	roleARN := iotActionRoleARN(s3a)
+	if roleARN == "" {
+		log.Printf("iot rules %s: s3 skip (missing roleArn)", rule.RuleName)
+		return
+	}
 	if _, err := s.store.GetBucket(rule.AccountID, bucket); err != nil {
 		log.Printf("iot rules %s: s3 skip (bucket missing): %v", rule.RuleName, err)
+		return
+	}
+	objectARN := store.ObjectARN(bucket, key)
+	if !s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionS3PutObject, objectARN) {
+		log.Printf("iot rules %s: s3 skip (delivery denied)", rule.RuleName)
 		return
 	}
 	if _, err := s.store.PutObject(rule.AccountID, bucket, key, store.PutObjectMeta{
@@ -229,8 +320,22 @@ func (s *Server) dispatchIoTRuleDynamo(rule store.IoTTopicRule, topic string, pa
 		log.Printf("iot rules %s: dynamoDB skip (missing tableName)", rule.RuleName)
 		return
 	}
-	if _, err := s.store.DescribeTable(rule.AccountID, tableName); err != nil {
+	roleARN := iotActionRoleARN(ddb)
+	if roleARN == "" {
+		log.Printf("iot rules %s: dynamoDB skip (missing roleArn)", rule.RuleName)
+		return
+	}
+	tbl, err := s.store.DescribeTable(rule.AccountID, tableName)
+	if err != nil {
 		log.Printf("iot rules %s: dynamoDB skip (table missing): %v", rule.RuleName, err)
+		return
+	}
+	tableARN := tbl.TableARN
+	if tableARN == "" {
+		tableARN = store.TableARN(rule.AccountID, rule.Region, tableName)
+	}
+	if !s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionDynamoPutItem, tableARN) {
+		log.Printf("iot rules %s: dynamoDB skip (delivery denied)", rule.RuleName)
 		return
 	}
 	itemJSON, pk, err := iotPayloadToDynamoItem(payload, topic)
@@ -248,6 +353,20 @@ func (s *Server) dispatchIoTRuleKinesis(rule store.IoTTopicRule, payload []byte,
 	streamName = strings.TrimSpace(streamName)
 	if streamName == "" {
 		log.Printf("iot rules %s: kinesis skip (missing streamName)", rule.RuleName)
+		return
+	}
+	roleARN := iotActionRoleARN(kin)
+	if roleARN == "" {
+		log.Printf("iot rules %s: kinesis skip (missing roleArn)", rule.RuleName)
+		return
+	}
+	region := rule.Region
+	if region == "" {
+		region = store.DefaultIoTRegion
+	}
+	streamARN := store.KinesisStreamARN(region, rule.AccountID, streamName)
+	if !s.iotRuleDeliveryAuthorized(rule, roleARN, iotRuleActionKinesisPutRecord, streamARN) {
+		log.Printf("iot rules %s: kinesis skip (delivery denied)", rule.RuleName)
 		return
 	}
 	partitionKey, _ := kin["partitionKey"].(string)
@@ -278,8 +397,17 @@ func (s *Server) dispatchIoTRuleLambda(rule store.IoTTopicRule, payload []byte, 
 		accountID = rule.AccountID
 	}
 	name, qualifier := store.ParseFunctionQualifier(fnName)
-	if _, err := s.store.GetFunction(accountID, name); err != nil {
+	fn, err := s.store.GetFunction(accountID, name)
+	if err != nil {
 		log.Printf("iot rules %s: lambda skip (function missing): %v", rule.RuleName, err)
+		return
+	}
+	functionARN := fn.FunctionARN
+	if functionARN == "" {
+		functionARN = store.FunctionARN(accountID, rule.Region, name)
+	}
+	if !s.iotRuleLambdaAuthorized(rule, iotActionRoleARN(lam), functionARN) {
+		log.Printf("iot rules %s: lambda skip (delivery denied)", rule.RuleName)
 		return
 	}
 	eventJSON := string(payload)

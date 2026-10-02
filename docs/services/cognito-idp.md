@@ -61,7 +61,7 @@ Tokens are RS256 with `kid`. ID token uses `aud` = client id and `token_use` = `
 
 ### Authz notes
 
-Identity `EvaluateFull` on management `cognito-idp:*`. `InitiateAuth`, `ConfirmForgotPassword`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `RevokeToken`, `AssociateSoftwareToken`, `VerifySoftwareToken`, and `RespondToAuthChallenge` do not require SigV4 (public IdP). JWKS is public on loopback. PassRole applies only when configuring `RoleArn`.
+Identity `EvaluateFull` on management `cognito-idp:*`. Public IdP (no SigV4): `InitiateAuth`, `ConfirmForgotPassword`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `RevokeToken`, `AssociateSoftwareToken`, `VerifySoftwareToken`, and `RespondToAuthChallenge`. Lab still requires SigV4 for `SignUp`, `ConfirmSignUp`, `ForgotPassword`, and `ResendConfirmationCode` (AWS Cognito exposes those unsigned). JWKS is public on loopback. PassRole applies only when configuring `RoleArn`.
 
 ## How to verify / CLI smoke
 

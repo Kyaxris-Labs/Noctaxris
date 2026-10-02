@@ -57,13 +57,18 @@ Unauthenticated or alternate-auth paths (no SigV4 required):
 | `GET /_noctaxris/health` | Open (liveness) |
 | `GET /_noctaxris/ready` | Open (readiness; SQLite ping, optional engine TLS dial) |
 | `GET /_noctaxris/version` | Open (product semver, plain text) |
-| `GET /cognito-idp/{region}/{pool}/.well-known/jwks.json` | Public JWKS on the loopback listener |
+| `GET /cognito-idp/{region}/{pool}/.well-known/jwks.json` | Public JWKS (unsigned; served on the API listener) |
 | `AssumeRoleWithSAML` / `AssumeRoleWithWebIdentity` | Federation token crypto (not SigV4) |
 | Lambda Function URL with AuthType `NONE` | Open invoke on `/lambda-url/...` when listen is loopback, or with `NOCTAXRIS_ALLOW_OPEN_DATA_PLANE=1`. CORS defaults to `Access-Control-Allow-Origin: *` unless `Cors.AllowOrigins` / `NOCTAXRIS_FUNCTION_URL_CORS_ORIGINS` is set |
 | HTTP API routes with authorizer `NONE` | Open invoke on `/http-api/...` (same open-data-plane gate). CORS is off until `CorsConfiguration` is set on the API; there is no default `AllowOrigins: *` |
 | AppSync GraphQL | `API_KEY`, `AWS_IAM` (SigV4), or Cognito User Pools Bearer JWT |
 | S3 anonymous GetObject / HeadObject | Off by default. With `NOCTAXRIS_ALLOW_ANONYMOUS_S3=1`, unsigned path-style object GET/HEAD only when bucket policy Principal `"*"` / `{"AWS":"*"}` Allows `s3:GetObject` or the object canned ACL is `public-read` / `public-read-write`. Explicit Deny beats ACL. List/Put and other S3 APIs stay SigV4-required |
-| Cognito `InitiateAuth` | Public IdP API (unsigned AWS CLI / SDK shape). Pool/client CRUD and `Admin*` stay SigV4 |
+| Cognito public IdP (unsigned) | `InitiateAuth`, `ConfirmForgotPassword`, `UpdateUserAttributes`, `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `RevokeToken`, `AssociateSoftwareToken`, `VerifySoftwareToken`, `RespondToAuthChallenge`. Pool/client CRUD and `Admin*` stay SigV4. Lab still requires SigV4 for `SignUp` / `ConfirmSignUp` / `ForgotPassword` / `ResendConfirmationCode` |
+| `GET`/`POST /_noctaxris/sns-http-catcher` | Lab SNS HTTP sink (open on the shared listener). `Action=ConfirmSubscription` with `Token` + `TopicArn` confirms without SigV4 (token UUID gate). Query `sns:ConfirmSubscription` on the AWS API still requires SigV4 and identity Allow |
+| `POST /_noctaxris/codebuild/webhook/{account}/{project}` | Lab webhook; requires `X-Noctaxris-Webhook-Secret` matching the configured secret |
+| Registry `/v2/...` | Bearer/token auth (not SigV4 mux); ECR IAM after token |
+| REST/HTTP/WS API invoke, ELB `/alb/...` `/nlb/...` | Per-route authorizer or OpenDataPlane gate for `NONE` |
+| `GET /role-aliases/{alias}/credentials` | IoT Credentials Provider: device mTLS client cert + matching `x-amzn-iot-thingname` + TLS SNI for the CredentialProvider endpoint (not SigV4). Device policy and role-alias trust still evaluated |
 
 All other AWS API paths require a valid SigV4 signature (header or query) for a known access key.
 
@@ -82,7 +87,7 @@ Additional auth notes:
 - Organizations SCP/RCP filters apply on member authorize paths, including OU-path inheritance.
 - SNS HTTP(S) subscription endpoints default to the lab catcher on loopback `:4566` (`/_noctaxris/sns-http-catcher`) only. Exact URLs in `NOCTAXRIS_SNS_HTTP_ALLOWLIST` require `NOCTAXRIS_SNS_HTTP_EGRESS=1` and must resolve to a public host (private, loopback, link-local, and metadata targets are rejected even when listed). Without egress, the allowlist is ignored. Delivery does not follow redirects.
 - API Gateway `HTTP_PROXY` / `VPC_LINK` integrations are denied unless `NOCTAXRIS_APIGW_HTTP_PROXY=1` and the IntegrationUri matches `NOCTAXRIS_APIGW_HTTP_PROXY_ALLOWLIST` (hosts or parsed http(s) origin, not a raw URL string prefix). Link-local, metadata, loopback, and private hosts require an allowlist entry that names that host. Fetches do not follow redirects; dial uses a pinned DialContext.
-- Cognito management APIs (pool/client CRUD, `Admin*`) require SigV4 and identity Allow. `InitiateAuth` is the public IdP exception (unsigned).
+- Cognito management APIs (pool/client CRUD, `Admin*`) require SigV4 and identity Allow. The public IdP exceptions are listed in the Auth table above (not only `InitiateAuth`).
 - API Gateway JWT routes reject missing, expired, not-yet-valid (`nbf`), or invalid Bearer tokens. IAM routes reject unsigned requests. HTTP API resource policies are not invented. `IdentitySource` must be `$request.header.Authorization`.
 - Gateway CredentialsArn requires PassRole plus matching service trust at create, and role-session `lambda:InvokeFunction` evaluation at invoke when set. Without CredentialsArn, HTTP API invoke requires a Lambda resource policy Allow for `apigateway.amazonaws.com`. AppSync Lambda data sources require a resource policy Allow for `appsync.amazonaws.com`. CodeDeploy serviceRoleArn requires PassRole plus matching service trust when set.
 - S3 bucket notifications and EventBridge target delivery re-check destination resource policies on emit (`s3.amazonaws.com` / `events.amazonaws.com` + `aws:SourceArn` / `aws:SourceAccount`). Empty notification config is off. EventBridge `PutTargets` without `RoleArn` delivers to SQS/Lambda/SNS/Logs/Kinesis/SFN only when the destination resource policy Allows `events.amazonaws.com` (or account root); empty policy skips that target.

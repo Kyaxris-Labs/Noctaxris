@@ -67,6 +67,21 @@ func TestCodeBuildWebhookCRUDAndFilterValidation(t *testing.T) {
 	if !errors.Is(err, store.ErrCodeBuildInvalidInput) {
 		t.Fatalf("bad regex err=%v", err)
 	}
+	_, err = st.UpsertCodeBuildWebhook(account, store.CodeBuildWebhook{
+		ProjectName:      "wh-proj",
+		FilterGroupsJSON: `[[{"type":"EVENT","pattern":"PUSH"}]]`,
+		Secret:           "",
+	})
+	if !errors.Is(err, store.ErrCodeBuildInvalidInput) {
+		t.Fatalf("empty secret err=%v", err)
+	}
+	_, err = st.UpsertCodeBuildWebhook(account, store.CodeBuildWebhook{
+		ProjectName: "wh-proj",
+		Secret:      "   ",
+	})
+	if !errors.Is(err, store.ErrCodeBuildInvalidInput) {
+		t.Fatalf("whitespace secret err=%v", err)
+	}
 
 	filters := `[[{"type":"EVENT","pattern":"PUSH"},{"type":"HEAD_REF","pattern":"^refs/heads/main$"}],[{"type":"FILE_PATH","pattern":"^src/.*"}]]`
 	wh, err := st.UpsertCodeBuildWebhook(account, store.CodeBuildWebhook{

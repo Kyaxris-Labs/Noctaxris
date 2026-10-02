@@ -55,18 +55,30 @@ func TestIoTTopicRuleSNSDynamoKinesisLambdaAndDispatch(t *testing.T) {
 	if fn.Code != http.StatusOK {
 		t.Fatalf("CreateFunction status=%d body=%q", fn.Code, fn.Body.String())
 	}
+	add := mustLambdaJSON(t, handler, "AddPermission", map[string]any{
+		"FunctionName": "iot-rule-fn",
+		"StatementId":  "iot-rule",
+		"Action":       "lambda:InvokeFunction",
+		"Principal":    "iot.amazonaws.com",
+	}, now)
+	if add.Code != http.StatusOK {
+		t.Fatalf("AddPermission status=%d body=%q", add.Code, add.Body.String())
+	}
+
+	deliverARN := mustIoTDeliveryRole(t, st, "iot-multi-deliver", "*", "*")
 
 	create := mustJSONTarget(t, handler, "AWSIotService.CreateTopicRule", "iot", map[string]any{
 		"ruleName": "multi-action",
 		"topicRulePayload": map[string]any{
 			"sql": "SELECT * FROM 'lab/multi'",
 			"actions": []any{
-				map[string]any{"sns": map[string]any{"topicArn": topicARN}},
-				map[string]any{"dynamoDB": map[string]any{"tableName": "iot-rule-ddb"}},
+				map[string]any{"sns": map[string]any{"topicArn": topicARN, "roleArn": deliverARN}},
+				map[string]any{"dynamoDB": map[string]any{"tableName": "iot-rule-ddb", "roleArn": deliverARN}},
 				map[string]any{"dynamoDBv2": map[string]any{
+					"roleArn": deliverARN,
 					"putItem": map[string]any{"tableName": "iot-rule-ddb"},
 				}},
-				map[string]any{"kinesis": map[string]any{"streamName": "iot-rule-k"}},
+				map[string]any{"kinesis": map[string]any{"streamName": "iot-rule-k", "roleArn": deliverARN}},
 				map[string]any{"lambda": map[string]any{
 					"functionName": "iot-rule-fn",
 				}},
@@ -127,15 +139,18 @@ func TestIoTTopicRuleSNSDynamoKinesisLambdaAndDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Missing targets fail closed
+	// Missing targets fail closed (roleArn present so authz path is exercised after lookup).
 	_ = mustJSONTarget(t, handler, "AWSIotService.CreateTopicRule", "iot", map[string]any{
 		"ruleName": "missing-targets",
 		"topicRulePayload": map[string]any{
 			"sql": "SELECT * FROM 'lab/miss'",
 			"actions": []any{
-				map[string]any{"sns": map[string]any{"topicArn": "arn:aws:sns:us-east-1:" + testAccountID + ":nope"}},
-				map[string]any{"dynamoDB": map[string]any{"tableName": "nope"}},
-				map[string]any{"kinesis": map[string]any{"streamName": "nope"}},
+				map[string]any{"sns": map[string]any{
+					"topicArn": "arn:aws:sns:us-east-1:" + testAccountID + ":nope",
+					"roleArn":  deliverARN,
+				}},
+				map[string]any{"dynamoDB": map[string]any{"tableName": "nope", "roleArn": deliverARN}},
+				map[string]any{"kinesis": map[string]any{"streamName": "nope", "roleArn": deliverARN}},
 				map[string]any{"lambda": map[string]any{"functionName": "nope"}},
 				map[string]any{"lambda": map[string]any{"functionArn": "bad"}},
 			},

@@ -92,6 +92,12 @@ func (s *Server) memorydbCreate(
 			"User is not authorized to perform memorydb:CreateCluster.", readOnly, eventID, verified)
 		return
 	}
+	secretName := store.DataPlaneMasterSecretName(store.DataPlaneSecretMemoryDB, name)
+	if !s.authorizeSecretsMint(verified, s.memorydbRegion(verified), secretName) {
+		s.writeMemoryDBError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
+		return
+	}
 	c, err := s.store.CreateMemoryDBCluster(
 		verified.AccountID, s.memorydbRegion(verified), name, engine, version, nodeType, aclName, numShards,
 	)
@@ -110,10 +116,14 @@ func (s *Server) memorydbCreate(
 			"Unable to create cluster.", readOnly, eventID, verified)
 		return
 	}
-	_, _ = s.store.EnsureDataPlaneMasterSecret(
+	if _, err := s.store.EnsureDataPlaneMasterSecret(
 		verified.AccountID, s.memorydbRegion(verified),
 		store.DataPlaneSecretMemoryDB, c.Name, "default", "noctaxris-memorydb-lab",
-	)
+	); err != nil {
+		s.writeMemoryDBError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to store master secret.", readOnly, eventID, verified)
+		return
+	}
 	// Nested Valkey/Redis lab image has no AUTH by default. Secret is for control-plane labs.
 	_ = tryStartNestedDataEngine(s, verified.AccountID, "memorydb", c.Name, nil)
 	if updated, err := s.store.DescribeMemoryDBCluster(verified.AccountID, s.memorydbRegion(verified), c.Name); err == nil {

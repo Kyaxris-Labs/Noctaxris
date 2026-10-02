@@ -8,9 +8,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/compute"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
+
+type rdsDataVerifiedKey struct{}
+
+func withRDSDataVerified(ctx context.Context, verified *authn.Verified) context.Context {
+	if verified == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, rdsDataVerifiedKey{}, verified)
+}
+
+func rdsDataVerifiedFrom(ctx context.Context) *authn.Verified {
+	v, _ := ctx.Value(rdsDataVerifiedKey{}).(*authn.Verified)
+	return v
+}
 
 const nestedRDSDataExecutorMarker = `{"noctaxrisExecutor":"nested-psql"}`
 
@@ -72,7 +88,7 @@ func (s *Server) executeRDSDataNestedPsql(
 	if err != nil || cli == nil {
 		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
-	user, password, err := s.rdsDataMasterCreds(accountID, inst, req.SecretARN)
+	user, password, err := s.rdsDataMasterCreds(ctx, accountID, inst, req.SecretARN)
 	if err != nil {
 		return store.RDSDataExecuteResult{}, err
 	}
@@ -106,7 +122,27 @@ func (s *Server) executeRDSDataNestedPsql(
 	return mapPostgresSQLResult(pgRes), nil
 }
 
-func (s *Server) rdsDataMasterCreds(accountID string, inst store.RDSDBInstance, secretARN string) (user, password string, err error) {
+// authorizeRDSDataSecretAccess requires secretsmanager:GetSecretValue before any
+// plaintext secret load. Missing caller identity fails closed.
+func (s *Server) authorizeRDSDataSecretAccess(verified *authn.Verified, accountID, secretARN string) error {
+	if verified == nil {
+		return fmt.Errorf("%w: not authorized to perform secretsmanager:GetSecretValue", store.ErrRDSDataAccessDenied)
+	}
+	arn := strings.TrimSpace(secretARN)
+	if arn == "" {
+		return fmt.Errorf("%w: secretArn is required for nested SQL", store.ErrRDSDataInvalidSecret)
+	}
+	meta, err := s.store.DescribeSecret(accountID, arn)
+	if err != nil {
+		return fmt.Errorf("%w: %v", store.ErrRDSDataSecretsError, err)
+	}
+	if !s.authorizeSecretsManager(verified, catalog.ActionSecretsGetSecretValue, meta.ARN, meta.ResourcePolicy) {
+		return fmt.Errorf("%w: not authorized to perform secretsmanager:GetSecretValue", store.ErrRDSDataAccessDenied)
+	}
+	return nil
+}
+
+func (s *Server) rdsDataMasterCreds(ctx context.Context, accountID string, inst store.RDSDBInstance, secretARN string) (user, password string, err error) {
 	user = inst.MasterUsername
 	arn := strings.TrimSpace(secretARN)
 	if arn == "" {
@@ -114,6 +150,9 @@ func (s *Server) rdsDataMasterCreds(accountID string, inst store.RDSDBInstance, 
 	}
 	if arn == "" {
 		return "", "", fmt.Errorf("%w: secretArn is required for nested SQL", store.ErrRDSDataInvalidSecret)
+	}
+	if err := s.authorizeRDSDataSecretAccess(rdsDataVerifiedFrom(ctx), accountID, arn); err != nil {
+		return "", "", err
 	}
 	sec, err := s.store.GetSecretValue(accountID, arn)
 	if err != nil {

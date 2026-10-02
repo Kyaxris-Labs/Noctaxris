@@ -20,6 +20,16 @@ func (s *Store) RoleSessionAllows(accountID, roleARN, action, targetARN, session
 	return s.deliveryRoleSessionAllows(accountID, roleARN, action, targetARN, sessionName, region, "")
 }
 
+// DeliveryAuthorizedRoleAndResource authorizes RoleArn delivery (EvaluateFull on the
+// minted role session, plus destination resource policy for foreign targets).
+func (s *Store) DeliveryAuthorizedRoleAndResource(
+	delivererAccount, roleARN, action, targetARN, servicePrincipal, sourceARN, sessionName, region string,
+) bool {
+	return s.deliveryAuthorizedRoleAndResource(
+		delivererAccount, roleARN, action, targetARN, servicePrincipal, sourceARN, sessionName, region,
+	)
+}
+
 // deliveryAuthorizedRoleAndResource authorizes RoleArn delivery.
 // Same-account (or targets without a resource-policy surface): RoleArn session Allow alone
 // remains the lab path. Foreign SQS/Lambda/SNS/S3 targets require session Allow AND

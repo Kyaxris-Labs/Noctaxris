@@ -16,7 +16,7 @@ Lab CodeBuild core: project create/list/get/update/delete, StartBuild / StartBui
 | Config stubs | `vpcConfig`, `cache`, `secondarySources`, `fleet` / `projectFleet`, and `reportGroupArns` persist as JSON and echo on Create/Update/BatchGetProjects (decorative `status=ACTIVE` on vpc/cache/fleet). Validated shapes: `cache.type` in `NO_CACHE`/`LOCAL`/`S3`; `vpcConfig.vpcId` + non-empty `subnets`; `fleet.fleetArn` ARN; `reportGroupArns` ARN list. Config-only: no real VPC attach, cache backend, fleets, or report publishing |
 | Lab image | Optional tool-bearing image under `docker/codebuild-lab/` (see [codebuild-lab-image.md](codebuild-lab-image.md)); pull via lab registry refs already allowed by the DinD allowlist |
 | IMDS mirror | Nested builds started via `RunECSTask` with minted `AWS_*` also get link-local `169.254.170.2` container-credential env on Internal `noctaxris-ecs` (not published on the host API listen). Prefer `AWS_CONTAINER_CREDENTIALS_FULL_URI` (`http://169.254.170.2:9254/v2/credentials/<uuid>`); relative URI `/v2/credentials/<uuid>` alone assumes port 80 and will not hit the lab mirror. The sidecar GET-serves that exact UUID path only (`GET /v2/credentials/` and other paths return 404; no directory listing). Nested stop deletes the credential file. |
-| Webhooks | AWS-shaped `CreateWebhook` / `DeleteWebhook` / `ListWebhooks` (JSON protocol) plus receive path `POST /_noctaxris/codebuild/webhook/{account}/{project}` with lite `filterGroups` (`EVENT` / `HEAD_REF` / `FILE_PATH`) into StartBuild. `payloadUrl` points at the lab receive path (not GitHub SaaS). Optional secret via request or auto-minted; receive checks `X-Noctaxris-Webhook-Secret` when set |
+| Webhooks | AWS-shaped `CreateWebhook` / `DeleteWebhook` / `ListWebhooks` (JSON protocol) plus receive path `POST /_noctaxris/codebuild/webhook/{account}/{project}` with lite `filterGroups` (`EVENT` / `HEAD_REF` / `FILE_PATH`) into StartBuild. `payloadUrl` points at the lab receive path (not GitHub SaaS). `CreateWebhook` always stores a non-empty shared secret (minted server-side) and returns it once; `ListWebhooks` omits secrets; receive always checks `X-Noctaxris-Webhook-Secret` |
 | Roles | `CreateProject` / `UpdateProject` require `serviceRole`. Caller needs `iam:PassRole`. Role trust must Allow `sts:AssumeRole` for `codebuild.amazonaws.com`. StartBuild mints temporary AWS_* credentials for the project `serviceRole` into the nested container. Lab registry pull tokens use the service role ARN |
 | Compute | Nested containers via Compose `noctaxris-engine` (DinD TLS). StartBuild starts the container and returns `IN_PROGRESS`; exit is reaped in the background. Lab registry image refs (`127.0.0.1:4566/...`) are rewritten and pulled once with authenticated Registry V2 |
 | Endpoint mint | Nested build env includes `AWS_ENDPOINT_URL_*` aliases for Secrets Manager (`AWS_ENDPOINT_URL_SECRETSMANAGER`, `AWS_ENDPOINT_URL_SECRETS_MANAGER`), CloudWatch Logs (`AWS_ENDPOINT_URL_LOGS`), SNS (`AWS_ENDPOINT_URL_SNS`), and CodeBuild (`AWS_ENDPOINT_URL_CODEBUILD`), plus the shared mint set used by ECS-path compute |
@@ -48,14 +48,14 @@ CodeBuild nested containers use the same DinD path as ECS (`noctaxris-ecs`). Hos
 
 ### Lab webhooks
 
-Register via `CreateWebhook` (`projectName`, optional `filterGroups`, optional `secret`). Response includes `webhook.payloadUrl` / `webhook.url` pointing at `POST /_noctaxris/codebuild/webhook/{account}/{project}` and a `secret` (auto-minted when omitted). `ListWebhooks` (optional `projectName` filter) and `DeleteWebhook` manage rows. Store upsert remains available for operators/tests.
+Register via `CreateWebhook` (`projectName`, optional `filterGroups`). The API always mints a non-empty shared secret and returns it once under `webhook.secret` with `webhook.payloadUrl` / `webhook.url` pointing at `POST /_noctaxris/codebuild/webhook/{account}/{project}`. `ListWebhooks` (optional `projectName` filter) omits secrets; `DeleteWebhook` removes rows. Store upsert rejects an empty secret.
 
-Receive (unauthenticated lab path; optional shared secret):
+Receive (lab path; shared secret required):
 
 ```http
 POST /_noctaxris/codebuild/webhook/{account}/{project}
 Content-Type: application/json
-X-Noctaxris-Webhook-Secret: <optional; required when the webhook secret is non-empty>
+X-Noctaxris-Webhook-Secret: <required shared secret>
 
 {"event":"PUSH","headRef":"refs/heads/main","filePaths":["src/app.go"]}
 ```

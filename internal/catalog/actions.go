@@ -241,7 +241,10 @@ const (
 	ActionS3DeleteBucketPolicy            = "s3:DeleteBucketPolicy"
 	ActionS3GetObject                     = "s3:GetObject"
 	ActionS3PutObject                     = "s3:PutObject"
+	ActionS3PutObjectAcl                  = "s3:PutObjectAcl"
+	ActionS3PutObjectRetention            = "s3:PutObjectRetention"
 	ActionS3DeleteObject                  = "s3:DeleteObject"
+	ActionS3BypassGovernanceRetention     = "s3:BypassGovernanceRetention"
 	ActionS3CreateMultipartUpload         = "s3:CreateMultipartUpload"
 	ActionS3UploadPart                    = "s3:UploadPart"
 	ActionS3CompleteMultipartUpload       = "s3:CompleteMultipartUpload"
@@ -361,8 +364,7 @@ const (
 	ActionDocDBDeleteDBCluster    = "rds:DeleteDBCluster"
 )
 
-// Neptune lab actions. Control-plane IAM uses the rds: prefix (AWS Neptune shares RDS cluster APIs).
-// Catalog strings use neptune: so they stay distinct from DocumentDB routing constants.
+// Neptune lab actions. Catalog and authorize use neptune:* (distinct from DocumentDB rds:*).
 const (
 	ActionNeptuneCreateDBCluster    = "neptune:CreateDBCluster"
 	ActionNeptuneDescribeDBClusters = "neptune:DescribeDBClusters"
@@ -830,6 +832,10 @@ const (
 	ActionOpenSearchDescribeDomain  = "es:DescribeDomain"
 	ActionOpenSearchListDomainNames = "es:ListDomainNames"
 	ActionOpenSearchDeleteDomain    = "es:DeleteDomain"
+	ActionOpenSearchESHttpGet       = "es:ESHttpGet"
+	ActionOpenSearchESHttpPost      = "es:ESHttpPost"
+	ActionOpenSearchESHttpPut       = "es:ESHttpPut"
+	ActionOpenSearchESHttpDelete    = "es:ESHttpDelete"
 )
 
 // WAFv2 lab actions.

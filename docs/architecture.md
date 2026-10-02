@@ -45,7 +45,7 @@ Noctaxris/
   internal/kernel/authn/          # SigV4 header + query (presign)
   internal/kernel/authz/          # Evaluate*, CheckPassRole
   internal/kernel/federation/     # OIDC/SAML federation verify (go-jose v4)
-  internal/kernel/jwtutil/        # shared RS256 JWKS issue/verify helper
+  internal/kernel/jwtutil/        # shared RS256/HS256 JWT issue/verify helper (go-jose)
   internal/kernel/identity/
   internal/kernel/sts/
   internal/services/

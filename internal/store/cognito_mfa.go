@@ -4,8 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base32"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -191,25 +189,16 @@ func (s *Store) resolveAccessTokenIdentity(accessToken string) (accountID, poolI
 	if accessToken == "" {
 		return "", "", "", "", fmt.Errorf("%w: AccessToken or Session required", ErrCognitoBadRequest)
 	}
-	// Peek issuer from unverified payload only after JWKS verify succeeds for that pool.
-	parts := strings.Split(accessToken, ".")
-	if len(parts) != 3 {
-		return "", "", "", "", ErrCognitoUnauthorized
-	}
-	// Brute-force pool lookup via claim iss after verify: decode mid-payload is avoided;
-	// verify against each known pool is expensive. Parse iss from payload after base64 decode
-	// of the middle segment without trusting signature until JWKS verify.
-	payloadJSON, decErr := jwtPayloadBytes(accessToken)
+	// Peek issuer from unverified payload only; signature is checked via JWKS below.
+	claimsPeek, decErr := jwtutil.PeekUnverifiedClaims(accessToken)
 	if decErr != nil {
 		return "", "", "", "", ErrCognitoUnauthorized
 	}
-	var peek struct {
-		Iss string `json:"iss"`
-	}
-	if err := json.Unmarshal(payloadJSON, &peek); err != nil || peek.Iss == "" {
+	peekIss := jwtutil.ClaimString(claimsPeek, "iss")
+	if peekIss == "" {
 		return "", "", "", "", ErrCognitoUnauthorized
 	}
-	poolID = poolIDFromIssuer(peek.Iss)
+	poolID = poolIDFromIssuer(peekIss)
 	if poolID == "" {
 		return "", "", "", "", ErrCognitoUnauthorized
 	}
@@ -485,13 +474,4 @@ func (s *Store) createSOFTWARETokenMFAChallenge(accountID, poolID, clientID, use
 			"FRIENDLY_DEVICE_NAME": "SoftwareToken",
 		},
 	}, nil
-}
-
-// jwtPayloadBytes returns the JWT payload segment decoded (no signature check).
-func jwtPayloadBytes(token string) ([]byte, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("jwt: segments")
-	}
-	return base64.RawURLEncoding.DecodeString(parts[1])
 }

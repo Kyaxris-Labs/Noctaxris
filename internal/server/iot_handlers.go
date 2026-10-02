@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	iotsvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/iot"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -963,6 +964,48 @@ func iotActionsJSON(payload map[string]any) string {
 	return string(b)
 }
 
+func iotTopicRuleActionRoleARNs(actionsJSON string) []string {
+	var actions []map[string]any
+	if err := json.Unmarshal([]byte(actionsJSON), &actions); err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(role string) {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			return
+		}
+		if _, ok := seen[role]; ok {
+			return
+		}
+		seen[role] = struct{}{}
+		out = append(out, role)
+	}
+	for _, action := range actions {
+		for _, key := range []string{"sqs", "sns", "s3", "dynamoDB", "kinesis", "lambda"} {
+			if nested, ok := action[key].(map[string]any); ok {
+				add(iotActionRoleARN(nested))
+			}
+		}
+		if ddbv2, ok := action["dynamoDBv2"].(map[string]any); ok {
+			add(iotActionRoleARN(ddbv2))
+			if putItem, ok := ddbv2["putItem"].(map[string]any); ok {
+				add(iotActionRoleARN(putItem))
+			}
+		}
+	}
+	return out
+}
+
+func (s *Server) checkIoTPassRole(verified *authn.Verified, roleARN, sourceARN string) error {
+	return s.checkServicePassRole(verified, roleARN, sourceARN, authz.ServicePrincipalIoT, "IoT", passRoleMsgs{
+		InvalidARN:   "roleArn must be a valid IAM role ARN",
+		WrongAccount: "roleArn must be in the same account",
+		NotFound:     "roleArn not found",
+	})
+}
+
 func (s *Server) iotCreateTopicRule(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
@@ -986,8 +1029,18 @@ func (s *Server) iotCreateTopicRule(
 	if v, ok := payload["RuleDisabled"].(bool); ok {
 		disabled = v
 	}
+	actionsJSON := iotActionsJSON(payload)
+	region := s.iotRegion(verified)
+	sourceARN := store.IoTTopicRuleARN(region, verified.AccountID, name)
+	for _, roleARN := range iotTopicRuleActionRoleARNs(actionsJSON) {
+		if err := s.checkIoTPassRole(verified, roleARN, sourceARN); err != nil {
+			s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	rule, err := s.store.CreateIoTTopicRule(
-		verified.AccountID, s.iotRegion(verified), name, sqlText, desc, iotActionsJSON(payload), disabled,
+		verified.AccountID, region, name, sqlText, desc, actionsJSON, disabled,
 	)
 	if errors.Is(err, store.ErrIoTConflict) {
 		s.writeIoTError(w, r, body, requestID, http.StatusConflict, "ResourceAlreadyExistsException",
@@ -1079,8 +1132,18 @@ func (s *Server) iotReplaceTopicRule(
 	if v, ok := payload["RuleDisabled"].(bool); ok {
 		disabled = v
 	}
+	actionsJSON := iotActionsJSON(payload)
+	region := s.iotRegion(verified)
+	sourceARN := store.IoTTopicRuleARN(region, verified.AccountID, name)
+	for _, roleARN := range iotTopicRuleActionRoleARNs(actionsJSON) {
+		if err := s.checkIoTPassRole(verified, roleARN, sourceARN); err != nil {
+			s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	rule, err := s.store.ReplaceIoTTopicRule(
-		verified.AccountID, s.iotRegion(verified), name, sqlText, desc, iotActionsJSON(payload), disabled,
+		verified.AccountID, region, name, sqlText, desc, actionsJSON, disabled,
 	)
 	if errors.Is(err, store.ErrIoTNotFound) {
 		s.writeIoTError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
@@ -1219,7 +1282,19 @@ func (s *Server) iotCreateRoleAlias(
 	alias := iotStringParam(params, "roleAlias", "RoleAlias")
 	roleARN := iotStringParam(params, "roleArn", "RoleArn")
 	dur := iotIntParam(params, "credentialDurationSeconds", "CredentialDurationSeconds")
-	ra, err := s.store.CreateIoTRoleAlias(verified.AccountID, s.iotRegion(verified), alias, roleARN, dur)
+	region := s.iotRegion(verified)
+	if strings.TrimSpace(alias) == "" || strings.TrimSpace(roleARN) == "" {
+		s.writeIoTError(w, r, body, requestID, http.StatusBadRequest, "InvalidRequestException",
+			"roleAlias and roleArn required", readOnly, eventID, verified)
+		return
+	}
+	sourceARN := store.IoTRoleAliasARN(region, verified.AccountID, alias)
+	if err := s.checkPassRoleForService(verified, roleARN, sourceARN, authz.ServicePrincipalIoTCredentials, "IoT"); err != nil {
+		s.writeIoTError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	ra, err := s.store.CreateIoTRoleAlias(verified.AccountID, region, alias, roleARN, dur)
 	if errors.Is(err, store.ErrIoTConflict) {
 		s.writeIoTError(w, r, body, requestID, http.StatusConflict, "ResourceAlreadyExistsException",
 			"Role alias already exists.", readOnly, eventID, verified)

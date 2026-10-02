@@ -81,6 +81,12 @@ func (s *Server) elasticacheCreate(
 			"User is not authorized to perform elasticache:CreateCacheCluster.", readOnly, eventID, verified)
 		return
 	}
+	secretName := store.DataPlaneMasterSecretName(store.DataPlaneSecretElastiCache, id)
+	if !s.authorizeSecretsMint(verified, s.elasticacheRegion(verified), secretName) {
+		s.writeElastiCacheError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
+		return
+	}
 	c, err := s.store.CreateElastiCacheCluster(verified.AccountID, s.elasticacheRegion(verified), id, engine, version, nodeType, numNodes)
 	if errors.Is(err, store.ErrElastiCacheClusterExists) {
 		s.writeElastiCacheError(w, r, requestID, http.StatusBadRequest, "CacheClusterAlreadyExists",
@@ -97,10 +103,14 @@ func (s *Server) elasticacheCreate(
 			"Unable to create cache cluster.", readOnly, eventID, verified)
 		return
 	}
-	_, _ = s.store.EnsureDataPlaneMasterSecret(
+	if _, err := s.store.EnsureDataPlaneMasterSecret(
 		verified.AccountID, s.elasticacheRegion(verified),
 		store.DataPlaneSecretElastiCache, c.CacheClusterID, "default", "noctaxris-cache-lab",
-	)
+	); err != nil {
+		s.writeElastiCacheError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to store master secret.", readOnly, eventID, verified)
+		return
+	}
 	// Nested Valkey/Redis lab image has no AUTH by default. Secret is for control-plane labs.
 	_ = tryStartNestedDataEngine(s, verified.AccountID, "elasticache", c.CacheClusterID, nil)
 	if updated, err := s.store.DescribeElastiCacheCluster(verified.AccountID, c.CacheClusterID); err == nil {

@@ -2,6 +2,11 @@ package store
 
 import "fmt"
 
+// UnsafeSetFunctionResourcePolicyForTest replaces a function resource policy document.
+func (s *Store) UnsafeSetFunctionResourcePolicyForTest(accountID, functionName, policy string) error {
+	return s.setFunctionResourcePolicy(accountID, functionName, policy)
+}
+
 // UnsafeDeleteUserRowForTest deletes the users row without cleaning access keys.
 // Used only by IdentityLoadFailClosed* tests to force identity load errors
 // while SigV4 still verifies via the access_keys row.

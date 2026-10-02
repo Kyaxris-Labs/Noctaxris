@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 )
 
 var (
@@ -253,6 +255,8 @@ func FormatS3ServerAccessLogLine(ownerAccount, bucket string, in S3ServerAccessL
 }
 
 // AppendS3ServerAccessLog appends a line to the configured target bucket when logging is enabled.
+// Fail-closed against TargetBucket resource policy: when a policy is set, logging.s3.amazonaws.com
+// must be Allowed s3:PutObject (Deny or missing Allow skips delivery).
 func (s *Store) AppendS3ServerAccessLog(accountID, bucket string, in S3ServerAccessLogInput) error {
 	cfg, err := s.GetBucketLogging(accountID, bucket)
 	if err != nil {
@@ -272,6 +276,27 @@ func (s *Store) AppendS3ServerAccessLog(accountID, bucket string, in S3ServerAcc
 		in.RequestTime = time.Now().UTC()
 	}
 	key := S3ServerAccessLogObjectKey(bucket, cfg.TargetPrefix, in.RequestTime)
+	objectARN := ObjectARN(target, key)
+	if !s.s3AccessLogDeliveryAllowed(accountID, bucket, target, objectARN) {
+		return nil
+	}
 	line := FormatS3ServerAccessLogLine(accountID, bucket, in)
 	return s.appendS3TextLine(accountID, target, key, []byte(line))
+}
+
+// s3AccessLogDeliveryAllowed evaluates TargetBucket policy for logging.s3.amazonaws.com.
+// No bucket policy: same-account delivery allowed (lab default). Policy present: require
+// explicit Allow for the logging principal (or account root) and no matching Deny.
+func (s *Store) s3AccessLogDeliveryAllowed(accountID, sourceBucket, targetBucket, objectARN string) bool {
+	doc, err := s.GetBucketPolicy(accountID, targetBucket)
+	if errors.Is(err, ErrNoSuchBucketPolicy) || strings.TrimSpace(doc) == "" {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	keys := authz.DeliverySourceConditionKeys(BucketARN(sourceBucket), accountID)
+	return authz.EventTargetResourcePolicyAllows(
+		doc, actionS3PutObject, objectARN, authz.ServicePrincipalS3Logging, accountID, keys,
+	)
 }

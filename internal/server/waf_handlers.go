@@ -17,6 +17,45 @@ const (
 	wafEventSource     = "wafv2.amazonaws.com"
 )
 
+
+func wafWebACLResource(s *Server, verified *authn.Verified, name, scope, id string) string {
+	name = strings.TrimSpace(name)
+	if s == nil || verified == nil || name == "" {
+		return "*"
+	}
+	acl, err := s.store.GetWAFWebACL(verified.AccountID, name, scope, id)
+	if err != nil || strings.TrimSpace(acl.ARN) == "" {
+		region := verified.Region
+		if region == "" {
+			region = store.DefaultWAFRegion
+		}
+		if id == "" {
+			id = name
+		}
+		return store.WAFWebACLARN(region, verified.AccountID, scope, name, id)
+	}
+	return acl.ARN
+}
+
+func wafIPSetResource(s *Server, verified *authn.Verified, name, scope, id string) string {
+	name = strings.TrimSpace(name)
+	if s == nil || verified == nil || name == "" {
+		return "*"
+	}
+	ip, err := s.store.GetWAFIPSet(verified.AccountID, name, scope, id)
+	if err != nil || strings.TrimSpace(ip.ARN) == "" {
+		region := verified.Region
+		if region == "" {
+			region = store.DefaultWAFRegion
+		}
+		if id == "" {
+			id = name
+		}
+		return store.WAFIPSetARN(region, verified.AccountID, scope, name, id)
+	}
+	return ip.ARN
+}
+
 func (s *Server) handleWAFv2(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -325,7 +364,7 @@ func (s *Server) wafUpdateWebACL(
 	name, _ := params["Name"].(string)
 	scope, _ := params["Scope"].(string)
 	lock, _ := params["LockToken"].(string)
-	if !s.authorize(verified, catalog.ActionWAFUpdateWebACL, "*") {
+	if !s.authorize(verified, catalog.ActionWAFUpdateWebACL, wafWebACLResource(s, verified, name, scope, "")) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:UpdateWebACL.", readOnly, eventID, verified)
 		return
@@ -353,7 +392,7 @@ func (s *Server) wafGetWebACL(
 	name, _ := params["Name"].(string)
 	scope, _ := params["Scope"].(string)
 	id, _ := params["Id"].(string)
-	if !s.authorize(verified, catalog.ActionWAFGetWebACL, "*") {
+	if !s.authorize(verified, catalog.ActionWAFGetWebACL, wafWebACLResource(s, verified, name, scope, id)) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:GetWebACL.", readOnly, eventID, verified)
 		return
@@ -435,8 +474,14 @@ func (s *Server) wafAssociate(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	webARN, _ := params["WebACLArn"].(string)
+	if webARN == "" {
+		webARN, _ = params["WebACLARN"].(string)
+	}
+	if webARN == "" {
+		webARN = "*"
+	}
 	resARN, _ := params["ResourceArn"].(string)
-	if !s.authorize(verified, catalog.ActionWAFAssociateWebACL, "*") {
+	if !s.authorize(verified, catalog.ActionWAFAssociateWebACL, webARN) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:AssociateWebACL.", readOnly, eventID, verified)
 		return
@@ -462,9 +507,15 @@ func (s *Server) wafEvaluate(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	webARN, _ := params["WebACLArn"].(string)
+	if webARN == "" {
+		webARN, _ = params["WebACLARN"].(string)
+	}
+	if webARN == "" {
+		webARN = "*"
+	}
 	label, _ := params["Label"].(string)
 	view := wafRequestViewFromEvaluateParams(params)
-	if !s.authorize(verified, catalog.ActionWAFEvaluate, "*") {
+	if !s.authorize(verified, catalog.ActionWAFEvaluate, webARN) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:Evaluate.", readOnly, eventID, verified)
 		return
@@ -530,7 +581,7 @@ func (s *Server) wafGetIPSet(
 	name, _ := params["Name"].(string)
 	scope, _ := params["Scope"].(string)
 	id, _ := params["Id"].(string)
-	if !s.authorize(verified, catalog.ActionWAFGetIPSet, "*") {
+	if !s.authorize(verified, catalog.ActionWAFGetIPSet, wafIPSetResource(s, verified, name, scope, id)) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:GetIPSet.", readOnly, eventID, verified)
 		return
@@ -559,7 +610,7 @@ func (s *Server) wafUpdateIPSet(
 	scope, _ := params["Scope"].(string)
 	id, _ := params["Id"].(string)
 	lock, _ := params["LockToken"].(string)
-	if !s.authorize(verified, catalog.ActionWAFUpdateIPSet, "*") {
+	if !s.authorize(verified, catalog.ActionWAFUpdateIPSet, wafIPSetResource(s, verified, name, scope, "")) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:UpdateIPSet.", readOnly, eventID, verified)
 		return
@@ -588,7 +639,7 @@ func (s *Server) wafDeleteIPSet(
 	scope, _ := params["Scope"].(string)
 	id, _ := params["Id"].(string)
 	lock, _ := params["LockToken"].(string)
-	if !s.authorize(verified, catalog.ActionWAFDeleteIPSet, "*") {
+	if !s.authorize(verified, catalog.ActionWAFDeleteIPSet, wafIPSetResource(s, verified, name, scope, "")) {
 		s.writeWAFError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform wafv2:DeleteIPSet.", readOnly, eventID, verified)
 		return

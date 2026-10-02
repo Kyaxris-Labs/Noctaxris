@@ -109,7 +109,7 @@ Condition-key catalogs and ADR-0005 §7 evaluation:
 go test ./internal/catalog/conditionkeys ./internal/kernel/authz -count=1
 ```
 
-Compose up (publishes `127.0.0.1:4566` only, must not mount host `docker.sock`). Compose binds `0.0.0.0` in-container; replace both `NOCTAXRIS_ROOT_*` values with unique lab credentials before `up` (the shipped `.env.example` pair is refused):
+Compose up (publishes `127.0.0.1:4566` and `127.0.0.1:8443`, must not mount host `docker.sock`). Compose binds `0.0.0.0` in-container; replace both `NOCTAXRIS_ROOT_*` values with unique lab credentials before `up` (the shipped `.env.example` pair is refused):
 
 ```bash
 cp docker/.env.example docker/.env   # then set unique NOCTAXRIS_ROOT_* values
@@ -147,7 +147,7 @@ Per-service CLI smoke lives on each shipped service page above.
 
 **Compute runtime:** Nested DinD via Compose `noctaxris-engine` is the only packaged path for Lambda, ECS, EC2 lab instances, CodeBuild, Batch, and nested data engines (RDS / ElastiCache / MemoryDB / DocumentDB / Neptune / MQ / OpenSearch / MSK / DuckDB). Live Invoke/RunTask/RunInstances need a healthy engine. Default engine is restricted DinD (`privileged: false` with explicit caps and host cgroup); use `docker/compose.engine-privileged.yaml` only when nested smoke fails on the host. Athena defaults to in-process SQL; optional DuckDB sidecar on `noctaxris-data` (no host publish) via `NOCTAXRIS_ATHENA_ENGINE` / `NOCTAXRIS_DUCKDB_URL`.
 
-**Nested data ports:** Compose publishes only `127.0.0.1:4566`. Nested `DataKind` engines are RDS (Postgres/MySQL/MariaDB when enabled), ElastiCache/MemoryDB (Valkey/Redis), DocumentDB (Mongo-compatible), Neptune (Gremlin Server or opt-in Neo4j), MQ (RabbitMQ or ActiveMQ), OpenSearch, MSK (Redpanda), and DuckDB (`noctaxris-lab-duck`); those ports are never published on the host. Prefer RDS Data API on `:4566` for SQL labs.
+**Nested data ports:** Compose publishes `127.0.0.1:4566` (API) and `127.0.0.1:8443` (IoT mTLS). Nested `DataKind` engines are RDS (Postgres/MySQL/MariaDB when enabled), ElastiCache/MemoryDB (Valkey/Redis), DocumentDB (Mongo-compatible), Neptune (Gremlin Server or opt-in Neo4j), MQ (RabbitMQ or ActiveMQ), OpenSearch, MSK (Redpanda), and DuckDB (`noctaxris-lab-duck`); those ports are never published on the host. Prefer RDS Data API on `:4566` for SQL labs.
 
 **In-process workers:** EventBridge Scheduler uses an in-process ticker. Lambda SQS, DynamoDB Streams, Kinesis (all shards polled sequentially), and Amazon MQ event source mappings use a continuous in-process poller. EventBridge Pipes use a continuous in-process ticker that calls `PollPipeOnce`. SNS HTTP delivery defaults to the loopback catcher; non-catcher URLs need `NOCTAXRIS_SNS_HTTP_EGRESS=1` plus allowlist (no open SSRF).
 

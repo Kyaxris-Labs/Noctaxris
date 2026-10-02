@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	ErrAthenaNotFound   = errors.New("InvalidRequestException")
-	ErrAthenaBadRequest = errors.New("InvalidRequestException")
+	ErrAthenaNotFound     = errors.New("InvalidRequestException")
+	ErrAthenaBadRequest   = errors.New("InvalidRequestException")
+	ErrAthenaAccessDenied = errors.New("AccessDeniedException")
 )
 
 const DefaultAthenaRegion = "us-east-1"
@@ -1281,6 +1282,11 @@ func parseS3Location(loc string) (bucket, prefix string, err error) {
 		prefix = parts[1]
 	}
 	return bucket, prefix, nil
+}
+
+// ParseS3Location exports parseS3Location for server-layer S3 authz on Athena Duck scans.
+func ParseS3Location(loc string) (bucket, prefix string, err error) {
+	return parseS3Location(loc)
 }
 
 func parseCSVRows(data []byte, columns []GlueColumn) ([][]string, error) {

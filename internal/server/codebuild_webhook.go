@@ -12,7 +12,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
-// LabCodeBuildWebhookSecretHeader is the optional shared-secret header for lab webhooks.
+// LabCodeBuildWebhookSecretHeader is the required shared-secret header for lab webhooks.
 const LabCodeBuildWebhookSecretHeader = "X-Noctaxris-Webhook-Secret"
 
 func isLabCodeBuildWebhookPath(path string) bool {
@@ -85,12 +85,11 @@ func (s *Server) handleLabCodeBuildWebhook(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if secret := strings.TrimSpace(wh.Secret); secret != "" {
-		got := strings.TrimSpace(r.Header.Get(LabCodeBuildWebhookSecretHeader))
-		if got == "" || got != secret {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	secret := strings.TrimSpace(wh.Secret)
+	got := strings.TrimSpace(r.Header.Get(LabCodeBuildWebhookSecretHeader))
+	if secret == "" || got == "" || got != secret {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))

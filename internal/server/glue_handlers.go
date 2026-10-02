@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -435,6 +436,46 @@ func (s *Server) checkGluePassRole(verified *authn.Verified, roleARN, sourceARN 
 	})
 }
 
+// authorizeGlueCrawlerS3Reads evaluates the crawler Role for s3:ListBucket and
+// s3:GetObject on each target before StartCrawler reads objects.
+func (s *Server) authorizeGlueCrawlerS3Reads(verified *authn.Verified, cr store.GlueCrawler) error {
+	roleARN := strings.TrimSpace(cr.Role)
+	if roleARN == "" {
+		return fmt.Errorf("crawler Role is required for S3 target reads")
+	}
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultGlueRegion
+	}
+	for _, tgt := range cr.Targets {
+		bucket, prefix, err := store.ParseS3Location(tgt.Path)
+		if err != nil {
+			return fmt.Errorf("invalid S3 target path: %w", err)
+		}
+		bucketARN := store.BucketARN(bucket)
+		if !s.store.RoleSessionAllows(
+			verified.AccountID, roleARN, catalog.ActionS3ListBucket, bucketARN,
+			"glue-crawler", region,
+		) {
+			return fmt.Errorf("crawler Role is not authorized to perform s3:ListBucket on %s", bucketARN)
+		}
+		key := strings.TrimPrefix(prefix, "/")
+		if key == "" {
+			key = "*"
+		} else if !strings.HasSuffix(key, "*") {
+			key = strings.TrimRight(key, "/") + "/*"
+		}
+		objectARN := store.ObjectARN(bucket, key)
+		if !s.store.RoleSessionAllows(
+			verified.AccountID, roleARN, catalog.ActionS3GetObject, objectARN,
+			"glue-crawler", region,
+		) {
+			return fmt.Errorf("crawler Role is not authorized to perform s3:GetObject on %s", objectARN)
+		}
+	}
+	return nil
+}
+
 func parseGlueS3Targets(params map[string]any) []store.GlueS3Target {
 	targetsIn, _ := params["Targets"].(map[string]any)
 	raw, _ := targetsIn["S3Targets"].([]any)
@@ -535,7 +576,23 @@ func (s *Server) glueStartCrawler(
 			"User is not authorized to perform glue:StartCrawler.", readOnly, eventID, verified)
 		return
 	}
-	_, err := s.store.StartGlueCrawler(verified.AccountID, name)
+	cr, err := s.store.GetGlueCrawler(verified.AccountID, name)
+	if errors.Is(err, store.ErrGlueNotFound) {
+		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
+			"Crawler not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusInternalServerError, "InternalServiceException",
+			"Unable to load crawler.", readOnly, eventID, verified)
+		return
+	}
+	if err := s.authorizeGlueCrawlerS3Reads(verified, cr); err != nil {
+		s.writeGlueError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			err.Error(), readOnly, eventID, verified)
+		return
+	}
+	_, err = s.store.StartGlueCrawler(verified.AccountID, name)
 	if errors.Is(err, store.ErrGlueNotFound) {
 		s.writeGlueError(w, r, body, requestID, http.StatusBadRequest, "EntityNotFoundException",
 			"Crawler not found.", readOnly, eventID, verified)

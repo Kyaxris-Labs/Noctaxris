@@ -20,6 +20,24 @@ const (
 	DefaultAppConfigRegion = "us-east-1"
 )
 
+// AppConfigApplicationARN builds arn:aws:appconfig:REGION:ACCOUNT:application/APP_ID
+func AppConfigApplicationARN(region, accountID, applicationID string) string {
+	if region == "" {
+		region = DefaultAppConfigRegion
+	}
+	return fmt.Sprintf("arn:aws:appconfig:%s:%s:application/%s", region, accountID, strings.TrimSpace(applicationID))
+}
+
+// AppConfigEnvironmentARN builds .../application/APP_ID/environment/ENV_ID
+func AppConfigEnvironmentARN(region, accountID, applicationID, environmentID string) string {
+	return AppConfigApplicationARN(region, accountID, applicationID) + "/environment/" + strings.TrimSpace(environmentID)
+}
+
+// AppConfigConfigurationProfileARN builds .../application/APP_ID/configurationprofile/PROFILE_ID
+func AppConfigConfigurationProfileARN(region, accountID, applicationID, profileID string) string {
+	return AppConfigApplicationARN(region, accountID, applicationID) + "/configurationprofile/" + strings.TrimSpace(profileID)
+}
+
 const appconfigSchema = `
 CREATE TABLE IF NOT EXISTS appconfig_applications (
   account_id TEXT NOT NULL,

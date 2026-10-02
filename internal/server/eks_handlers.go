@@ -144,6 +144,7 @@ func (s *Server) eksCreate(
 	if role == "" {
 		role, _ = params["RoleArn"].(string)
 	}
+	role = strings.TrimSpace(role)
 	version, _ := params["version"].(string)
 	if version == "" {
 		version, _ = params["Version"].(string)
@@ -160,7 +161,16 @@ func (s *Server) eksCreate(
 			vpcJSON = string(b)
 		}
 	}
-	c, err := s.store.CreateEKSCluster(verified.AccountID, s.eksRegion(verified), name, role, version, vpcJSON)
+	region := s.eksRegion(verified)
+	if role != "" {
+		sourceARN := store.EKSClusterARN(region, verified.AccountID, strings.TrimSpace(name))
+		if err := s.checkEKSPassRole(verified, role, sourceARN); err != nil {
+			s.writeEKSError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
+	c, err := s.store.CreateEKSCluster(verified.AccountID, region, name, role, version, vpcJSON)
 	if errors.Is(err, store.ErrEKSClusterExists) {
 		s.writeEKSError(w, r, body, requestID, http.StatusConflict, "ResourceInUseException",
 			"Cluster already exists.", readOnly, eventID, verified)

@@ -94,6 +94,12 @@ func (s *Server) docdbCreate(
 			"User is not authorized to perform rds:CreateDBCluster.", readOnly, eventID, verified)
 		return
 	}
+	secretName := store.DataPlaneMasterSecretName(store.DataPlaneSecretDocDB, id)
+	if !s.authorizeSecretsMint(verified, s.docdbRegion(verified), secretName) {
+		s.writeDocDBError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+			"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
+		return
+	}
 	c, err := s.store.CreateDocDBCluster(verified.AccountID, s.docdbRegion(verified), id, engine, version, master, port)
 	if errors.Is(err, store.ErrDocDBClusterExists) {
 		s.writeDocDBError(w, r, requestID, http.StatusBadRequest, "DBClusterAlreadyExistsFault",
@@ -118,10 +124,14 @@ func (s *Server) docdbCreate(
 	if pass == "" {
 		pass = "noctaxris-docdb-lab"
 	}
-	_, _ = s.store.EnsureDataPlaneMasterSecret(
+	if _, err := s.store.EnsureDataPlaneMasterSecret(
 		verified.AccountID, s.docdbRegion(verified),
 		store.DataPlaneSecretDocDB, c.DBClusterIdentifier, user, pass,
-	)
+	); err != nil {
+		s.writeDocDBError(w, r, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to store master secret.", readOnly, eventID, verified)
+		return
+	}
 	_ = tryStartNestedDataEngine(s, verified.AccountID, "docdb", c.DBClusterIdentifier, map[string]string{
 		"MONGO_INITDB_ROOT_USERNAME": user,
 		"MONGO_INITDB_ROOT_PASSWORD": pass,

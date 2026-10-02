@@ -37,7 +37,7 @@ type CodeBuildWebhook struct {
 	ProjectName      string
 	PayloadJSON      string // optional opaque metadata JSON
 	FilterGroupsJSON string // JSON [][]CodeBuildWebhookFilter
-	Secret           string // optional shared secret; empty disables check
+	Secret           string // required shared secret; empty is rejected on upsert
 }
 
 const codebuildWebhookSchema = `
@@ -89,6 +89,10 @@ func (s *Store) UpsertCodeBuildWebhook(accountID string, wh CodeBuildWebhook) (C
 	if err := validateCodeBuildFilterGroupsJSON(filters); err != nil {
 		return CodeBuildWebhook{}, err
 	}
+	secret := strings.TrimSpace(wh.Secret)
+	if secret == "" {
+		return CodeBuildWebhook{}, fmt.Errorf("%w: secret is required", ErrCodeBuildInvalidInput)
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO codebuild_webhooks (account_id, project_name, payload_json, filter_groups_json, secret)
 		 VALUES (?, ?, ?, ?, ?)
@@ -96,7 +100,7 @@ func (s *Store) UpsertCodeBuildWebhook(accountID string, wh CodeBuildWebhook) (C
 		   payload_json = excluded.payload_json,
 		   filter_groups_json = excluded.filter_groups_json,
 		   secret = excluded.secret`,
-		accountID, project, payload, filters, wh.Secret,
+		accountID, project, payload, filters, secret,
 	)
 	if err != nil {
 		return CodeBuildWebhook{}, fmt.Errorf("upsert codebuild webhook: %w", err)
@@ -106,7 +110,7 @@ func (s *Store) UpsertCodeBuildWebhook(accountID string, wh CodeBuildWebhook) (C
 		ProjectName:      project,
 		PayloadJSON:      payload,
 		FilterGroupsJSON: filters,
-		Secret:           wh.Secret,
+		Secret:           secret,
 	}, nil
 }
 

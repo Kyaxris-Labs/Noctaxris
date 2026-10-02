@@ -164,8 +164,17 @@ func TestCodeBuildProjectAndBuildJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(whCreate), "sec") || !strings.Contains(string(whList), "lab-proj") {
-		t.Fatalf("webhook create=%s list=%s", whCreate, whList)
+	if !strings.Contains(string(whCreate), "payloadUrl") {
+		t.Fatalf("CreateWebhook missing payloadUrl create=%s", whCreate)
+	}
+	if strings.Contains(string(whCreate), `"secret"`) || strings.Contains(string(whCreate), `"sec"`) {
+		t.Fatalf("CreateWebhook must omit secret create=%s", whCreate)
+	}
+	if !strings.Contains(string(whList), "lab-proj") {
+		t.Fatalf("webhook list=%s", whList)
+	}
+	if strings.Contains(string(whList), `"secret"`) || strings.Contains(string(whList), `"sec"`) {
+		t.Fatalf("ListWebhooks must omit secret list=%s", whList)
 	}
 	if !strings.Contains(string(whNilList), "webhooks") {
 		t.Fatalf("nil list=%s", whNilList)

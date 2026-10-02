@@ -14,7 +14,7 @@ func ensureConfigDeliveryRole(t *testing.T, st *store.Store, account, roleName s
 	if err != nil {
 		t.Fatal(err)
 	}
-	allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`
+	allow := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:PutObject","sns:Publish"],"Resource":"*"}]}`
 	if err := st.PutInlinePolicy(roleARN, "config-delivery", allow); err != nil {
 		t.Fatal(err)
 	}

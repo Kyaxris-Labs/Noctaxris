@@ -111,7 +111,7 @@ func (s *Server) r53DeleteHostedZone(
 	if zoneID == "" {
 		zoneID, _ = params["HostedZoneId"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionRoute53DeleteHostedZone, "*") {
+	if !s.authorize(verified, catalog.ActionRoute53DeleteHostedZone, store.Route53HostedZoneARN(zoneID)) {
 		s.writeRoute53Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform route53:DeleteHostedZone.", readOnly, eventID, verified)
 		return
@@ -158,7 +158,7 @@ func (s *Server) r53ChangeRRSets(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	zoneID, _ := params["HostedZoneId"].(string)
-	if !s.authorize(verified, catalog.ActionRoute53ChangeResourceRecordSets, "*") {
+	if !s.authorize(verified, catalog.ActionRoute53ChangeResourceRecordSets, store.Route53HostedZoneARN(zoneID)) {
 		s.writeRoute53Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform route53:ChangeResourceRecordSets.", readOnly, eventID, verified)
 		return
@@ -190,7 +190,7 @@ func (s *Server) r53ListRRSets(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	zoneID, _ := params["HostedZoneId"].(string)
-	if !s.authorize(verified, catalog.ActionRoute53ListResourceRecordSets, "*") {
+	if !s.authorize(verified, catalog.ActionRoute53ListResourceRecordSets, store.Route53HostedZoneARN(zoneID)) {
 		s.writeRoute53Error(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
 			"User is not authorized to perform route53:ListResourceRecordSets.", readOnly, eventID, verified)
 		return

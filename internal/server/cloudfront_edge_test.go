@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -124,6 +125,103 @@ func TestCloudFrontEdgeMissingObjectNotFound(t *testing.T) {
 	edge.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing object status=%d want 404 body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCloudFrontEdgeS3GetObjectDeniedWithoutCallerOrOAC(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const bucket = "cf-edge-deny-bucket"
+	if _, err := st.CreateBucket(testAccountID, bucket); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutObject(testAccountID, bucket, "secret.txt", store.PutObjectMeta{
+		Data: []byte("secret"), PlainSize: 6, ContentType: "text/plain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateCloudFrontDistribution(testAccountID, "lab", "edge-deny-s3", true, []store.CloudFrontOrigin{{
+		ID: "o1", DomainName: bucket, OriginType: "s3",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, userARN, err := st.CreateUser(testAccountID, "cf-edge-deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ak, secret, err := st.CreateUserAccessKey(testAccountID, "cf-edge-deny")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowCF := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"cloudfront:GetDistribution","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(userARN, "cf-only", allowCF); err != nil {
+		t.Fatal(err)
+	}
+
+	edge := srv.CloudFrontEdgeHandler()
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/cloudfront/"+d.ID+"/secret.txt", nil)
+	req.Header.Del("Content-Type")
+	signS3Header(t, req, nil, ak, secret, testRegion, "cloudfront", now)
+	rec := httptest.NewRecorder()
+	edge.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("edge GET status=%d want 403 body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCloudFrontEdgeS3GetObjectAllowedViaOACBucketPolicy(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	const bucket = "cf-edge-oac-bucket"
+	if _, err := st.CreateBucket(testAccountID, bucket); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("oac-bytes")
+	if _, err := st.PutObject(testAccountID, bucket, "pub.txt", store.PutObjectMeta{
+		Data: payload, PlainSize: int64(len(payload)), ContentType: "text/plain",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateCloudFrontDistribution(testAccountID, "lab", "edge-oac", true, []store.CloudFrontOrigin{{
+		ID: "o1", DomainName: bucket, OriginType: "s3",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectARN := store.ObjectARN(bucket, "pub.txt")
+	oacPolicy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"` + authz.ServicePrincipalCloudFront + `"},"Action":"s3:GetObject","Resource":"` + objectARN + `","Condition":{"StringEquals":{"aws:SourceArn":"` + d.ARN + `"}}}]}`
+	if err := st.PutBucketPolicy(testAccountID, bucket, oacPolicy); err != nil {
+		t.Fatal(err)
+	}
+
+	_, userARN, err := st.CreateUser(testAccountID, "cf-edge-oac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ak, secret, err := st.CreateUserAccessKey(testAccountID, "cf-edge-oac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowCF := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"cloudfront:GetDistribution","Resource":"*"}]}`
+	if err := st.PutInlinePolicy(userARN, "cf-only", allowCF); err != nil {
+		t.Fatal(err)
+	}
+
+	edge := srv.CloudFrontEdgeHandler()
+	req := mustNewRequest(t, http.MethodGet, "http://127.0.0.1:4566/cloudfront/"+d.ID+"/pub.txt", nil)
+	req.Header.Del("Content-Type")
+	signS3Header(t, req, nil, ak, secret, testRegion, "cloudfront", now)
+	rec := httptest.NewRecorder()
+	edge.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("OAC edge GET status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != string(payload) {
+		t.Fatalf("body=%q want %q", rec.Body.String(), payload)
 	}
 }
 

@@ -177,8 +177,17 @@ func (s *Store) ListConfigDeliveryChannels(accountID string) ([]ConfigDeliveryCh
 	return out, rows.Err()
 }
 
-// NotifyConfigDeliveryChannelsSNS publishes a lab start notification to each delivery channel SNS topic (best-effort).
+// NotifyConfigDeliveryChannelsSNS publishes a lab start notification to each delivery channel SNS topic.
+// Fail-closed: requires the configuration recorder RoleARN session Allow for sns:Publish on the topic.
 func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) {
+	rec, err := s.GetConfigRecorder(accountID, recorderName)
+	if err != nil {
+		return
+	}
+	roleARN := strings.TrimSpace(rec.RoleARN)
+	if roleARN == "" {
+		return
+	}
 	channels, err := s.ListConfigDeliveryChannels(accountID)
 	if err != nil {
 		return
@@ -195,6 +204,9 @@ func (s *Store) NotifyConfigDeliveryChannelsSNS(accountID, recorderName string) 
 		}
 		topic, err := s.GetTopicByARN(arn)
 		if err != nil || topic.AccountID != accountID {
+			continue
+		}
+		if !s.deliveryRoleSessionAllows(accountID, roleARN, actionSNSPublish, topic.TopicARN, "config-sns", DefaultConfigRegion, "") {
 			continue
 		}
 		_, _ = s.Publish(accountID, topic.TopicName, msg, "AWS Config Notification", nil)

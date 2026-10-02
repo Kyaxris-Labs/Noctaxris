@@ -2817,8 +2817,7 @@ func (s *Server) dynamoRunPartiQL(
 	}
 	switch op.Kind {
 	case "INSERT":
-		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBPutItem, table.TableARN, table.ResourcePolicy) &&
-			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
 			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
 			return nil, false
@@ -2828,8 +2827,7 @@ func (s *Server) dynamoRunPartiQL(
 		}
 		return []ddb.ItemMap{}, true
 	case "SELECT":
-		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBGetItem, table.TableARN, table.ResourcePolicy) &&
-			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
 			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
 			return nil, false
@@ -2843,8 +2841,7 @@ func (s *Server) dynamoRunPartiQL(
 		}
 		return []ddb.ItemMap{item}, true
 	case "DELETE":
-		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBDeleteItem, table.TableARN, table.ResourcePolicy) &&
-			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
 			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
 			return nil, false
@@ -2858,8 +2855,7 @@ func (s *Server) dynamoRunPartiQL(
 		_ = s.store.DeleteItem(table.AccountID, table.TableName, itemPK, itemSK)
 		return []ddb.ItemMap{}, true
 	case "UPDATE":
-		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBUpdateItem, table.TableARN, table.ResourcePolicy) &&
-			!s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
+		if !s.authorizeDynamoDB(verified, catalog.ActionDynamoDBExecuteStatement, table.TableARN, table.ResourcePolicy) {
 			s.writeDynamoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform dynamodb:ExecuteStatement.", readOnly, eventID, verified)
 			return nil, false

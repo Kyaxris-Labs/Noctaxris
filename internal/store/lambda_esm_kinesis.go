@@ -74,7 +74,7 @@ func (s *Store) pollKinesisEventSourceMappingOnce(m LambdaEventSourceMapping, in
 		if err != nil {
 			return err
 		}
-		recs, _, err := s.GetKinesisRecords(iterator, remaining)
+		recs, _, err := s.GetKinesisRecords(acct, iterator, remaining)
 		if err != nil {
 			return err
 		}

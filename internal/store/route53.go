@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS route53_rrsets (
 );
 `
 
+// Route53HostedZoneARN builds arn:aws:route53:::hostedzone/ZONE_ID
+func Route53HostedZoneARN(zoneID string) string {
+	zoneID = strings.TrimSpace(zoneID)
+	zoneID = strings.TrimPrefix(zoneID, "/hostedzone/")
+	if zoneID == "" {
+		return "*"
+	}
+	return "arn:aws:route53:::hostedzone/" + zoneID
+}
+
 // Route53HostedZone is a hosted zone row.
 type Route53HostedZone struct {
 	ID          string

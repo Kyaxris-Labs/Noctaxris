@@ -91,12 +91,20 @@ func (s *Store) EnsureS3VectorsSchema() error {
 	return EnsureS3VectorsSchema(s.db)
 }
 
-func s3VectorBucketARN(accountID, name string) string {
+// S3VectorBucketARN builds arn:aws:s3vectors:REGION:ACCOUNT:bucket/NAME
+func S3VectorBucketARN(accountID, name string) string {
 	return fmt.Sprintf("arn:aws:s3vectors:%s:%s:bucket/%s", DefaultS3VectorsRegion, accountID, name)
 }
 
-func s3VectorIndexARN(accountID, bucket, index string) string {
+// S3VectorIndexARN builds arn:aws:s3vectors:REGION:ACCOUNT:bucket/NAME/index/INDEX
+func S3VectorIndexARN(accountID, bucket, index string) string {
 	return fmt.Sprintf("arn:aws:s3vectors:%s:%s:bucket/%s/index/%s", DefaultS3VectorsRegion, accountID, bucket, index)
+}
+
+func s3VectorBucketARN(accountID, name string) string { return S3VectorBucketARN(accountID, name) }
+
+func s3VectorIndexARN(accountID, bucket, index string) string {
+	return S3VectorIndexARN(accountID, bucket, index)
 }
 
 // CreateS3VectorBucket creates a vector bucket.

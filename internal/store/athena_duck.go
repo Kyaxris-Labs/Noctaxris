@@ -37,6 +37,27 @@ func (s *Store) ListAthenaDuckTables(accountID, database string) ([]AthenaDuckTa
 	return out, nil
 }
 
+// ResolveAthenaDuckDatabase returns the Glue database DuckDB will inject views for.
+// Prefer db.table from the SELECT subset parse; else QueryExecutionContext.Database.
+func ResolveAthenaDuckDatabase(in AthenaStartInput) (string, error) {
+	q := strings.TrimSpace(in.QueryString)
+	if q == "" {
+		return "", fmt.Errorf("%w: QueryString is required", ErrAthenaBadRequest)
+	}
+	parsed, err := parseAthenaSelect(q)
+	if err != nil {
+		return "", err
+	}
+	db := strings.TrimSpace(parsed.Database)
+	if db == "" {
+		db = strings.TrimSpace(in.Database)
+	}
+	if db == "" {
+		return "", fmt.Errorf("%w: Database is required in QueryExecutionContext or as db.table", ErrAthenaBadRequest)
+	}
+	return db, nil
+}
+
 // StartAthenaDuckQueryExecution runs user SQL via DuckDB after injecting Glue views.
 // Fail-closed: runner errors mark the execution FAILED (persisted).
 func (s *Store) StartAthenaDuckQueryExecution(accountID string, in AthenaStartInput, run AthenaDuckRunner) (AthenaQueryExecution, error) {

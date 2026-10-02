@@ -184,12 +184,35 @@ func (s *Server) ddbStreamsGetRecords(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string,
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
-	if !s.authorize(verified, catalog.ActionDynamoDBStreamsGetRecords, "*") {
+	iterator, _ := params["ShardIterator"].(string)
+	accountID, tableName, err := s.store.PeekDynamoStreamIterator(iterator)
+	if errors.Is(err, store.ErrDynamoStreamExpiredIter) {
+		s.writeDynamoStreamsError(w, r, body, requestID, http.StatusBadRequest, "ExpiredIteratorException",
+			"Shard iterator has expired.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeDynamoStreamsError(w, r, body, requestID, http.StatusBadRequest, "ValidationException",
+			"ShardIterator is required.", readOnly, eventID, verified)
+		return
+	}
+	if accountID != verified.AccountID {
 		s.writeDynamoStreamsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform dynamodbstreams:GetRecords.", readOnly, eventID, verified)
 		return
 	}
-	iterator, _ := params["ShardIterator"].(string)
+	table, err := s.store.GetTable(accountID, tableName)
+	if err != nil {
+		s.writeDynamoStreamsError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
+			"Stream not found.", readOnly, eventID, verified)
+		return
+	}
+	streamARN := store.DynamoStreamARN(s.dynamoStreamsRegion(verified), accountID, tableName, table.StreamLabel)
+	if !s.authorize(verified, catalog.ActionDynamoDBStreamsGetRecords, streamARN) {
+		s.writeDynamoStreamsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform dynamodbstreams:GetRecords.", readOnly, eventID, verified)
+		return
+	}
 	limit := 0
 	if v, ok := params["Limit"].(float64); ok {
 		limit = int(v)

@@ -587,6 +587,13 @@ func (s *Server) secretsRotateSecret(
 	rotationLambdaARN = strings.TrimSpace(rotationLambdaARN)
 	rotationRoleARN, _ := params["RotationRoleARN"].(string)
 	rotationRoleARN = strings.TrimSpace(rotationRoleARN)
+	if rotationRoleARN != "" {
+		if err := s.checkSecretsManagerPassRole(verified, rotationRoleARN, meta.ARN); err != nil {
+			s.writeSecretsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	if rotationLambdaARN != "" || rotationRoleARN != "" {
 		persistLambda := rotationLambdaARN
 		if persistLambda == "" {

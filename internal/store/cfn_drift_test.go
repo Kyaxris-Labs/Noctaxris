@@ -114,4 +114,11 @@ func TestCFNDriftMoreResourceTypes(t *testing.T) {
 			t.Fatalf("missing type %s in %v", want, types)
 		}
 	}
+	got, err := st.DescribeCFNStackDriftDetectionStatus(account, det.StackDriftDetectionID)
+	if err != nil || got.StackDriftDetectionID != det.StackDriftDetectionID {
+		t.Fatalf("describe detection=%+v err=%v", got, err)
+	}
+	if _, err := st.DescribeCFNStackDriftDetectionStatus(account, "missing-detection"); err == nil {
+		t.Fatal("missing detection should fail")
+	}
 }

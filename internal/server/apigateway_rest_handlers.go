@@ -743,6 +743,14 @@ func (s *Server) apigwRESTPutIntegration(
 			"User is not authorized to perform apigateway:PutIntegration.", readOnly, eventID, verified)
 		return
 	}
+	credentials = strings.TrimSpace(credentials)
+	if credentials != "" {
+		if err := s.checkAPIGatewayPassRole(verified, credentials, store.RestAPIControlPlaneARN(verified.Region, apiID)); err != nil {
+			s.writeAPIGatewayError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	in, err := s.store.PutRestIntegration(
 		verified.AccountID, apiID, resourceID, httpMethod, intType, uri, intHTTP, credentials, templates,
 	)

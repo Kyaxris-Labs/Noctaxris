@@ -403,7 +403,30 @@ func (s *Server) kinesisGetRecords(
 			"ShardIterator is required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionKinesisGetRecords, "*") {
+	ownerAccount, _, streamARN, err := s.store.LookupKinesisShardIterator(iterator)
+	if errors.Is(err, store.ErrKinesisExpiredIterator) {
+		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ExpiredIteratorException",
+			"Iterator expired or invalid.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeKinesisError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to resolve shard iterator.", readOnly, eventID, verified)
+		return
+	}
+	if ownerAccount != verified.AccountID {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:GetRecords.", readOnly, eventID, verified)
+		return
+	}
+	// Fail-closed: authorize the concrete stream ARN from the iterator binding.
+	// Never fall back to "*" (that would widen GetRecords beyond the iterator's stream).
+	if strings.TrimSpace(streamARN) == "" {
+		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform kinesis:GetRecords.", readOnly, eventID, verified)
+		return
+	}
+	if !s.authorize(verified, catalog.ActionKinesisGetRecords, streamARN) {
 		s.writeKinesisError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform kinesis:GetRecords.", readOnly, eventID, verified)
 		return
@@ -412,7 +435,7 @@ func (s *Server) kinesisGetRecords(
 	if v, ok := params["Limit"].(float64); ok {
 		limit = int(v)
 	}
-	recs, next, err := s.store.GetKinesisRecords(iterator, limit)
+	recs, next, err := s.store.GetKinesisRecords(verified.AccountID, iterator, limit)
 	if errors.Is(err, store.ErrKinesisExpiredIterator) {
 		s.writeKinesisError(w, r, body, requestID, http.StatusBadRequest, "ExpiredIteratorException",
 			"Iterator expired or invalid.", readOnly, eventID, verified)

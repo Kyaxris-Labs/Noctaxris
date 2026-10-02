@@ -445,6 +445,8 @@ func TestBackupHandlers(t *testing.T) {
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
+	mustCreateIAMRole(t, handler, "Backup", backupTrustOK, now)
+
 	createVault := mustBackupREST(t, handler, http.MethodPut, "/backup-vaults/lab-vault", map[string]any{}, now)
 	if createVault.Code != http.StatusOK || !strings.Contains(createVault.Body.String(), "lab-vault") {
 		t.Fatalf("CreateBackupVault status=%d body=%q", createVault.Code, createVault.Body.String())

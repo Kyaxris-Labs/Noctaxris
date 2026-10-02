@@ -240,10 +240,18 @@ func (s *Server) asgCreateLaunchConfiguration(
 			"User is not authorized to perform autoscaling:CreateLaunchConfiguration.", readOnly, eventID, verified)
 		return
 	}
+	iamProfile := strings.TrimSpace(params.Get("IamInstanceProfile"))
+	if iamProfile != "" {
+		if err := s.checkEC2InstanceProfilePassRole(verified, iamProfile); err != nil {
+			s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	_, err := s.store.CreateLaunchConfiguration(
 		verified.AccountID, s.asgRegion(verified),
 		params.Get("LaunchConfigurationName"), params.Get("ImageId"), params.Get("InstanceType"),
-		params.Get("KeyName"), params.Get("UserData"), params.Get("IamInstanceProfile"),
+		params.Get("KeyName"), params.Get("UserData"), iamProfile,
 		formMemberList(params, "SecurityGroups"),
 	)
 	if errors.Is(err, store.ErrASGExists) {
@@ -643,6 +651,14 @@ func (s *Server) asgPutLifecycleHook(
 			"User is not authorized to perform autoscaling:PutLifecycleHook.", readOnly, eventID, verified)
 		return
 	}
+	roleARN := strings.TrimSpace(params.Get("RoleARN"))
+	if roleARN != "" {
+		if err := s.checkASGLifecyclePassRole(verified, roleARN); err != nil {
+			s.writeASGError(w, r, requestID, http.StatusForbidden, "AccessDenied",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	var timeout *int
 	if v := params.Get("HeartbeatTimeout"); v != "" {
 		n, _ := strconv.Atoi(v)
@@ -652,7 +668,7 @@ func (s *Server) asgPutLifecycleHook(
 		verified.AccountID, s.asgRegion(verified),
 		params.Get("AutoScalingGroupName"), params.Get("LifecycleHookName"),
 		params.Get("LifecycleTransition"), params.Get("NotificationTargetARN"),
-		params.Get("RoleARN"), params.Get("NotificationMetadata"),
+		roleARN, params.Get("NotificationMetadata"),
 		timeout, params.Get("DefaultResult"),
 	)
 	if errors.Is(err, store.ErrASGNotFound) {

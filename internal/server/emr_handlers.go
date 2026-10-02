@@ -245,6 +245,14 @@ func (s *Server) emrAddJobFlowSteps(
 	}
 	jobFlowID, _ := params["JobFlowId"].(string)
 	inputs := parseEMRStepInputs(params["Steps"])
+	for _, in := range inputs {
+		if role := strings.TrimSpace(in.ExecutionRoleArn); role != "" {
+			if err := s.checkEMRPassRole(verified, role); err != nil {
+				s.writeEMRError(w, requestID, http.StatusForbidden, "AccessDeniedException", err.Error())
+				return
+			}
+		}
+	}
 	ids, err := s.store.AddEMRJobFlowSteps(verified.AccountID, jobFlowID, inputs)
 	if errors.Is(err, store.ErrEMRValidation) {
 		s.writeEMRError(w, requestID, http.StatusBadRequest, "ValidationException", err.Error())

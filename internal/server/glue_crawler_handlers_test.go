@@ -31,8 +31,17 @@ func TestGlueStartCrawlerCreatesTableFromCSV(t *testing.T) {
 		t.Fatalf("CreateDatabase status=%d body=%q", createDB.Code, createDB.Body.String())
 	}
 
+	roleARN, err := st.CreateRole(testAccountID, "glue-crawl-role", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"glue.amazonaws.com"},"Action":"sts:AssumeRole"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutInlinePolicy(roleARN, "s3", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject"],"Resource":"*"}]}`); err != nil {
+		t.Fatal(err)
+	}
+
 	createCr := mustJSONTarget(t, handler, "AWSGlue.CreateCrawler", "glue", map[string]any{
 		"Name":         "lab-crawler",
+		"Role":         roleARN,
 		"DatabaseName": "labdb",
 		"Targets": map[string]any{
 			"S3Targets": []map[string]any{{"Path": "s3://glue-crawl/data/"}},

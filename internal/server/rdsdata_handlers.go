@@ -133,15 +133,20 @@ func (s *Server) rdsDataExecute(
 		res store.RDSDataExecuteResult
 		err error
 	)
+	ctx := withRDSDataVerified(r.Context(), verified)
 	if strings.TrimSpace(req.TransactionID) != "" {
-		res, err = s.executeRDSDataOnTransaction(r.Context(), verified.AccountID, req)
+		res, err = s.executeRDSDataOnTransaction(ctx, verified.AccountID, req)
 	} else {
 		inst, resolveErr := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
 		if resolveErr != nil {
 			s.writeRDSDataResolveError(w, r, body, requestID, resolveErr, readOnly, eventID, verified)
 			return
 		}
-		res, err = s.preferNestedRDSDataExecute(r.Context(), verified.AccountID, inst, req)
+		if authErr := s.authorizeRDSDataSecretAccess(verified, verified.AccountID, req.SecretARN); authErr != nil {
+			s.writeRDSDataResolveError(w, r, body, requestID, authErr, readOnly, eventID, verified)
+			return
+		}
+		res, err = s.preferNestedRDSDataExecute(ctx, verified.AccountID, inst, req)
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrRDSDataUnavailable) ||
@@ -149,6 +154,7 @@ func (s *Server) rdsDataExecute(
 			errors.Is(err, store.ErrRDSDataBadRequest) ||
 			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
 			errors.Is(err, store.ErrRDSDataSecretsError) ||
+			errors.Is(err, store.ErrRDSDataAccessDenied) ||
 			errors.Is(err, store.ErrRDSDataNotFound) {
 			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 			return
@@ -207,15 +213,20 @@ func (s *Server) rdsDataBatchExecute(
 		results []store.RDSDataExecuteResult
 		err     error
 	)
+	ctx := withRDSDataVerified(r.Context(), verified)
 	if strings.TrimSpace(req.TransactionID) != "" {
-		results, err = s.preferNestedRDSDataBatch(r.Context(), verified.AccountID, store.RDSDBInstance{}, req)
+		results, err = s.preferNestedRDSDataBatch(ctx, verified.AccountID, store.RDSDBInstance{}, req)
 	} else {
 		inst, resolveErr := s.store.ResolveRDSDataResource(verified.AccountID, req.ResourceARN, req.SecretARN)
 		if resolveErr != nil {
 			s.writeRDSDataResolveError(w, r, body, requestID, resolveErr, readOnly, eventID, verified)
 			return
 		}
-		results, err = s.preferNestedRDSDataBatch(r.Context(), verified.AccountID, inst, req)
+		if authErr := s.authorizeRDSDataSecretAccess(verified, verified.AccountID, req.SecretARN); authErr != nil {
+			s.writeRDSDataResolveError(w, r, body, requestID, authErr, readOnly, eventID, verified)
+			return
+		}
+		results, err = s.preferNestedRDSDataBatch(ctx, verified.AccountID, inst, req)
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrRDSDataUnavailable) ||
@@ -223,6 +234,7 @@ func (s *Server) rdsDataBatchExecute(
 			errors.Is(err, store.ErrRDSDataBadRequest) ||
 			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
 			errors.Is(err, store.ErrRDSDataSecretsError) ||
+			errors.Is(err, store.ErrRDSDataAccessDenied) ||
 			errors.Is(err, store.ErrRDSDataNotFound) {
 			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 			return
@@ -258,12 +270,17 @@ func (s *Server) rdsDataBegin(
 		s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 		return
 	}
-	txnID, err := s.BeginRDSDataSQLTransaction(r.Context(), verified.AccountID, inst, secretARN, database)
+	if authErr := s.authorizeRDSDataSecretAccess(verified, verified.AccountID, secretARN); authErr != nil {
+		s.writeRDSDataResolveError(w, r, body, requestID, authErr, readOnly, eventID, verified)
+		return
+	}
+	txnID, err := s.BeginRDSDataSQLTransaction(withRDSDataVerified(r.Context(), verified), verified.AccountID, inst, secretARN, database)
 	if err != nil {
 		if errors.Is(err, store.ErrRDSDataUnavailable) ||
 			errors.Is(err, store.ErrRDSDataBadRequest) ||
 			errors.Is(err, store.ErrRDSDataInvalidSecret) ||
-			errors.Is(err, store.ErrRDSDataSecretsError) {
+			errors.Is(err, store.ErrRDSDataSecretsError) ||
+			errors.Is(err, store.ErrRDSDataAccessDenied) {
 			s.writeRDSDataResolveError(w, r, body, requestID, err, readOnly, eventID, verified)
 			return
 		}
@@ -369,6 +386,9 @@ func (s *Server) writeRDSDataResolveError(
 	case errors.Is(err, store.ErrRDSDataNotFound):
 		s.writeRDSDataError(w, r, body, requestID, http.StatusNotFound, "DatabaseNotFoundException",
 			"DB instance not found for resourceArn.", readOnly, eventID, verified)
+	case errors.Is(err, store.ErrRDSDataAccessDenied):
+		s.writeRDSDataError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform secretsmanager:GetSecretValue.", readOnly, eventID, verified)
 	case errors.Is(err, store.ErrRDSDataInvalidSecret):
 		s.writeRDSDataError(w, r, body, requestID, http.StatusBadRequest, "InvalidSecretException",
 			"The Secrets Manager secret used with the request is not valid.", readOnly, eventID, verified)

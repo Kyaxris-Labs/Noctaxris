@@ -331,6 +331,30 @@ func (s *Store) GetDynamoStreamShardIterator(accountID, tableName, shardID, iter
 	return id, nil
 }
 
+// PeekDynamoStreamIterator returns the account and table bound to a shard iterator.
+func (s *Store) PeekDynamoStreamIterator(iterator string) (accountID, tableName string, err error) {
+	iterator = strings.TrimSpace(iterator)
+	if iterator == "" {
+		return "", "", fmt.Errorf("peek dynamodb stream iterator: ShardIterator is required")
+	}
+	var expires int64
+	err = s.db.QueryRow(
+		`SELECT account_id, table_name, expires_at FROM dynamodb_stream_iterators WHERE iterator_id = ?`,
+		iterator,
+	).Scan(&accountID, &tableName, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrDynamoStreamExpiredIter
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("peek dynamodb stream iterator: %w", err)
+	}
+	if time.Now().UTC().Unix() > expires {
+		_, _ = s.db.Exec(`DELETE FROM dynamodb_stream_iterators WHERE iterator_id = ?`, iterator)
+		return "", "", ErrDynamoStreamExpiredIter
+	}
+	return accountID, tableName, nil
+}
+
 // GetDynamoStreamRecords reads records from an iterator and advances it.
 func (s *Store) GetDynamoStreamRecords(iterator string, limit int) (records []DynamoStreamRecord, nextIterator string, err error) {
 	iterator = strings.TrimSpace(iterator)

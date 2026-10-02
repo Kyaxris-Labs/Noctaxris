@@ -22,6 +22,40 @@ const (
 	actionAppConfigListDeployments = "appconfig:ListDeployments"
 )
 
+
+func appconfigRegion(verified *authn.Verified) string {
+	if verified != nil && verified.Region != "" {
+		return verified.Region
+	}
+	return store.DefaultAppConfigRegion
+}
+
+func appconfigApplicationResource(verified *authn.Verified, appID string) string {
+	appID = strings.TrimSpace(appID)
+	if verified == nil || appID == "" {
+		return "*"
+	}
+	return store.AppConfigApplicationARN(appconfigRegion(verified), verified.AccountID, appID)
+}
+
+func appconfigEnvironmentResource(verified *authn.Verified, appID, envID string) string {
+	appID = strings.TrimSpace(appID)
+	envID = strings.TrimSpace(envID)
+	if verified == nil || appID == "" || envID == "" {
+		return appconfigApplicationResource(verified, appID)
+	}
+	return store.AppConfigEnvironmentARN(appconfigRegion(verified), verified.AccountID, appID, envID)
+}
+
+func appconfigProfileResource(verified *authn.Verified, appID, profileID string) string {
+	appID = strings.TrimSpace(appID)
+	profileID = strings.TrimSpace(profileID)
+	if verified == nil || appID == "" || profileID == "" {
+		return appconfigApplicationResource(verified, appID)
+	}
+	return store.AppConfigConfigurationProfileARN(appconfigRegion(verified), verified.AccountID, appID, profileID)
+}
+
 func (s *Server) handleAppConfig(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -134,7 +168,7 @@ func (s *Server) appconfigCreateEnvironment(
 			"ApplicationId and Name are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionAppConfigCreateEnvironment, "*") {
+	if !s.authorize(verified, catalog.ActionAppConfigCreateEnvironment, appconfigApplicationResource(verified, appID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:CreateEnvironment.", readOnly, eventID, verified)
 		return
@@ -167,7 +201,7 @@ func (s *Server) appconfigCreateProfile(
 			"ApplicationId and Name are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionAppConfigCreateConfigurationProfile, "*") {
+	if !s.authorize(verified, catalog.ActionAppConfigCreateConfigurationProfile, appconfigApplicationResource(verified, appID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:CreateConfigurationProfile.", readOnly, eventID, verified)
 		return
@@ -200,7 +234,7 @@ func (s *Server) appconfigCreateHostedVersion(
 			"ApplicationId and ConfigurationProfileId are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionAppConfigCreateHostedConfigurationVersion, "*") {
+	if !s.authorize(verified, catalog.ActionAppConfigCreateHostedConfigurationVersion, appconfigProfileResource(verified, appID, profileID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:CreateHostedConfigurationVersion.", readOnly, eventID, verified)
 		return
@@ -248,7 +282,7 @@ func (s *Server) appconfigGetConfiguration(
 			"Application, Environment, and Configuration are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionAppConfigGetConfiguration, "*") {
+	if !s.authorize(verified, catalog.ActionAppConfigGetConfiguration, appconfigEnvironmentResource(verified, appID, envID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:GetConfiguration.", readOnly, eventID, verified)
 		return
@@ -281,7 +315,7 @@ func (s *Server) appconfigStartSession(
 			"ApplicationIdentifier, EnvironmentIdentifier, and ConfigurationProfileIdentifier are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionAppConfigDataStartConfigurationSession, "*") {
+	if !s.authorize(verified, catalog.ActionAppConfigDataStartConfigurationSession, appconfigApplicationResource(verified, appID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfigdata:StartConfigurationSession.", readOnly, eventID, verified)
 		return
@@ -353,7 +387,7 @@ func (s *Server) appconfigStartDeployment(
 			"ApplicationId, EnvironmentId, ConfigurationProfileId, and ConfigurationVersion are required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, actionAppConfigStartDeployment, "*") {
+	if !s.authorize(verified, actionAppConfigStartDeployment, appconfigEnvironmentResource(verified, appID, envID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:StartDeployment.", readOnly, eventID, verified)
 		return
@@ -401,11 +435,6 @@ func (s *Server) appconfigGetDeployment(
 			"DeploymentId is required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, actionAppConfigGetDeployment, "*") {
-		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
-			"User is not authorized to perform appconfig:GetDeployment.", readOnly, eventID, verified)
-		return
-	}
 	dep, err := s.store.GetAppConfigDeployment(verified.AccountID, deploymentID)
 	if errors.Is(err, store.ErrAppConfigNotFound) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusNotFound, "ResourceNotFoundException",
@@ -415,6 +444,19 @@ func (s *Server) appconfigGetDeployment(
 	if err != nil {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusInternalServerError, "InternalServerException",
 			"Unable to get deployment.", readOnly, eventID, verified)
+		return
+	}
+	appID := dep.ApplicationID
+	envID := dep.EnvironmentID
+	if v, _ := params["ApplicationId"].(string); strings.TrimSpace(v) != "" {
+		appID = v
+	}
+	if v, _ := params["EnvironmentId"].(string); strings.TrimSpace(v) != "" {
+		envID = v
+	}
+	if !s.authorize(verified, actionAppConfigGetDeployment, appconfigEnvironmentResource(verified, appID, envID)) {
+		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+			"User is not authorized to perform appconfig:GetDeployment.", readOnly, eventID, verified)
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -442,7 +484,7 @@ func (s *Server) appconfigListDeployments(
 			"ApplicationId is required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, actionAppConfigListDeployments, "*") {
+	if !s.authorize(verified, actionAppConfigListDeployments, appconfigEnvironmentResource(verified, appID, envID)) {
 		s.writeAppConfigError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform appconfig:ListDeployments.", readOnly, eventID, verified)
 		return

@@ -77,6 +77,35 @@ func safeOpenSearchPathSegment(s string) bool {
 	return true
 }
 
+func openSearchLabHTTPAction(op openSearchLabOp, method string) string {
+	switch op {
+	case openSearchLabOpDoc:
+		switch strings.ToUpper(strings.TrimSpace(method)) {
+		case http.MethodPut:
+			return catalog.ActionOpenSearchESHttpPut
+		case http.MethodPost:
+			return catalog.ActionOpenSearchESHttpPost
+		case http.MethodGet:
+			return catalog.ActionOpenSearchESHttpGet
+		case http.MethodDelete:
+			return catalog.ActionOpenSearchESHttpDelete
+		default:
+			return ""
+		}
+	case openSearchLabOpSearch:
+		switch strings.ToUpper(strings.TrimSpace(method)) {
+		case http.MethodPost:
+			return catalog.ActionOpenSearchESHttpPost
+		case http.MethodGet:
+			return catalog.ActionOpenSearchESHttpGet
+		default:
+			return ""
+		}
+	default:
+		return ""
+	}
+}
+
 // validateNestedOpenSearchHost allows only DinD nested OpenSearch hostnames.
 // Delegates to store.ValidateNestedOpenSearchHost (rejects dotted suffixes after prefix).
 func validateNestedOpenSearchHost(host string) error {
@@ -518,6 +547,17 @@ func (s *Server) handleOpenSearchLabQuery(
 		if !s.authorize(verified, catalog.ActionOpenSearchDescribeDomain, "*") {
 			s.writeOpenSearchLabError(w, requestID, http.StatusForbidden, "AccessDeniedException",
 				"User is not authorized to perform es:DescribeDomain.")
+			return
+		}
+		httpAction := openSearchLabHTTPAction(op, r.Method)
+		if httpAction == "" {
+			s.writeOpenSearchLabError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized for this OpenSearch lab data-plane method.")
+			return
+		}
+		if !s.authorize(verified, httpAction, "*") {
+			s.writeOpenSearchLabError(w, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform "+httpAction+".")
 			return
 		}
 		accountID = verified.AccountID

@@ -86,6 +86,42 @@ const ServicePrincipalSecretsManager = "secretsmanager.amazonaws.com"
 // ServicePrincipalIoTCredentials is the IoT credentials provider service principal.
 const ServicePrincipalIoTCredentials = "credentials.iot.amazonaws.com"
 
+// ServicePrincipalIoT is the AWS IoT Core service principal used for topic-rule
+// RoleArn trust / PassRole and destination resource-policy delivery.
+const ServicePrincipalIoT = "iot.amazonaws.com"
+
+// ServicePrincipalCloudFront is the CloudFront service principal used for
+// Origin Access Control (OAC) shaped S3 bucket-policy Allow on edge fetch.
+const ServicePrincipalCloudFront = "cloudfront.amazonaws.com"
+
+// ServicePrincipalS3Logging is the S3 server access logging delivery principal
+// (bucket policy Allow for logging.s3.amazonaws.com on the target bucket).
+const ServicePrincipalS3Logging = "logging.s3.amazonaws.com"
+
+// ServicePrincipalEC2 is the Amazon EC2 service principal used in role trust for
+// instance profiles (RunInstances / ASG launch configuration IamInstanceProfile).
+const ServicePrincipalEC2 = "ec2.amazonaws.com"
+
+// ServicePrincipalAutoScaling is the Auto Scaling service principal used in role
+// trust for lifecycle hook RoleARN.
+const ServicePrincipalAutoScaling = "autoscaling.amazonaws.com"
+
+// ServicePrincipalBackup is the AWS Backup service principal used in role trust
+// for StartBackupJob / CreateBackupSelection IamRoleArn.
+const ServicePrincipalBackup = "backup.amazonaws.com"
+
+// ServicePrincipalEKS is the Amazon EKS service principal used in role trust for
+// CreateCluster roleArn.
+const ServicePrincipalEKS = "eks.amazonaws.com"
+
+// ServicePrincipalEMR is the Amazon EMR service principal used in role trust for
+// AddJobFlowSteps ExecutionRoleArn.
+const ServicePrincipalEMR = "elasticmapreduce.amazonaws.com"
+
+// ServicePrincipalVPCFlowLogs is the VPC Flow Logs service principal used in role
+// trust for CreateFlowLogs DeliverLogsPermissionArn.
+const ServicePrincipalVPCFlowLogs = "vpc-flow-logs.amazonaws.com"
+
 const actionPassRole = "iam:PassRole"
 const actionAssumeRole = "sts:AssumeRole"
 

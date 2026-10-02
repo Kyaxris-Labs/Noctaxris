@@ -13,6 +13,18 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
+func firehoseStreamResource(verified *authn.Verified, name string) string {
+	name = strings.TrimSpace(name)
+	if verified == nil || name == "" {
+		return "*"
+	}
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultFirehoseRegion
+	}
+	return store.FirehoseStreamARN(region, verified.AccountID, name)
+}
+
 const (
 	firehoseJSONContentType = "application/x-amz-json-1.1"
 	firehoseEventSource     = "firehose.amazonaws.com"
@@ -87,7 +99,7 @@ func (s *Server) fhCreate(
 			"DeliveryStreamName is required.", readOnly, eventID, verified)
 		return
 	}
-	if !s.authorize(verified, catalog.ActionFirehoseCreateDeliveryStream, "*") {
+	if !s.authorize(verified, catalog.ActionFirehoseCreateDeliveryStream, firehoseStreamResource(verified, name)) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform firehose:CreateDeliveryStream.", readOnly, eventID, verified)
 		return
@@ -206,7 +218,7 @@ func (s *Server) fhDelete(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	name, _ := params["DeliveryStreamName"].(string)
-	if !s.authorize(verified, catalog.ActionFirehoseDeleteDeliveryStream, "*") {
+	if !s.authorize(verified, catalog.ActionFirehoseDeleteDeliveryStream, firehoseStreamResource(verified, name)) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform firehose:DeleteDeliveryStream.", readOnly, eventID, verified)
 		return
@@ -232,7 +244,7 @@ func (s *Server) fhDescribe(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	name, _ := params["DeliveryStreamName"].(string)
-	if !s.authorize(verified, catalog.ActionFirehoseDescribeDeliveryStream, "*") {
+	if !s.authorize(verified, catalog.ActionFirehoseDescribeDeliveryStream, firehoseStreamResource(verified, name)) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform firehose:DescribeDeliveryStream.", readOnly, eventID, verified)
 		return
@@ -278,7 +290,7 @@ func (s *Server) fhPutRecord(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	name, _ := params["DeliveryStreamName"].(string)
-	if !s.authorize(verified, catalog.ActionFirehosePutRecord, "*") {
+	if !s.authorize(verified, catalog.ActionFirehosePutRecord, firehoseStreamResource(verified, name)) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform firehose:PutRecord.", readOnly, eventID, verified)
 		return
@@ -311,7 +323,7 @@ func (s *Server) fhPutRecordBatch(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	name, _ := params["DeliveryStreamName"].(string)
-	if !s.authorize(verified, catalog.ActionFirehosePutRecordBatch, "*") {
+	if !s.authorize(verified, catalog.ActionFirehosePutRecordBatch, firehoseStreamResource(verified, name)) {
 		s.writeFirehoseError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform firehose:PutRecordBatch.", readOnly, eventID, verified)
 		return

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
@@ -154,8 +155,27 @@ func (s *Server) cloudFrontEdgeFetchS3(
 		http.Error(w, "object key required", http.StatusNotFound)
 		return
 	}
+	ref, err := s.s3ResolveBucket(bucket)
+	if errors.Is(err, store.ErrNoSuchBucket) {
+		http.Error(w, "origin bucket not found", http.StatusBadGateway)
+		return
+	}
+	if err != nil {
+		http.Error(w, "origin fetch failed", http.StatusBadGateway)
+		return
+	}
+	objectARN := store.ObjectARN(bucket, key)
+	callerOK := s.authorizeS3(verified, catalog.ActionS3GetObject, objectARN, ref.policy, ref.accountID)
+	oacOK := s.store.DeliveryTargetResourcePolicyAllows(
+		ref.accountID, objectARN, catalog.ActionS3GetObject,
+		authz.ServicePrincipalCloudFront, dist.ARN,
+	)
+	if !callerOK && !oacOK {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
 	start := time.Now()
-	meta, data, err := s.store.GetObject(verified.AccountID, bucket, key)
+	meta, data, err := s.store.GetObject(ref.accountID, bucket, key)
 	if errors.Is(err, store.ErrNoSuchKey) || errors.Is(err, store.ErrInvalidObjectKey) {
 		http.Error(w, "NoSuchKey", http.StatusNotFound)
 		return

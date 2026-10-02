@@ -141,7 +141,7 @@ func (s *Server) beginRDSDataPostgresTxn(
 	inst store.RDSDBInstance,
 	secretARN, database string,
 ) (string, error) {
-	user, password, err := s.rdsDataMasterCreds(accountID, inst, secretARN)
+	user, password, err := s.rdsDataMasterCreds(ctx, accountID, inst, secretARN)
 	if err != nil {
 		return "", err
 	}
@@ -193,7 +193,7 @@ func (s *Server) beginRDSDataMySQLTxn(
 	if !rdsDataPgxEnabled() {
 		return "", store.ErrRDSDataUnavailable
 	}
-	user, password, err := s.rdsDataMasterCreds(accountID, inst, secretARN)
+	user, password, err := s.rdsDataMasterCreds(ctx, accountID, inst, secretARN)
 	if err != nil {
 		return "", err
 	}

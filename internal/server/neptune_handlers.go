@@ -142,9 +142,9 @@ func (s *Server) neptuneCreate(
 			port = v
 		}
 	}
-	if !s.authorize(verified, catalog.ActionDocDBCreateDBCluster, "*") {
+	if !s.authorize(verified, catalog.ActionNeptuneCreateDBCluster, "*") {
 		s.writeNeptuneError(w, r, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform rds:CreateDBCluster.", readOnly, eventID, verified)
+			"User is not authorized to perform neptune:CreateDBCluster.", readOnly, eventID, verified)
 		return
 	}
 	graphEngine, err := resolveNeptuneGraphEngine(params)
@@ -183,9 +183,9 @@ func (s *Server) neptuneDescribe(
 	verified *authn.Verified, readOnly bool, params url.Values,
 ) {
 	id := strings.TrimSpace(params.Get("DBClusterIdentifier"))
-	if !s.authorize(verified, catalog.ActionDocDBDescribeDBClusters, "*") {
+	if !s.authorize(verified, catalog.ActionNeptuneDescribeDBClusters, "*") {
 		s.writeNeptuneError(w, r, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform rds:DescribeDBClusters.", readOnly, eventID, verified)
+			"User is not authorized to perform neptune:DescribeDBClusters.", readOnly, eventID, verified)
 		return
 	}
 	clusters, err := s.store.DescribeNeptuneClusters(verified.AccountID, id)
@@ -209,9 +209,9 @@ func (s *Server) neptuneDelete(
 	verified *authn.Verified, readOnly bool, params url.Values,
 ) {
 	id := strings.TrimSpace(params.Get("DBClusterIdentifier"))
-	if !s.authorize(verified, catalog.ActionDocDBDeleteDBCluster, "*") {
+	if !s.authorize(verified, catalog.ActionNeptuneDeleteDBCluster, "*") {
 		s.writeNeptuneError(w, r, requestID, http.StatusForbidden, "AccessDenied",
-			"User is not authorized to perform rds:DeleteDBCluster.", readOnly, eventID, verified)
+			"User is not authorized to perform neptune:DeleteDBCluster.", readOnly, eventID, verified)
 		return
 	}
 	existing, err := s.store.DescribeNeptuneCluster(verified.AccountID, id)

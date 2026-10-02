@@ -589,8 +589,20 @@
       "value": "s3:PutObject"
     },
     {
+      "name": "ActionS3PutObjectAcl",
+      "value": "s3:PutObjectAcl"
+    },
+    {
+      "name": "ActionS3PutObjectRetention",
+      "value": "s3:PutObjectRetention"
+    },
+    {
       "name": "ActionS3DeleteObject",
       "value": "s3:DeleteObject"
+    },
+    {
+      "name": "ActionS3BypassGovernanceRetention",
+      "value": "s3:BypassGovernanceRetention"
     },
     {
       "name": "ActionS3CreateMultipartUpload",
@@ -2267,6 +2279,22 @@
     {
       "name": "ActionOpenSearchDeleteDomain",
       "value": "es:DeleteDomain"
+    },
+    {
+      "name": "ActionOpenSearchESHttpGet",
+      "value": "es:ESHttpGet"
+    },
+    {
+      "name": "ActionOpenSearchESHttpPost",
+      "value": "es:ESHttpPost"
+    },
+    {
+      "name": "ActionOpenSearchESHttpPut",
+      "value": "es:ESHttpPut"
+    },
+    {
+      "name": "ActionOpenSearchESHttpDelete",
+      "value": "es:ESHttpDelete"
     },
     {
       "name": "ActionWAFCreateWebACL",
@@ -4317,6 +4345,10 @@
     "es:CreateDomain",
     "es:DeleteDomain",
     "es:DescribeDomain",
+    "es:ESHttpDelete",
+    "es:ESHttpGet",
+    "es:ESHttpPost",
+    "es:ESHttpPut",
     "es:ListDomainNames",
     "events:CreateEventBus",
     "events:DeleteEventBus",
@@ -4699,6 +4731,7 @@
     "route53:ListHostedZones",
     "route53:ListResourceRecordSets",
     "s3:AbortMultipartUpload",
+    "s3:BypassGovernanceRetention",
     "s3:CompleteMultipartUpload",
     "s3:CreateBucket",
     "s3:CreateMultipartUpload",
@@ -4729,6 +4762,8 @@
     "s3:PutEncryptionConfiguration",
     "s3:PutLifecycleConfiguration",
     "s3:PutObject",
+    "s3:PutObjectAcl",
+    "s3:PutObjectRetention",
     "s3:SelectObjectContent",
     "s3:UploadPart",
     "s3vectors:CreateIndex",
@@ -4883,7 +4918,7 @@
     "wafv2:UpdateIPSet",
     "wafv2:UpdateWebACL"
   ],
-  "count": 976,
+  "count": 983,
   "source": "Action* constants in actions.go",
-  "generated": "2026-09-21T06:00:55.048383+00:00"
+  "generated": "2026-10-02T19:08:28.142450+00:00"
 }

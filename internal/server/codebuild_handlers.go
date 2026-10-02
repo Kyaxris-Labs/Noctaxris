@@ -3,9 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1229,15 +1227,11 @@ func (s *Server) codebuildCreateWebhook(
 		}
 		filtersJSON = string(b)
 	}
-	secret := stringParam(params["secret"])
+	secret := strings.TrimSpace(stringParam(params["secret"]))
 	if secret == "" {
-		var seed [16]byte
-		if _, err := rand.Read(seed[:]); err != nil {
-			s.writeCodeBuildError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
-				"Unable to mint webhook secret.", readOnly, eventID, verified)
-			return
-		}
-		secret = hex.EncodeToString(seed[:])
+		s.writeCodeBuildError(w, r, body, requestID, http.StatusBadRequest, "InvalidInputException",
+			"secret is required", readOnly, eventID, verified)
+		return
 	}
 	wh, err := s.store.UpsertCodeBuildWebhook(verified.AccountID, store.CodeBuildWebhook{
 		ProjectName:      projectName,

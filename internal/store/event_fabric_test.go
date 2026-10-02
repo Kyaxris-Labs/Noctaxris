@@ -105,7 +105,7 @@ func TestEventBridgeLogsAndKinesisTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recs, _, err := st.GetKinesisRecords(it, 10)
+	recs, _, err := st.GetKinesisRecords(account, it, 10)
 	if err != nil || len(recs) == 0 {
 		t.Fatalf("kinesis recs=%d err=%v", len(recs), err)
 	}

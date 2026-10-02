@@ -9,10 +9,14 @@ import (
 	"time"
 )
 
+const backupTrustOK = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"backup.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+
 func TestBackupDescribeListDeleteVaultPlanJob(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
+
+	mustCreateIAMRole(t, handler, "Backup", backupTrustOK, now)
 
 	emptyVaults := mustBackupREST(t, handler, http.MethodGet, "/backup-vaults", nil, now)
 	if emptyVaults.Code != http.StatusOK {

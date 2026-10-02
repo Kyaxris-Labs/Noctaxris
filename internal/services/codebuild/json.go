@@ -95,6 +95,7 @@ func ListBuildsJSON(ids []string) ([]byte, error) {
 
 // CreateWebhookJSON builds a CreateWebhook response.
 // payloadURL is the lab receive path (not a GitHub SaaS URL).
+// Shared secrets are never echoed in Create/List JSON.
 func CreateWebhookJSON(wh store.CodeBuildWebhook, payloadURL string) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"webhook": webhookMap(wh, payloadURL),
@@ -107,6 +108,7 @@ func DeleteWebhookJSON() ([]byte, error) {
 }
 
 // ListWebhooksJSON builds a ListWebhooks response.
+// Shared secrets are never echoed in Create/List JSON.
 func ListWebhooksJSON(webhooks []store.CodeBuildWebhook, payloadURLFor func(projectName string) string) ([]byte, error) {
 	items := make([]map[string]any, 0, len(webhooks))
 	for _, wh := range webhooks {
@@ -127,17 +129,18 @@ func webhookMap(wh store.CodeBuildWebhook, payloadURL string) map[string]any {
 	if strings.TrimSpace(wh.FilterGroupsJSON) != "" {
 		_ = json.Unmarshal([]byte(wh.FilterGroupsJSON), &groups)
 	}
-	m := map[string]any{
+	return map[string]any{
 		"url":          payloadURL,
 		"payloadUrl":   payloadURL,
 		"filterGroups": groups,
 		"status":       "ACTIVE",
+		"projectName":  wh.ProjectName,
 	}
-	if wh.Secret != "" {
-		m["secret"] = wh.Secret
-	}
-	return m
 }
+
+
+
+
 
 func projectMap(p store.CodeBuildProject) map[string]any {
 	var artifacts map[string]any

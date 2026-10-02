@@ -9,6 +9,8 @@ import (
 
 	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authz"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/identity"
 	lambdasvc "github.com/Kyaxris-Labs/Noctaxris/internal/services/lambda"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
@@ -316,6 +318,12 @@ func (s *Server) handleFunctionURLInvoke(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if u.AuthType == store.FunctionURLAuthNone {
+		if !s.authorizeFunctionURLNoneResourcePolicy(accountID, fn.FunctionARN, fn.ResourcePolicy, u.AuthType) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
 	result, err := s.executeLambdaInvoke(r.Context(), accountID, functionName, fn, executedVersion, eventJSON)
 	if err != nil {
 		if strings.Contains(err.Error(), "compute unavailable") {
@@ -358,6 +366,32 @@ func parseFunctionURLCorsAllowOrigins(params map[string]any) []string {
 	default:
 		return nil
 	}
+}
+
+// authorizeFunctionURLNoneResourcePolicy evaluates a resource-based policy for
+// AuthType NONE public invoke. Empty policy denies (fail-closed; matches cloud
+// Function URL AuthType NONE requiring AddPermission Principal "*"). Explicit
+// Deny wins; Allow requires a matching Principal "*" / public grant.
+func (s *Server) authorizeFunctionURLNoneResourcePolicy(accountID, functionARN, resourcePolicy, authType string) bool {
+	policy := strings.TrimSpace(resourcePolicy)
+	if policy == "" {
+		return false
+	}
+	caller := authz.RequestContext{
+		Principal: identity.AnonymousPrincipal(accountID),
+		Action:    catalog.ActionLambdaInvokeFunctionUrl,
+		Resource:  functionARN,
+		ConditionKeys: map[string]string{
+			"lambda:FunctionUrlAuthType":   authType,
+			"lambda:InvokedViaFunctionUrl": "true",
+		},
+	}
+	return authz.EvaluateDynamoDB(authz.DynamoDBRequest{
+		Caller:            caller,
+		IdentityDocs:      nil,
+		ResourcePolicyDoc: policy,
+		ResourceAccountID: accountID,
+	}) == authz.Allow
 }
 
 func setFunctionURLCORSHeaders(w http.ResponseWriter, requestOrigin string, allowOrigins []string) {

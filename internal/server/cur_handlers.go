@@ -37,10 +37,28 @@ func (s *Server) handleCUR(
 		s.curDescribe(w, r, body, requestID, eventID, verified, readOnly, params)
 	case catalog.ActionCURDeleteReportDefinition:
 		s.curDelete(w, r, body, requestID, eventID, verified, readOnly, params)
-	case catalog.ActionCURTagResource, catalog.ActionCURUntagResource:
+	case catalog.ActionCURTagResource:
+		if !s.authorize(verified, catalog.ActionCURTagResource, "*") {
+			s.writeCURError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform cur:TagResource.", readOnly, eventID, verified)
+			return
+		}
 		s.writeCUROK(w, []byte(`{}`))
 		s.writeSuccessAudit(r, requestID, eventID, verified, curEventSource, "TagResource", readOnly)
+	case catalog.ActionCURUntagResource:
+		if !s.authorize(verified, catalog.ActionCURUntagResource, "*") {
+			s.writeCURError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform cur:UntagResource.", readOnly, eventID, verified)
+			return
+		}
+		s.writeCUROK(w, []byte(`{}`))
+		s.writeSuccessAudit(r, requestID, eventID, verified, curEventSource, "UntagResource", readOnly)
 	case catalog.ActionCURListTagsForResource:
+		if !s.authorize(verified, catalog.ActionCURListTagsForResource, "*") {
+			s.writeCURError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform cur:ListTagsForResource.", readOnly, eventID, verified)
+			return
+		}
 		s.writeCUROK(w, []byte(`{"Tags":[]}`))
 		s.writeSuccessAudit(r, requestID, eventID, verified, curEventSource, "ListTagsForResource", readOnly)
 	default:

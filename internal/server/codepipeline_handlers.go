@@ -79,12 +79,16 @@ func codepipelineAction(action string) string {
 	}
 }
 
-func (s *Server) codePipelineBuildRunner(r *http.Request, verified *authn.Verified) store.CodePipelineBuildRunner {
+func (s *Server) codePipelineBuildRunner(r *http.Request, verified *authn.Verified, pipelineRoleARN string) store.CodePipelineBuildRunner {
 	region := verified.Region
 	if region == "" {
 		region = store.DefaultCodeBuildRegion
 	}
 	return func(projectName string) (buildID, status string, err error) {
+		resource := store.CodeBuildProjectARN(region, verified.AccountID, projectName)
+		if !s.authorizeCodePipelineStartBuild(verified, pipelineRoleARN, resource, region) {
+			return "", "Failed", errors.New("not authorized to perform codebuild:StartBuild")
+		}
 		b, err := s.store.StartCodeBuildBuild(verified.AccountID, region, store.StartCodeBuildBuildOpts{
 			ProjectName: projectName,
 		})
@@ -114,6 +118,45 @@ func (s *Server) checkCodePipelinePassRole(verified *authn.Verified, roleARN str
 		InvalidARN:   "roleArn must be a valid IAM role ARN",
 		WrongAccount: "roleArn must be in the same account",
 	})
+}
+
+// authorizeCodePipelineStartBuild requires codebuild:StartBuild for the pipeline
+// role when RoleARN is set, otherwise for the StartPipelineExecution caller.
+func (s *Server) authorizeCodePipelineStartBuild(verified *authn.Verified, pipelineRoleARN, projectARN, region string) bool {
+	roleARN := strings.TrimSpace(pipelineRoleARN)
+	if roleARN != "" {
+		return s.store.RoleSessionAllows(
+			verified.AccountID, roleARN, catalog.ActionCodeBuildStartBuild, projectARN,
+			"codepipeline-start-build", region,
+		)
+	}
+	return s.authorize(verified, catalog.ActionCodeBuildStartBuild, projectARN)
+}
+
+func codePipelineCodeBuildProjects(definitionJSON string) []string {
+	var decl store.CodePipelineDeclaration
+	if err := json.Unmarshal([]byte(definitionJSON), &decl); err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]struct{}{}
+	for _, st := range decl.Stages {
+		for _, a := range st.Actions {
+			if !strings.EqualFold(a.ActionTypeID.Provider, "CodeBuild") {
+				continue
+			}
+			name := strings.TrimSpace(a.Configuration["ProjectName"])
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func (s *Server) cpCreatePipeline(
@@ -241,7 +284,30 @@ func (s *Server) cpStartExecution(
 			"User is not authorized to perform codepipeline:StartPipelineExecution.", readOnly, eventID, verified)
 		return
 	}
-	e, err := s.store.StartCodePipelineExecution(verified.AccountID, name, s.codePipelineBuildRunner(r, verified))
+	pipe, err := s.store.GetCodePipeline(verified.AccountID, name)
+	if errors.Is(err, store.ErrCodePipelineNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
+			"Pipeline not found.", readOnly, eventID, verified)
+		return
+	}
+	if err != nil {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load pipeline.", readOnly, eventID, verified)
+		return
+	}
+	region := verified.Region
+	if region == "" {
+		region = store.DefaultCodeBuildRegion
+	}
+	for _, project := range codePipelineCodeBuildProjects(pipe.Definition) {
+		resource := store.CodeBuildProjectARN(region, verified.AccountID, project)
+		if !s.authorizeCodePipelineStartBuild(verified, pipe.RoleARN, resource, region) {
+			s.writeCodePipelineError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				"User is not authorized to perform codebuild:StartBuild.", readOnly, eventID, verified)
+			return
+		}
+	}
+	e, err := s.store.StartCodePipelineExecution(verified.AccountID, name, s.codePipelineBuildRunner(r, verified, pipe.RoleARN))
 	if errors.Is(err, store.ErrCodePipelineNotFound) {
 		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
 			"Pipeline not found.", readOnly, eventID, verified)
@@ -309,9 +375,34 @@ func (s *Server) cpPutApprovalResult(
 			"User is not authorized to perform codepipeline:PutApprovalResult.", readOnly, eventID, verified)
 		return
 	}
+	pipe, pipeErr := s.store.GetCodePipeline(verified.AccountID, pipelineName)
+	if errors.Is(pipeErr, store.ErrCodePipelineNotFound) {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",
+			"Pipeline not found.", readOnly, eventID, verified)
+		return
+	}
+	if pipeErr != nil {
+		s.writeCodePipelineError(w, r, body, requestID, http.StatusInternalServerError, "InternalFailure",
+			"Unable to load pipeline.", readOnly, eventID, verified)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(status), "Approved") {
+		region := verified.Region
+		if region == "" {
+			region = store.DefaultCodeBuildRegion
+		}
+		for _, project := range codePipelineCodeBuildProjects(pipe.Definition) {
+			resource := store.CodeBuildProjectARN(region, verified.AccountID, project)
+			if !s.authorizeCodePipelineStartBuild(verified, pipe.RoleARN, resource, region) {
+				s.writeCodePipelineError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+					"User is not authorized to perform codebuild:StartBuild.", readOnly, eventID, verified)
+				return
+			}
+		}
+	}
 	approvedAt, err := s.store.PutCodePipelineApprovalResult(
 		verified.AccountID, pipelineName, stageName, actionName, token, status,
-		s.codePipelineBuildRunner(r, verified),
+		s.codePipelineBuildRunner(r, verified, pipe.RoleARN),
 	)
 	if errors.Is(err, store.ErrCodePipelineNotFound) {
 		s.writeCodePipelineError(w, r, body, requestID, http.StatusBadRequest, "PipelineNotFoundException",

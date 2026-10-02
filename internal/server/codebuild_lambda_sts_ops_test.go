@@ -92,6 +92,7 @@ func TestCodeBuildStopBatchGetWebhookNegatives(t *testing.T) {
 
 	wh := mustCodeBuildJSON(t, handler, "CreateWebhook", map[string]any{
 		"projectName": "stop-proj",
+		"secret":      "lab-webhook-secret",
 		"filterGroups": []any{
 			[]any{map[string]any{"type": "EVENT", "pattern": "PUSH"}},
 		},

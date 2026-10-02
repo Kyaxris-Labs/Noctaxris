@@ -29,14 +29,19 @@ func mustEKSREST(t *testing.T, handler http.Handler, method, path string, payloa
 	return rec
 }
 
+const eksTrustOK = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+
 func TestEKSHandlersCRUD(t *testing.T) {
 	srv, _ := newTestServer(t)
 	handler := srv.Handler()
 	now := time.Now().UTC().Truncate(time.Second)
 
+	mustCreateIAMRole(t, handler, "eks", eksTrustOK, now)
+	roleARN := "arn:aws:iam::" + testAccountID + ":role/eks"
+
 	create := mustEKSREST(t, handler, http.MethodPost, "/clusters", map[string]any{
 		"name":    "lab-eks-1",
-		"roleArn": "arn:aws:iam::000000000001:role/eks",
+		"roleArn": roleARN,
 		"version": "1.29",
 		"resourcesVpcConfig": map[string]any{
 			"subnetIds":         []string{"subnet-1"},
@@ -95,7 +100,7 @@ func TestEKSHandlersCRUD(t *testing.T) {
 
 	dup := mustEKSREST(t, handler, http.MethodPost, "/clusters", map[string]any{
 		"name":    "lab-eks-1",
-		"roleArn": "arn:aws:iam::000000000001:role/eks",
+		"roleArn": roleARN,
 		"resourcesVpcConfig": map[string]any{
 			"subnetIds": []string{"subnet-1"},
 		},

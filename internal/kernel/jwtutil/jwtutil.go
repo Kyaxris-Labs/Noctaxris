@@ -1,20 +1,25 @@
-// Package jwtutil provides shared RS256 JWT/JWS helpers for Noctaxris.
+// Package jwtutil provides shared JWT/JWS helpers for Noctaxris via go-jose.
 //
-// Allowed signature algorithms are restricted to RS256 (Cognito and lab OIDC).
-// Callers must not pass other algorithms to ParseSigned.
+// Callers must not hand-roll compact JWT sign/verify. Use SignRS256 / VerifyCompactRS256
+// for Cognito and lab OIDC, or SignHS256 / VerifyCompactHS256 for HMAC lab tokens.
 package jwtutil
 
 import (
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// AllowedRS256 is the only signature algorithm accepted for lab JWT verify.
+// AllowedRS256 is the signature algorithm accepted for RS256 lab JWT verify.
 var AllowedRS256 = []jose.SignatureAlgorithm{jose.RS256}
+
+// AllowedHS256 is the signature algorithm accepted for HS256 lab JWT verify.
+var AllowedHS256 = []jose.SignatureAlgorithm{jose.HS256}
 
 // ParseJWKS unmarshals a JWKS JSON document.
 func ParseJWKS(jwksJSON []byte) (*jose.JSONWebKeySet, error) {
@@ -84,6 +89,77 @@ func SignRS256(payload []byte, key *rsa.PrivateKey, kid string) (string, error) 
 		return "", fmt.Errorf("jwt: serialize: %w", err)
 	}
 	return compact, nil
+}
+
+// SignHS256 signs payload as a compact JWS (HS256). Key must be non-empty.
+func SignHS256(payload []byte, key []byte) (string, error) {
+	if len(key) == 0 {
+		return "", fmt.Errorf("jwt: empty HMAC key")
+	}
+	opts := (&jose.SignerOptions{}).WithType("JWT")
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: key}, opts)
+	if err != nil {
+		return "", fmt.Errorf("jwt: signer: %w", err)
+	}
+	obj, err := signer.Sign(payload)
+	if err != nil {
+		return "", fmt.Errorf("jwt: sign: %w", err)
+	}
+	compact, err := obj.CompactSerialize()
+	if err != nil {
+		return "", fmt.Errorf("jwt: serialize: %w", err)
+	}
+	return compact, nil
+}
+
+// VerifyCompactHS256 parses a compact JWS with HS256 only, verifies with key,
+// and returns the payload as a generic claims map. Fail-closed on any error.
+func VerifyCompactHS256(token string, key []byte) (map[string]any, error) {
+	if token == "" {
+		return nil, fmt.Errorf("jwt: empty token")
+	}
+	if len(key) == 0 {
+		return nil, fmt.Errorf("jwt: empty HMAC key")
+	}
+	jws, err := jose.ParseSigned(token, AllowedHS256)
+	if err != nil {
+		return nil, fmt.Errorf("jwt: parse: %w", err)
+	}
+	payload, err := jws.Verify(key)
+	if err != nil {
+		return nil, fmt.Errorf("jwt: verify: %w", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("jwt: claims: %w", err)
+	}
+	return claims, nil
+}
+
+// PeekUnverifiedClaims decodes the JWT payload segment without verifying the
+// signature. Use only for IdP/pool lookup before a real VerifyCompact* call.
+func PeekUnverifiedClaims(token string) (map[string]any, error) {
+	payload, err := payloadBytesUnverified(token)
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("jwt: claims: %w", err)
+	}
+	return claims, nil
+}
+
+func payloadBytesUnverified(token string) ([]byte, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("jwt: malformed")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("jwt: payload: %w", err)
+	}
+	return payload, nil
 }
 
 // PublicJWK builds a public JWKS key entry for an RSA signing key.

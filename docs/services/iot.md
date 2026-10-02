@@ -64,12 +64,12 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 | Action key | Fields | Dispatch |
 |------------|--------|----------|
 | `republish` | `topic` | Re-publish without re-evaluating rules; MQTT republish when bridge is connected |
-| `sqs` | `queueUrl` (optional `useBase64`) | `SendMessage` |
-| `sns` | `topicArn` or `targetArn` | `Publish` |
-| `s3` | `bucketName`/`bucket`, `key` | `PutObject` |
-| `dynamoDB` / `dynamoDBv2.putItem` | `tableName` | `PutItem` from JSON object payload |
-| `kinesis` | `streamName` (optional `partitionKey`) | `PutRecord` |
-| `lambda` | `functionName` or `functionArn` | async `EnqueueAsyncInvoke` |
+| `sqs` | `queueUrl`, `roleArn` (optional `useBase64`) | Role session `EvaluateFull` then `SendMessage` |
+| `sns` | `topicArn` or `targetArn`, `roleArn` | Role session `EvaluateFull` then `Publish` |
+| `s3` | `bucketName`/`bucket`, `key`, `roleArn` | Role session `EvaluateFull` then `PutObject` |
+| `dynamoDB` / `dynamoDBv2.putItem` | `tableName`, `roleArn` | Role session `EvaluateFull` then `PutItem` from JSON object payload |
+| `kinesis` | `streamName`, `roleArn` (optional `partitionKey`) | Role session `EvaluateFull` then `PutRecord` |
+| `lambda` | `functionName` or `functionArn` (optional `roleArn`) | Role session `EvaluateFull`, or function resource policy for `iot.amazonaws.com`, then async `EnqueueAsyncInvoke` |
 
 ## Implemented
 
@@ -99,6 +99,8 @@ Supported action shapes (Floci-like; missing targets log-skip, never panic):
 ### Authz notes
 
 Identity `EvaluateFull` on `iot:*`, `iot-data:*`, and `iot-jobs-data:*` for signed HTTP APIs. Device certificates use attached IoT policies (`iot:*`). Device certificates cannot call `ListThings` or `ListRoleAliases`.
+
+Topic-rule `CreateTopicRule` / `ReplaceTopicRule` enforce `iam:PassRole` plus `iot.amazonaws.com` trust for each action `roleArn`. `CreateRoleAlias` enforces `iam:PassRole` plus `credentials.iot.amazonaws.com` trust (role-alias ARN as `aws:SourceArn`). Delivery for SQS/SNS/S3/DynamoDB/Kinesis requires `roleArn` and mints a role session through `EvaluateFull` (plus destination resource policy for foreign targets). Lambda delivery uses the same RoleArn session path when `roleArn` is set, otherwise a function resource policy Allow for `iot.amazonaws.com`. Missing RoleArn or denied evaluation skips the action (fail closed; no direct store bypass).
 
 Shadow, Jobs, named-shadow, HTTP Publish, and GetRetainedMessage REST (`/things/{name}/shadow`, `/things/{name}/jobs`, `/api/things/shadow/ListNamedShadowsForThing/{name}`, `POST /topics/{topic}`, `GET /retainedMessage/{topic}`) run when SigV4 credential scope is `iot`, `iotdata` / `iot-data`, `iotdevicegateway`, or `iot-jobs-data`, or when a lab-CA device certificate is present and the attached IoT policy Allows the action (`iot:GetThingShadow` / `iot:ListNamedShadowsForThing` / `iot:Publish` / `iot:GetRetainedMessage` / Jobs actions). Identity on signed Publish is `iot-data:Publish`. Identity on signed GetRetainedMessage is `iot:GetRetainedMessage`. Unsigned HTTP without SigV4 or mTLS is 403. A request signed as `s3` is path-style S3 (`things` / `api` / `topics` / `retainedMessage` as the bucket). Wrong-scope signatures are not treated as IoT writes.
 

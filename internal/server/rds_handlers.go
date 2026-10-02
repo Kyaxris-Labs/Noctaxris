@@ -97,6 +97,14 @@ func (s *Server) rdsCreateDBInstance(
 	}
 
 	region := s.rdsRegion(verified)
+	if strings.TrimSpace(secretARN) == "" {
+		// Create path mints (or updates) a Secrets Manager master secret via the store.
+		if !s.authorizeSecretsMint(verified, region, store.RDSMasterSecretName(identifier)) {
+			s.writeRDSError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+				"User is not authorized to perform secretsmanager:CreateSecret.", readOnly, eventID, verified)
+			return
+		}
+	}
 	inst, err := s.store.CreateRDSDBInstance(verified.AccountID, region, store.CreateRDSDBInstanceInput{
 		DBInstanceIdentifier: identifier,
 		Engine:               engine,

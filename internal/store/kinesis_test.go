@@ -52,7 +52,7 @@ func TestKinesisPutGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recs, next, err := st.GetKinesisRecords(it, 10)
+	recs, next, err := st.GetKinesisRecords(account, it, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

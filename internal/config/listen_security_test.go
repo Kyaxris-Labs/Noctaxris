@@ -107,3 +107,27 @@ func TestOpenDataPlaneAllowed(t *testing.T) {
 		t.Fatal("opt-in should allow open data plane")
 	}
 }
+
+func TestAnonymousS3Allowed(t *testing.T) {
+	cfg := config.Config{}
+	if cfg.AnonymousS3Allowed() {
+		t.Fatal("default deny")
+	}
+	cfg.AllowAnonymousS3 = true
+	if !cfg.AnonymousS3Allowed() {
+		t.Fatal("struct flag should allow")
+	}
+	cfg.AllowAnonymousS3 = false
+	t.Setenv(config.EnvAllowAnonymousS3, "1")
+	if !cfg.AnonymousS3Allowed() {
+		t.Fatal("env=1 should allow")
+	}
+	t.Setenv(config.EnvAllowAnonymousS3, "true")
+	if !cfg.AnonymousS3Allowed() {
+		t.Fatal("env=true should allow")
+	}
+	t.Setenv(config.EnvAllowAnonymousS3, "0")
+	if cfg.AnonymousS3Allowed() {
+		t.Fatal("env=0 should deny")
+	}
+}

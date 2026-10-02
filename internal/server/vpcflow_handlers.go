@@ -93,6 +93,14 @@ func (s *Server) vpcCreateFlowLogs(
 	if deliverARN == "" {
 		deliverARN, _ = params["deliverLogsPermissionArn"].(string)
 	}
+	deliverARN = strings.TrimSpace(deliverARN)
+	if deliverARN != "" {
+		if err := s.checkVPCFlowPassRole(verified, deliverARN); err != nil {
+			s.writeVPCFlowError(w, r, body, requestID, http.StatusForbidden, "AccessDenied",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	region := verified.Region
 	if region == "" {
 		region = store.DefaultVPCFlowRegion

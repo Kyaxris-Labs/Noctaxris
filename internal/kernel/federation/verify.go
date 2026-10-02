@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
 	"fmt"
@@ -542,20 +541,10 @@ func containsString(ss []string, want string) bool {
 
 // ParseJWTUnverified extracts iss/aud without verifying signature (for IdP lookup only).
 func ParseJWTUnverified(token string) (iss string, aud []string, err error) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
+	claims, err := jwtutil.PeekUnverifiedClaims(token)
+	if err != nil {
 		return "", nil, fmt.Errorf("malformed JWT")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", nil, err
-	}
-	var claims struct {
-		Iss string `json:"iss"`
-		Aud any    `json:"aud"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", nil, err
-	}
-	return claims.Iss, normalizeAud(claims.Aud), nil
+	iss = jwtutil.ClaimString(claims, "iss")
+	return iss, normalizeAud(claims["aud"]), nil
 }

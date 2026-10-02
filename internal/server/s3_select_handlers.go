@@ -145,7 +145,8 @@ func (s *Server) s3SelectObjectContent(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	resource := store.ObjectARN(bucket, strings.TrimPrefix(key, "/"))
-	if !s.authorizeS3(verified, catalog.ActionS3SelectObjectContent, resource, ref.policy, ref.accountID) {
+	if !s.authorizeS3(verified, catalog.ActionS3SelectObjectContent, resource, ref.policy, ref.accountID) ||
+		!s.authorizeS3(verified, catalog.ActionS3GetObject, resource, ref.policy, ref.accountID) {
 		s.writeS3Error(w, r, requestID, eventID, verified, readOnly, http.StatusForbidden, "AccessDenied",
 			"Access Denied", "SelectObjectContent")
 		return

@@ -85,7 +85,7 @@ func (s *Server) s3vCreateBucket(
 	if name == "" {
 		name, _ = params["VectorBucketName"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsCreateVectorBucket, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsCreateVectorBucket, store.S3VectorBucketARN(verified.AccountID, name)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:CreateVectorBucket.", readOnly, eventID, verified)
 		return
@@ -140,7 +140,7 @@ func (s *Server) s3vDeleteBucket(
 	if name == "" {
 		name, _ = params["VectorBucketName"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsDeleteVectorBucket, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsDeleteVectorBucket, store.S3VectorBucketARN(verified.AccountID, name)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:DeleteVectorBucket.", readOnly, eventID, verified)
 		return
@@ -186,7 +186,7 @@ func (s *Server) s3vCreateIndex(
 			dim = int(d2)
 		}
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsCreateIndex, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsCreateIndex, store.S3VectorIndexARN(verified.AccountID, bucket, indexName)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:CreateIndex.", readOnly, eventID, verified)
 		return
@@ -225,7 +225,7 @@ func (s *Server) s3vListIndexes(
 	if bucket == "" {
 		bucket, _ = params["VectorBucketName"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsListIndexes, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsListIndexes, store.S3VectorBucketARN(verified.AccountID, bucket)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:ListIndexes.", readOnly, eventID, verified)
 		return
@@ -253,7 +253,7 @@ func (s *Server) s3vDeleteIndex(
 	if indexName == "" {
 		indexName, _ = params["IndexName"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsDeleteIndex, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsDeleteIndex, store.S3VectorIndexARN(verified.AccountID, bucket, indexName)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:DeleteIndex.", readOnly, eventID, verified)
 		return
@@ -298,7 +298,7 @@ func (s *Server) s3vPutVectors(
 	if indexName == "" {
 		indexName, _ = params["IndexName"].(string)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsPutVectors, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsPutVectors, store.S3VectorIndexARN(verified.AccountID, bucket, indexName)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:PutVectors.", readOnly, eventID, verified)
 		return
@@ -370,7 +370,7 @@ func (s *Server) s3vQueryVectors(
 	if queryMap == nil {
 		queryMap, _ = params["QueryVector"].(map[string]any)
 	}
-	if !s.authorize(verified, catalog.ActionS3VectorsQueryVectors, "*") {
+	if !s.authorize(verified, catalog.ActionS3VectorsQueryVectors, store.S3VectorIndexARN(verified.AccountID, bucket, indexName)) {
 		s.writeS3VectorsError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform s3vectors:QueryVectors.", readOnly, eventID, verified)
 		return

@@ -488,6 +488,14 @@ func (s *Server) backupStartJob(
 	vault, _ := params["BackupVaultName"].(string)
 	resource, _ := params["ResourceArn"].(string)
 	role, _ := params["IamRoleArn"].(string)
+	role = strings.TrimSpace(role)
+	if role != "" {
+		if err := s.checkBackupPassRole(verified, role); err != nil {
+			s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
+	}
 	job, _, err := s.store.StartBackupJob(verified.AccountID, s.backupRegion(verified), vault, resource, role)
 	if errors.Is(err, store.ErrBackupNotFound) {
 		s.writeBackupError(w, r, body, requestID, http.StatusBadRequest, "ResourceNotFoundException",
@@ -718,6 +726,14 @@ func (s *Server) backupCreateSelection(
 		selectionName, _ = sel["SelectionName"].(string)
 		iamRole, _ = sel["IamRoleArn"].(string)
 		resources = backupResourcesFromParams(sel)
+	}
+	iamRole = strings.TrimSpace(iamRole)
+	if iamRole != "" {
+		if err := s.checkBackupPassRole(verified, iamRole); err != nil {
+			s.writeBackupError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
+				err.Error(), readOnly, eventID, verified)
+			return
+		}
 	}
 	created, err := s.store.CreateBackupSelection(verified.AccountID, s.backupRegion(verified), planID, selectionName, iamRole, resources)
 	if errors.Is(err, store.ErrBackupNotFound) {

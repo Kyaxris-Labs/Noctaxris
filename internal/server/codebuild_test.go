@@ -498,22 +498,29 @@ func TestCodeBuildCreateDeleteListWebhook(t *testing.T) {
 		"filterGroups": []any{
 			[]any{map[string]any{"type": "EVENT", "pattern": "PUSH"}},
 		},
+		"secret": "caller-known-secret",
 	}, now)
 	if wh.Code != http.StatusOK {
 		t.Fatalf("CreateWebhook status=%d body=%q", wh.Code, wh.Body.String())
 	}
-	if !strings.Contains(wh.Body.String(), "/_noctaxris/codebuild/webhook/") || !strings.Contains(wh.Body.String(), "secret") {
-		t.Fatalf("CreateWebhook body=%q", wh.Body.String())
+	if !strings.Contains(wh.Body.String(), "/_noctaxris/codebuild/webhook/") {
+		t.Fatalf("CreateWebhook missing payloadUrl body=%q", wh.Body.String())
+	}
+	if strings.Contains(wh.Body.String(), `"secret"`) || strings.Contains(wh.Body.String(), "caller-known-secret") {
+		t.Fatalf("CreateWebhook must not echo secret body=%q", wh.Body.String())
 	}
 
 	list := mustCodeBuildJSON(t, handler, "ListWebhooks", map[string]any{
 		"projectName": "wh-proj",
 	}, now)
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "wh-proj") && !strings.Contains(list.Body.String(), "payloadUrl") {
+	if list.Code != http.StatusOK {
 		t.Fatalf("ListWebhooks status=%d body=%q", list.Code, list.Body.String())
 	}
-	if !strings.Contains(list.Body.String(), "payloadUrl") {
+	if !strings.Contains(list.Body.String(), "payloadUrl") || !strings.Contains(list.Body.String(), "wh-proj") {
 		t.Fatalf("ListWebhooks missing payloadUrl body=%q", list.Body.String())
+	}
+	if strings.Contains(list.Body.String(), `"secret"`) || strings.Contains(list.Body.String(), "caller-known-secret") {
+		t.Fatalf("ListWebhooks must not echo secret body=%q", list.Body.String())
 	}
 
 	del := mustCodeBuildJSON(t, handler, "DeleteWebhook", map[string]any{"projectName": "wh-proj"}, now)

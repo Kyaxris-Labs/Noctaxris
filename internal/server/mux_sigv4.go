@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Kyaxris-Labs/Noctaxris/internal/catalog"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
 )
 
@@ -111,16 +112,12 @@ func (s *Server) rejectSigV4ServiceMismatch(
 	if isUnauthenticatedSTSAction(action) || isUnauthenticatedCognitoAction(action) {
 		return false
 	}
-	if r.Header.Get("X-Amz-Target") == "" {
-		// Query IAM/STS bind only when the caller signed as iam or sts.
-		// Short names such as CreatePolicy / DeletePolicy remap to iam:* but
-		// Organizations and Auto Scaling Query still use their own scope.
-		got := strings.ToLower(strings.TrimSpace(verified.Service))
-		if got != "iam" && got != "sts" {
-			return false
-		}
-	}
 	if sigv4ServiceMatchesAction(verified.Service, action) {
+		return false
+	}
+	// Query short names such as CreatePolicy remap to iam:* but Organizations
+	// still signs as organizations and routes by verified.Service.
+	if r.Header.Get("X-Amz-Target") == "" && querySharedShortNameAllows(verified.Service, action) {
 		return false
 	}
 	want := expectedSigV4Service(action)
@@ -128,4 +125,17 @@ func (s *Server) rejectSigV4ServiceMismatch(
 	s.writeAWSError(w, requestID, http.StatusForbidden, authn.CodeSignatureDoesNotMatch, msg,
 		readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
 	return true
+}
+
+func querySharedShortNameAllows(verifiedService, action string) bool {
+	if !strings.EqualFold(strings.TrimSpace(verifiedService), "organizations") {
+		return false
+	}
+	switch action {
+	case catalog.ActionIAMCreatePolicy, "CreatePolicy",
+		catalog.ActionIAMListPolicies, "ListPolicies":
+		return true
+	default:
+		return false
+	}
 }

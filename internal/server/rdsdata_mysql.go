@@ -58,7 +58,7 @@ func (s *Server) executeRDSDataMySQL(
 	if strings.TrimSpace(inst.ContainerID) == "" || inst.DBInstanceStatus != "available" {
 		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
-	user, password, err := s.rdsDataMasterCreds(accountID, inst, req.SecretARN)
+	user, password, err := s.rdsDataMasterCreds(ctx, accountID, inst, req.SecretARN)
 	if err != nil {
 		return store.RDSDataExecuteResult{}, err
 	}
@@ -146,7 +146,7 @@ func (s *Server) executeRDSDataNestedMySQL(
 	if err != nil || cli == nil {
 		return store.RDSDataExecuteResult{}, store.ErrRDSDataUnavailable
 	}
-	user, password, err := s.rdsDataMasterCreds(accountID, inst, req.SecretARN)
+	user, password, err := s.rdsDataMasterCreds(ctx, accountID, inst, req.SecretARN)
 	if err != nil {
 		return store.RDSDataExecuteResult{}, err
 	}

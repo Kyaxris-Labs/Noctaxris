@@ -321,8 +321,38 @@ func (s *Store) GetKinesisShardIterator(accountID, name, shardID, iteratorType, 
 	return id, nil
 }
 
+// LookupKinesisShardIterator returns the owning account and stream for an iterator
+// without advancing it. Expired or missing iterators return ErrKinesisExpiredIterator.
+func (s *Store) LookupKinesisShardIterator(iterator string) (accountID, streamName, streamARN string, err error) {
+	iterator = strings.TrimSpace(iterator)
+	if iterator == "" {
+		return "", "", "", fmt.Errorf("lookup iterator: ShardIterator is required")
+	}
+	var expires int64
+	err = s.db.QueryRow(
+		`SELECT account_id, stream_name, expires_at FROM kinesis_iterators WHERE iterator_id = ?`,
+		iterator,
+	).Scan(&accountID, &streamName, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", ErrKinesisExpiredIterator
+	}
+	if err != nil {
+		return "", "", "", fmt.Errorf("lookup iterator: %w", err)
+	}
+	if time.Now().UTC().Unix() > expires {
+		_, _ = s.db.Exec(`DELETE FROM kinesis_iterators WHERE iterator_id = ?`, iterator)
+		return "", "", "", ErrKinesisExpiredIterator
+	}
+	st, err := s.getKinesisStream(accountID, streamName)
+	if err != nil {
+		return "", "", "", ErrKinesisExpiredIterator
+	}
+	return accountID, streamName, st.StreamARN, nil
+}
+
 // GetKinesisRecords reads records from an iterator and advances it.
-func (s *Store) GetKinesisRecords(iterator string, limit int) (records []KinesisRecord, nextIterator string, err error) {
+// callerAccountID must match the iterator's owning account (fail-closed).
+func (s *Store) GetKinesisRecords(callerAccountID, iterator string, limit int) (records []KinesisRecord, nextIterator string, err error) {
 	iterator = strings.TrimSpace(iterator)
 	if iterator == "" {
 		return nil, "", fmt.Errorf("get records: ShardIterator is required")
@@ -342,6 +372,9 @@ func (s *Store) GetKinesisRecords(iterator string, limit int) (records []Kinesis
 	}
 	if time.Now().UTC().Unix() > expires {
 		_, _ = s.db.Exec(`DELETE FROM kinesis_iterators WHERE iterator_id = ?`, iterator)
+		return nil, "", ErrKinesisExpiredIterator
+	}
+	if strings.TrimSpace(callerAccountID) == "" || callerAccountID != accountID {
 		return nil, "", ErrKinesisExpiredIterator
 	}
 	if limit <= 0 {

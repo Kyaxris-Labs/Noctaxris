@@ -18,6 +18,7 @@ var (
 	ErrRDSDataUnavailable        = errors.New("DatabaseUnavailableException")
 	ErrRDSDataTxnNotFound        = errors.New("TransactionNotFoundException")
 	ErrRDSDataSecretsError       = errors.New("SecretsErrorException")
+	ErrRDSDataAccessDenied       = errors.New("AccessDeniedException")
 )
 
 const rdsDataSchema = `

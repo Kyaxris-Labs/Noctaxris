@@ -276,7 +276,7 @@ func (s *Server) cognitoUpdateUserPool(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	poolID, _ := params["UserPoolId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoUpdateUserPool, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoUpdateUserPool, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:UpdateUserPool.", readOnly, eventID, verified)
 		return
@@ -328,7 +328,7 @@ func (s *Server) cognitoDescribeUserPool(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	poolID, _ := params["UserPoolId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoDescribeUserPool, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoDescribeUserPool, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:DescribeUserPool.", readOnly, eventID, verified)
 		return
@@ -375,7 +375,7 @@ func (s *Server) cognitoDeleteUserPool(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	poolID, _ := params["UserPoolId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoDeleteUserPool, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoDeleteUserPool, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:DeleteUserPool.", readOnly, eventID, verified)
 		return
@@ -402,7 +402,7 @@ func (s *Server) cognitoCreateUserPoolClient(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	name, _ := params["ClientName"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoCreateUserPoolClient, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoCreateUserPoolClient, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:CreateUserPoolClient.", readOnly, eventID, verified)
 		return
@@ -434,7 +434,7 @@ func (s *Server) cognitoDescribeUserPoolClient(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	clientID, _ := params["ClientId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoDescribeUserPoolClient, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoDescribeUserPoolClient, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:DescribeUserPoolClient.", readOnly, eventID, verified)
 		return
@@ -460,7 +460,7 @@ func (s *Server) cognitoListUserPoolClients(
 	verified *authn.Verified, readOnly bool, params map[string]any,
 ) {
 	poolID, _ := params["UserPoolId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoListUserPoolClients, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoListUserPoolClients, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:ListUserPoolClients.", readOnly, eventID, verified)
 		return
@@ -487,7 +487,7 @@ func (s *Server) cognitoDeleteUserPoolClient(
 ) {
 	poolID, _ := params["UserPoolId"].(string)
 	clientID, _ := params["ClientId"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoDeleteUserPoolClient, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoDeleteUserPoolClient, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:DeleteUserPoolClient.", readOnly, eventID, verified)
 		return
@@ -515,7 +515,7 @@ func (s *Server) cognitoAdminCreateUser(
 	poolID, _ := params["UserPoolId"].(string)
 	username, _ := params["Username"].(string)
 	password, _ := params["TemporaryPassword"].(string)
-	if !s.authorize(verified, catalog.ActionCognitoAdminCreateUser, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminCreateUser, cognitoUserResource(verified, poolID, username)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminCreateUser.", readOnly, eventID, verified)
 		return
@@ -1009,7 +1009,7 @@ func (s *Server) cognitoAdminInitiateAuth(
 	clientID, _ := params["ClientId"].(string)
 	flow, _ := params["AuthFlow"].(string)
 	username, password, refreshToken, _ := cognitoAuthParams(params)
-	if !s.authorize(verified, catalog.ActionCognitoAdminInitiateAuth, "*") {
+	if !s.authorize(verified, catalog.ActionCognitoAdminInitiateAuth, cognitoPoolResource(verified, poolID)) {
 		s.writeCognitoError(w, r, body, requestID, http.StatusForbidden, "AccessDeniedException",
 			"User is not authorized to perform cognito-idp:AdminInitiateAuth.", readOnly, eventID, verified)
 		return

@@ -250,7 +250,7 @@ func (s *Store) SubscribeToShardLab(accountID, consumerARN, shardID, iteratorTyp
 	if err != nil {
 		return KinesisConsumer{}, nil, "", err
 	}
-	records, nextIt, err := s.GetKinesisRecords(it, limit)
+	records, nextIt, err := s.GetKinesisRecords(accountID, it, limit)
 	if err != nil {
 		return KinesisConsumer{}, nil, "", err
 	}

@@ -140,9 +140,10 @@ func TestCodeBuildControlPlaneAndOptionalStartBuild(t *testing.T) {
 		t.Fatalf("CreateWebhook status=%d body=%s", whStatus, whBody)
 	}
 	webhook, _ := whParsed["webhook"].(map[string]any)
-	if webhook == nil || webhook["payloadUrl"] == nil || webhook["secret"] == nil {
+	if webhook == nil || webhook["payloadUrl"] == nil || webhook["secret"] == nil || webhook["secret"] == "" {
 		t.Fatalf("CreateWebhook missing payloadUrl/secret: %s", whBody)
 	}
+	mintedSecret, _ := webhook["secret"].(string)
 	listWhStatus, listWhBody, listWhParsed := signedJSONTarget(t, "codebuild", "CodeBuild_20161006.ListWebhooks", map[string]any{
 		"projectName": projectName,
 	})
@@ -151,6 +152,9 @@ func TestCodeBuildControlPlaneAndOptionalStartBuild(t *testing.T) {
 	}
 	if webs, _ := listWhParsed["webhooks"].([]any); len(webs) != 1 {
 		t.Fatalf("ListWebhooks len=%d body=%s", len(webs), listWhBody)
+	}
+	if strings.Contains(string(listWhBody), `"secret"`) || strings.Contains(string(listWhBody), mintedSecret) {
+		t.Fatalf("ListWebhooks must not echo secret: %s", listWhBody)
 	}
 	delWhStatus, delWhBody, _ := signedJSONTarget(t, "codebuild", "CodeBuild_20161006.DeleteWebhook", map[string]any{
 		"projectName": projectName,

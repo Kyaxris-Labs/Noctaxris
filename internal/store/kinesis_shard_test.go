@@ -95,7 +95,7 @@ func TestKinesisMultiShardPutAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recs0, _, err := st.GetKinesisRecords(it0, 10)
+	recs0, _, err := st.GetKinesisRecords(account, it0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestKinesisMultiShardPutAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recs1, _, err := st.GetKinesisRecords(it1, 10)
+	recs1, _, err := st.GetKinesisRecords(account, it1, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
