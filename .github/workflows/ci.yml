@@ -78,26 +78,6 @@ jobs:
         # docs/security-defaults.md).
         run: go run ./scripts/govulncheck-ci
 
-  sbom:
-    runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
-    needs: [image]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build API image for SBOM
-        run: docker build -t noctaxris:ci-sbom -f docker/Dockerfile .
-      - name: Generate SBOM (Syft)
-        uses: anchore/sbom-action@v0
-        with:
-          image: noctaxris:ci-sbom
-          format: spdx-json
-          output-file: noctaxris-sbom.spdx.json
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: noctaxris-sbom
-          path: noctaxris-sbom.spdx.json
-
   race:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
@@ -118,10 +98,31 @@ jobs:
       - name: Build API image
         run: docker build -f docker/Dockerfile .
 
+  sbom:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    needs: [image]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build API image for SBOM
+        run: docker build -t noctaxris:ci-sbom -f docker/Dockerfile .
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: noctaxris:ci-sbom
+          format: spdx-json
+          output-file: noctaxris-sbom.spdx.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: noctaxris-sbom
+          path: noctaxris-sbom.spdx.json
+
   smoke-core:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     needs: [unit, compose-static, image]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install AWS CLI v2

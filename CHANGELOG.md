@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CI: smoke-core timeout aligned with siblings; `docker-nightly` runs `ci-required` before Hub push
+
 ## 1.7.0
 
 Minor after 1.6.3: tighter authz on PassRole-shaped configures and SigV4 mux short actions, nested data wire honesty, plus more tests and service docs. Docker Hub: `kyaxris/noctaxris` (`1.7.0`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
