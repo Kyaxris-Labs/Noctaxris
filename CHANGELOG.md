@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- Nested data wire theatre: MSK DescribeCluster declares PLAINTEXT / unauthenticated; ElastiCache and MemoryDB support opt-in `NOCTAXRIS_REDIS_AUTH=1` (`--requirepass` matching the lab master secret); docs cover nested-Internal vs nested-ports overlay severity (no multi-tenant Kafka/Redis ACL claims)
+## 1.7.0
+
+Minor after 1.6.3: tighter authz on PassRole-shaped configures and SigV4 mux short actions, nested data wire honesty, plus more tests and service docs. Docker Hub: `kyaxris/noctaxris` (`1.7.0`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- Authz: shared PassRole / configure-deny helpers on Lambda, ECS, Glue crawlers, and related paths; SigV4 short-action remaps so query/JSON targets authorize the correct service action; CodeBuild webhook secrets require the caller and never echo Create/List
+- Nested data: MSK DescribeCluster reports PLAINTEXT / unauthenticated; ElastiCache and MemoryDB support opt-in `NOCTAXRIS_REDIS_AUTH=1` (`--requirepass` matching the lab master secret); security-defaults and service pages cover nested-Internal vs nested-ports exposure (no multi-tenant Kafka/Redis ACL claims)
+- Tests and docs: expanded authz and wire-theatre coverage; service and security-defaults pages aligned with the fail-closed paths
 
 ## 1.6.3
 
