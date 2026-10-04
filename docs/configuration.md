@@ -63,6 +63,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_LAB_FORENSICS` | disabled | Set to `1` to enable lab FreezeClock/UnfreezeClock/SetClock/BulkSeed (`NoctaxrisLab.*`). Default off returns AccessDenied. |
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
 | `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` for forgot/attr-verify; any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
+| `NOCTAXRIS_STRIP_PRODUCT` | disabled | Set to `1` / `true` to serve open probes only at `/_lab/health`, `/_lab/ready`, and `/_lab/version` (same bodies as the product paths). Product `/_noctaxris/health|ready|version` are not registered. Distroless `/noctaxris healthcheck` probes `/_lab/ready` when this is on. ACM and IoT lab certificates use Organization `Lab` instead of `Noctaxris Lab`. Default keeps `/_noctaxris/*` probes and branded Organization. |
 
 ## AWS CLI, SDK, and Prowler
 

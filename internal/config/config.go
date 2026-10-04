@@ -19,6 +19,19 @@ const EnvSharedKafka = "NOCTAXRIS_SHARED_KAFKA"
 // EnvSharedMQTT enables the shared DinD Mosquitto singleton for IoT MQTT (strict bool; default off).
 const EnvSharedMQTT = "NOCTAXRIS_SHARED_MQTT"
 
+// EnvStripProduct replaces product-branded probe paths and lab cert Organization
+// strings with generic lab labels when set to 1/true (NOCTAXRIS_STRIP_PRODUCT).
+const EnvStripProduct = "NOCTAXRIS_STRIP_PRODUCT"
+
+const (
+	productHealthPath  = "/_noctaxris/health"
+	productReadyPath   = "/_noctaxris/ready"
+	productVersionPath = "/_noctaxris/version"
+	labHealthPath      = "/_lab/health"
+	labReadyPath       = "/_lab/ready"
+	labVersionPath     = "/_lab/version"
+)
+
 type Config struct {
 	ListenAddr          string
 	DataRoot            string
@@ -91,6 +104,9 @@ type Config struct {
 	SharedKafka bool
 	// SharedMQTT starts the shared noctaxris-lab-mqtt Mosquitto singleton (NOCTAXRIS_SHARED_MQTT).
 	SharedMQTT bool
+	// StripProduct serves /_lab/health|ready|version instead of /_noctaxris/*
+	// and uses Organization "Lab" on ACM/IoT lab certificates (NOCTAXRIS_STRIP_PRODUCT).
+	StripProduct bool
 	// IoTEndpointHost is the hostname prefix for DescribeEndpoint addresses
 	// (NOCTAXRIS_IOT_ENDPOINT_HOST). Empty uses 127.0.0.1. Non-IP values produce
 	// distinct data/jobs/credentials hostnames for hosts-file and TLS SNI labs.
@@ -133,6 +149,7 @@ func LoadFromEnv() (Config, error) {
 		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
 		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
+		StripProduct:          envTruthy(EnvStripProduct),
 	}
 
 	sharedKafka, err := envStrictBool(EnvSharedKafka)
@@ -206,6 +223,44 @@ func getenv(key, fallback string) string {
 func envTruthy(key string) bool {
 	return strings.EqualFold(os.Getenv(key), "1") ||
 		strings.EqualFold(os.Getenv(key), "true")
+}
+
+// StripProductFromEnv reports NOCTAXRIS_STRIP_PRODUCT without full LoadFromEnv
+// (used by the distroless healthcheck binary path).
+func StripProductFromEnv() bool {
+	return envTruthy(EnvStripProduct)
+}
+
+// HealthPath is the open liveness probe path for this config.
+func (c Config) HealthPath() string {
+	if c.StripProduct {
+		return labHealthPath
+	}
+	return productHealthPath
+}
+
+// ReadyPath is the open readiness probe path for this config.
+func (c Config) ReadyPath() string {
+	if c.StripProduct {
+		return labReadyPath
+	}
+	return productReadyPath
+}
+
+// VersionPath is the open version probe path for this config.
+func (c Config) VersionPath() string {
+	if c.StripProduct {
+		return labVersionPath
+	}
+	return productVersionPath
+}
+
+// LabCertificateOrganization is the X.509 Organization for ACM/IoT lab certs.
+func (c Config) LabCertificateOrganization() string {
+	if c.StripProduct {
+		return "Lab"
+	}
+	return "Noctaxris Lab"
 }
 
 // envStrictBool parses unset/0/false/off as false and 1/true/on as true.

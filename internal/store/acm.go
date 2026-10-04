@@ -80,7 +80,7 @@ func (s *Store) RequestACMCertificate(accountID, region, domainName string) (ACM
 	if region == "" {
 		region = DefaultACMRegion
 	}
-	certPEM, keyPEM, err := generateSelfSignedCert(domainName)
+	certPEM, keyPEM, err := generateSelfSignedCert(domainName, s.labCertificateOrganization())
 	if err != nil {
 		return ACMCertificate{}, fmt.Errorf("generate certificate: %w", err)
 	}
@@ -162,7 +162,7 @@ func (s *Store) DeleteACMCertificate(accountID, certificateARN string) error {
 	return nil
 }
 
-func generateSelfSignedCert(domainName string) (certPEM, keyPEM string, err error) {
+func generateSelfSignedCert(domainName, organization string) (certPEM, keyPEM string, err error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return "", "", err
@@ -171,9 +171,12 @@ func generateSelfSignedCert(domainName string) (certPEM, keyPEM string, err erro
 	if err != nil {
 		return "", "", err
 	}
+	if strings.TrimSpace(organization) == "" {
+		organization = "Noctaxris Lab"
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: domainName, Organization: []string{"Noctaxris Lab"}},
+		Subject:      pkix.Name{CommonName: domainName, Organization: []string{organization}},
 		NotBefore:    time.Now().UTC().Add(-time.Hour),
 		NotAfter:     time.Now().UTC().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

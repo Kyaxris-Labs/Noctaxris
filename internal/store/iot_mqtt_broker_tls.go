@@ -60,12 +60,13 @@ func (s *Store) EnsureLabMQTTBrokerMaterial() (LabMQTTBrokerMaterial, error) {
 	}
 	serverCertPath := filepath.Join(dir, labMQTTServerCertFile)
 	serverKeyPath := filepath.Join(dir, labMQTTServerKeyFile)
-	if err := ensureLabMQTTLSPair(ca, serverCertPath, serverKeyPath, "noctaxris-lab-mqtt", false, true); err != nil {
+	org := s.labCertificateOrganization()
+	if err := ensureLabMQTTTLSPair(ca, serverCertPath, serverKeyPath, "noctaxris-lab-mqtt", false, true, org); err != nil {
 		return LabMQTTBrokerMaterial{}, err
 	}
 	bridgeCertPath := filepath.Join(dir, labMQTTBridgeCertFile)
 	bridgeKeyPath := filepath.Join(dir, labMQTTBridgeKeyFile)
-	if err := ensureLabMQTTLSPair(ca, bridgeCertPath, bridgeKeyPath, LabMQTTBridgeUsername, true, false); err != nil {
+	if err := ensureLabMQTTTLSPair(ca, bridgeCertPath, bridgeKeyPath, LabMQTTBridgeUsername, true, false, org); err != nil {
 		return LabMQTTBrokerMaterial{}, err
 	}
 	aclPath := filepath.Join(dir, labMQTTACLFile)
@@ -142,13 +143,13 @@ plugin_opt_config_file %s/dynamic-security.json
 `, mountDir, mountDir, mountDir, mountDir, labMQTTDynsecPluginPath, mountDir)
 }
 
-func ensureLabMQTTLSPair(ca LabIoTCA, certPath, keyPath, cn string, clientAuth, serverAuth bool) error {
+func ensureLabMQTTTLSPair(ca LabIoTCA, certPath, keyPath, cn string, clientAuth, serverAuth bool, organization string) error {
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err2 := os.Stat(keyPath); err2 == nil {
 			return nil
 		}
 	}
-	certPEM, keyPEM, err := signLabMQTTLeaf(ca, cn, clientAuth, serverAuth)
+	certPEM, keyPEM, err := signLabMQTTLeaf(ca, cn, clientAuth, serverAuth, organization)
 	if err != nil {
 		return err
 	}
@@ -158,7 +159,7 @@ func ensureLabMQTTLSPair(ca LabIoTCA, certPath, keyPath, cn string, clientAuth, 
 	return os.WriteFile(keyPath, []byte(keyPEM), 0o600)
 }
 
-func signLabMQTTLeaf(ca LabIoTCA, cn string, clientAuth, serverAuth bool) (certPEM, keyPEM string, err error) {
+func signLabMQTTLeaf(ca LabIoTCA, cn string, clientAuth, serverAuth bool, organization string) (certPEM, keyPEM string, err error) {
 	caCert, caKey, err := parseCAKeyPair(ca)
 	if err != nil {
 		return "", "", err
@@ -178,12 +179,15 @@ func signLabMQTTLeaf(ca LabIoTCA, cn string, clientAuth, serverAuth bool) (certP
 	if serverAuth {
 		ekus = append(ekus, x509.ExtKeyUsageServerAuth)
 	}
+	if strings.TrimSpace(organization) == "" {
+		organization = "Noctaxris Lab"
+	}
 	now := time.Now().UTC()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   strings.TrimSpace(cn),
-			Organization: []string{"Noctaxris Lab"},
+			Organization: []string{organization},
 		},
 		NotBefore:   now.Add(-time.Hour),
 		NotAfter:    now.Add(825 * 24 * time.Hour),

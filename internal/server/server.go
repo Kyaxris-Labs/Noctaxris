@@ -31,9 +31,6 @@ import (
 
 const (
 	eventVersion    = "1.11"
-	healthPath      = "/_noctaxris/health"
-	readyPath       = "/_noctaxris/ready"
-	versionPath     = "/_noctaxris/version"
 	requestIDHeader = "x-amz-request-id"
 	maxBodyBytes    = 1 << 20  // 1 MiB
 	maxS3BodyBytes  = 16 << 20 // 16 MiB lab PutObject
@@ -113,6 +110,7 @@ func New(cfg config.Config, st *store.Store, aud *audit.Writer) *Server {
 		})
 	}
 	st.SetCognitoInsecureCodes(cfg.CognitoInsecureCodes)
+	st.SetStripProduct(cfg.StripProduct)
 	s.wireCognitoTriggerInvoker()
 	s.wireCURDuckRunner()
 	return s
@@ -226,16 +224,16 @@ func (s *Server) StopBackgroundWorkers() {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet && r.URL.Path == healthPath {
+	if r.Method == http.MethodGet && r.URL.Path == s.cfg.HealthPath() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == readyPath {
+	if r.Method == http.MethodGet && r.URL.Path == s.cfg.ReadyPath() {
 		s.handleReady(w, r)
 		return
 	}
-	if r.Method == http.MethodGet && r.URL.Path == versionPath {
+	if r.Method == http.MethodGet && r.URL.Path == s.cfg.VersionPath() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(version.Version + "\n"))

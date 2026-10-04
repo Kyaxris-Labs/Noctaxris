@@ -93,7 +93,8 @@ func runHealthcheck() error {
 	if strings.HasPrefix(addr, "0.0.0.0:") {
 		addr = "127.0.0.1:" + strings.TrimPrefix(addr, "0.0.0.0:")
 	}
-	url := "http://" + addr + "/_noctaxris/ready"
+	readyPath := config.Config{StripProduct: config.StripProductFromEnv()}.ReadyPath()
+	url := "http://" + addr + readyPath
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {

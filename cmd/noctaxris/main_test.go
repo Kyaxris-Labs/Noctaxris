@@ -180,6 +180,7 @@ func TestMainPackageDoesNotStartOnMissingKeys(t *testing.T) {
 }
 
 func TestRunHealthcheck_successAndZeroHostRewrite(t *testing.T) {
+	t.Setenv("NOCTAXRIS_STRIP_PRODUCT", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/_noctaxris/ready" {
 			http.NotFound(w, r)
@@ -206,6 +207,22 @@ func TestRunHealthcheck_successAndZeroHostRewrite(t *testing.T) {
 		if err := run([]string{"healthcheck"}); err != nil {
 			t.Fatalf("0.0.0.0 rewrite healthcheck: %v", err)
 		}
+	}
+}
+
+func TestRunHealthcheck_stripProductUsesLabReady(t *testing.T) {
+	t.Setenv("NOCTAXRIS_STRIP_PRODUCT", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/_lab/ready" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("NOCTAXRIS_LISTEN", strings.TrimPrefix(srv.URL, "http://"))
+	if err := run([]string{"healthcheck"}); err != nil {
+		t.Fatalf("strip healthcheck: %v", err)
 	}
 }
 

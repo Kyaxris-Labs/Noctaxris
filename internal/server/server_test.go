@@ -156,6 +156,73 @@ func TestReadyRejectsWhenEngineUnreachable(t *testing.T) {
 	}
 }
 
+func TestStripProductProbePaths(t *testing.T) {
+	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.StripProduct = true
+	})
+	handler := srv.Handler()
+
+	cases := []struct {
+		path string
+		body string
+	}{
+		{"/_lab/health", "ok"},
+		{"/_lab/ready", "ready"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d want %d body=%q", tc.path, rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if rec.Body.String() != tc.body {
+			t.Fatalf("%s body=%q want %q", tc.path, rec.Body.String(), tc.body)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_lab/version", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/_lab/version status=%d want %d", rec.Code, http.StatusOK)
+	}
+	if strings.TrimSpace(rec.Body.String()) == "" {
+		t.Fatal("empty /_lab/version body")
+	}
+
+	for _, path := range []string{"/_noctaxris/health", "/_noctaxris/ready", "/_noctaxris/version"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		body := rec.Body.String()
+		if path == "/_noctaxris/health" && rec.Code == http.StatusOK && body == "ok" {
+			t.Fatal("product /_noctaxris/health must not be open when StripProduct is on")
+		}
+		if path == "/_noctaxris/ready" && rec.Code == http.StatusOK && body == "ready" {
+			t.Fatal("product /_noctaxris/ready must not be open when StripProduct is on")
+		}
+		if path == "/_noctaxris/version" && rec.Code == http.StatusOK {
+			trimmed := strings.TrimSpace(body)
+			if trimmed != "" && strings.Contains(trimmed, ".") && !strings.Contains(strings.ToLower(trimmed), "error") && !strings.Contains(trimmed, "<") {
+				t.Fatalf("product /_noctaxris/version must not be open when StripProduct is on; body=%q", trimmed)
+			}
+		}
+	}
+}
+
+func TestDefaultProbePathsRejectLabPrefix(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/_lab/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK && rec.Body.String() == "ok" {
+		t.Fatal("default mode must not serve /_lab/health")
+	}
+}
+
 func TestListenAndServeContextShutdown(t *testing.T) {
 	srv, _, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
 		cfg.ListenAddr = "127.0.0.1:0"

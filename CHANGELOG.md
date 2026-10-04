@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.7.1
+
+Patch after 1.7.0: opt-in product strip for challenge images, plus CI gate alignment. Docker Hub: `kyaxris/noctaxris` (`1.7.1`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- Config: `NOCTAXRIS_STRIP_PRODUCT=1` serves open probes at `/_lab/health|ready|version` only (product `/_noctaxris/*` probes off); healthcheck and ACM/IoT lab cert Organization follow strip mode
 - CI: smoke-core timeout aligned with siblings; `docker-nightly` runs `ci-required` before Hub push
 
 ## 1.7.0

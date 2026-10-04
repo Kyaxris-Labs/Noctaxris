@@ -398,7 +398,7 @@ func (s *Store) CreateIoTKeysAndCertificate(accountID, region string, setAsActiv
 	if err != nil {
 		return IoTCertificate{}, fmt.Errorf("ensure lab iot ca: %w", err)
 	}
-	certPEM, keyPEM, certID, err := signIoTDeviceCertificate(ca, "")
+	certPEM, keyPEM, certID, err := signIoTDeviceCertificate(ca, "", s.labCertificateOrganization())
 	if err != nil {
 		return IoTCertificate{}, fmt.Errorf("generate iot certificate: %w", err)
 	}

@@ -86,7 +86,7 @@ func (s *Store) ensureLabIoTCAUnlocked() (LabIoTCA, error) {
 	if certErr == nil || keyErr == nil {
 		return LabIoTCA{}, fmt.Errorf("ensure lab iot ca: incomplete CA material on disk")
 	}
-	newCertPEM, newKeyPEM, err := generateLabIoTCA()
+	newCertPEM, newKeyPEM, err := generateLabIoTCA(s.labCertificateOrganization())
 	if err != nil {
 		return LabIoTCA{}, err
 	}
@@ -103,7 +103,7 @@ func (s *Store) ensureLabIoTCAUnlocked() (LabIoTCA, error) {
 	return LabIoTCA{CertPEM: newCertPEM, KeyPEM: newKeyPEM}, nil
 }
 
-func generateLabIoTCA() (certPEM, keyPEM string, err error) {
+func generateLabIoTCA(organization string) (certPEM, keyPEM string, err error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return "", "", err
@@ -112,12 +112,15 @@ func generateLabIoTCA() (certPEM, keyPEM string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	if strings.TrimSpace(organization) == "" {
+		organization = "Noctaxris Lab"
+	}
 	now := time.Now().UTC()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   "Noctaxris Lab IoT CA",
-			Organization: []string{"Noctaxris Lab"},
+			Organization: []string{organization},
 		},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
@@ -179,7 +182,7 @@ func (s *Store) EnsureLabIoTServerCertificate(dnsNames []string, ips []net.IP) (
 	if err != nil {
 		return LabIoTServerCert{}, err
 	}
-	newCertPEM, newKeyPEM, err := signIoTServerCertificate(ca, dnsNames, ips)
+	newCertPEM, newKeyPEM, err := signIoTServerCertificate(ca, dnsNames, ips, s.labCertificateOrganization())
 	if err != nil {
 		return LabIoTServerCert{}, err
 	}
@@ -196,7 +199,7 @@ func (s *Store) EnsureLabIoTServerCertificate(dnsNames []string, ips []net.IP) (
 	return LabIoTServerCert{CertPEM: newCertPEM, KeyPEM: newKeyPEM}, nil
 }
 
-func signIoTServerCertificate(ca LabIoTCA, dnsNames []string, ips []net.IP) (certPEM, keyPEM string, err error) {
+func signIoTServerCertificate(ca LabIoTCA, dnsNames []string, ips []net.IP, organization string) (certPEM, keyPEM string, err error) {
 	caCert, caKey, err := parseCAKeyPair(ca)
 	if err != nil {
 		return "", "", err
@@ -223,11 +226,14 @@ func signIoTServerCertificate(ca LabIoTCA, dnsNames []string, ips []net.IP) (cer
 			cleanIPs = append(cleanIPs, ip)
 		}
 	}
+	if strings.TrimSpace(organization) == "" {
+		organization = "Noctaxris Lab"
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   "noctaxris-iot-server",
-			Organization: []string{"Noctaxris Lab"},
+			Organization: []string{organization},
 		},
 		NotBefore:   now.Add(-time.Hour),
 		NotAfter:    now.Add(825 * 24 * time.Hour),
@@ -247,7 +253,7 @@ func signIoTServerCertificate(ca LabIoTCA, dnsNames []string, ips []net.IP) (cer
 
 // signIoTDeviceCertificate issues a device cert signed by the lab CA with ClientAuth EKU.
 // certificateId is embedded in CN or URI SAN when stable; returned id is SHA-256 of DER.
-func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID string) (certPEM, keyPEM, certificateID string, err error) {
+func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID, organization string) (certPEM, keyPEM, certificateID string, err error) {
 	caCert, caKey, err := parseCAKeyPair(ca)
 	if err != nil {
 		return "", "", "", err
@@ -257,6 +263,9 @@ func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID string) (certPEM, 
 		return "", "", "", err
 	}
 	embed := strings.TrimSpace(embedCertificateID)
+	if strings.TrimSpace(organization) == "" {
+		organization = "Noctaxris Lab"
+	}
 	var lastDER []byte
 	for attempt := 0; attempt < 4; attempt++ {
 		serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
@@ -280,7 +289,7 @@ func signIoTDeviceCertificate(ca LabIoTCA, embedCertificateID string) (certPEM, 
 			SerialNumber: serial,
 			Subject: pkix.Name{
 				CommonName:   cn,
-				Organization: []string{"Noctaxris Lab"},
+				Organization: []string{organization},
 			},
 			NotBefore:   now.Add(-time.Hour),
 			NotAfter:    now.Add(825 * 24 * time.Hour),
