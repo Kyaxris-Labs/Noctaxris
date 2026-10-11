@@ -1,7 +1,6 @@
 module github.com/Kyaxris-Labs/Noctaxris/tests/cloudformation/go
 
-go 1.27.1
-
+go 1.27.2
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5

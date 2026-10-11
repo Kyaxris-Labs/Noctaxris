@@ -1,7 +1,6 @@
 module github.com/Kyaxris-Labs/Noctaxris
 
-go 1.27.1
-
+go 1.27.2
 require (
 	github.com/Azure/go-amqp v1.7.0
 	github.com/containerd/errdefs v1.0.0
