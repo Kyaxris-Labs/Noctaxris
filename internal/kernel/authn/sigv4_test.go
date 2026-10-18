@@ -208,6 +208,33 @@ func TestVerifyS3QueryUnsignedPayloadOK(t *testing.T) {
 	}
 }
 
+func TestVerifyS3StreamingUnsignedTrailerOK(t *testing.T) {
+	now := fixedNow()
+	// Body is already decoded by the server before Verify; signature uses the STREAMING token.
+	decoded := []byte("hello")
+	req := mustNewRequest(t, http.MethodPut, "http://127.0.0.1:4566/bucket/key", decoded)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Amz-Content-Sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+	signHeader(t, req, decoded, testAKID, testSecret, testRegion, "s3", now)
+
+	if _, err := authn.Verify(req, decoded, now, 15*time.Minute, lookupOK); err != nil {
+		t.Fatalf("Verify S3 STREAMING-UNSIGNED-PAYLOAD-TRAILER: %v", err)
+	}
+}
+
+func TestVerifyStreamingPayloadHashRejectedForNonS3(t *testing.T) {
+	now := fixedNow()
+	body := []byte("hello")
+	req := mustNewRequest(t, http.MethodPost, "http://127.0.0.1:4566/", body)
+	req.Header.Set("X-Amz-Content-Sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+	signHeader(t, req, body, testAKID, testSecret, testRegion, testSvc, now)
+
+	_, err := authn.Verify(req, body, now, 15*time.Minute, lookupOK)
+	if authn.Code(err) != authn.CodeSignatureDoesNotMatch {
+		t.Fatalf("Code = %q, err = %v", authn.Code(err), err)
+	}
+}
+
 func TestVerifyRequiresSessionToken(t *testing.T) {
 	now := fixedNow()
 	body := []byte("Action=GetCallerIdentity&Version=2011-06-15")

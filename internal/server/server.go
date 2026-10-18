@@ -24,6 +24,7 @@ import (
 	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/audit"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/authn"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/kernel/awschunked"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 	"github.com/Kyaxris-Labs/Noctaxris/internal/version"
 	"github.com/google/uuid"
@@ -1997,27 +1998,50 @@ func readBody(r *http.Request, limit int64) ([]byte, error) {
 		return nil, nil
 	}
 	defer r.Body.Close()
-	enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
-	compressed := io.LimitReader(r.Body, limit+1)
-	var src io.Reader = compressed
-	switch enc {
+	rawCE := r.Header.Get("Content-Encoding")
+	awsChunked := awschunked.HasEncoding(rawCE)
+	// Framing/trailers add overhead beyond decoded object bytes.
+	readLimit := limit + 1
+	if awsChunked {
+		readLimit = limit + (1 << 20) + 1
+	}
+	restCE := strings.ToLower(strings.TrimSpace(awschunked.StripEncoding(rawCE)))
+	framed := io.LimitReader(r.Body, readLimit)
+	var src io.Reader = framed
+	switch restCE {
 	case "", "identity":
-		// plaintext under compressed limit
+		// plaintext or aws-chunked framed bytes
 	case "gzip":
-		gz, err := gzip.NewReader(compressed)
+		gz, err := gzip.NewReader(framed)
 		if err != nil {
 			return nil, fmt.Errorf("gzip body: %w", err)
 		}
 		defer gz.Close()
-		src = io.LimitReader(gz, limit+1)
+		src = io.LimitReader(gz, readLimit)
 	case "deflate":
-		src = io.LimitReader(flate.NewReader(compressed), limit+1)
+		src = io.LimitReader(flate.NewReader(framed), readLimit)
 	default:
-		return nil, fmt.Errorf("unsupported Content-Encoding %q", enc)
+		return nil, fmt.Errorf("unsupported Content-Encoding %q", rawCE)
 	}
 	data, err := io.ReadAll(src)
 	if err != nil {
 		return nil, err
+	}
+	if awsChunked {
+		decoded, _, err := awschunked.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("aws-chunked body: %w", err)
+		}
+		data = decoded
+		if decLen := strings.TrimSpace(r.Header.Get("X-Amz-Decoded-Content-Length")); decLen != "" {
+			want, err := strconv.ParseInt(decLen, 10, 64)
+			if err != nil || want < 0 {
+				return nil, fmt.Errorf("invalid x-amz-decoded-content-length")
+			}
+			if int64(len(data)) != want {
+				return nil, fmt.Errorf("aws-chunked decoded length mismatch")
+			}
+		}
 	}
 	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("body too large")

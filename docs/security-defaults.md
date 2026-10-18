@@ -56,7 +56,7 @@ These defaults are intentional product posture for a local emulator that people 
 - Tests assert plaintext secrets and CMK bytes do not appear in `state.db`.
 - Audit events must not carry secret or plaintext key material.
 - Inactive access keys are rejected at SigV4 verification. An in-process cache may reuse unsealed access-key material after Lookup; Status, ExpiresAt, and session token are still checked on every Verify, and Delete/UpdateAccessKey invalidate the entry. Allow/Deny decisions and policy document sets are not cached.
-- For non-`UNSIGNED-PAYLOAD` requests, SigV4 binds `X-Amz-Content-Sha256` to `sha256(body)` (mismatch fails closed). `UNSIGNED-PAYLOAD` is limited to S3 query (presigned) authentication.
+- For non-`UNSIGNED-PAYLOAD` requests, SigV4 binds `X-Amz-Content-Sha256` to `sha256(body)` (mismatch fails closed). `UNSIGNED-PAYLOAD` is limited to S3 query (presigned) authentication. S3 streaming uploads may send `Content-Encoding: aws-chunked` with `X-Amz-Content-Sha256` `STREAMING-UNSIGNED-PAYLOAD-TRAILER` / `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` / `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` (AWS CLI default checksum trailers); the lab decodes aws-chunked before authz/store and accepts those streaming payload tokens for S3 only (per-chunk signatures are not re-checked).
 - SigV4 requires `host` in `SignedHeaders` (header and query auth). Presigned `X-Amz-Expires` max is 604800.
 - AppSync API keys are returned once in plaintext; only an HMAC-SHA256 (master key) hash is stored at rest.
 

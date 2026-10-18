@@ -328,6 +328,12 @@ func parseAmzDate(s string) (time.Time, error) {
 
 const unsignedPayload = "UNSIGNED-PAYLOAD"
 
+const (
+	streamingUnsignedTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+	streamingSignedPayload   = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+	streamingSignedTrailer   = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+)
+
 func bodySHA256Hex(body []byte) string {
 	if len(body) == 0 {
 		return emptyPayload
@@ -348,8 +354,18 @@ func allowUnsignedPayload(mat *authMaterial) bool {
 	return mat != nil && mat.queryAuth && strings.EqualFold(mat.service, "s3")
 }
 
+func isS3StreamingPayloadHash(h string) bool {
+	switch strings.ToUpper(strings.TrimSpace(h)) {
+	case streamingUnsignedTrailer, streamingSignedPayload, streamingSignedTrailer:
+		return true
+	default:
+		return false
+	}
+}
+
 // resolvePayloadHash binds X-Amz-Content-Sha256 to the request body except for
-// S3 query-auth UNSIGNED-PAYLOAD (presigned URLs). Mismatch fails closed.
+// S3 query-auth UNSIGNED-PAYLOAD (presigned URLs) and S3 streaming aws-chunked
+// uploads (STREAMING-*-PAYLOAD*). Mismatch fails closed.
 func resolvePayloadHash(r *http.Request, body []byte, mat *authMaterial) (string, error) {
 	actual := bodySHA256Hex(body)
 	claimed := claimedContentSHA256(r)
@@ -365,6 +381,14 @@ func resolvePayloadHash(r *http.Request, body []byte, mat *authMaterial) (string
 			return "", newError(CodeSignatureDoesNotMatch, "UNSIGNED-PAYLOAD is only allowed for S3 query authentication")
 		}
 		return unsignedPayload, nil
+	}
+	if isS3StreamingPayloadHash(claimed) {
+		if mat == nil || !strings.EqualFold(mat.service, "s3") {
+			return "", newError(CodeSignatureDoesNotMatch, "streaming payload hash is only allowed for S3")
+		}
+		// Canonical request uses the STREAMING-* token; body is aws-chunked
+		// (decoded before Verify). Per-chunk signatures are not re-checked in lab.
+		return strings.ToUpper(claimed), nil
 	}
 	if !strings.EqualFold(claimed, actual) {
 		return "", newError(CodeSignatureDoesNotMatch, "X-Amz-Content-Sha256 does not match the request body")

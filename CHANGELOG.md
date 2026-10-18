@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- S3: decode `Content-Encoding: aws-chunked` PutObject bodies and accept SigV4 streaming payload hashes (`STREAMING-UNSIGNED-PAYLOAD-TRAILER` and related). Fixes AWS CLI 2.38+ default CRC64NVME trailer uploads that previously failed with `Unable to read request body`.
+
 ## 1.7.2
 
 Patch after 1.7.1: Go 1.27.2 for stdlib net/http govulncheck clear. Docker Hub: `kyaxris/noctaxris` (`1.7.2`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
