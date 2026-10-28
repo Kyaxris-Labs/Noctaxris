@@ -108,8 +108,10 @@ type Config struct {
 	// and uses Organization "Lab" on ACM/IoT lab certificates (NOCTAXRIS_STRIP_PRODUCT).
 	StripProduct bool
 	// IoTEndpointHost is the hostname prefix for DescribeEndpoint addresses
-	// (NOCTAXRIS_IOT_ENDPOINT_HOST). Empty uses 127.0.0.1. Non-IP values produce
-	// distinct data/jobs/credentials hostnames for hosts-file and TLS SNI labs.
+	// (NOCTAXRIS_IOT_ENDPOINT_HOST). Empty uses 127.0.0.1 and does not require
+	// the credentials GET SNI to equal that loopback host. A non-loopback
+	// hostname produces distinct data, jobs, and credentials names and still
+	// requires TLS SNI to match credentials.iot.<host>.
 	IoTEndpointHost string
 	// IoTTLSListen is the dedicated device-HTTP / credentials TLS bind
 	// (NOCTAXRIS_IOT_TLS_LISTEN). Empty leaves device mTLS on the main listener
@@ -256,7 +258,11 @@ func (c Config) VersionPath() string {
 }
 
 // LabCertificateOrganization is the X.509 Organization for ACM/IoT lab certs.
+// NOCTAXRIS_LAB_CERT_ORG, when set, wins over the strip and default names.
 func (c Config) LabCertificateOrganization() string {
+	if v := strings.TrimSpace(os.Getenv("NOCTAXRIS_LAB_CERT_ORG")); v != "" {
+		return v
+	}
 	if c.StripProduct {
 		return "Lab"
 	}

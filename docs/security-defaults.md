@@ -80,7 +80,7 @@ Unauthenticated or alternate-auth paths (no SigV4 required):
 | `POST /_noctaxris/codebuild/webhook/{account}/{project}` | Lab webhook; `CreateWebhook` requires a caller-supplied non-empty `secret` (never echoed in Create/List JSON); receive requires `X-Noctaxris-Webhook-Secret` matching the stored secret |
 | Registry `/v2/...` | Bearer/token auth (not SigV4 mux); ECR IAM after token |
 | REST/HTTP/WS API invoke, ELB `/alb/...` `/nlb/...` | Per-route authorizer or OpenDataPlane gate for `NONE` |
-| `GET /role-aliases/{alias}/credentials` | IoT Credentials Provider: device mTLS client cert + matching `x-amzn-iot-thingname` + TLS SNI for the CredentialProvider endpoint (not SigV4). Device policy and role-alias trust still evaluated |
+| `GET /role-aliases/{alias}/credentials` | IoT Credentials Provider: device mTLS client cert + matching `x-amzn-iot-thingname` (not SigV4). A non-loopback `NOCTAXRIS_IOT_ENDPOINT_HOST` still requires TLS SNI to match the CredentialProvider endpoint. An empty host (loopback `endpointAddress`) does not. Device policy and role-alias trust still evaluated |
 
 All other AWS API paths require a valid SigV4 signature (header or query) for a known access key.
 

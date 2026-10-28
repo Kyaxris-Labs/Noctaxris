@@ -1,6 +1,10 @@
 package store
 
-import "sync"
+import (
+	"os"
+	"strings"
+	"sync"
+)
 
 var stripProductByStore sync.Map // *Store -> bool
 
@@ -14,6 +18,9 @@ func (s *Store) SetStripProduct(enabled bool) {
 }
 
 func (s *Store) labCertificateOrganization() string {
+	if v := strings.TrimSpace(os.Getenv("NOCTAXRIS_LAB_CERT_ORG")); v != "" {
+		return v
+	}
 	if s != nil {
 		if v, ok := stripProductByStore.Load(s); ok {
 			if enabled, _ := v.(bool); enabled {

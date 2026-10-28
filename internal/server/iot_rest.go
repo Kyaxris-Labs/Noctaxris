@@ -548,8 +548,7 @@ func (s *Server) iotRESTJobs(
 
 // iotCredentialsPresentedHost is TLS SNI when the client sent it. Go and curl omit
 // SNI for literal IP URLs, so empty SNI may fall back to Host when wantHost is an
-// IP or localhost (Compose 127.0.0.1:8443). Hostname CredentialProvider labs still
-// require SNI.
+// IP or localhost. A non-loopback hostname still requires SNI.
 func iotCredentialsPresentedHost(r *http.Request, wantHost string) string {
 	if r == nil || r.TLS == nil {
 		return ""
@@ -564,11 +563,35 @@ func iotCredentialsPresentedHost(r *http.Request, wantHost string) string {
 	return iotEndpointHost(r.Host)
 }
 
+// iotCredentialsLoopbackEndpoint reports whether the CredentialProvider host is
+// loopback. An empty IoTEndpointHost advertises 127.0.0.1, which is not the
+// address a client uses on a published listener.
+func iotCredentialsLoopbackEndpoint(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// iotCredentialsRequireHostMatch is false only when IoTEndpointHost is unset and
+// the advertised CredentialProvider host is loopback. A configured hostname still
+// requires the presented host to equal credentials.iot.<host>.
+func (s *Server) iotCredentialsRequireHostMatch(wantHost string) bool {
+	if s == nil || strings.TrimSpace(s.cfg.IoTEndpointHost) != "" {
+		return true
+	}
+	return !iotCredentialsLoopbackEndpoint(wantHost)
+}
+
 func (s *Server) handleIoTCredentials(
 	w http.ResponseWriter, r *http.Request, body []byte, requestID, eventID string, readOnly bool,
 ) {
 	wantHost := iotEndpointHost(s.iotEndpointAddress("iot:CredentialProvider"))
-	if r.TLS == nil || !strings.EqualFold(iotCredentialsPresentedHost(r, wantHost), wantHost) {
+	hostOK := !s.iotCredentialsRequireHostMatch(wantHost) ||
+		strings.EqualFold(iotCredentialsPresentedHost(r, wantHost), wantHost)
+	if r.TLS == nil || !hostOK {
 		s.writeIoTRESTError(w, r, body, requestID, http.StatusForbidden, "ForbiddenException",
 			"TLS SNI must match the CredentialProvider endpointAddress.", readOnly, eventID, nil)
 		return

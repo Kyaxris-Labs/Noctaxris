@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.7.4
+
+Patch after 1.7.3: the IoT credentials provider accepts a published address when its endpoint host is loopback. Docker Hub: `kyaxris/noctaxris` (`1.7.4`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- `GET /role-aliases/{alias}/credentials` no longer requires TLS SNI to equal `127.0.0.1` when `NOCTAXRIS_IOT_ENDPOINT_HOST` is empty. The call still requires TLS, a device certificate, and `x-amzn-iot-thingname` matching the certificate thing.
+- A non-loopback `NOCTAXRIS_IOT_ENDPOINT_HOST` still requires SNI to match `credentials.iot.<host>`.
+- `NOCTAXRIS_LAB_CERT_ORG`, when set, is the ACM and IoT certificate organization. `NOCTAXRIS_IOT_CA_CN`, when set, is the IoT CA common name. Unset, strip mode still uses organization `Lab`.
+
 ## 1.7.3
 
 Patch after 1.7.2: Go 1.27.3 for stdlib crypto/x509 govulncheck clear, S3 aws-chunked PutObject decode for AWS CLI 2.38+, plus Go module refreshes. Docker Hub: `kyaxris/noctaxris` (`1.7.3`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).

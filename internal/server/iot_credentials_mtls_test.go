@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Kyaxris-Labs/Noctaxris/internal/config"
+	"github.com/Kyaxris-Labs/Noctaxris/internal/store"
 )
 
 func TestIoTCredentialsProviderThingMismatchForbidden(t *testing.T) {
@@ -121,6 +124,127 @@ func credentialsRequest(t *testing.T, alias, thingName, sni string, peer *x509.C
 		PeerCertificates: []*x509.Certificate{peer},
 	}
 	return req
+}
+
+func TestIoTCredentialsLoopbackAllowsPublishedHost(t *testing.T) {
+	srv, st, _ := newTestServerStore(t)
+	handler := srv.Handler()
+	const thing = "pub-cred-thing"
+	const alias = "pub-device-creds"
+	peer := seedIoTCredentialsPeer(t, handler, st, thing, "pub-cred-pol", "iot-pub-creds-role", alias)
+
+	sniReq := credentialsRequest(t, alias, thing, "203.0.113.10", peer)
+	sniReq.Host = "203.0.113.10:8443"
+	sniRec := httptest.NewRecorder()
+	handler.ServeHTTP(sniRec, sniReq)
+	if sniRec.Code != http.StatusOK || strings.Contains(sniRec.Body.String(), "TLS SNI must match") {
+		t.Fatalf("published SNI status=%d body=%q", sniRec.Code, sniRec.Body.String())
+	}
+	if !strings.Contains(sniRec.Body.String(), `"accessKeyId"`) {
+		t.Fatalf("credentials shape: %s", sniRec.Body.String())
+	}
+
+	hostReq := credentialsRequest(t, alias, thing, "", peer)
+	hostReq.Host = "203.0.113.10:8443"
+	hostRec := httptest.NewRecorder()
+	handler.ServeHTTP(hostRec, hostReq)
+	if hostRec.Code != http.StatusOK || strings.Contains(hostRec.Body.String(), "TLS SNI must match") {
+		t.Fatalf("published Host status=%d body=%q", hostRec.Code, hostRec.Body.String())
+	}
+
+	mismatch := credentialsRequest(t, alias, "wrong-thing", "203.0.113.10", peer)
+	mismatch.Host = "203.0.113.10:8443"
+	mismatchRec := httptest.NewRecorder()
+	handler.ServeHTTP(mismatchRec, mismatch)
+	if mismatchRec.Code != http.StatusForbidden ||
+		!strings.Contains(mismatchRec.Body.String(), "x-amzn-iot-thingname must match the certificate thing.") ||
+		strings.Contains(mismatchRec.Body.String(), "TLS SNI must match") {
+		t.Fatalf("thing mismatch status=%d body=%q", mismatchRec.Code, mismatchRec.Body.String())
+	}
+}
+
+func TestIoTCredentialsDNSEndpointRejectsMismatchedSNI(t *testing.T) {
+	srv, st, _ := newTestServerStoreWith(t, func(cfg *config.Config) {
+		cfg.IoTEndpointHost = "lab.example.local"
+	})
+	handler := srv.Handler()
+	const thing = "dns-cred-thing"
+	const alias = "dns-device-creds"
+	peer := seedIoTCredentialsPeer(t, handler, st, thing, "dns-cred-pol", "iot-dns-creds-role", alias)
+
+	bad := credentialsRequest(t, alias, thing, "203.0.113.10", peer)
+	bad.Host = "203.0.113.10:8443"
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, bad)
+	if badRec.Code != http.StatusForbidden ||
+		!strings.Contains(badRec.Body.String(), "TLS SNI must match the CredentialProvider endpointAddress.") {
+		t.Fatalf("mismatched SNI status=%d body=%q", badRec.Code, badRec.Body.String())
+	}
+
+	noSNI := credentialsRequest(t, alias, thing, "", peer)
+	noSNI.Host = "credentials.iot.lab.example.local:8443"
+	noRec := httptest.NewRecorder()
+	handler.ServeHTTP(noRec, noSNI)
+	if noRec.Code != http.StatusForbidden ||
+		!strings.Contains(noRec.Body.String(), "TLS SNI must match the CredentialProvider endpointAddress.") {
+		t.Fatalf("empty SNI status=%d body=%q", noRec.Code, noRec.Body.String())
+	}
+
+	okReq := credentialsRequest(t, alias, thing, "credentials.iot.lab.example.local", peer)
+	okRec := httptest.NewRecorder()
+	handler.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK || strings.Contains(okRec.Body.String(), "TLS SNI must match") {
+		t.Fatalf("matching SNI status=%d body=%q", okRec.Code, okRec.Body.String())
+	}
+}
+
+func seedIoTCredentialsPeer(t *testing.T, handler http.Handler, st *store.Store, thingName, policyName, roleName, alias string) *x509.Certificate {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	if rec := mustJSONTarget(t, handler, "AWSIotService.CreateThing", "iot", map[string]any{
+		"thingName": thingName,
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("CreateThing %d %s", rec.Code, rec.Body.String())
+	}
+	certRec := mustJSONTarget(t, handler, "AWSIotService.CreateKeysAndCertificate", "iot", map[string]any{
+		"setAsActive": true,
+	}, now)
+	if certRec.Code != http.StatusOK {
+		t.Fatalf("CreateKeysAndCertificate %d %s", certRec.Code, certRec.Body.String())
+	}
+	var certOut map[string]any
+	_ = json.Unmarshal(certRec.Body.Bytes(), &certOut)
+	certARN, _ := certOut["certificateArn"].(string)
+	certPEM, _ := certOut["certificatePem"].(string)
+	peer := mustParseDeviceCert(t, certPEM)
+	if rec := mustJSONTarget(t, handler, "AWSIotService.CreatePolicy", "iot", map[string]any{
+		"policyName":     policyName,
+		"policyDocument": `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["iot:AssumeRoleWithCertificate","iot:*"],"Resource":"*"}]}`,
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("CreatePolicy %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := mustJSONTarget(t, handler, "AWSIotService.AttachPolicy", "iot", map[string]any{
+		"policyName": policyName, "target": certARN,
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("AttachPolicy %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := mustJSONTarget(t, handler, "AWSIotService.AttachThingPrincipal", "iot", map[string]any{
+		"thingName": thingName, "principal": certARN,
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("AttachThingPrincipal %d %s", rec.Code, rec.Body.String())
+	}
+	trust := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"credentials.iot.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+	roleARN, err := st.CreateRole(testAccountID, roleName, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := mustJSONTarget(t, handler, "AWSIotService.CreateRoleAlias", "iot", map[string]any{
+		"roleAlias": alias,
+		"roleArn":   roleARN,
+	}, now); rec.Code != http.StatusOK {
+		t.Fatalf("CreateRoleAlias %d %s", rec.Code, rec.Body.String())
+	}
+	return peer
 }
 
 func deviceJSONRequest(t *testing.T, target string, payload map[string]any, peer *x509.Certificate) *http.Request {

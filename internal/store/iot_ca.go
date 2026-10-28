@@ -115,11 +115,15 @@ func generateLabIoTCA(organization string) (certPEM, keyPEM string, err error) {
 	if strings.TrimSpace(organization) == "" {
 		organization = "Noctaxris Lab"
 	}
+	cn := strings.TrimSpace(os.Getenv("NOCTAXRIS_IOT_CA_CN"))
+	if cn == "" {
+		cn = "Noctaxris Lab IoT CA"
+	}
 	now := time.Now().UTC()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "Noctaxris Lab IoT CA",
+			CommonName:   cn,
 			Organization: []string{organization},
 		},
 		NotBefore:             now.Add(-time.Hour),

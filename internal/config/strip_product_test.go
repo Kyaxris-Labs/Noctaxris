@@ -38,6 +38,14 @@ func TestStripProductProbePaths(t *testing.T) {
 	}
 }
 
+func TestLabCertOrgEnvOverridesStrip(t *testing.T) {
+	t.Setenv("NOCTAXRIS_LAB_CERT_ORG", "North Grid Auth")
+	strip := config.Config{StripProduct: true}
+	if got := strip.LabCertificateOrganization(); got != "North Grid Auth" {
+		t.Fatalf("override=%q", got)
+	}
+}
+
 func TestStripProductFromEnv(t *testing.T) {
 	t.Setenv(config.EnvStripProduct, "")
 	if config.StripProductFromEnv() {
