@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+## 1.7.3
+
+Patch after 1.7.2: Go 1.27.3 for stdlib crypto/x509 govulncheck clear, S3 aws-chunked PutObject decode for AWS CLI 2.38+, plus Go module refreshes. Docker Hub: `kyaxris/noctaxris` (`1.7.3`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
 - S3: decode `Content-Encoding: aws-chunked` PutObject bodies and accept SigV4 streaming payload hashes (`STREAMING-UNSIGNED-PAYLOAD-TRAILER` and related). Fixes AWS CLI 2.38+ default CRC64NVME trailer uploads that previously failed with `Unable to read request body`.
+- Dependencies: `go-jose/v4` v4.1.6, `golang.org/x/crypto` v0.58.0, `golang.org/x/net` v0.62.0, `moby/moby` client v0.6.2 / api v1.56.1, `modernc.org/sqlite` v1.61.0, and related indirects; Go SDK and CloudFormation test clients refreshed.
+- Toolchain: Go 1.27.3. Digest-pinned `golang:1.27.3-bookworm` (GO-2026-6809).
 
 ## 1.7.2
 
