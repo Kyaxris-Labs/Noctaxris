@@ -37,7 +37,7 @@ echo "==> SDK (Node.js)"
 (cd tests/sdk/nodejs && npm install --no-fund --no-audit && npm test)
 
 echo "==> SDK (Python)"
-(cd tests/sdk/python && python -m pip install -q -r requirements.txt && python -m pytest)
+(cd tests/sdk/python && python -m pip install -q -r requirements.txt && python -m pytest && python -m pytest --confcutdir=prowler prowler)
 
 echo "==> Terraform (lab-core)"
 bash tests/terraform/run.sh

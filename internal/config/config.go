@@ -96,6 +96,9 @@ type Config struct {
 	// LabForensics enables NoctaxrisLab clock and bulk-seed APIs
 	// (NOCTAXRIS_LAB_FORENSICS=1). Default false (AccessDenied when off).
 	LabForensics bool
+	// LabStandalone enables POST /_noctaxris/lab/accounts:seedStandalone
+	// (NOCTAXRIS_LAB_STANDALONE=1). Default false: the path is not registered.
+	LabStandalone bool
 	// CognitoInsecureCodes restores fixed confirmation code 123456 and
 	// any-non-empty ConfirmSignUp (NOCTAXRIS_COGNITO_INSECURE_CODES=1).
 	// Default false: high-entropy single-use codes with expiry.
@@ -150,6 +153,7 @@ func LoadFromEnv() (Config, error) {
 		VPCFlowInject:         envTruthy("NOCTAXRIS_VPCFLOW_INJECT"),
 		Route53QueryLogInject: envTruthy("NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT"),
 		LabForensics:          envTruthy("NOCTAXRIS_LAB_FORENSICS"),
+		LabStandalone:         envTruthy("NOCTAXRIS_LAB_STANDALONE"),
 		CognitoInsecureCodes:  envTruthy(EnvCognitoInsecureCodes),
 		StripProduct:          envTruthy(EnvStripProduct),
 	}

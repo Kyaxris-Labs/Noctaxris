@@ -20,6 +20,10 @@ from botocore.awsrequest import AWSRequest
 from botocore.client import Config
 from botocore.credentials import Credentials
 
+# The prowler directory has its own conftest.py. Collecting it here makes
+# pytest import that file as "conftest" and breaks "from conftest import".
+collect_ignore = ["prowler"]
+
 
 def endpoint() -> str:
     return os.environ.get("NOCTAXRIS_ENDPOINT", "http://127.0.0.1:4566").rstrip("/")

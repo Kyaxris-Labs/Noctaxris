@@ -2,6 +2,7 @@
 # Terraform apply + destroy against a running Noctaxris API.
 # STACK=lab-core (default), lab-fullstack, lab-lambda-*, lab-ms-serverless, lab-ms-ecs,
 # lab-parity-observe, lab-parity-compute (also via TF_PARITY=1 / NOCTAXRIS_ADVANCED=1)
+# lab-standalone is opt-in: it runs only when STACK=lab-standalone (see that stack's README).
 #
 # lab-ms-ecs: set TF_MS_LIVE=1 for -var=live=true (DesiredCount>0; needs DinD).
 #
@@ -21,6 +22,16 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-wJalrXUtnFEMI/K7MDENG/bPx
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 export AWS_EC2_METADATA_DISABLED="${AWS_EC2_METADATA_DISABLED:-true}"
 EP="${NOCTAXRIS_ENDPOINT:-http://127.0.0.1:4566}"
+
+# Opt-in only. Default STACK stays lab-core. Do not apply with the example process root.
+if [[ "$STACK_NAME" == "lab-standalone" ]]; then
+  example_key="AKIAROOTEXAMPLE01"
+  example_secret="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  if [[ "$AWS_ACCESS_KEY_ID" == "$example_key" || "$AWS_SECRET_ACCESS_KEY" == "$example_secret" ]]; then
+    echo "skip Terraform STACK=lab-standalone: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to the standalone account key, not the example process root" >&2
+    exit 0
+  fi
+fi
 
 # WSL cannot reach Windows-host 127.0.0.1 publish. Skip when
 # EP is loopback unless NOCTAXRIS_FORCE_WSL_TF=1. Do not widen Compose to 0.0.0.0.
@@ -89,10 +100,15 @@ fi
 TF_VARS=(
   -var="endpoint=$EP"
   -var="region=$AWS_DEFAULT_REGION"
-  -var="access_key=$AWS_ACCESS_KEY_ID"
-  -var="secret_key=$AWS_SECRET_ACCESS_KEY"
-  -var="name_prefix=$PREFIX"
 )
+# lab-standalone takes credentials from the environment, not -var access_key/secret_key.
+if [[ "$STACK_NAME" != "lab-standalone" ]]; then
+  TF_VARS+=(
+    -var="access_key=$AWS_ACCESS_KEY_ID"
+    -var="secret_key=$AWS_SECRET_ACCESS_KEY"
+    -var="name_prefix=$PREFIX"
+  )
+fi
 if [[ "$STACK_NAME" == "lab-ms-ecs" ]]; then
   TF_VARS+=(-var="live=$LIVE_VAR")
 fi

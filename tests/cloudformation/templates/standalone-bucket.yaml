@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Noctaxris CFN: S3 bucket for a standalone account"
+Parameters:
+  BucketName:
+    Type: String
+    Default: noctaxris-sa
+    Description: "Safe bucket name prefix. Deploy with a unique suffix."
+Resources:
+  StandaloneBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName

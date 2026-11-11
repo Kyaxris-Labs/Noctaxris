@@ -61,6 +61,7 @@ All settings come from environment variables. Defaults favor a locked-down local
 | `NOCTAXRIS_MACIE_INJECT` | disabled | Set to `1` to enable lab-only `macie2:InjectFindings` (`NoctaxrisMacie.InjectFindings`) including canned S3 object matches. Default off returns AccessDenied. |
 | `NOCTAXRIS_VPCFLOW_INJECT` | disabled | Set to `1` to enable lab-only `ec2:InjectFlowLogs` (`NoctaxrisEC2.InjectFlowLogs`). Default off returns AccessDenied. |
 | `NOCTAXRIS_LAB_FORENSICS` | disabled | Set to `1` to enable lab FreezeClock/UnfreezeClock/SetClock/BulkSeed (`NoctaxrisLab.*`). Default off returns AccessDenied. |
+| `NOCTAXRIS_LAB_STANDALONE` | disabled | Set to `1` or `true` (either spelling, any case) to register `POST /_noctaxris/lab/accounts:seedStandalone` after SigV4. Unset, empty, or any other value leaves that path unregistered (404 before SigV4). |
 | `NOCTAXRIS_ROUTE53_QUERY_LOG_INJECT` | disabled | Set to `1` to enable lab Route 53 query log inject to CloudWatch Logs. Default off returns AccessDenied. |
 | `NOCTAXRIS_COGNITO_INSECURE_CODES` | disabled | Set to `1` to restore Cognito lab stub confirmation codes (`123456` for forgot/attr-verify; any-non-empty `ConfirmSignUp`). Default off uses high-entropy single-use codes. |
 | `NOCTAXRIS_STRIP_PRODUCT` | disabled | Set to `1` / `true` to serve open probes only at `/_lab/health`, `/_lab/ready`, and `/_lab/version` (same bodies as the product paths). Product `/_noctaxris/health|ready|version` are not registered. Distroless `/noctaxris healthcheck` probes `/_lab/ready` when this is on. ACM and IoT lab certificates use Organization `Lab` instead of `Noctaxris Lab`, unless `NOCTAXRIS_LAB_CERT_ORG` is set. `NOCTAXRIS_IOT_CA_CN`, when set, is the IoT CA common name. Default keeps `/_noctaxris/*` probes and branded Organization. |
@@ -114,6 +115,20 @@ When `NOCTAXRIS_LAB_FORENSICS=1`, SigV4 service `noctaxris-lab` accepts:
 | `BulkSeed` | Seed a named forensic scenario (`ScenarioId` required: `suspicious-login`, `s3-data-exfil`, `crypto-mining`) into CloudTrail JSONL and optional GuardDuty findings (canned shapes; not live traffic) |
 
 Default off returns AccessDenied. These are Noctaxris lab extensions, not AWS public APIs.
+
+### Standalone account (`NOCTAXRIS_LAB_STANDALONE`)
+
+Off is the default. `POST /_noctaxris/lab/accounts:seedStandalone` is not registered, and a request for that path returns 404 before SigV4.
+
+`NOCTAXRIS_LAB_STANDALONE=1` or `true` (any case) registers POST after SigV4. The caller must be a root access key of the management account `000000000001`. A root key of another account is denied (`AccessDenied`, `Not authorized to seed a standalone account.`). A key with `is_root` false is denied the same way. A method other than POST returns 404 before SigV4.
+
+An empty body uses seed name `default`. A JSON object may set `name`. The name must be a valid IAM name: 1 to 64 characters matching `[\w+=,.@-]+`. An omitted `name`, or an empty string, uses `default`. A name that is only spaces, or any other name that fails that pattern, is `ValidationError`. A non-object body is `InvalidRequest`.
+
+The route creates a new 12-digit account whose organization parent is `outside`, plus IAM user `admin` in that account. The user has an inline policy named `AdministratorAccess` that allows every action on every resource. The minted access key is a user key (`is_root` is false). Success is JSON with `accountId`, `userName`, `userArn`, `accessKeyId`, and `secretAccessKey`. The same seed name returns that stored key and secret. If the stored key is missing, is a root key, or belongs to a different account, the call returns `InternalFailure` and does not mint a replacement.
+
+That user can call services in the new account. Cross-account S3, SQS, SNS, Lambda, and Secrets Manager calls still need an identity Allow and a resource policy Allow. `ListBuckets` returns buckets for the caller account only. S3 bucket names stay unique across accounts (`BucketAlreadyExists`).
+
+Placement, SCP and RCP inheritance, AssumeRoot, and Organizations membership: [organizations](services/organizations.md). IAM policy document reads: [iam](services/iam.md).
 
 Federation is fail-closed. If these are unset and no IdP rows exist in the store, SAML/OIDC STS APIs deny with AccessDenied / InvalidIdentityToken rather than accepting unsigned tokens.
 

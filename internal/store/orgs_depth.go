@@ -42,6 +42,12 @@ const ManagementAccountID = "000000000001"
 // OrgRootID is the fixed Organizations root identifier used as CreateOU parent.
 const OrgRootID = "r-root"
 
+// OrgOutsideID is a placement parent for an account that is not a member of
+// the lab organization. It is not an r-* root and not an OU. SCP and RCP
+// collection returns no documents for it. A missing placement row still
+// defaults to OrgRootID.
+const OrgOutsideID = "outside"
+
 // Account is an Organizations / local account listing entry.
 type Account struct {
 	AccountID string
@@ -356,6 +362,9 @@ func (s *Store) ListAccountsForParent(parentID string) ([]Account, error) {
 		if err != nil {
 			return nil, err
 		}
+		if pid == OrgOutsideID {
+			continue
+		}
 		if pid == parentID {
 			out = append(out, a)
 		}
@@ -386,6 +395,9 @@ func (s *Store) ListParents(childID string) ([]OrgParent, error) {
 			return nil, fmt.Errorf("list parents: child_id must be a root, OU, or account id")
 		}
 		current, err = s.AccountParentID(childID)
+		if err == nil && current == OrgOutsideID {
+			return []OrgParent{}, nil
+		}
 	default:
 		return nil, fmt.Errorf("list parents: child_id must be a root, OU, or account id")
 	}
@@ -521,11 +533,18 @@ func (s *Store) MoveAccount(accountID, sourceParentID, destinationParentID strin
 }
 
 // OUPathToRoot returns OU ids from the account's parent up to (but not including) root.
-// Order is nearest parent first. Empty when the account sits directly under root.
+// Order is nearest parent first. Empty when the account sits directly under root
+// or outside the organization. An unknown parent returns an error.
 func (s *Store) OUPathToRoot(accountID string) ([]string, error) {
 	parent, err := s.AccountParentID(accountID)
 	if err != nil {
 		return nil, err
+	}
+	if parent == OrgOutsideID {
+		return []string{}, nil
+	}
+	if err := s.requireOrgParent(parent); err != nil {
+		return nil, fmt.Errorf("ou path for %s: %w", accountID, err)
 	}
 	var path []string
 	seen := map[string]bool{}
@@ -557,6 +576,28 @@ func (s *Store) ouParentID(ouID string) (string, error) {
 		return "", fmt.Errorf("ou parent for %s: %w", ouID, err)
 	}
 	return parentID, nil
+}
+
+// requireOrgParent accepts the organization root or an existing OU.
+// OrgOutsideID is handled by callers before this check. Any other string,
+// including a root id other than OrgRootID, is an error so authorize denies
+// instead of inheriting r-root policies.
+func (s *Store) requireOrgParent(parentID string) error {
+	if parentID == OrgRootID {
+		return nil
+	}
+	if strings.HasPrefix(parentID, "ou-") {
+		var id string
+		err := s.db.QueryRow(`SELECT id FROM org_ous WHERE id = ?`, parentID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("organizational unit %s not found", parentID)
+		}
+		if err != nil {
+			return fmt.Errorf("validate parent %s: %w", parentID, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("invalid parent %s", parentID)
 }
 
 func (s *Store) validateOrgParentID(parentID string) error {
@@ -615,6 +656,16 @@ func (s *Store) orgPolicyDocsForAccount(accountID, policyType string) ([]string,
 }
 
 func (s *Store) orgPolicyDocsForAccountWithPath(accountID, policyType string, ouPath []string) ([]string, error) {
+	parent, err := s.AccountParentID(accountID)
+	if err != nil {
+		return nil, err
+	}
+	if parent == OrgOutsideID {
+		return []string{}, nil
+	}
+	if err := s.requireOrgParent(parent); err != nil {
+		return nil, fmt.Errorf("%s docs for account %s: %w", policyType, accountID, err)
+	}
 	args := []any{policyType, accountID, OrgRootID}
 	ouClause := ""
 	if len(ouPath) > 0 {

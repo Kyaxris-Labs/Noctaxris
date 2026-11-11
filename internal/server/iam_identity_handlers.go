@@ -377,6 +377,9 @@ func (s *Server) handleIAMIdentity(
 
 	case catalog.ActionIAMDeleteOpenIDConnectProvider, "DeleteOpenIDConnectProvider":
 		handled = true
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verifiedAccessKeyID, accountID, params["OpenIDConnectProviderArn"], "Provider is in another account.") {
+			return nil, true, errHandled
+		}
 		if delErr := s.store.DeleteOIDCProvider(params["OpenIDConnectProviderArn"]); delErr != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"OIDC provider not found.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
@@ -396,6 +399,9 @@ func (s *Server) handleIAMIdentity(
 
 	case catalog.ActionIAMGetOpenIDConnectProvider, "GetOpenIDConnectProvider":
 		handled = true
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verifiedAccessKeyID, accountID, params["OpenIDConnectProviderArn"], "Provider is in another account.") {
+			return nil, true, errHandled
+		}
 		p, getErr := s.store.GetOIDCProvider(params["OpenIDConnectProviderArn"])
 		if getErr != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
@@ -418,6 +424,9 @@ func (s *Server) handleIAMIdentity(
 
 	case catalog.ActionIAMDeleteSAMLProvider, "DeleteSAMLProvider":
 		handled = true
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verifiedAccessKeyID, accountID, params["SAMLProviderArn"], "Provider is in another account.") {
+			return nil, true, errHandled
+		}
 		if delErr := s.store.DeleteSAMLProvider(params["SAMLProviderArn"]); delErr != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
 				"SAML provider not found.", readOnly, r, eventID, verifiedAccessKeyID, accountID, true)
@@ -437,6 +446,9 @@ func (s *Server) handleIAMIdentity(
 
 	case catalog.ActionIAMGetSAMLProvider, "GetSAMLProvider":
 		handled = true
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verifiedAccessKeyID, accountID, params["SAMLProviderArn"], "Provider is in another account.") {
+			return nil, true, errHandled
+		}
 		p, getErr := s.store.GetSAMLProvider(params["SAMLProviderArn"])
 		if getErr != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",

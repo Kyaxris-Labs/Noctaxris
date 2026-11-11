@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.8.0
+
+Minor after 1.7.4: opt-in standalone account. Docker Hub: `kyaxris/noctaxris` (`1.8.0`, `1.8`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+
+- `NOCTAXRIS_LAB_STANDALONE` defaults off. `POST /_noctaxris/lab/accounts:seedStandalone` is 404 before SigV4 when the flag is off or the method is not POST. When it is on, only a root key of the management account can seed. The result is an IAM user key with `is_root` false in an account whose organization parent is `outside`. The same seed name returns the stored key.
+- Parent `outside` loads no SCP or RCP. A missing parent row still uses `r-root`. An unknown parent fails closed. `AssumeRoot` cannot target the account. Organizations APIs stay on the management account.
+- IAM policy document reads and version writes, and OpenID Connect and SAML provider get and delete, deny another stored account. The account `aws` is still loaded. A missing policy stays `NoSuchEntity`.
+- Cross-account S3, SQS, SNS, Lambda, and Secrets Manager calls still need an identity Allow and a resource policy Allow. `ListBuckets` is per account. Bucket names stay globally unique.
+- SDK tests skip when the API is down or the route is 404. `STACK=lab-standalone` is opt-in. CloudFormation `standalone-bucket.yaml` deploys in the CLI suite only when the flag is on.
+
 ## 1.7.4
 
 Patch after 1.7.3: the IoT credentials provider accepts a published address when its endpoint host is loopback. Docker Hub: `kyaxris/noctaxris` (`1.7.4`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
@@ -26,7 +36,7 @@ Patch after 1.7.1: Go 1.27.2 for stdlib net/http govulncheck clear. Docker Hub: 
 
 ## 1.7.1
 
-Patch after 1.7.0: opt-in product strip for challenge images, plus CI gate alignment. Docker Hub: `kyaxris/noctaxris` (`1.7.1`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
+Patch after 1.7.0: opt-in product strip for lab images, plus CI gate alignment. Docker Hub: `kyaxris/noctaxris` (`1.7.1`, `1.7`, `1`, `latest`). Cut steps: [docs/release.md](docs/release.md).
 
 - Config: `NOCTAXRIS_STRIP_PRODUCT=1` serves open probes at `/_lab/health|ready|version` only (product `/_noctaxris/*` probes off); healthcheck and ACM/IoT lab cert Organization follow strip mode
 - CI: smoke-core timeout aligned with siblings; `docker-nightly` runs `ci-required` before Hub push

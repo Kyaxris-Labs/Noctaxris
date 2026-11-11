@@ -252,6 +252,11 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.CreatePolicyXML(p, requestID)
 	case catalog.ActionIAMGetPolicy, "GetPolicy":
+		if !s.policyDocumentInCallerAccount(accountID, params["PolicyArn"]) {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"Policy is in another account.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
 		p, getErr := s.store.GetManagedPolicy(params["PolicyArn"])
 		if getErr != nil {
 			s.writeAWSError(w, requestID, http.StatusNotFound, "NoSuchEntity",
@@ -268,6 +273,9 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.ListPoliciesXML(policies, requestID)
 	case catalog.ActionIAMDeletePolicy, "DeletePolicy":
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verified.AccessKeyID, accountID, params["PolicyArn"], "Policy is in another account.") {
+			return
+		}
 		if err := s.store.DeleteManagedPolicy(params["PolicyArn"]); err != nil {
 			s.writeAWSError(w, requestID, http.StatusBadRequest, "DeleteConflict",
 				"Unable to delete policy.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
@@ -275,6 +283,9 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.DeletePolicyXML(requestID)
 	case catalog.ActionIAMCreatePolicyVersion, "CreatePolicyVersion":
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verified.AccessKeyID, accountID, params["PolicyArn"], "Policy is in another account.") {
+			return
+		}
 		setDefault := strings.EqualFold(params["SetAsDefault"], "true")
 		v, createErr := s.store.CreateManagedPolicyVersion(params["PolicyArn"], params["PolicyDocument"], setDefault)
 		if createErr != nil {
@@ -300,6 +311,11 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.CreatePolicyVersionXML(v, requestID)
 	case catalog.ActionIAMGetPolicyVersion, "GetPolicyVersion":
+		if !s.policyDocumentInCallerAccount(accountID, params["PolicyArn"]) {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"Policy is in another account.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
 		v, getErr := s.store.GetManagedPolicyVersion(params["PolicyArn"], params["VersionId"])
 		if getErr != nil {
 			if errors.Is(getErr, store.ErrNoSuchPolicyVersion) || errors.Is(getErr, sql.ErrNoRows) {
@@ -313,6 +329,11 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.GetPolicyVersionXML(v, requestID)
 	case catalog.ActionIAMListPolicyVersions, "ListPolicyVersions":
+		if !s.policyDocumentInCallerAccount(accountID, params["PolicyArn"]) {
+			s.writeAWSError(w, requestID, http.StatusForbidden, "AccessDenied",
+				"Policy is in another account.", readOnly, r, eventID, verified.AccessKeyID, verified.AccountID, true)
+			return
+		}
 		versions, listErr := s.store.ListManagedPolicyVersions(params["PolicyArn"])
 		if listErr != nil {
 			if errors.Is(listErr, sql.ErrNoRows) {
@@ -326,6 +347,9 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.ListPolicyVersionsXML(versions, requestID)
 	case catalog.ActionIAMDeletePolicyVersion, "DeletePolicyVersion":
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verified.AccessKeyID, accountID, params["PolicyArn"], "Policy is in another account.") {
+			return
+		}
 		if delErr := s.store.DeleteManagedPolicyVersion(params["PolicyArn"], params["VersionId"]); delErr != nil {
 			switch {
 			case errors.Is(delErr, store.ErrDeleteDefaultPolicyVersion):
@@ -342,6 +366,9 @@ func (s *Server) handleIAM(
 		}
 		payload, err = iam.DeletePolicyVersionXML(requestID)
 	case catalog.ActionIAMSetDefaultPolicyVersion, "SetDefaultPolicyVersion":
+		if s.denyIAMOutsideCaller(w, requestID, readOnly, r, eventID, verified.AccessKeyID, accountID, params["PolicyArn"], "Policy is in another account.") {
+			return
+		}
 		if setErr := s.store.SetDefaultManagedPolicyVersion(params["PolicyArn"], params["VersionId"]); setErr != nil {
 			switch {
 			case errors.Is(setErr, store.ErrNoSuchPolicyVersion):

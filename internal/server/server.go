@@ -251,6 +251,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// When standalone seeding is disabled, and for any non-POST, the path stays unregistered and returns 404 before SigV4.
+	if r.URL.Path == standaloneSeedPath && (!s.cfg.LabStandalone || r.Method != http.MethodPost) {
+		http.NotFound(w, r)
+		return
+	}
+
 	if isRegistryV2Path(r.URL.Path) {
 		s.handleRegistryV2(w, r)
 		return
@@ -353,6 +359,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		verified.SourceIP = peerClientIP(r)
 		s.recordAccessKeyLastUsed(verified)
+	}
+
+	if r.URL.Path == standaloneSeedPath {
+		s.handleSeedStandalone(w, r, body, requestID, eventID, verified, readOnly)
+		return
 	}
 
 	// Lab facades on :4566 after SigV4 (account-scoped; no anonymous edge/query/file paths).

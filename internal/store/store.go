@@ -529,6 +529,7 @@ func bootstrapServiceSchemas(db *sql.DB) error {
 		{"ecs", EnsureECSSchema},
 		{"ecs service", EnsureECSServiceSchema},
 		{"org account placement", EnsureOrgAccountPlacementSchema},
+		{"standalone accounts", EnsureStandaloneAccountSchema},
 		{"logs", EnsureLogsSchema},
 		{"logs subscription", EnsureLogsSubscriptionSchema},
 		{"logs metric filter", EnsureLogsMetricFilterSchema},

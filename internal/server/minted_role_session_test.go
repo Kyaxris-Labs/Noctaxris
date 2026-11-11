@@ -33,7 +33,7 @@ func TestMintedRoleSessionAuthorizesS3AndIAM(t *testing.T) {
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/mint-no", nil, "s3", now, nil)
 	mustS3(t, handler, http.MethodPut, "http://127.0.0.1:4566/mint-no/obj.txt", []byte("hidden"), "s3", now, nil)
 
-	assumeAK, assumeSecret, assumeToken := assumeRoleSession(t, handler, roleARN, "player", now)
+	assumeAK, assumeSecret, assumeToken := assumeRoleSession(t, handler, roleARN, "caller", now)
 	assertUpperASIA(t, assumeAK)
 	exerciseMintedSession(t, handler, assumeAK, assumeSecret, assumeToken, roleName, now)
 

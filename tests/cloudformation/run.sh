@@ -84,4 +84,24 @@ aws cloudformation create-stack \
   --endpoint-url "$EP"
 aws cloudformation delete-stack --stack-name "$STACK_SQS" --endpoint-url "$EP"
 
+# Opt-in. Default CLI suite does not require NOCTAXRIS_LAB_STANDALONE.
+# Lab CreateStack ignores the Parameters section, so apply BucketName here.
+if [ "${NOCTAXRIS_LAB_STANDALONE:-}" = "1" ]; then
+  STACK_SA="cfn-cli-sa-${SHORT}"
+  BUCKET_SA="noctaxris-sa-${SHORT}"
+  BUCKET_SA="$(echo "$BUCKET_SA" | tr '[:upper:]' '[:lower:]' | cut -c1-63)"
+  ref='!Ref BucketName'
+  sed "s/${ref}/${BUCKET_SA}/" "$TEMPLATES/standalone-bucket.yaml" >"$WORKDIR/standalone.yaml"
+  aws cloudformation create-stack \
+    --stack-name "$STACK_SA" \
+    --template-body "file://$WORKDIR/standalone.yaml" \
+    --endpoint-url "$EP"
+  aws cloudformation describe-stacks --stack-name "$STACK_SA" --endpoint-url "$EP" \
+    --query 'Stacks[0].StackStatus' --output text | grep -E 'CREATE_COMPLETE|CREATE_IN_PROGRESS'
+  aws cloudformation delete-stack --stack-name "$STACK_SA" --endpoint-url "$EP"
+  echo "CloudFormation standalone bucket stack succeeded ($STACK_SA)"
+else
+  echo "skip standalone-bucket.yaml (NOCTAXRIS_LAB_STANDALONE is not 1)"
+fi
+
 echo "CloudFormation CLI suite succeeded (json=$STACK_JSON yaml=$STACK_YAML sqs=$STACK_SQS)"

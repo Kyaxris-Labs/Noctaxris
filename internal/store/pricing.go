@@ -11,7 +11,7 @@ import (
 // DefaultPricingRegion is the lab Pricing API region.
 const DefaultPricingRegion = "us-east-1"
 
-// pricingCatalogJSON is a tiny static AWS Price List shaped catalog for CTF/lab entry.
+// pricingCatalogJSON is a tiny static AWS Price List shaped catalog for lab entry.
 const pricingCatalogJSON = `[
   {
     "serviceCode": "AmazonEC2",
